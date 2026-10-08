@@ -61,6 +61,9 @@ type Service struct {
 	// transport. Nil inherits the platform default. An explicit false remains
 	// serialized so platforms that default to encryption can preserve an opt-out.
 	Encryption *bool `toml:"encryption,omitempty"`
+	// InternetCheck lets Core probe public endpoints to learn whether the
+	// device can reach the internet. Nil means on.
+	InternetCheck *bool `toml:"internet_check,omitempty"`
 }
 
 type RemoteControl struct {
@@ -227,6 +230,17 @@ func (c *Instance) DiscoveryEnabled() bool {
 		return true
 	}
 	return *c.vals.Service.Discovery.Enabled
+}
+
+// InternetCheckEnabled reports whether Core may probe public endpoints to
+// learn whether the device can reach the internet.
+func (c *Instance) InternetCheckEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Service.InternetCheck == nil {
+		return true
+	}
+	return *c.vals.Service.InternetCheck
 }
 
 func (c *Instance) SetDiscoveryEnabled(enabled bool) {

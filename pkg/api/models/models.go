@@ -51,6 +51,7 @@ const (
 	NotificationBackupState          = "backup.state"
 	NotificationUpdateState          = "update.state"
 	NotificationRunFailed            = "run.failed"
+	NotificationDeviceChanged        = "device.changed"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -204,6 +205,10 @@ const (
 	MethodScreenshot                  = "screenshot"
 	MethodMediaTitleParse             = "media.title.parse"
 	MethodRemoteActivity              = "remote.activity"
+	MethodDeviceStatus                = "device.status"
+	MethodDevicePowerReboot           = "device.power.reboot"
+	MethodDevicePowerShutdown         = "device.power.shutdown"
+	MethodDevicePowerSuspend          = "device.power.suspend"
 )
 
 // MethodHasUnboundedRuntime reports whether a method may run without a fixed

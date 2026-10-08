@@ -52,6 +52,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/hoststatus"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
@@ -522,6 +523,11 @@ func NewMethodMap() *MethodMap {
 		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
 		},
+		// device
+		models.MethodDeviceStatus:        methods.HandleDeviceStatus,
+		models.MethodDevicePowerReboot:   methods.HandleDevicePower(hoststatus.PowerReboot),
+		models.MethodDevicePowerShutdown: methods.HandleDevicePower(hoststatus.PowerShutdown),
+		models.MethodDevicePowerSuspend:  methods.HandleDevicePower(hoststatus.PowerSuspend),
 	}
 
 	for name, fn := range defaultMethods {
@@ -1248,6 +1254,20 @@ func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	}
 }
 
+// notificationClientConnected tells the device monitor that someone is now
+// listening for notifications, which is what it runs for.
+func notificationClientConnected(st *state.State) {
+	if monitor := st.DeviceMonitor(); monitor != nil {
+		monitor.ClientConnected()
+	}
+}
+
+func notificationClientDisconnected(st *state.State) {
+	if monitor := st.DeviceMonitor(); monitor != nil {
+		monitor.ClientDisconnected()
+	}
+}
+
 // handleSSE returns an HTTP handler that streams notifications as Server-Sent
 // Events. Each connected client gets its own broker subscription which is
 // cleaned up on disconnect.
@@ -1261,6 +1281,9 @@ func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
 
 		notifs, subID := notifBroker.Subscribe(100)
 		defer notifBroker.Unsubscribe(subID)
+
+		notificationClientConnected(st)
+		defer notificationClientDisconnected(st)
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher.Flush()
@@ -2297,11 +2320,13 @@ func StartWithListener(
 	session.HandleConnect(func(s *melody.Session) {
 		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
 		startWebSocketSettleGrace(s, webSocketSettleGrace)
+		notificationClientConnected(st)
 	})
 	session.HandleDisconnect(func(s *melody.Session) {
 		stopWebSocketAuthDeadline(s)
 		stopWebSocketSettleGrace(s)
 		closeWSDispatcher(s)
+		notificationClientDisconnected(st)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {
 		if errors.Is(herr, melody.ErrMessageBufferFull) {

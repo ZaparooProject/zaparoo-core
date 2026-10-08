@@ -74,6 +74,18 @@ func TestAllowlistMethodsExist(t *testing.T) {
 	}
 }
 
+// TestAllowlistHasNoDeviceOperations guards a decision rather than an
+// accident: nothing about the device a household's Core runs on, and no way
+// to switch it off, is reachable from a remote operation.
+func TestAllowlistHasNoDeviceOperations(t *testing.T) {
+	t.Parallel()
+
+	for opType, spec := range operationAllowlist {
+		assert.False(t, strings.HasPrefix(spec.method, "device."), opType)
+		assert.False(t, strings.HasPrefix(opType, "device"), opType)
+	}
+}
+
 // TestAllowlistEveryEntryIsWired ensures no operation type skips params
 // translation (which is also where validation happens), that every
 // method-backed entry converts its response to the wire shape, and that an

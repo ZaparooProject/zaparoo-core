@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/hoststatus"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -65,6 +66,51 @@ func (m *MockPlatform) SetPowerStatus(status power.Status) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.powerStatus = &status
+}
+
+// The device providers below answer for a machine with nothing attached. Like
+// PowerStatus they are not testify expectations: the device monitor reads them
+// whenever a test opens a connection, and what it finds must not depend on the
+// machine running the test or reach out to its network.
+
+func (*MockPlatform) DevicePower() (power.Detail, error) {
+	return power.Detail{Source: power.SourceExternal}, nil
+}
+
+func (*MockPlatform) DeviceNetwork() (hoststatus.Network, error) {
+	return hoststatus.Network{
+		Type:                  hoststatus.LinkNone,
+		Internet:              hoststatus.InternetNone,
+		InternetAuthoritative: true,
+	}, nil
+}
+
+func (*MockPlatform) DeviceBluetooth() (hoststatus.Bluetooth, error) {
+	return hoststatus.Bluetooth{}, hoststatus.ErrUnsupported
+}
+
+func (*MockPlatform) DeviceStorage() ([]hoststatus.Volume, error) {
+	return nil, hoststatus.ErrUnsupported
+}
+
+func (*MockPlatform) DeviceDisplay() (hoststatus.Display, error) {
+	return hoststatus.Display{}, hoststatus.ErrUnsupported
+}
+
+func (*MockPlatform) DeviceControllers() ([]hoststatus.Controller, error) {
+	return nil, hoststatus.ErrUnsupported
+}
+
+func (*MockPlatform) DeviceSystem() (hoststatus.System, error) {
+	return hoststatus.System{}, hoststatus.ErrUnsupported
+}
+
+func (*MockPlatform) PowerActions(context.Context) map[hoststatus.PowerAction]hoststatus.Availability {
+	return map[hoststatus.PowerAction]hoststatus.Availability{}
+}
+
+func (*MockPlatform) PreparePowerAction(context.Context, hoststatus.PowerAction) (func() error, error) {
+	return nil, hoststatus.ErrUnsupported
 }
 
 // ID returns the unique ID of this platform. Unstubbed it returns "" rather

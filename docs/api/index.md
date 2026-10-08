@@ -217,7 +217,7 @@ Core evaluates four public access states:
 
 - **Localhost** requests originate from Core's device and have full access.
 - Authenticated **admin** includes paired admin clients and requests carrying a valid configured static API key. API-key admin is not localhost and cannot invoke localhost-only methods.
-- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, or apply updates.
+- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, apply updates, or reboot or shut down the device.
 - Unauthenticated **legacy** clients are admitted only on MiSTer, MiSTeX, Batocera, LibreELEC, and ReplayOS. Legacy is a distinct compatibility state, never admin. Every other platform rejects legacy full-API access.
 
 Grandfathered legacy screenshot access exists on MiSTer and ReplayOS. Grandfathered legacy input exists on MiSTer, MiSTeX, Batocera, and ReplayOS. New methods and capabilities do not become legacy-accessible automatically.
@@ -366,6 +366,10 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | update.status                   | Report the last known update state without contacting the release server.             | Localhost or any paired client |
 | update.check                    | Check for newer Core version.                                                         | Localhost or any paired client |
 | update.apply                    | Apply latest update and restart gracefully.                                           | `update.apply` |
+| device.status                   | Query the state of the device Core runs on.                                           | Localhost or any paired client |
+| device.power.reboot             | Restart the device.                                                                   | `device.power` |
+| device.power.shutdown           | Power the device off.                                                                 | `device.power` |
+| device.power.suspend            | Put the device to sleep.                                                              | `device.power` |
 
 ## Notifications
 
@@ -391,3 +395,4 @@ Notifications let a server or client know an event has occurred. See the [API No
 | inbox.added            | A new inbox message was added to the server.                                      |
 | decks.changed          | A deck was created, edited, deleted or refreshed from its source.                 |
 | update.state           | Progress of an update being applied.                                              |
+| device.changed         | The state of the device Core runs on changed.                                     |

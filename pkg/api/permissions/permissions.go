@@ -102,6 +102,10 @@ const (
 	// then on, and it stops whatever is playing to do it. Checking for an
 	// update needs no capability. Legacy and member roles do not receive it.
 	CapUpdateApply Capability = "update.apply"
+	// CapDevicePower covers rebooting, shutting down and suspending the
+	// device. It stops whatever is running for everyone using the device,
+	// so legacy and member roles do not receive it.
+	CapDevicePower Capability = "device.power"
 )
 
 // roleCapabilities maps authenticated and internal roles to capabilities.
@@ -115,6 +119,7 @@ var roleCapabilities = map[Role]map[Capability]bool{
 		CapInput:          true,
 		CapPlaytimeExtend: true,
 		CapUpdateApply:    true,
+		CapDevicePower:    true,
 	},
 	RoleMember: {
 		CapScreenshot: true,

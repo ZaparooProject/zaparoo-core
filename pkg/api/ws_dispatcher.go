@@ -415,6 +415,11 @@ func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
 	if isMediaDBFreeInstantMethod(method) {
 		return mediaDBLockNone
 	}
+	// A reboot must not wait behind an indexing commit, and a status read has
+	// no business holding up one either.
+	if isDeviceAPIMethod(method) {
+		return mediaDBLockNone
+	}
 	if isMediaDBTransactionAPIMethod(method) {
 		return mediaDBLockWrite
 	}

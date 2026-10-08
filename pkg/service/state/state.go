@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/device"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -83,6 +84,7 @@ type State struct {
 	backgroundPlaylist    *playlists.Playlist
 	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
+	deviceMonitor         *device.Monitor
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
 	beforeExitHook        func()
@@ -1263,6 +1265,22 @@ func (s *State) BootUUID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.bootUUID
+}
+
+// SetDeviceMonitor sets the device status monitor. Called during service
+// startup, before the API accepts requests.
+func (s *State) SetDeviceMonitor(monitor *device.Monitor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deviceMonitor = monitor
+}
+
+// DeviceMonitor returns the device status monitor, or nil when the service
+// was started without one.
+func (s *State) DeviceMonitor() *device.Monitor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deviceMonitor
 }
 
 // SetInbox sets the inbox service. Called during service startup after database is ready.

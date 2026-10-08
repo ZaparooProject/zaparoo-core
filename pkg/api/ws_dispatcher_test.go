@@ -555,6 +555,9 @@ func TestMediaDBLockModeForAPIMethod(t *testing.T) {
 		{"image takes no lock", models.MethodMediaImage, mediaDBLockNone},
 		{"asset takes no lock", models.MethodMediaAsset, mediaDBLockNone},
 		{"other method takes read lock", models.MethodMediaMeta, mediaDBLockRead},
+		{"device status takes no lock", models.MethodDeviceStatus, mediaDBLockNone},
+		{"device reboot takes no lock", models.MethodDevicePowerReboot, mediaDBLockNone},
+		{"device namespace is case insensitive", "DEVICE.POWER.SHUTDOWN", mediaDBLockNone},
 	}
 
 	for _, tt := range tests {

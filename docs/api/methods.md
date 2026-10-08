@@ -14,6 +14,7 @@ Each method below identifies which clients may call it:
 - **`input`:** localhost, member, and admin. Legacy input is grandfathered only on MiSTer, MiSTeX, Batocera, and ReplayOS.
 - **`screenshot`:** localhost, member, and admin. Legacy screenshot capture is grandfathered only on MiSTer and ReplayOS.
 - **`update.apply`:** localhost and authenticated admin. Member and legacy do not receive it.
+- **`device.power`:** localhost and authenticated admin. Member and legacy do not receive it.
 - **Localhost or admin:** localhost, paired admin, and API-key admin. Member and legacy are rejected.
 - **Localhost only:** requests originating from Core's device. All remote clients are rejected.
 
@@ -6110,3 +6111,290 @@ Parameters may be omitted entirely, which is the same as `force: false`.
   }
 }
 ```
+
+## Device
+
+These methods describe and control the machine Core is running on. They are the same on every platform. A platform that cannot report or do something says so in `capabilities` instead of offering a different method.
+
+None of these methods is available to legacy clients or to Zaparoo Online remote operations.
+
+### device.status
+
+**Access:** Localhost or any authenticated client.
+
+Query the state of the device: its battery, network links, Bluetooth adapter, storage, displays, connected controllers, clock and identity.
+
+Core keeps this state current while at least one client holds a WebSocket or SSE connection, and sends [`device.changed`](notifications.md#devicechanged) when the part of it a status display needs has changed. Call this method once after connecting, then follow the notification. Do not poll it.
+
+A caller with no open connection, such as a one-off HTTP request, gets a fresh reading taken for that request.
+
+Every section key is always present. A section that is `null` is either unsupported on this device or has no reading yet; `capabilities.sections` says which. Within a section, a value that is not known is `null`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key          | Type                              | Required | Description                                                  |
+| :----------- | :-------------------------------- | :------- | :----------------------------------------------------------- |
+| capabilities | [Capabilities](#capabilities-object) | Yes   | What this device can report and do.                          |
+| power        | [Power](#power-object) \| null    | Yes      | The battery the device runs on.                              |
+| network      | [Network](#network-object) \| null | Yes     | Network links and internet reachability.                     |
+| bluetooth    | [Bluetooth](#bluetooth-object) \| null | Yes | The Bluetooth adapter.                                       |
+| storage      | [Storage](#storage-object) \| null | Yes     | The filesystems holding media and Core's data.               |
+| display      | [Display](#display-object) \| null | Yes     | What the device is showing its picture on.                   |
+| controllers  | [Controllers](#controllers-object) \| null | Yes | Connected game controllers.                              |
+| time         | [Time](#time-object)              | Yes      | The device clock.                                            |
+| system       | [System](#system-object) \| null  | Yes      | What the device is.                                          |
+
+##### Capabilities object
+
+| Key      | Type   | Required | Description                                                                                         |
+| :------- | :----- | :------- | :-------------------------------------------------------------------------------------------------- |
+| sections | object | Yes      | Section name to `supported` or `unsupported`.                                                       |
+| actions  | object | Yes      | Method name to `supported` or `notPermitted`. An action the device cannot perform is left out.      |
+
+A key that is absent from either object means unsupported. Later versions of Core add sections and actions; a client must ignore keys it does not know.
+
+`actions` is worked out for the calling client. `notPermitted` means either the client lacks the capability the method requires, or the device's operating system refuses Core.
+
+##### Power object
+
+| Key           | Type            | Required | Description                                                                                             |
+| :------------ | :-------------- | :------- | :------------------------------------------------------------------------------------------------------ |
+| present       | boolean         | Yes      | Whether the device has a battery of its own.                                                            |
+| percent       | number \| null  | Yes      | Charge of the lowest battery, 0-100. Reported whether or not the device is charging.                    |
+| source        | string \| null  | Yes      | `battery` or `external`.                                                                                |
+| chargeState   | string \| null  | Yes      | `charging`, `discharging`, `full` or `notCharging`.                                                     |
+| timeRemaining | number          | No       | Estimated seconds until empty. Only present while discharging and when an estimate exists.              |
+| batteries     | Battery[]       | Yes      | Each battery: `id`, `percent`, `chargeState` and optional `timeRemaining`, with the meanings above.     |
+
+Batteries that belong to a peripheral, such as a wireless controller, are not reported here. A controller's battery is on its entry in `controllers`.
+
+Some hardware reports only a charge level. `source` and `chargeState` are then `null`.
+
+##### Network object
+
+| Key        | Type            | Required | Description                                                                                       |
+| :--------- | :-------------- | :------- | :------------------------------------------------------------------------------------------------ |
+| type       | string          | Yes      | Kind of link carrying the default route: `wifi`, `wired`, `other`, or `none` when there is none.  |
+| interface  | string \| null  | Yes      | Name of that interface.                                                                           |
+| internet   | string \| null  | Yes      | `full`, `portal` (something such as a sign-in page is answering in place of the internet) or `none`. |
+| interfaces | Interface[]     | Yes      | Each Wi-Fi and wired link: `name`, `type`, `up`, and `addresses` (loopback and link-local excluded). |
+
+`internet` comes from the operating system where it already checks reachability. Otherwise Core requests a small known page over plain HTTP, on a link change and then every five minutes while a client is connected. It is `null` until the first answer, and stays `null` when `internet_check = false` is set under `[service]` in the config and the operating system has no answer of its own.
+
+##### Bluetooth object
+
+| Key     | Type             | Required | Description                                                        |
+| :------ | :--------------- | :------- | :----------------------------------------------------------------- |
+| present | boolean          | Yes      | Whether the device has a Bluetooth adapter.                        |
+| powered | boolean \| null  | Yes      | Whether the adapter is switched on, where that can be read.        |
+
+Core reads the adapter's state and never changes it.
+
+##### Storage object
+
+| Key     | Type     | Required | Description                 |
+| :------ | :------- | :------- | :-------------------------- |
+| volumes | Volume[] | Yes      | One entry per filesystem.   |
+
+Each volume has `path` (where it is mounted, or a directory on it when that is not known), `roles` (`media`, `data`, or both), `totalBytes`, `freeBytes` (the space Core may use) and `usedBytes`.
+
+##### Display object
+
+| Key               | Type             | Required | Description                                                                              |
+| :---------------- | :--------------- | :------- | :--------------------------------------------------------------------------------------- |
+| internalPanel     | boolean          | Yes      | Whether the device has a built-in screen.                                                |
+| internalActive    | boolean          | Yes      | Whether the built-in screen is being driven.                                             |
+| externalConnected | boolean          | Yes      | Whether an external display is plugged in.                                               |
+| externalActive    | boolean          | Yes      | Whether an external display is being driven.                                             |
+| docked            | boolean \| null  | Yes      | Whether a device with a built-in screen is driving an external one. `null` without one.  |
+
+##### Controllers object
+
+| Key   | Type         | Required | Description                         |
+| :---- | :----------- | :------- | :---------------------------------- |
+| count | number       | Yes      | Number of connected controllers.    |
+| items | Controller[] | Yes      | The controllers.                    |
+
+| Controller key | Type            | Required | Description                                                                                  |
+| :------------- | :-------------- | :------- | :------------------------------------------------------------------------------------------- |
+| id             | string          | Yes      | Identifies the controller only while it stays connected.                                     |
+| name           | string \| null  | Yes      | The name the controller reports.                                                             |
+| vendorId       | string \| null  | Yes      | USB vendor ID, four lowercase hex digits.                                                    |
+| productId      | string \| null  | Yes      | USB product ID, four lowercase hex digits.                                                   |
+| connection     | string          | Yes      | `usb`, `bluetooth` or `unknown`.                                                             |
+| battery        | object \| null  | Yes      | `percent` (number or `null`) and `level` (`empty`, `low`, `medium` or `full`).               |
+
+Virtual controllers, including the one Core creates for [`input.gamepad`](#inputgamepad), are not listed.
+
+On Windows, controllers are read through XInput: at most four, with no name or IDs, and a battery `level` without a `percent`.
+
+##### Time object
+
+| Key           | Type            | Required | Description                                                                                   |
+| :------------ | :-------------- | :------- | :-------------------------------------------------------------------------------------------- |
+| clockReliable | boolean         | Yes      | `false` when the clock is clearly unset, as on a device with no clock battery before it syncs. |
+| timezone      | string \| null  | Yes      | IANA time zone name.                                                                          |
+| utcOffset     | number          | Yes      | Current offset from UTC in seconds.                                                           |
+
+##### System object
+
+| Key      | Type            | Required | Description                                  |
+| :------- | :-------------- | :------- | :------------------------------------------- |
+| hostname | string          | Yes      | The device's hostname.                       |
+| platform | string          | Yes      | Core's platform ID, as in [`version`](#version). |
+| os       | string          | Yes      | Operating system family, such as `linux`.    |
+| arch     | string          | Yes      | CPU architecture, such as `arm64`.           |
+| model    | string \| null  | Yes      | Hardware model, where the device reports one. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5d-4d5c-9b6e-2f3d4c5b6a79",
+  "method": "device.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5d-4d5c-9b6e-2f3d4c5b6a79",
+  "result": {
+    "capabilities": {
+      "sections": {
+        "power": "supported",
+        "network": "supported",
+        "bluetooth": "supported",
+        "storage": "supported",
+        "display": "supported",
+        "controllers": "supported",
+        "time": "supported",
+        "system": "supported"
+      },
+      "actions": {
+        "device.power.reboot": "supported",
+        "device.power.shutdown": "supported",
+        "device.power.suspend": "supported"
+      }
+    },
+    "power": {
+      "present": true,
+      "percent": 96,
+      "source": "external",
+      "chargeState": "charging",
+      "batteries": [{ "id": "BAT1", "percent": 96, "chargeState": "charging" }]
+    },
+    "network": {
+      "type": "wifi",
+      "interface": "wlan0",
+      "internet": "full",
+      "interfaces": [{ "name": "wlan0", "type": "wifi", "up": true, "addresses": ["192.168.1.20"] }]
+    },
+    "bluetooth": { "present": true, "powered": true },
+    "storage": {
+      "volumes": [
+        {
+          "path": "/home",
+          "roles": ["media", "data"],
+          "totalBytes": 494384795648,
+          "freeBytes": 201863462912,
+          "usedBytes": 292521332736
+        }
+      ]
+    },
+    "display": {
+      "internalPanel": true,
+      "internalActive": false,
+      "externalConnected": true,
+      "externalActive": true,
+      "docked": true
+    },
+    "controllers": {
+      "count": 1,
+      "items": [
+        {
+          "id": "input17",
+          "name": "DualSense Wireless Controller",
+          "vendorId": "054c",
+          "productId": "0ce6",
+          "connection": "bluetooth",
+          "battery": { "percent": 80, "level": "full" }
+        }
+      ]
+    },
+    "time": { "clockReliable": true, "timezone": "Australia/Perth", "utcOffset": 28800 },
+    "system": { "hostname": "steamdeck", "platform": "steamos", "os": "linux", "arch": "amd64", "model": "Jupiter" }
+  }
+}
+```
+
+### device.power.reboot
+
+**Access:** Requires `device.power`.
+
+Restart the device. The response is sent before the device goes down.
+
+Check `capabilities.actions` in [`device.status`](#devicestatus) before offering this to a user: it lists the action only where the device can perform it, and marks it `notPermitted` where it cannot be used.
+
+The request is refused while a backup or restore is running.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` once the request has been accepted.
+
+#### Errors
+
+A refusal carries a `category` in the error's `data`:
+
+| Category        | Meaning                                                              |
+| :-------------- | :------------------------------------------------------------------- |
+| `unsupported`   | This device cannot perform the action.                               |
+| `not_permitted` | The device's operating system does not allow Core to perform it.     |
+| `busy`          | A backup or restore is running.                                      |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "0c1b2a39-4857-4a6b-8c9d-0e1f2a3b4c5d",
+  "method": "device.power.reboot"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "0c1b2a39-4857-4a6b-8c9d-0e1f2a3b4c5d",
+  "result": null
+}
+```
+
+### device.power.shutdown
+
+**Access:** Requires `device.power`.
+
+Power the device off. Access, parameters, result and errors are the same as [`device.power.reboot`](#devicepowerreboot).
+
+### device.power.suspend
+
+**Access:** Requires `device.power`.
+
+Put the device to sleep. Access, parameters, result and errors are the same as [`device.power.reboot`](#devicepowerreboot).
