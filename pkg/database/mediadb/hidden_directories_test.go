@@ -251,3 +251,115 @@ func TestReplaceHiddenDirectoriesAdvancesRevisionOnChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, has, "a name that only starts the folder's is not the folder")
 }
+
+// A projection this build cannot read hides nothing, and the next sync
+// replaces it. A database that is closed or mid-transaction refuses the write.
+func TestHiddenDirectoriesProjectionEdges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("Game", root+"Folder/Game.nes")
+
+	// The fixture's transaction is still open.
+	_, err := f.mediaDB.ReplaceHiddenDirectories(ctx, nil)
+	require.ErrorIs(t, err, ErrTransactionActive)
+	f.commit(t, true)
+
+	_, err = f.mediaDB.sql.Load().ExecContext(ctx,
+		`INSERT INTO DBConfig(Name, Value) VALUES (?, 'not json')`, DBConfigHiddenDirectories)
+	require.NoError(t, err)
+	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Folder"}, dirNames(dirs))
+
+	// Entries with no system or no path are dropped, and a repeat is one.
+	changed, err := f.mediaDB.ReplaceHiddenDirectories(ctx, []database.HiddenDirectory{
+		{SystemID: "NES", Path: root + "Folder"},
+		{SystemID: "NES", Path: root + "Folder/"},
+		{SystemID: "", Path: root + "Folder"},
+		{SystemID: "NES", Path: ""},
+	})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	dirs, err = f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, dirs)
+
+	closed := &MediaDB{}
+	_, err = closed.ReplaceHiddenDirectories(ctx, nil)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = closed.HasMediaUnderDirectory(ctx, 1, root)
+	require.ErrorIs(t, err, ErrNullSQL)
+}
+
+// Title candidates treat media under a hidden folder like media hidden one
+// file at a time: it no longer makes its title eligible.
+func TestTitleCandidatesSkipTitlesOnlyUnderHiddenDirectories(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("Zelda Hidden", root+"Folder/Zelda Hidden.nes")
+	f.insert("Zelda Shown", root+"Zelda Shown.nes")
+	f.commit(t, true)
+
+	names := func() []string {
+		candidates, err := f.mediaDB.TitleCandidates(ctx, "NES", "Zelda", 5)
+		require.NoError(t, err)
+		got := make([]string, 0, len(candidates))
+		for i := range candidates {
+			got = append(got, candidates[i].Name)
+		}
+		return got
+	}
+	assert.Contains(t, names(), "Zelda Hidden")
+	hideDirs(t, f.mediaDB, root+"Folder")
+	got := names()
+	assert.NotContains(t, got, "Zelda Hidden")
+	assert.Contains(t, got, "Zelda Shown")
+}
+
+// System root candidates probe Media for anything still visible, so the
+// probe has to leave a hidden folder's media out as the counts do.
+func TestHiddenDirectoryLeavesRootCandidates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 2)
+	t.Cleanup(cleanup)
+	f.insert("Inside", f.roots[0]+"Folder/Inside.nes")
+	f.insert("Kept", f.roots[0]+"Kept/Kept.nes")
+	f.insert("Only", f.roots[1]+"Whole/Only.nes")
+	f.commit(t, true)
+	hideDirs(t, f.mediaDB, f.roots[0]+"Folder", f.roots[1]+"Whole")
+
+	candidates, _, err := f.mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots: f.roots, Systems: []systemdefs.System{f.system}, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Kept"}, candidates.Children[f.roots[0]])
+	assert.True(t, candidates.HasMedia[f.roots[0]])
+	assert.Empty(t, candidates.Children[f.roots[1]])
+	assert.False(t, candidates.HasMedia[f.roots[1]], "a root with nothing visible left is no candidate")
+}
+
+func TestHiddenDirCoversEverySystemOfTheRow(t *testing.T) {
+	t.Parallel()
+	dirs := []hiddenDir{{SystemID: "NES", Prefix: "/roms/Shared/"}}
+	nes := []systemdefs.System{{ID: "NES"}}
+
+	assert.True(t, hiddenDirCovers(dirs, "/roms/Shared/", []string{"NES"}, nil))
+	assert.False(t, hiddenDirCovers(dirs, "/roms/Shared/", []string{"NES", "SNES"}, nil),
+		"a folder that also holds another system's media stays")
+	// A row that reports no systems falls back to the listing's scope.
+	assert.True(t, hiddenDirCovers(dirs, "/roms/Shared/", nil, nes))
+	assert.False(t, hiddenDirCovers(dirs, "/roms/Shared/", nil, []systemdefs.System{{ID: "SNES"}}))
+	assert.True(t, hiddenDirCovers(dirs, "/roms/Shared/", nil, nil))
+	assert.False(t, hiddenDirCovers(dirs, "/roms/Other/", nil, nil))
+}

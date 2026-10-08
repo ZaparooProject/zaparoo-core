@@ -435,6 +435,17 @@ func TestHiddenFolderLeavesOtherRequestsAlone(t *testing.T) {
 	_, err = request(filepath.Join(root, "Missing"), "user:hidden")
 	require.ErrorContains(t, err, "media not found")
 
+	// A hidden path that has left the index can still be unhidden.
+	gone := filepath.Join(root, "Gone")
+	require.NoError(t, userDB.SetMediaUserHidden("NES", gone, true))
+	encoded, err := json.Marshal(map[string]any{"system": "NES", "path": gone, "remove": []string{"user:hidden"}})
+	require.NoError(t, err)
+	_, err = HandleMediaTagsUpdate(withParams(&env, string(encoded)))
+	require.NoError(t, err)
+	_, found, err = userDB.GetMediaUserData("NES", gone)
+	require.NoError(t, err)
+	assert.False(t, found)
+
 	// A file named with a trailing slash is still a file, not a folder.
 	_, _ = request(filepath.Join(folder, "Game.nes")+"/", "user:hidden")
 	assert.False(t, folderHidden())
