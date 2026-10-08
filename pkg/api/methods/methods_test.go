@@ -811,7 +811,6 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			// wins, an unexpected call panics the whole test binary rather than
 			// failing this test (#1379).
 			mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
-			mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 
 			// Persisted optimization state is restart intent, not process ownership.
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)

@@ -665,7 +665,9 @@ type BrowseDirectoryResult struct {
 // HiddenDirectory is a folder hidden for one system. Path is canonical, with
 // no trailing slash. The folder leaves its parent's listing and its media
 // leave search and random selection, while the folder's own path still
-// browses.
+// browses. UserDB records it as the hidden flag of a MediaUserData row whose
+// path is the folder's; what makes that row a folder is the index, where the
+// path names no file and holds media.
 type HiddenDirectory struct {
 	SystemID string
 	Path     string
@@ -1261,11 +1263,6 @@ type UserDBI interface {
 	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
 	SetMediaUserHidden(systemID, path string, hidden bool) error
-	// SetDirectoryHidden records or clears the hide on one folder of one
-	// system. The folder and everything under it leave discovery; the row
-	// count does not grow with the folder's contents.
-	SetDirectoryHidden(systemID, path string, hidden bool) error
-	ListHiddenDirectories() ([]HiddenDirectory, error)
 	SetMediaUserFlag(systemID, path string, flag MediaUserFlag, value bool) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
 	SetMediaUserSnapshot(systemID, path, mediaName, slug string, tags []string) error
@@ -1597,9 +1594,9 @@ type MediaDBI interface {
 	// overrides) already stored in media.db, for the one-time UserDB backfill.
 	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
 	MediaPreferencesRevision(ctx context.Context) (string, error)
-	// ReplaceHiddenDirectories brings the projection of UserDB's hidden
-	// folders in line with dirs and advances the preferences revision when
-	// it changed anything. It reports whether it did.
+	// ReplaceHiddenDirectories brings the projection of the hidden folders
+	// UserDB records in line with dirs and advances the preferences revision
+	// when it changed anything. It reports whether it did.
 	ReplaceHiddenDirectories(ctx context.Context, dirs []HiddenDirectory) (bool, error)
 	// HasMediaUnderDirectory reports whether a system has indexed, present
 	// media anywhere under a directory path.

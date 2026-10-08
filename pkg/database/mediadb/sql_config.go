@@ -32,18 +32,21 @@ import (
 )
 
 const (
-	DBConfigLastGeneratedAt                 = "LastGeneratedAt"
-	DBConfigOptimizationStatus              = "OptimizationStatus"
-	DBConfigOptimizationStep                = "OptimizationStep"
-	DBConfigIndexingStatus                  = "IndexingStatus"
-	DBConfigScrapingStatus                  = "ScrapingStatus"
-	DBConfigScrapingOperation               = "ScrapingOperation"
-	DBConfigLastIndexedSystem               = "LastIndexedSystem"
-	DBConfigIndexingSystems                 = "IndexingSystems"
-	DBConfigIndexingPlanSystems             = "IndexingPlanSystems"
-	DBConfigIndexingCurrentSystem           = "IndexingCurrentSystem"
-	DBConfigIndexingSkippedSystems          = "IndexingSkippedSystems"
-	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigLastGeneratedAt        = "LastGeneratedAt"
+	DBConfigOptimizationStatus     = "OptimizationStatus"
+	DBConfigOptimizationStep       = "OptimizationStep"
+	DBConfigIndexingStatus         = "IndexingStatus"
+	DBConfigScrapingStatus         = "ScrapingStatus"
+	DBConfigScrapingOperation      = "ScrapingOperation"
+	DBConfigLastIndexedSystem      = "LastIndexedSystem"
+	DBConfigIndexingSystems        = "IndexingSystems"
+	DBConfigIndexingPlanSystems    = "IndexingPlanSystems"
+	DBConfigIndexingCurrentSystem  = "IndexingCurrentSystem"
+	DBConfigIndexingSkippedSystems = "IndexingSkippedSystems"
+	DBConfigBrowseIndexVersion     = "BrowseIndexVersion"
+	// DBConfigHiddenDirectories holds the hidden folders UserDB records, as
+	// JSON, for browse and search to apply by path.
+	DBConfigHiddenDirectories               = "HiddenDirectories"
 	DBConfigBrowseIndexComplete             = "BrowseIndexComplete"
 	DBConfigMediaTotalCount                 = "MediaTotalCount"
 	DBConfigMediaMissingCount               = "MediaMissingCount"

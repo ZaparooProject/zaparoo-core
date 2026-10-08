@@ -23,7 +23,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -221,12 +220,12 @@ func updateHiddenDirectory(
 		return nil, false, fmt.Errorf("failed to probe directory: %w", err)
 	}
 	if !isDir {
-		// A hidden folder that has since left the index can still be unhidden.
-		known, listErr := env.Database.UserDB.ListHiddenDirectories()
-		if listErr != nil {
-			return nil, false, fmt.Errorf("failed to list hidden directories: %w", listErr)
+		// A hidden path that has since left the index can still be unhidden.
+		stored, found, readErr := env.Database.UserDB.GetMediaUserData(system.SystemID, dirPath)
+		if readErr != nil {
+			return nil, false, fmt.Errorf("failed to read media user data: %w", readErr)
 		}
-		isDir = !hidden && slices.Contains(known, database.HiddenDirectory{SystemID: system.SystemID, Path: dirPath})
+		isDir = !hidden && found && stored.IsHidden
 	}
 	if !isDir {
 		return nil, false, nil

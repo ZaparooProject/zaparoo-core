@@ -362,14 +362,11 @@ func TestHiddenFolderDiscoveryAndRecovery(t *testing.T) {
 
 	hidden := database.TagInfo{Type: "user", Tag: "hidden"}
 	assert.Equal(t, []database.TagInfo{hidden}, update("add"))
-	stored, err := userDB.ListHiddenDirectories()
-	require.NoError(t, err)
-	assert.Equal(t, []database.HiddenDirectory{
-		{SystemID: "NES", Path: pathutil.CanonicalMediaPath(folder)},
-	}, stored, "one row for the folder, none for its files")
 	rows, err := userDB.ListMediaUserData()
 	require.NoError(t, err)
-	assert.Empty(t, rows)
+	require.Len(t, rows, 1, "one row for the folder, none for its files")
+	assert.Equal(t, pathutil.CanonicalMediaPath(folder), rows[0].Path)
+	assert.True(t, rows[0].IsHidden)
 
 	listed := browse(map[string]any{"path": root})
 	assert.Nil(t, folderEntry(listed))
@@ -392,6 +389,9 @@ func TestHiddenFolderDiscoveryAndRecovery(t *testing.T) {
 	assert.Empty(t, update("remove"))
 	assert.NotNil(t, folderEntry(browse(map[string]any{"path": root})))
 	assert.Equal(t, 3, searchCount(map[string]any{}))
+	rows, err = userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, rows, "unhiding leaves no row behind")
 }
 
 // Any other tag on a folder still means its single launch target, and a path
@@ -422,9 +422,15 @@ func TestHiddenFolderLeavesOtherRequestsAlone(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.True(t, row.IsFavorite, "the favorite lands on the folder's launch target")
-	dirs, err := userDB.ListHiddenDirectories()
-	require.NoError(t, err)
-	assert.Empty(t, dirs)
+	folderHidden := func() bool {
+		dirs, browseErr := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			PathPrefix: pathutil.CanonicalMediaPath(root) + "/",
+		})
+		require.NoError(t, browseErr)
+		require.Len(t, dirs, 1)
+		return dirs[0].Hidden
+	}
+	assert.False(t, folderHidden())
 
 	_, err = request(filepath.Join(root, "Missing"), "user:hidden")
 	require.ErrorContains(t, err, "media not found")
@@ -432,9 +438,7 @@ func TestHiddenFolderLeavesOtherRequestsAlone(t *testing.T) {
 	// A file is hidden as a file, never as a folder.
 	_, err = HandleMediaTagsUpdate(withParams(&env, fmt.Sprintf(`{"mediaId":%d,"add":["user:hidden"]}`, ids[0])))
 	require.NoError(t, err)
-	dirs, err = userDB.ListHiddenDirectories()
-	require.NoError(t, err)
-	assert.Empty(t, dirs)
+	assert.False(t, folderHidden(), "a hidden file is not projected as a folder")
 }
 
 func TestSearchCursorRejectedAfterVisibilityChange(t *testing.T) {

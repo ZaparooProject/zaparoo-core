@@ -157,8 +157,9 @@ func TestLogBrowseMediaCountsBySystem_RowsError(t *testing.T) {
 // expectNoHiddenDirectories answers the read a listing that includes hidden
 // entries makes to say which of its folders are hidden.
 func expectNoHiddenDirectories(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery("SELECT SystemID, Path FROM HiddenDirectories").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path"}))
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigHiddenDirectories).
+		WillReturnError(sql.ErrNoRows)
 }
 
 func TestSqlBrowseDirectoriesFromCache_ReturnsSystemCounts(t *testing.T) {

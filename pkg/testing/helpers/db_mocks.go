@@ -291,24 +291,6 @@ func (m *MockUserDBI) DeleteMediaUserData(systemID, path string) error {
 	return nil
 }
 
-func (m *MockUserDBI) SetDirectoryHidden(systemID, path string, hidden bool) error {
-	if err := m.Called(systemID, path, hidden).Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI set directory hidden failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockUserDBI) ListHiddenDirectories() ([]database.HiddenDirectory, error) {
-	args := m.Called()
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI list hidden directories failed: %w", err)
-	}
-	if dirs, ok := args.Get(0).([]database.HiddenDirectory); ok {
-		return dirs, nil
-	}
-	return nil, nil
-}
-
 func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
 	args := m.Called()
 	if data, ok := args.Get(0).([]database.MediaUserData); ok {
@@ -3135,8 +3117,6 @@ func NewMockUserDBI() *MockUserDBI {
 	// projection. Default to an empty list so tests exercising NewNamesIndex
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
-	// The same passes bring the hidden folder projection in line.
-	m.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	// Startup checks for a reconcile left pending by a restore; default to none.
 	m.On("GetDeviceState", database.DeviceStateKeyMediaUserDataReconcile).Return("", false, nil).Maybe()

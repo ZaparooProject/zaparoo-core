@@ -21,6 +21,9 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -29,13 +32,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/rs/zerolog/log"
 )
 
-// A hidden folder is one HiddenDirectories row, never a hidden tag on each
-// file under it: the per-file hidden set is loaded whole by every browse and
-// is expected to stay small, and a folder such as an arcade alternatives tree
-// holds thousands of files. The folder is applied by path instead, in the two
-// ways per-file visibility already works:
+// A hidden folder is one entry in the DBConfigHiddenDirectories list, never a
+// hidden tag on each file under it: the per-file hidden set is loaded whole
+// by every browse and is expected to stay small, and a folder such as an
+// arcade alternatives tree holds thousands of files. The folder is applied by
+// path instead, in the two ways per-file visibility already works:
 //
 //   - aggregates subtract the folder's media count, which drops the folder
 //     from its parent's listing and shrinks every ancestor's count;
@@ -85,25 +89,43 @@ func (d *hiddenDir) within(prefix string) bool {
 	return strings.HasPrefix(d.Prefix, prefix)
 }
 
-const hiddenDirsSQL = `SELECT SystemID, Path FROM HiddenDirectories ORDER BY SystemID, Path`
+// storedHiddenDir is one folder of the DBConfigHiddenDirectories list.
+type storedHiddenDir struct {
+	SystemID string `json:"systemId"`
+	Path     string `json:"path"`
+}
 
-// loadHiddenDirs returns the hidden folders without their counts.
-func loadHiddenDirs(ctx context.Context, db sqlQueryable) ([]hiddenDir, error) {
-	rows, err := db.QueryContext(ctx, hiddenDirsSQL)
+const hiddenDirsSQL = `SELECT Value FROM DBConfig WHERE Name = ?`
+
+// loadStoredHiddenDirs reads the projected list. No value means no folder is
+// hidden, and one this build cannot read is treated the same: the projection
+// is rewritten from UserDB at the next sync.
+func loadStoredHiddenDirs(ctx context.Context, db sqlQueryable) ([]storedHiddenDir, error) {
+	var value string
+	err := db.QueryRowContext(ctx, hiddenDirsSQL, DBConfigHiddenDirectories).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && value == "") {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query hidden directories: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	var dirs []hiddenDir
-	for rows.Next() {
-		var systemID, path string
-		if scanErr := rows.Scan(&systemID, &path); scanErr != nil {
-			return nil, fmt.Errorf("scan hidden directory: %w", scanErr)
-		}
-		dirs = append(dirs, hiddenDir{SystemID: systemID, Prefix: hiddenDirPrefix(path)})
+	var stored []storedHiddenDir
+	if jsonErr := json.Unmarshal([]byte(value), &stored); jsonErr != nil {
+		log.Warn().Err(jsonErr).Msg("ignoring unreadable hidden directories projection")
+		return nil, nil
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("read hidden directories: %w", rowsErr)
+	return stored, nil
+}
+
+// loadHiddenDirs returns the hidden folders without their counts.
+func loadHiddenDirs(ctx context.Context, db sqlQueryable) ([]hiddenDir, error) {
+	stored, err := loadStoredHiddenDirs(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	dirs := make([]hiddenDir, 0, len(stored))
+	for i := range stored {
+		dirs = append(dirs, hiddenDir{SystemID: stored[i].SystemID, Prefix: hiddenDirPrefix(stored[i].Path)})
 	}
 	return dirs, nil
 }
@@ -250,15 +272,15 @@ func (db *MediaDB) ReplaceHiddenDirectories(
 		return false, ErrTransactionActive
 	}
 
-	want := make([]database.HiddenDirectory, 0, len(dirs))
+	want := make([]storedHiddenDir, 0, len(dirs))
 	for _, dir := range dirs {
 		dir.Path = pathutil.CanonicalMediaPath(dir.Path)
 		if dir.SystemID == "" || dir.Path == "" {
 			continue
 		}
-		want = append(want, dir)
+		want = append(want, storedHiddenDir{SystemID: dir.SystemID, Path: dir.Path})
 	}
-	slices.SortFunc(want, func(a, b database.HiddenDirectory) int {
+	slices.SortFunc(want, func(a, b storedHiddenDir) int {
 		if c := strings.Compare(a.SystemID, b.SystemID); c != 0 {
 			return c
 		}
@@ -277,29 +299,23 @@ func (db *MediaDB) ReplaceHiddenDirectories(
 		}
 	}()
 
-	current, err := loadHiddenDirs(ctx, tx)
+	have, err := loadStoredHiddenDirs(ctx, tx)
 	if err != nil {
 		return false, err
-	}
-	have := make([]database.HiddenDirectory, 0, len(current))
-	for i := range current {
-		have = append(have, database.HiddenDirectory{
-			SystemID: current[i].SystemID, Path: strings.TrimSuffix(current[i].Prefix, "/"),
-		})
 	}
 	if slices.Equal(have, want) {
 		return false, nil
 	}
 
-	if _, err = tx.ExecContext(ctx, `DELETE FROM HiddenDirectories`); err != nil {
-		return false, fmt.Errorf("clear hidden directories: %w", err)
+	value, err := json.Marshal(want)
+	if err != nil {
+		return false, fmt.Errorf("encode hidden directories: %w", err)
 	}
-	for _, dir := range want {
-		if _, err = tx.ExecContext(ctx,
-			`INSERT INTO HiddenDirectories(SystemID, Path) VALUES (?, ?)`, dir.SystemID, dir.Path,
-		); err != nil {
-			return false, fmt.Errorf("write hidden directory: %w", err)
-		}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO DBConfig(Name, Value) VALUES (?, ?)
+		ON CONFLICT(Name) DO UPDATE SET Value = excluded.Value
+	`, DBConfigHiddenDirectories, string(value)); err != nil {
+		return false, fmt.Errorf("write hidden directories: %w", err)
 	}
 	// Cached random counts and every browse and search cursor describe the
 	// library as it was listed before this change.
