@@ -48,7 +48,9 @@ func testSystemIndex() systemIndex {
 // checks every one against the tag vocabulary.
 func buildValidWrites(t testing.TB, records []sourceRecords, runID string) matchResult {
 	t.Helper()
-	matched := buildPendingWrites(testSystemIndex(), records, runID, &scraper.UnmappedValues{})
+	matched := buildPendingWrites(
+		testSystemIndex(), records, scraper.ScrapeOptions{RunID: runID}, &scraper.UnmappedValues{},
+	)
 	for _, target := range matched.Targets {
 		scrapertest.RequireValidWrite(t, target.Write)
 	}
@@ -63,6 +65,51 @@ func titleTagValues(write *database.ScrapeWrite, tagType tags.TagType) []string 
 		}
 	}
 	return values
+}
+
+func TestBuildPendingWrites_StoresEachPackUnderItsOwnImageType(t *testing.T) {
+	t.Parallel()
+
+	boxPath := filepath.Join("docs", "SNES", "Artwork", "Game.jpg")
+	screenPath := filepath.Join("docs", "SNES", "Screenshots", "Game.png")
+	titlePath := filepath.Join("docs", "SNES", "Titles", "Game.png")
+	record := func(path string) []artworkRecord {
+		return []artworkRecord{{Name: "Game (USA)", Key: "Game", ImagePath: path}}
+	}
+	matched := buildValidWrites(t, []sourceRecords{
+		{Image: tags.TagPropertyImageBoxart, Artwork: record(boxPath)},
+		{Image: tags.TagPropertyImageScreenshot, Artwork: record(screenPath)},
+		{Image: tags.TagPropertyImageTitleshot, Artwork: record(titlePath)},
+	}, "")
+
+	require.Len(t, matched.Targets, 1)
+	assert.Equal(t, matchStats{Processed: 3, Matched: 3}, matched.Stats)
+	got := make(map[string]string)
+	for _, prop := range matched.Targets[0].Write.MediaProps {
+		got[prop.TypeTag] = prop.Text
+	}
+	assert.Equal(t, map[string]string{
+		tags.PropertyTypeTag(tags.TagPropertyImageBoxart):     filepath.ToSlash(boxPath),
+		tags.PropertyTypeTag(tags.TagPropertyImageScreenshot): filepath.ToSlash(screenPath),
+		tags.PropertyTypeTag(tags.TagPropertyImageTitleshot):  filepath.ToSlash(titlePath),
+	}, got)
+}
+
+func TestBuildPendingWrites_MarksFillMissingWrites(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{Artwork: []artworkRecord{{
+		Name: "Game (USA)", Key: "Game", ImagePath: filepath.Join("docs", "SNES", "Artwork", "Game.jpg"),
+	}}}}
+	filled := buildPendingWrites(
+		testSystemIndex(), records, scraper.ScrapeOptions{FillMissing: true}, &scraper.UnmappedValues{},
+	)
+	require.Len(t, filled.Targets, 1)
+	assert.True(t, filled.Targets[0].Write.FillMissing, "an index-triggered run never replaces existing art")
+
+	manual := buildValidWrites(t, records, "")
+	require.Len(t, manual.Targets, 1)
+	assert.False(t, manual.Targets[0].Write.FillMissing)
 }
 
 func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
@@ -422,7 +469,7 @@ func TestBuildPendingWrites_UnmappedValuesDroppedAndNoted(t *testing.T) {
 	}}
 
 	unmapped := &scraper.UnmappedValues{}
-	matched := buildPendingWrites(testSystemIndex(), records, "", unmapped)
+	matched := buildPendingWrites(testSystemIndex(), records, scraper.ScrapeOptions{}, unmapped)
 	require.Len(t, matched.Targets, 1)
 	write := matched.Targets[0].Write
 	scrapertest.RequireValidWrite(t, write)

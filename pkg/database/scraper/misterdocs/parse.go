@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -72,17 +73,28 @@ type gameInfoRecord struct {
 }
 
 type sourceRecords struct {
-	GameInfo  map[string]gameInfoRecord
-	Synopsis  map[string]string
+	GameInfo map[string]gameInfoRecord
+	Synopsis map[string]string
+	// Image is the property this source's images are stored as; empty means
+	// box art.
+	Image     tags.TagValue
 	Artwork   []artworkRecord
 	Manuals   []string
 	RowErrors int
 }
 
+// imageTypeTag is the property type tag this source's images are written under.
+func (s *sourceRecords) imageTypeTag() string {
+	if s.Image == "" {
+		return tags.PropertyTypeTag(tags.TagPropertyImageBoxart)
+	}
+	return tags.PropertyTypeTag(s.Image)
+}
+
 func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir, langs []string) (sourceRecords, error) {
 	switch source.Kind {
 	case sourceArtwork:
-		return loadArtworkRecords(ctx, fs, source.Path, langs)
+		return loadArtworkRecords(ctx, fs, source, langs)
 	case sourceManuals:
 		manuals, err := loadManualRecords(ctx, fs, source.Path)
 		return sourceRecords{Manuals: manuals}, err
@@ -91,12 +103,14 @@ func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir, langs
 	}
 }
 
-func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string, langs []string) (sourceRecords, error) {
+func loadArtworkRecords(ctx context.Context, fs afero.Fs, source sourceDir, langs []string) (sourceRecords, error) {
+	dir := source.Path
 	images, err := imageFilesByStem(ctx, fs, dir)
 	if err != nil {
 		return sourceRecords{}, err
 	}
 	result := sourceRecords{
+		Image:    source.Image,
 		Artwork:  make([]artworkRecord, 0, len(images)),
 		GameInfo: make(map[string]gameInfoRecord),
 		Synopsis: make(map[string]string),
@@ -108,7 +122,9 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string, langs []st
 	// after this point resolve by exact name alone, which is all the format
 	// promises for an image the index does not mention.
 	markUniqueSlugs(result.Artwork)
-	loadArtworkMetadata(ctx, fs, dir, langs, &result)
+	if source.Metadata {
+		loadArtworkMetadata(ctx, fs, dir, langs, &result)
+	}
 	appendUnindexedRecords(images, &result)
 	return result, nil
 }

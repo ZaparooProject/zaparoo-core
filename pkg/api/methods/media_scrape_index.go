@@ -42,6 +42,17 @@ func scrapeSourceLaunchers(scrapers map[string]platforms.Scraper) []string {
 	return slices.Compact(ids)
 }
 
+// scrapeSourcesAllLaunchers reports whether an opted-in scraper wants the
+// contributions of every launcher rather than a list of them.
+func scrapeSourcesAllLaunchers(scrapers map[string]platforms.Scraper) bool {
+	for _, s := range scrapers {
+		if s.SupportsFillMissing && s.Scrape != nil && s.AutoScrapeAllLaunchers {
+			return true
+		}
+	}
+	return false
+}
+
 func scrapeJobsForSources(
 	scrapers map[string]platforms.Scraper, sources []mediascanner.IndexedSource,
 ) []database.ScrapeJob {
@@ -52,7 +63,8 @@ func scrapeJobsForSources(
 		}
 		var systems []string
 		for _, source := range sources {
-			if source.Files <= 0 || !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID) {
+			if source.Files <= 0 ||
+				!s.AutoScrapeAllLaunchers && !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID) {
 				continue
 			}
 			if len(s.SupportedSystemIDs) > 0 && !slices.Contains(s.SupportedSystemIDs, source.SystemID) {

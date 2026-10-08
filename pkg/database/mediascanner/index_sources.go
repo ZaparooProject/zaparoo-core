@@ -32,11 +32,13 @@ type IndexedSource struct {
 	Files      int
 }
 
-// IndexSourceOptions requests a bounded summary for selected launchers. Completed
-// runs only after successful finalization; existing index callers need no hook.
+// IndexSourceOptions requests a bounded summary for selected launchers, or for
+// every launcher when AllLaunchers is set. Completed runs only after successful
+// finalization; existing index callers need no hook.
 type IndexSourceOptions struct {
-	Completed   func([]IndexedSource)
-	LauncherIDs []string
+	Completed    func([]IndexedSource)
+	LauncherIDs  []string
+	AllLaunchers bool
 }
 
 type indexSourceCollector struct {
@@ -44,26 +46,29 @@ type indexSourceCollector struct {
 	wanted  map[string]bool
 	matcher *helpers.LauncherMatcher
 	sources []IndexedSource
+	all     bool
 }
 
 func newIndexSourceCollector(
 	cfg *config.Instance, pl platforms.Platform, opts *IndexSourceOptions,
 ) *indexSourceCollector {
-	if opts == nil || opts.Completed == nil || len(opts.LauncherIDs) == 0 {
+	if opts == nil || opts.Completed == nil || len(opts.LauncherIDs) == 0 && !opts.AllLaunchers {
 		return nil
 	}
 	wanted := make(map[string]bool, len(opts.LauncherIDs))
 	for _, id := range opts.LauncherIDs {
 		wanted[id] = true
 	}
-	return &indexSourceCollector{cfg: cfg, wanted: wanted, matcher: helpers.NewLauncherMatcher(cfg, pl)}
+	return &indexSourceCollector{
+		cfg: cfg, wanted: wanted, all: opts.AllLaunchers, matcher: helpers.NewLauncherMatcher(cfg, pl),
+	}
 }
 
 func (c *indexSourceCollector) record(
 	systemID string, files []platforms.ScanResult, launcher *platforms.Launcher,
 	succeeded map[string]bool, incomplete bool,
 ) {
-	if c == nil || !c.wanted[launcher.ID] || launcher.AvailabilityReason != "" {
+	if c == nil || !c.all && !c.wanted[launcher.ID] || launcher.AvailabilityReason != "" {
 		return
 	}
 	// The index-local cache intentionally does not evaluate launch availability.
