@@ -1474,6 +1474,16 @@ func apiPortHeld(addr string, probeTimeout time.Duration) bool {
 }
 
 func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Duration) error {
+	return waitForPortRelease(cfg, timeout, pollInterval, apiPortHeld)
+}
+
+// waitForPortRelease polls held until no API address is held or timeout passes.
+// Each probe is given no longer than the time left before the deadline.
+func waitForPortRelease(
+	cfg *config.Instance,
+	timeout, pollInterval time.Duration,
+	held func(addr string, probeTimeout time.Duration) bool,
+) error {
 	if cfg == nil || cfg.APIPort() == 0 {
 		return nil
 	}
@@ -1483,14 +1493,14 @@ func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Dura
 	for {
 		probeTimeout := min(apiPortProbeTimeout, max(time.Until(deadline), apiPortMinProbeTimeout))
 
-		held := false
+		stillHeld := false
 		for _, addr := range addrs {
-			if apiPortHeld(addr, probeTimeout) {
-				held = true
+			if held(addr, probeTimeout) {
+				stillHeld = true
 				break
 			}
 		}
-		if !held {
+		if !stillHeld {
 			return nil
 		}
 
