@@ -105,6 +105,9 @@ func applyBatch(
 		if batchErr == nil {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // callers match context errors directly
+		}
 		log.Warn().Err(batchErr).Int("targets", len(batch)).
 			Msgf("%s: batch write failed, falling back to per-record writes", scraperID)
 	}
