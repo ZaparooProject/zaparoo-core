@@ -245,6 +245,23 @@ func (h *harness) run(t *testing.T) (stop func()) {
 	return stop
 }
 
+// runConnected starts the monitor loop with a client already connected.
+//
+// Connecting after the loop starts leaves the wake-up that announces the client
+// pending whenever the loop saw the client before it saw the wake-up. The loop
+// then parks, wakes at once and parks a second time, and awaitParked cannot
+// tell those apart: a clock advanced between them lands before the second
+// timer exists, which then never fires.
+func (h *harness) runConnected(t *testing.T) (stop func()) {
+	t.Helper()
+	h.monitor.ClientConnected()
+	select {
+	case <-h.monitor.wake:
+	default:
+	}
+	return h.run(t)
+}
+
 func (h *harness) awaitPublish(t *testing.T) models.DeviceChangedNotification {
 	t.Helper()
 	select {
@@ -289,8 +306,7 @@ func TestMonitor_FirstClientGetsCurrentState(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, testPlatform(platforms.Settings{}), nil)
-	h.run(t)
-	h.monitor.ClientConnected()
+	h.runConnected(t)
 
 	params := h.awaitPublish(t)
 	require.NotNil(t, params.Power)
@@ -313,8 +329,7 @@ func TestMonitor_PublishesOnlyOnChange(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, testPlatform(platforms.Settings{}), nil)
-	h.run(t)
-	h.monitor.ClientConnected()
+	h.runConnected(t)
 	h.awaitPublish(t)
 	h.awaitParked(t)
 
@@ -347,8 +362,7 @@ func TestMonitor_ConstrainedHardwarePollsLessOften(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, testPlatform(platforms.Settings{ResourceConstrained: true}), nil)
-	h.run(t)
-	h.monitor.ClientConnected()
+	h.runConnected(t)
 	h.awaitPublish(t)
 	h.awaitParked(t)
 
@@ -368,9 +382,8 @@ func TestMonitor_StopsReadingWhenLastClientLeaves(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, testPlatform(platforms.Settings{}), nil)
-	stop := h.run(t)
 	h.monitor.ClientConnected()
-	h.monitor.ClientConnected()
+	stop := h.runConnected(t)
 	h.awaitPublish(t)
 	h.awaitParked(t)
 
@@ -399,8 +412,7 @@ func TestMonitor_HungReaderDoesNotBlockOtherSections(t *testing.T) {
 	h := newHarness(t, testPlatform(platforms.Settings{}), nil)
 	h.device.displayHang = make(chan struct{})
 	t.Cleanup(func() { close(h.device.displayHang) })
-	h.run(t)
-	h.monitor.ClientConnected()
+	h.runConnected(t)
 
 	params := h.awaitPublish(t)
 	assert.NotNil(t, params.Power)
@@ -651,8 +663,7 @@ func TestMonitor_ProbeStopsWhenClientsLeave(t *testing.T) {
 	prober := newFakeProber()
 	h := newHarness(t, testPlatform(platforms.Settings{}), prober)
 	h.device.setNetwork(probedNetwork(), nil)
-	stop := h.run(t)
-	h.monitor.ClientConnected()
+	stop := h.runConnected(t)
 
 	select {
 	case <-prober.calls:
@@ -694,8 +705,7 @@ func TestMonitor_PushedPlatformIsReadOnlyWhenItSaysSo(t *testing.T) {
 
 	pl := &pushingPlatform{MockPlatform: testPlatform(platforms.Settings{})}
 	h := newHarness(t, pl, nil)
-	stop := h.run(t)
-	h.monitor.ClientConnected()
+	stop := h.runConnected(t)
 	h.awaitPublish(t)
 
 	before := h.device.readCount.Load()

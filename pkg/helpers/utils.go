@@ -199,7 +199,7 @@ func GetLocalIP() string {
 
 // GetAllLocalIPs returns all non-loopback private IPv4 addresses
 func GetAllLocalIPs() []string {
-	var ips []string
+	ips := make([]string, 0)
 
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
