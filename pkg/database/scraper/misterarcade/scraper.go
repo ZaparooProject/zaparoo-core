@@ -21,7 +21,9 @@ package misterarcade
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -42,9 +44,8 @@ import (
 )
 
 const (
-	scraperID      = "mister-arcade"
-	scraperName    = "MiSTer arcade catalog"
-	writeBatchSize = 100
+	scraperID   = "mister-arcade"
+	scraperName = "MiSTer arcade catalog"
 )
 
 // NewPlatformScraper returns the arcade catalog scraper.
@@ -95,7 +96,7 @@ func NewPlatformScraper(systems []string, catalog Catalog, cache SetNameCache) p
 			}
 			impl := &scraperImpl{
 				fs: fs, db: db.MediaDB, entries: index(entries), cache: cache,
-				unmapped: &scraper.UnmappedValues{},
+				unmapped: &scraper.UnmappedValues{}, catalogState: catalogState(entries),
 			}
 			go impl.scrapeLoop(ctx, opts, targetSystems(supported, indexed, opts.SystemIDs()), ch)
 			return nil
@@ -133,6 +134,9 @@ type scraperImpl struct {
 	// unmapped collects the catalog values this run dropped for want of a
 	// tag mapping; scrapeLoop logs the summary once the run ends.
 	unmapped *scraper.UnmappedValues
+	// catalogState identifies the catalog this run reads, for the fingerprint
+	// that lets an index-triggered run leave an unchanged system alone.
+	catalogState string
 }
 
 type matchStats struct {
@@ -178,15 +182,51 @@ func (s *scraperImpl) scrapeLoop(
 	}
 }
 
+// fingerprintVersion is bumped when a change to matching or to what is written
+// means an unchanged system has to be scraped again.
+const fingerprintVersion = 1
+
+// catalogState digests the catalog, the whole of this scraper's source: a
+// refreshed catalog is the only thing outside the library that can give a
+// descriptor new metadata.
+func catalogState(entries []Entry) string {
+	digest := sha256.New()
+	for i := range entries {
+		_, _ = fmt.Fprintf(digest, "%+v\n", entries[i])
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
 func (s *scraperImpl) scrapeSystem(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
 	systemID string,
 	step, steps int,
 	ch chan<- scraper.ScrapeUpdate,
-) (matchStats, error) {
-	if err := waitForScrape(ctx, opts); err != nil {
-		return matchStats{}, err
+) (stats matchStats, err error) {
+	if waitErr := waitForScrape(ctx, opts); waitErr != nil {
+		return matchStats{}, waitErr
+	}
+	// An index-triggered run ends here when the catalog and the system's rows
+	// are as its last completed run left them; every run over whole systems
+	// records the state it finishes in.
+	if opts.Scope == nil {
+		if opts.FillMissing &&
+			scraper.SystemUnchanged(ctx, s.db, scraperID, systemID, fingerprintVersion, s.catalogState) {
+			log.Debug().Str("system", systemID).Msg("misterarcade: catalog and library unchanged, system skipped")
+			ch <- scraper.ScrapeUpdate{SystemID: systemID, TotalSteps: steps, CurrentStep: step + 1}
+			return matchStats{}, nil
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			if rememberErr := scraper.RememberSystem(
+				ctx, s.db, scraperID, systemID, fingerprintVersion, s.catalogState,
+			); rememberErr != nil {
+				log.Debug().Err(rememberErr).Msg("misterarcade: system fingerprint not stored")
+			}
+		}()
 	}
 	candidates, err := s.loadDescriptors(ctx, systemID)
 	if len(candidates) > 0 {
@@ -234,12 +274,13 @@ func (s *scraperImpl) scrapeSystem(
 	}
 
 	written := 0
-	if err := s.applyTargets(ctx, opts, targets, func(from, to int) {
+	if err := scraper.ApplyTargets(ctx, s.db, opts, scraperID, targets, func(from, to int) {
 		written += to - from
 		if to < len(targets) {
 			report(stats.Skipped+written, written)
 		}
 	}); err != nil {
+		//nolint:wrapcheck // scraper.ApplyTargets names the scraper in its errors
 		return matchStats{Processed: stats.Processed, Matched: written, Skipped: stats.Skipped}, err
 	}
 	report(stats.Processed, written)
@@ -346,63 +387,7 @@ func (s *scraperImpl) setName(path string) string {
 	return mra.ReadSetName(s.fs, path)
 }
 
-// applyTargets writes targets in batches, calling onBatch with the half-open
-// index range of each batch once it has committed.
-func (s *scraperImpl) applyTargets(
-	ctx context.Context,
-	opts scraper.ScrapeOptions,
-	targets []database.ScrapeWriteTarget,
-	onBatch func(from, to int),
-) error {
-	batcher, canBatch := s.db.(database.ScrapeResultBatchApplier)
-	for start := 0; start < len(targets); start += writeBatchSize {
-		if err := waitForScrape(ctx, opts); err != nil {
-			return err
-		}
-		end := min(start+writeBatchSize, len(targets))
-		if err := s.applyBatch(ctx, batcher, canBatch, targets[start:end]); err != nil {
-			return err
-		}
-		if onBatch != nil {
-			onBatch(start, end)
-		}
-	}
-	return nil
-}
-
-// applyBatch commits one batch. A write failure is fatal: fill-missing work
-// that committed only part of a batch must not be reported as complete, or the
-// sentinel would keep the remaining rows from ever being filled.
-func (s *scraperImpl) applyBatch(
-	ctx context.Context,
-	batcher database.ScrapeResultBatchApplier,
-	canBatch bool,
-	batch []database.ScrapeWriteTarget,
-) error {
-	if canBatch {
-		batchErr := batcher.ApplyScrapeResults(ctx, batch)
-		if batchErr == nil {
-			return nil
-		}
-		log.Warn().Err(batchErr).Int("targets", len(batch)).
-			Msg("misterarcade: batch write failed, falling back to per-record writes")
-	}
-	for _, target := range batch {
-		if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
-			return fmt.Errorf("misterarcade: write media %d: %w", target.MediaDBID, err)
-		}
-	}
-	return nil
-}
-
 func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if opts.Pauser != nil {
-		if err := opts.Pauser.Wait(ctx); err != nil {
-			return fmt.Errorf("misterarcade: wait while paused: %w", err)
-		}
-	}
-	return nil
+	//nolint:wrapcheck // scraper.Wait names the scraper in its error
+	return scraper.Wait(ctx, opts, scraperID)
 }

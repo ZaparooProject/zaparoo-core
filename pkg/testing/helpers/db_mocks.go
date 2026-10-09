@@ -3675,6 +3675,69 @@ func (m *MockMediaDBI) GetScrapedMediaIDs(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+// GetTitlesByDBIDs answers from the mock's GetTitlesBySystemID results when no
+// expectation is set, so a test that describes a system's titles once serves
+// both the stream and the by-id lookup.
+func (m *MockMediaDBI) GetTitlesByDBIDs(
+	ctx context.Context, titleDBIDs []int64,
+) ([]database.TitleWithSystem, error) {
+	if m.hasExpectation("GetTitlesByDBIDs") {
+		args := m.Called(ctx, titleDBIDs)
+		if result, ok := args.Get(0).([]database.TitleWithSystem); ok {
+			return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+		}
+		return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	wanted := make(map[int64]struct{}, len(titleDBIDs))
+	for _, id := range titleDBIDs {
+		wanted[id] = struct{}{}
+	}
+	var titles []database.TitleWithSystem
+	for _, call := range m.ExpectedCalls {
+		if call.Method != "GetTitlesBySystemID" || len(call.ReturnArguments) == 0 {
+			continue
+		}
+		rows, ok := call.ReturnArguments.Get(0).([]database.TitleWithSystem)
+		if !ok {
+			continue
+		}
+		for i := range rows {
+			if _, want := wanted[rows[i].DBID]; want {
+				titles = append(titles, rows[i])
+				delete(wanted, rows[i].DBID)
+			}
+		}
+	}
+	return titles, nil
+}
+
+func (m *MockMediaDBI) LibraryRevision(ctx context.Context, systemID string) (int64, error) {
+	if !m.hasExpectation("LibraryRevision") {
+		return 0, nil
+	}
+	args := m.Called(ctx, systemID)
+	if revision, ok := args.Get(0).(int64); ok {
+		return revision, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return 0, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetScrapeFingerprint(ctx context.Context, scraperID, systemID string) (string, error) {
+	if !m.hasExpectation("GetScrapeFingerprint") {
+		return "", nil
+	}
+	args := m.Called(ctx, scraperID, systemID)
+	return args.String(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) SetScrapeFingerprint(ctx context.Context, scraperID, systemID, fingerprint string) error {
+	if !m.hasExpectation("SetScrapeFingerprint") {
+		return nil
+	}
+	args := m.Called(ctx, scraperID, systemID, fingerprint)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetScrapeRunMediaIDs(
 	ctx context.Context, scraperID, runID string, systemDBID int64,
 ) (map[int64]struct{}, error) {

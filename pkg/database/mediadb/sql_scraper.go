@@ -883,19 +883,44 @@ const (
 	aliasCandidatesPerQuery = 200
 )
 
+// scrapeLinkStats counts the statements and rows of one tag link table.
+type scrapeLinkStats struct {
+	Deletes          int
+	InsertRows       int
+	InsertStatements int
+}
+
+// scrapePropStats counts the statements of one property table and the rows
+// they changed.
+type scrapePropStats struct {
+	ChangedRows int
+	Statements  int
+}
+
+// scrapeBatchSQLStats describes one ApplyScrapeResults call for the debug log:
+// what it wrote, and where its time went, including the work that follows the
+// commit.
 type scrapeBatchSQLStats struct {
-	Duration                      time.Duration
-	Targets                       int
-	TitleTagDeletes               int
-	TitleTagInsertRows            int
-	TitleTagInsertStatements      int
-	TitlePropertyUpsertRows       int
-	TitlePropertyUpsertStatements int
-	SentinelDeleteStatements      int
-	SentinelInsertRows            int
-	SentinelInsertStatements      int
-	MediaTagFallbackTargets       int
-	MediaPropFallbackTargets      int
+	// Duration is the time spent in the batch's statements.
+	Duration       time.Duration
+	Begin          time.Duration
+	Commit         time.Duration
+	ChangeTracking time.Duration
+	Disambiguation time.Duration
+	TitleTags      scrapeLinkStats
+	MediaTags      scrapeLinkStats
+	Sentinels      scrapeLinkStats
+	TitleProps     scrapePropStats
+	MediaProps     scrapePropStats
+	Targets        int
+	// ExistenceQueries counts the lookups a fill-missing batch makes for
+	// exclusive tag types already stored.
+	ExistenceQueries     int
+	DisambiguationTitles int
+	FillMissing          bool
+	// PerTarget is set when a batch mixing fill-missing and ordinary writes
+	// was applied one target at a time.
+	PerTarget bool
 }
 
 type tagTypeEntry struct {
@@ -1934,8 +1959,12 @@ func (db *MediaDB) ApplyScrapeResult(
 	committed = true
 	db.recordScrapeImageChanges(ctx, writeCtx)
 	db.recordScrapeTagChanges(ctx, []database.ScrapeWriteTarget{target})
-	// Scraped tags can change which tags distinguish a title's variants. Refresh
-	// after commit (the scrape ran on its own tx, not db.tx). Non-fatal.
+	// Scraped media tags can change which tags distinguish a title's variants
+	// (see scrapeDisambiguationTitles). Refresh after commit (the scrape ran on
+	// its own tx, not db.tx). Non-fatal.
+	if !writesDisambiguatingTag(target.Write) {
+		return nil
+	}
 	if disErr := db.RecomputeTitleDisambiguation(ctx, []int64{mediaTitleDBID}); disErr != nil {
 		log.Warn().Err(disErr).Int64("titleID", mediaTitleDBID).
 			Msg("failed to recompute title disambiguation after scrape")
@@ -1964,10 +1993,12 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return nil
 	}
 
+	beginStart := time.Now()
 	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ApplyScrapeResults: begin transaction: %w", err)
 	}
+	beginDuration := time.Since(beginStart)
 	committed := false
 	defer func() {
 		if !committed {
@@ -1980,44 +2011,90 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 	if err != nil {
 		return err
 	}
+	stats.Begin = beginDuration
 
+	commitStart := time.Now()
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("ApplyScrapeResults: commit: %w", err)
 	}
 	committed = true
+	stats.Commit = time.Since(commitStart)
+
+	trackingStart := time.Now()
 	db.recordScrapeImageChanges(ctx, writeCtx)
 	db.recordScrapeTagChanges(ctx, targets)
-	// Scraped tags can change which tags distinguish a title's variants. Refresh
-	// the affected titles after commit (the batch ran on its own tx). Non-fatal.
+	stats.ChangeTracking = time.Since(trackingStart)
+
+	// Scraped media tags can change which tags distinguish a title's variants.
+	// Refresh the affected titles after commit (the batch ran on its own tx).
+	// Non-fatal.
+	titleIDs := scrapeDisambiguationTitles(targets)
+	stats.DisambiguationTitles = len(titleIDs)
+	if len(titleIDs) > 0 {
+		disambiguationStart := time.Now()
+		if disErr := db.RecomputeTitleDisambiguation(ctx, titleIDs); disErr != nil {
+			log.Warn().Err(disErr).Msg("failed to recompute title disambiguation after scrape batch")
+		}
+		stats.Disambiguation = time.Since(disambiguationStart)
+	}
+	stats.log()
+	return nil
+}
+
+// scrapeDisambiguationTitles returns the titles whose stored disambiguation a
+// batch can have changed. Disambiguation reads only the media-level tags of
+// the types in database.ZapScriptTagTypes, so a target that writes none of
+// them, such as one carrying only artwork, title metadata and its sentinel,
+// leaves every title as it was.
+func scrapeDisambiguationTitles(targets []database.ScrapeWriteTarget) []int64 {
 	titleIDs := make([]int64, 0, len(targets))
-	seenTitles := make(map[int64]struct{}, len(targets))
+	seen := make(map[int64]struct{}, len(targets))
 	for i := range targets {
 		id := targets[i].MediaTitleDBID
-		if _, ok := seenTitles[id]; ok {
+		if _, ok := seen[id]; ok || !writesDisambiguatingTag(targets[i].Write) {
 			continue
 		}
-		seenTitles[id] = struct{}{}
+		seen[id] = struct{}{}
 		titleIDs = append(titleIDs, id)
 	}
-	if disErr := db.RecomputeTitleDisambiguation(ctx, titleIDs); disErr != nil {
-		log.Warn().Err(disErr).Msg("failed to recompute title disambiguation after scrape batch")
+	return titleIDs
+}
+
+func writesDisambiguatingTag(write *database.ScrapeWrite) bool {
+	for i := range write.MediaTags {
+		if slices.Contains(database.ZapScriptTagTypes, write.MediaTags[i].Type) {
+			return true
+		}
 	}
-	stats.Duration = stats.Duration.Round(time.Microsecond)
+	return false
+}
+
+func (s *scrapeBatchSQLStats) log() {
 	log.Debug().
-		Int("targets", stats.Targets).
-		Int("title_tag_deletes", stats.TitleTagDeletes).
-		Int("title_tag_insert_rows", stats.TitleTagInsertRows).
-		Int("title_tag_insert_statements", stats.TitleTagInsertStatements).
-		Int("title_property_upsert_rows", stats.TitlePropertyUpsertRows).
-		Int("title_property_upsert_statements", stats.TitlePropertyUpsertStatements).
-		Int("sentinel_delete_statements", stats.SentinelDeleteStatements).
-		Int("sentinel_insert_rows", stats.SentinelInsertRows).
-		Int("sentinel_insert_statements", stats.SentinelInsertStatements).
-		Int("media_tag_fallback_targets", stats.MediaTagFallbackTargets).
-		Int("media_property_fallback_targets", stats.MediaPropFallbackTargets).
-		Dur("duration", stats.Duration).
+		Int("targets", s.Targets).
+		Bool("fill_missing", s.FillMissing).
+		Bool("per_target", s.PerTarget).
+		Int("existence_queries", s.ExistenceQueries).
+		Int("media_tag_deletes", s.MediaTags.Deletes).
+		Int("media_tag_insert_rows", s.MediaTags.InsertRows).
+		Int("media_tag_insert_statements", s.MediaTags.InsertStatements).
+		Int("media_property_changed_rows", s.MediaProps.ChangedRows).
+		Int("media_property_statements", s.MediaProps.Statements).
+		Int("title_tag_deletes", s.TitleTags.Deletes).
+		Int("title_tag_insert_rows", s.TitleTags.InsertRows).
+		Int("title_tag_insert_statements", s.TitleTags.InsertStatements).
+		Int("title_property_upsert_rows", s.TitleProps.ChangedRows).
+		Int("title_property_upsert_statements", s.TitleProps.Statements).
+		Int("sentinel_delete_statements", s.Sentinels.Deletes).
+		Int("sentinel_insert_rows", s.Sentinels.InsertRows).
+		Int("sentinel_insert_statements", s.Sentinels.InsertStatements).
+		Int("disambiguation_titles", s.DisambiguationTitles).
+		Dur("begin", s.Begin.Round(time.Microsecond)).
+		Dur("duration", s.Duration.Round(time.Microsecond)).
+		Dur("commit", s.Commit.Round(time.Microsecond)).
+		Dur("change_tracking", s.ChangeTracking.Round(time.Microsecond)).
+		Dur("disambiguation", s.Disambiguation.Round(time.Microsecond)).
 		Msg("mediadb: applied scrape results bulk")
-	return nil
 }
 
 func applyScrapeWriteTargetsBulk(
@@ -2025,48 +2102,58 @@ func applyScrapeWriteTargetsBulk(
 ) (scrapeBatchSQLStats, error) {
 	start := time.Now()
 	stats := scrapeBatchSQLStats{Targets: len(targets)}
-	for _, target := range targets {
-		if target.Write.FillMissing {
-			// Preserve input order for shared titles. Reuse the same transactional
-			// insert-only path as single writes; normal batches retain bulk SQL.
-			for _, item := range targets {
-				if err := applyScrapeWriteTarget(ctx, writeCtx, item); err != nil {
-					return stats, err
-				}
-			}
-			stats.Duration = time.Since(start)
-			return stats, nil
+	fill := 0
+	for i := range targets {
+		if targets[i].Write.FillMissing {
+			fill++
 		}
 	}
-	if err := preloadScrapeWriteLookupCache(ctx, writeCtx, targets); err != nil {
-		return stats, fmt.Errorf("preload scrape write lookups: %w", err)
-	}
-	for _, target := range targets {
-		write := target.Write
-		if len(write.MediaTags) > 0 {
-			stats.MediaTagFallbackTargets++
-			if err := upsertMediaTagsWithContext(ctx, writeCtx, target.MediaDBID, write.MediaTags); err != nil {
-				return stats, fmt.Errorf("upsert media tags: %w", err)
+	var err error
+	switch fill {
+	case 0:
+		err = applyOrdinaryScrapeTargetsBulk(ctx, writeCtx, targets, &stats)
+	case len(targets):
+		stats.FillMissing = true
+		err = applyFillMissingScrapeTargetsBulk(ctx, writeCtx, targets, &stats)
+	default:
+		// No scraper mixes the two policies in one batch. Should one ever do
+		// so, each target keeps its own policy, applied in input order.
+		stats.PerTarget = true
+		for _, item := range targets {
+			if err = applyScrapeWriteTarget(ctx, writeCtx, item); err != nil {
+				break
 			}
 		}
-		if len(write.MediaProps) > 0 {
-			stats.MediaPropFallbackTargets++
-			if err := upsertMediaPropertiesWithContext(ctx, writeCtx, target.MediaDBID, write.MediaProps); err != nil {
-				return stats, fmt.Errorf("upsert media properties: %w", err)
-			}
-		}
-	}
-	if err := upsertMediaTitleTagsBulkWithContext(ctx, writeCtx, targets, &stats); err != nil {
-		return stats, fmt.Errorf("upsert title tags: %w", err)
-	}
-	if err := upsertMediaTitlePropertiesBulkWithContext(ctx, writeCtx, targets, &stats); err != nil {
-		return stats, fmt.Errorf("upsert title properties: %w", err)
-	}
-	if err := upsertScrapeSentinelsBulkWithContext(ctx, writeCtx, targets, &stats); err != nil {
-		return stats, fmt.Errorf("upsert sentinel tag: %w", err)
 	}
 	stats.Duration = time.Since(start)
-	return stats, nil
+	return stats, err
+}
+
+func applyOrdinaryScrapeTargetsBulk(
+	ctx context.Context,
+	writeCtx *scrapeWriteTxContext,
+	targets []database.ScrapeWriteTarget,
+	stats *scrapeBatchSQLStats,
+) error {
+	if err := preloadScrapeWriteLookupCache(ctx, writeCtx, targets); err != nil {
+		return fmt.Errorf("preload scrape write lookups: %w", err)
+	}
+	if err := upsertScrapeTagsBulk(ctx, writeCtx, &scrapeMediaScope, targets, &stats.MediaTags); err != nil {
+		return fmt.Errorf("upsert media tags: %w", err)
+	}
+	if err := upsertScrapeTagsBulk(ctx, writeCtx, &scrapeTitleScope, targets, &stats.TitleTags); err != nil {
+		return fmt.Errorf("upsert title tags: %w", err)
+	}
+	if err := upsertScrapePropertiesBulk(ctx, writeCtx, &scrapeTitleScope, targets, &stats.TitleProps); err != nil {
+		return fmt.Errorf("upsert title properties: %w", err)
+	}
+	if err := upsertScrapePropertiesBulk(ctx, writeCtx, &scrapeMediaScope, targets, &stats.MediaProps); err != nil {
+		return fmt.Errorf("upsert media properties: %w", err)
+	}
+	if err := upsertScrapeSentinelsBulk(ctx, writeCtx, targets, &stats.Sentinels); err != nil {
+		return fmt.Errorf("upsert sentinel tag: %w", err)
+	}
+	return nil
 }
 
 func validateScrapeWriteTarget(method string, target database.ScrapeWriteTarget) error {
@@ -2107,342 +2194,6 @@ func applyScrapeWriteTarget(
 	sentinel := []database.TagInfo{write.Sentinel}
 	if err := upsertMediaTagsWithContext(ctx, writeCtx, target.MediaDBID, sentinel); err != nil {
 		return fmt.Errorf("upsert sentinel tag: %w", err)
-	}
-	return nil
-}
-
-type titleTagTypeKey struct {
-	mediaTitleDBID int64
-	typeDBID       int64
-}
-
-type titleTagPair struct {
-	mediaTitleDBID int64
-	tagDBID        int64
-}
-
-type titlePropKey struct {
-	mediaTitleDBID int64
-	typeTagDBID    int64
-}
-
-type titlePropRow struct {
-	p   database.MediaProperty
-	key titlePropKey
-}
-
-func upsertMediaTitleTagsBulkWithContext(
-	ctx context.Context,
-	writeCtx *scrapeWriteTxContext,
-	targets []database.ScrapeWriteTarget,
-	stats *scrapeBatchSQLStats,
-) error {
-	exclusiveDeletes := make(map[int64]map[int64]struct{})
-	exclusiveFinal := make(map[titleTagTypeKey][]int64)
-	additivePairs := make(map[titleTagPair]struct{})
-
-	for _, target := range targets {
-		if len(target.Write.TitleTags) == 0 {
-			continue
-		}
-		typeOrder := make([]string, 0, len(target.Write.TitleTags))
-		byType := make(map[string][]database.TagInfo, len(target.Write.TitleTags))
-		for _, ti := range target.Write.TitleTags {
-			if _, ok := byType[ti.Type]; !ok {
-				typeOrder = append(typeOrder, ti.Type)
-			}
-			byType[ti.Type] = append(byType[ti.Type], ti)
-		}
-		for _, typeName := range typeOrder {
-			typeDBID, isExclusive, err := writeCtx.resolveTagType(ctx, typeName)
-			if err != nil {
-				return err
-			}
-			tagInfos := byType[typeName]
-			if isExclusive {
-				seen := make(map[string]struct{}, len(tagInfos))
-				for _, ti := range tagInfos {
-					seen[tags.PadTagValue(ti.Tag)] = struct{}{}
-				}
-				if len(seen) > 1 {
-					return fmt.Errorf("exclusive tag type %q received multiple values", typeName)
-				}
-				if _, ok := exclusiveDeletes[typeDBID]; !ok {
-					exclusiveDeletes[typeDBID] = make(map[int64]struct{})
-				}
-				exclusiveDeletes[typeDBID][target.MediaTitleDBID] = struct{}{}
-			}
-
-			resolved := make([]int64, 0, len(tagInfos))
-			for _, ti := range tagInfos {
-				tagValue := tags.PadTagValue(ti.Tag)
-				tagDBID, err := writeCtx.resolveTag(ctx, typeDBID, typeName, tagValue, ti.Label)
-				if err != nil {
-					return err
-				}
-				resolved = append(resolved, tagDBID)
-			}
-			if isExclusive {
-				exclusiveFinal[titleTagTypeKey{mediaTitleDBID: target.MediaTitleDBID, typeDBID: typeDBID}] = resolved
-				continue
-			}
-			for _, tagDBID := range resolved {
-				additivePairs[titleTagPair{mediaTitleDBID: target.MediaTitleDBID, tagDBID: tagDBID}] = struct{}{}
-			}
-		}
-	}
-
-	if err := deleteMediaTitleTagsByExclusiveType(ctx, writeCtx.tx, exclusiveDeletes, stats); err != nil {
-		return err
-	}
-
-	pairs := make([]titleTagPair, 0, len(additivePairs)+len(exclusiveFinal))
-	for pair := range additivePairs {
-		pairs = append(pairs, pair)
-	}
-	for key, tagDBIDs := range exclusiveFinal {
-		for _, tagDBID := range tagDBIDs {
-			pairs = append(pairs, titleTagPair{mediaTitleDBID: key.mediaTitleDBID, tagDBID: tagDBID})
-		}
-	}
-	return insertMediaTitleTagPairs(ctx, writeCtx.tx, pairs, stats)
-}
-
-func deleteMediaTitleTagsByExclusiveType(
-	ctx context.Context, tx *sql.Tx, exclusiveDeletes map[int64]map[int64]struct{}, stats *scrapeBatchSQLStats,
-) error {
-	for typeDBID, titleIDs := range exclusiveDeletes {
-		ids := make([]int64, 0, len(titleIDs))
-		for id := range titleIDs {
-			ids = append(ids, id)
-		}
-		for start := 0; start < len(ids); start += bulkDeleteEntityIDsPerStmt {
-			end := start + bulkDeleteEntityIDsPerStmt
-			if end > len(ids) {
-				end = len(ids)
-			}
-			chunk := ids[start:end]
-			args := make([]any, 0, len(chunk)+1)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			args = append(args, typeDBID)
-			//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-			query := `DELETE FROM MediaTitleTags WHERE MediaTitleDBID IN (` +
-				prepareVariadic("?", ",", len(chunk)) +
-				`) AND EXISTS (` +
-				`SELECT 1 FROM Tags WHERE Tags.DBID = MediaTitleTags.TagDBID AND Tags.TypeDBID = ?` +
-				`)`
-			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("failed to delete media title tags for type: %w", err)
-			}
-			stats.TitleTagDeletes++
-		}
-	}
-	return nil
-}
-
-func insertMediaTitleTagPairs(
-	ctx context.Context, tx *sql.Tx, pairs []titleTagPair, stats *scrapeBatchSQLStats,
-) error {
-	if len(pairs) == 0 {
-		return nil
-	}
-	for start := 0; start < len(pairs); start += bulkTagInsertRowsPerStmt {
-		end := start + bulkTagInsertRowsPerStmt
-		if end > len(pairs) {
-			end = len(pairs)
-		}
-		chunk := pairs[start:end]
-		args := make([]any, 0, len(chunk)*2)
-		for _, pair := range chunk {
-			args = append(args, pair.mediaTitleDBID, pair.tagDBID)
-		}
-		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-		query := `INSERT OR IGNORE INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES ` +
-			prepareVariadic("(?, ?)", ",", len(chunk))
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("failed to insert media title tag links: %w", err)
-		}
-		stats.TitleTagInsertRows += len(chunk)
-		stats.TitleTagInsertStatements++
-	}
-	return nil
-}
-
-func trackChangedTitlePropertyRows(
-	changedRows *sql.Rows,
-	rowsByKey map[titlePropKey]titlePropRow,
-	writeCtx *scrapeWriteTxContext,
-) (int, error) {
-	defer func() { _ = changedRows.Close() }()
-	changedCount := 0
-	for changedRows.Next() {
-		var key titlePropKey
-		if err := changedRows.Scan(&key.mediaTitleDBID, &key.typeTagDBID); err != nil {
-			return 0, fmt.Errorf("failed to scan changed MediaTitleProperty: %w", err)
-		}
-		changedCount++
-		if row, ok := rowsByKey[key]; ok && isImageProperty(row.p.TypeTag) {
-			writeCtx.changedImageMediaTitleIDs[key.mediaTitleDBID] = struct{}{}
-		}
-	}
-	if err := changedRows.Err(); err != nil {
-		return 0, fmt.Errorf("failed to iterate changed MediaTitleProperties: %w", err)
-	}
-	return changedCount, nil
-}
-
-func upsertMediaTitlePropertiesBulkWithContext(
-	ctx context.Context,
-	writeCtx *scrapeWriteTxContext,
-	targets []database.ScrapeWriteTarget,
-	stats *scrapeBatchSQLStats,
-) error {
-	rowsByKey := make(map[titlePropKey]titlePropRow)
-	for _, target := range targets {
-		for _, p := range target.Write.TitleProps {
-			typeTagDBID, err := writeCtx.resolvePropertyTypeTag(ctx, p.TypeTag)
-			if err != nil {
-				return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
-			}
-			key := titlePropKey{mediaTitleDBID: target.MediaTitleDBID, typeTagDBID: typeTagDBID}
-			rowsByKey[key] = titlePropRow{key: key, p: p}
-		}
-	}
-	if len(rowsByKey) == 0 {
-		return nil
-	}
-	rows := make([]titlePropRow, 0, len(rowsByKey))
-	for _, row := range rowsByKey {
-		rows = append(rows, row)
-	}
-	for start := 0; start < len(rows); start += bulkPropUpsertRowsPerStmt {
-		end := start + bulkPropUpsertRowsPerStmt
-		if end > len(rows) {
-			end = len(rows)
-		}
-		chunk := rows[start:end]
-		args := make([]any, 0, len(chunk)*4)
-		for _, row := range chunk {
-			args = append(args, row.key.mediaTitleDBID, row.key.typeTagDBID, row.p.Text, row.p.BlobDBID)
-		}
-		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-		query := `
-			INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, BlobDBID)
-			VALUES ` + prepareVariadic("(?, ?, ?, ?)", ",", len(chunk)) + `
-			ON CONFLICT(MediaTitleDBID, TypeTagDBID) DO UPDATE SET
-				Text = excluded.Text,
-				BlobDBID = excluded.BlobDBID
-			WHERE MediaTitleProperties.Text IS NOT excluded.Text
-			   OR MediaTitleProperties.BlobDBID IS NOT excluded.BlobDBID
-			RETURNING MediaTitleDBID, TypeTagDBID
-		`
-		changedRows, err := writeCtx.tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("failed to upsert MediaTitleProperties bulk: %w", err)
-		}
-		changedCount, err := trackChangedTitlePropertyRows(changedRows, rowsByKey, writeCtx)
-		if err != nil {
-			return err
-		}
-		stats.TitlePropertyUpsertRows += changedCount
-		stats.TitlePropertyUpsertStatements++
-	}
-	return nil
-}
-
-func upsertScrapeSentinelsBulkWithContext(
-	ctx context.Context,
-	writeCtx *scrapeWriteTxContext,
-	targets []database.ScrapeWriteTarget,
-	stats *scrapeBatchSQLStats,
-) error {
-	pairs := make([]mediaTagPair, 0, len(targets))
-	seen := make(map[mediaTagPair]struct{}, len(targets))
-	exclusiveDeletes := make(map[int64]map[int64]struct{})
-	for _, target := range targets {
-		sentinel := target.Write.Sentinel
-		typeDBID, isExclusive, err := writeCtx.resolveTagType(ctx, sentinel.Type)
-		if err != nil {
-			return err
-		}
-		if isExclusive {
-			if _, ok := exclusiveDeletes[typeDBID]; !ok {
-				exclusiveDeletes[typeDBID] = make(map[int64]struct{})
-			}
-			exclusiveDeletes[typeDBID][target.MediaDBID] = struct{}{}
-		}
-		tagDBID, err := writeCtx.resolveTag(
-			ctx, typeDBID, sentinel.Type, tags.PadTagValue(sentinel.Tag), sentinel.Label,
-		)
-		if err != nil {
-			return err
-		}
-		pair := mediaTagPair{mediaDBID: target.MediaDBID, tagDBID: tagDBID}
-		if _, ok := seen[pair]; ok {
-			continue
-		}
-		seen[pair] = struct{}{}
-		pairs = append(pairs, pair)
-	}
-	for typeDBID, mediaIDs := range exclusiveDeletes {
-		ids := make([]int64, 0, len(mediaIDs))
-		for id := range mediaIDs {
-			ids = append(ids, id)
-		}
-		for start := 0; start < len(ids); start += bulkDeleteEntityIDsPerStmt {
-			end := start + bulkDeleteEntityIDsPerStmt
-			if end > len(ids) {
-				end = len(ids)
-			}
-			chunk := ids[start:end]
-			args := make([]any, 0, len(chunk)+1)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			args = append(args, typeDBID)
-			//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-			query := `DELETE FROM MediaTags WHERE MediaDBID IN (` + prepareVariadic("?", ",", len(chunk)) +
-				`) AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
-			if _, err := writeCtx.tx.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("failed to delete media sentinel tags for type: %w", err)
-			}
-			stats.SentinelDeleteStatements++
-		}
-	}
-	return insertMediaTagPairs(ctx, writeCtx.tx, pairs, stats)
-}
-
-type mediaTagPair struct {
-	mediaDBID int64
-	tagDBID   int64
-}
-
-func insertMediaTagPairs(
-	ctx context.Context, tx *sql.Tx, pairs []mediaTagPair, stats *scrapeBatchSQLStats,
-) error {
-	if len(pairs) == 0 {
-		return nil
-	}
-	for start := 0; start < len(pairs); start += bulkTagInsertRowsPerStmt {
-		end := start + bulkTagInsertRowsPerStmt
-		if end > len(pairs) {
-			end = len(pairs)
-		}
-		chunk := pairs[start:end]
-		args := make([]any, 0, len(chunk)*2)
-		for _, pair := range chunk {
-			args = append(args, pair.mediaDBID, pair.tagDBID)
-		}
-		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-		query := `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES ` +
-			prepareVariadic("(?, ?)", ",", len(chunk))
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("failed to insert media tag links: %w", err)
-		}
-		stats.SentinelInsertRows += len(chunk)
-		stats.SentinelInsertStatements++
 	}
 	return nil
 }

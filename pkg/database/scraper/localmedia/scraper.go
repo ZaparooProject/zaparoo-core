@@ -64,6 +64,10 @@ type scraperImpl struct {
 	db       database.MediaDBI
 	fs       afero.Fs
 	listings *sourceDirListings
+	// dirNames holds one listing of each media directory of the system being
+	// scraped, so a row's candidate filenames are ruled out in memory instead
+	// of with a stat apiece.
+	dirNames *esmedia.DirNames
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
@@ -287,6 +291,8 @@ func (s *scraperImpl) scrapeSystem(
 	// Hand the system's working set back to the OS before the next one, so a
 	// run's peak is one system rather than the sum of them.
 	defer debug.FreeOSMemory()
+	s.dirNames = esmedia.NewDirNames(s.fs)
+	defer func() { s.dirNames = nil }()
 
 	var completed map[int64]struct{}
 	var selection scraper.ScopedSelection
@@ -722,7 +728,7 @@ func (s *scraperImpl) findArtworkFile(
 				file = findSourceFile(ctx, s.listings, fallbackNames, candidates, dirs)
 			}
 		} else {
-			file = esmedia.FindFileFS(s.fs, fallbackNames, candidates, dirs)
+			file = esmedia.FindFileIn(s.fs, s.dirNames, fallbackNames, candidates, dirs)
 		}
 		if file != nil {
 			return file

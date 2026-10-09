@@ -278,6 +278,67 @@ func TestFillMissingRevisitsSentinelRowsAndMarksTheWrite(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetScrapedMediaIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestFillMissingSkipsASystemWhoseCatalogAndLibraryAreUnchanged(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := descriptor(t, fs, "Filled", "1941")
+	entry := cps1Entry()
+	fill := scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"}
+
+	newDB := func(stored string) *testhelpers.MockMediaDBI {
+		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+		mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
+		mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
+			Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
+		mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
+			Return(map[int64]struct{}{}, nil)
+		mediaDB.On("LibraryRevision", mock.Anything, systemdefs.SystemArcade).Return(int64(3), nil)
+		mediaDB.On("GetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade).Return(stored, nil)
+		return mediaDB
+	}
+
+	// The first run does the work and records the state it finished in.
+	first := newDB("")
+	var remembered string
+	first.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Run(func(args mock.Arguments) { remembered = args.String(3) }).Return(nil)
+	writes := captureWrites(t, first)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	run(t, &s, fs, first, fill)
+	require.Len(t, *writes, 1)
+	require.NotEmpty(t, remembered)
+
+	// With that state stored and nothing moved, the next run reads no rows.
+	unchanged := newDB(remembered)
+	skipped := captureWrites(t, unchanged)
+	updates := run(t, &s, fs, unchanged, fill)
+	assert.Empty(t, *skipped)
+	unchanged.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
+	assert.Equal(t, systemdefs.SystemArcade, updates[0].SystemID)
+
+	// A refreshed catalog is a new source, so the system is read again.
+	refreshed := entry
+	refreshed.Year = "1999"
+	changed := newDB(remembered)
+	changed.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Return(nil)
+	rewritten := captureWrites(t, changed)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(refreshed), nil)
+	run(t, &s, fs, changed, fill)
+	assert.Len(t, *rewritten, 1)
+
+	// A manual run never consults the fingerprint.
+	manual := newDB(remembered)
+	manual.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).Return(map[int64]struct{}{}, nil)
+	manual.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Return(nil)
+	manualWrites := captureWrites(t, manual)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	run(t, &s, fs, manual, scraper.ScrapeOptions{})
+	assert.Len(t, *manualWrites, 1)
+}
+
 func TestScrapeRejectsFillMissingWithForce(t *testing.T) {
 	t.Parallel()
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(), nil)

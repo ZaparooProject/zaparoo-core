@@ -106,7 +106,7 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 		},
 	)).Return(nil).Once()
 
-	platformScraper := NewPlatformScraper()
+	platformScraper := NewPlatformScraper(nil)
 	ch := make(chan scraper.ScrapeUpdate, 8)
 	err := platformScraper.Scrape(
 		context.Background(), nil, pl, fs, &database.Database{MediaDB: mediaDB},
@@ -128,7 +128,7 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 func TestPlatformScraper_ValidatesDependenciesAndIndexLookup(t *testing.T) {
 	t.Parallel()
 
-	platformScraper := NewPlatformScraper()
+	platformScraper := NewPlatformScraper(nil)
 	ch := make(chan scraper.ScrapeUpdate, 1)
 	err := platformScraper.Scrape(
 		context.Background(), nil, nil, afero.NewMemMapFs(), &database.Database{},

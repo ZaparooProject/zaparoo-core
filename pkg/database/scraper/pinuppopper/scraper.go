@@ -50,9 +50,8 @@ import (
 )
 
 const (
-	scraperID      = "pinup-popper"
-	scraperName    = "PinUP Popper library"
-	writeBatchSize = 100
+	scraperID   = "pinup-popper"
+	scraperName = "PinUP Popper library"
 )
 
 // Locate resolves the PinUP System install the scraper reads.
@@ -159,6 +158,19 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 		return
 	}
 
+	// An index-triggered run ends here when Popper's library, its media
+	// folders and the indexed tables are as its last completed run left
+	// them; every run over the whole system records the state it finishes in.
+	sourceState := s.sourceState()
+	if opts.Scope == nil && opts.FillMissing && scraper.SystemUnchanged(
+		ctx, s.db, scraperID, systemdefs.SystemPinball, fingerprintVersion, sourceState,
+	) {
+		log.Debug().Msg("pinuppopper: library, media and tables unchanged, system skipped")
+		ch <- scraper.ScrapeUpdate{SystemID: systemdefs.SystemPinball, TotalSteps: 1, CurrentStep: 1}
+		done(0, 0, 0)
+		return
+	}
+
 	started := time.Now()
 	titles, err := s.db.GetTitlesBySystemID(systemdefs.SystemPinball)
 	if err != nil {
@@ -204,7 +216,7 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 	}
 
 	written := 0
-	stepErr := s.applyTargets(ctx, opts, targets, func(from, to int) {
+	stepErr := scraper.ApplyTargets(ctx, s.db, opts, scraperID, targets, func(from, to int) {
 		written += to - from
 		if to < len(targets) {
 			report(stats.Skipped+written, written, stats.Skipped)
@@ -218,6 +230,13 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 		}
 		return
 	}
+	if opts.Scope == nil {
+		if rememberErr := scraper.RememberSystem(
+			ctx, s.db, scraperID, systemdefs.SystemPinball, fingerprintVersion, sourceState,
+		); rememberErr != nil {
+			log.Debug().Err(rememberErr).Msg("pinuppopper: system fingerprint not stored")
+		}
+	}
 	log.Debug().
 		Int("tables", stats.Processed).
 		Int("matched", written).
@@ -229,6 +248,34 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 		Matched: written, Skipped: stats.Skipped, TotalSteps: 1, CurrentStep: 1,
 	}
 	done(stats.Processed, written, stats.Skipped)
+}
+
+// fingerprintVersion is bumped when a change to matching or to what is written
+// means an unchanged system has to be scraped again.
+const fingerprintVersion = 1
+
+// sourceState describes everything outside the media database this scraper's
+// result depends on: Popper's own library, which holds each table's metadata,
+// and the names in every emulator's screen folders, which decide the images a
+// table gets. An emulator's folders are read once however many tables use it.
+func (s *scraperImpl) sourceState() string {
+	var state strings.Builder
+	_, _ = fmt.Fprintf(&state, "tables %+v\n", s.lib.Tables)
+	ids := make([]int, 0, len(s.lib.Emulators))
+	for id := range s.lib.Emulators {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		emu := s.lib.Emulators[id]
+		_, _ = fmt.Fprintf(&state, "emulator %+v\n", emu)
+		dir := s.mediaDir(&emu)
+		for _, screen := range imageScreens {
+			_, _ = fmt.Fprintf(&state, "%s %s\n",
+				screen.folder, scraper.ListingState(s.fs, filepath.Join(dir, screen.folder)))
+		}
+	}
+	return state.String()
 }
 
 // buildTargets resolves every Popper-launched media row to the write that
@@ -362,62 +409,9 @@ func (s *scraperImpl) mediaDir(emu *pinup.Emulator) string {
 	return filepath.Join(s.install.MediaDir, emu.Name)
 }
 
-// applyTargets writes targets in batches, calling onBatch with the half-open
-// index range of each batch once it has committed.
-func (s *scraperImpl) applyTargets(
-	ctx context.Context,
-	opts scraper.ScrapeOptions,
-	targets []database.ScrapeWriteTarget,
-	onBatch func(from, to int),
-) error {
-	batcher, canBatch := s.db.(database.ScrapeResultBatchApplier)
-	for start := 0; start < len(targets); start += writeBatchSize {
-		if err := waitForScrape(ctx, opts); err != nil {
-			return err
-		}
-		end := min(start+writeBatchSize, len(targets))
-		if err := s.applyBatch(ctx, batcher, canBatch, targets[start:end]); err != nil {
-			return err
-		}
-		if onBatch != nil {
-			onBatch(start, end)
-		}
-	}
-	return nil
-}
-
-func (s *scraperImpl) applyBatch(
-	ctx context.Context,
-	batcher database.ScrapeResultBatchApplier,
-	canBatch bool,
-	batch []database.ScrapeWriteTarget,
-) error {
-	if canBatch {
-		batchErr := batcher.ApplyScrapeResults(ctx, batch)
-		if batchErr == nil {
-			return nil
-		}
-		log.Warn().Err(batchErr).Int("targets", len(batch)).
-			Msg("pinuppopper: batch write failed, falling back to per-record writes")
-	}
-	for _, target := range batch {
-		if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
-			return fmt.Errorf("pinuppopper: write media %d: %w", target.MediaDBID, err)
-		}
-	}
-	return nil
-}
-
 func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if opts.Pauser != nil {
-		if err := opts.Pauser.Wait(ctx); err != nil {
-			return fmt.Errorf("pinuppopper: wait while paused: %w", err)
-		}
-	}
-	return nil
+	//nolint:wrapcheck // scraper.Wait names the scraper in its error
+	return scraper.Wait(ctx, opts, scraperID)
 }
 
 // wantsSystem reports whether a scrape limited to systems includes systemID;

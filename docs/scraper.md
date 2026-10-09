@@ -53,7 +53,7 @@ The sequence is **index → existing optimization → ordinary scraping**. Succe
 
 The config-backed operation record holds one current job and an ordered pending list, bounded to 64 total jobs. Identical pending scopes/policies are deduplicated. A new manual request receives a conflict rather than overwriting pending work. Versioned records carry authoritative status; legacy records are readable and upgraded when resumed. Unknown versions fail closed.
 
-Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
+Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work; `mister-docs` writes no run markers on a run over whole systems and restarts the system it was on, which its batched fill-missing writes make cheap. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
 
 Indexing is only a trigger, not a durable parent workflow: use `media.scrape.cancel` after indexing finishes, not `media.generate.cancel`. A crash between successful indexing and queue persistence can require another index or manual request. Once accepted into the queue, a job survives restart.
 
@@ -61,7 +61,21 @@ Indexing is only a trigger, not a durable parent workflow: use `media.scrape.can
 
 Index-triggered jobs only fill missing metadata. A property is missing when no row of that type exists—not when its text is empty or its artwork file has disappeared. Existing exclusive tag values remain; additive tags may gain values. Nothing is automatically replaced or deleted.
 
-These checks and inserts share the existing single/batch scrape transaction. Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+These checks and inserts share the existing single/batch scrape transaction. A batch is written with multi-row statements under either policy: a fill-missing batch reads which rows already hold a value for each exclusive tag type once, inserts tag links with `INSERT OR IGNORE` and properties with `ON CONFLICT DO NOTHING`, and stores what the one-target-at-a-time policy stores for the same targets in the same order (the first target to offer a shared title's field wins it). Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+
+### Unchanged Systems
+
+A fill-missing run reconsiders a system only when something it depends on moved. Every scraper that runs after an index (`mister-docs`, `mister-arcade`, PinUP Popper and the Android apps scraper) stores a fingerprint per system in `DBConfig` (`ScrapeFingerprint:<scraper>:<system>`) when they complete it, on any run over whole systems. It joins the state of the scraper's source with the system's library revision.
+
+The library revision (`LibraryRevision:<system>` in `DBConfig`, read with `MediaDBI.LibraryRevision`) is a counter the index reconcile bumps, in its own transaction, when it inserted or renamed a title, inserted or changed a media row, flagged media missing, or added or removed a tag link for that system. Indexing a system whose files did not change leaves it where it was. Reading it is one keyed lookup, which matters on SD-card storage where even an index-only count of a large system takes minutes at background priority.
+
+For `mister-docs` the source state is one listing of names per pack folder serving the system: each TSV's size and modification time, plus the count of the other files and a digest of their names. For `mister-arcade` it is a digest of the catalog. For PinUP Popper it is Popper's own library as read from its database, plus a listing digest of every emulator's screen folders. The Android apps scraper has no source state: icons come from the host per package and fill-missing never replaces one already stored, so it compares the library revision alone, and it does not record a system in which the host could not supply an icon, so that system is tried again. An index-triggered run that finds the stored fingerprint unchanged reports the system and moves on without parsing a pack, reading a media row or writing anything.
+
+A manual or force run never consults the fingerprint and always does the full work, then stores a fresh one. That is also the way out when a source changed in a way the fingerprint cannot see, or when another tool removed metadata the scraper had filled. Truncating a system, or the whole database, deletes the fingerprints of the rows it removes, so rebuilt rows are always scraped again.
+
+### Post-Write Work
+
+Title disambiguation reads only media-level tags of the types in `database.ZapScriptTagTypes`, so a write recomputes it only for the titles of targets that carry such a tag. A batch of artwork, title metadata and sentinels recomputes nothing. Each batch logs where its time went (`begin`, `duration` for its statements, `commit`, `change_tracking`, `disambiguation`) with its row counts at debug level, and `scraper.ApplyTargets`, the write loop `mister-docs`, `mister-arcade` and PinUP Popper share, logs how long a system's batches spent waiting on the pauser against writing.
 
 ## Scoped Runs
 
@@ -319,7 +333,7 @@ Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and cu
 
 Every pack ships the same `gameinfo.tsv` and synopsis files, so Core reads them from one image folder per system: `Artwork/` when it is installed, otherwise `Screenshots/`, otherwise `Titles/`.
 
-This format-based discovery means future compatible databases need no Core update. A fill-missing `mister-docs` run is queued after every successful index for the systems that were indexed, so newly installed packs are picked up by the next index; it only adds properties a game does not have yet. Run `mister-docs` by hand after Downloader installs or updates content to import it sooner or to replace what is stored. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art, screenshot, title-screen and manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
+This format-based discovery means future compatible databases need no Core update. A fill-missing `mister-docs` run is queued after every successful index for the systems that were indexed, so newly installed packs are picked up by the next index; it only adds properties a game does not have yet, and it leaves a system alone when neither its packs nor its indexed rows changed since the last completed run (see [Unchanged Systems](#unchanged-systems)). Run `mister-docs` by hand after Downloader installs or updates content to import it sooner or to replace what is stored. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art, screenshot, title-screen and manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
 
 Metadata files are treated as untrusted input. Core bounds their size and record count, rejects symlink/path escapes and non-regular assets, skips ambiguous matches, and continues past malformed optional sources where possible.
 

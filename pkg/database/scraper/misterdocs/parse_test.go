@@ -312,11 +312,11 @@ func TestAppendManualRecord_FiltersBeforeEnforcingLimit(t *testing.T) {
 	require.NoError(t, err)
 	full := make([]string, maxMetadataRecords)
 
-	got, err := appendManualRecord(fs, dir, readmeInfo, full)
+	got, err := appendManualRecord(dir, readmeInfo, full)
 	require.NoError(t, err)
 	assert.Len(t, got, maxMetadataRecords)
 
-	_, err = appendManualRecord(fs, dir, manualInfo, full)
+	_, err = appendManualRecord(dir, manualInfo, full)
 	require.ErrorContains(t, err, "manuals directory exceeds 100000 records")
 }
 

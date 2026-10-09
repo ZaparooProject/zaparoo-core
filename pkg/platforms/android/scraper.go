@@ -38,6 +38,10 @@ import (
 
 const appScraperID = "android-apps"
 
+// appFingerprintVersion is bumped when a change to matching or to what is
+// written means an unchanged system has to be scraped again.
+const appFingerprintVersion = 1
+
 // appScraperSystems are the two systems installed-app launchers index into:
 // the synced game system, and the browsable-only system Library sync never
 // uploads (see installedAppsLauncherFor). The icon scraper covers both, so a
@@ -150,6 +154,20 @@ func scrapeAppsForSystem(
 	var c appScrapeCounts
 	var rows []database.MediaWithFullPath
 	var completed map[int64]struct{}
+	// An app's icon is fetched from the host per package, so the only state
+	// to compare is the system's own rows: an index-triggered run ends here
+	// when no app was added or removed since its last completed run. Fill
+	// -missing never replaces an icon it already stored, so an updated app's
+	// new icon is not something such a run could bring in anyway.
+	if opts.Scope == nil && opts.FillMissing &&
+		scraper.SystemUnchanged(ctx, db, appScraperID, systemID, appFingerprintVersion, "") {
+		log.Debug().Str("system", systemID).Msg("android-apps: installed apps unchanged, system skipped")
+		select {
+		case ch <- scraper.ScrapeUpdate{SystemID: systemID, TotalSteps: steps, CurrentStep: step}:
+		case <-ctx.Done():
+		}
+		return c, nil
+	}
 	if opts.Scope != nil {
 		selection, err := scraper.LoadScopedSelection(ctx, db, opts, appScraperID)
 		if err != nil {
@@ -237,6 +255,13 @@ func scrapeAppsForSystem(
 			return c, fmt.Errorf("android-apps: write media %d: %w", row.DBID, err)
 		}
 		c.matched++
+	}
+	// An app whose icon the host could not supply is asked for again by the
+	// next run, so a system with one is not recorded as complete.
+	if opts.Scope == nil && c.skipped == 0 {
+		if err := scraper.RememberSystem(ctx, db, appScraperID, systemID, appFingerprintVersion, ""); err != nil {
+			log.Debug().Err(err).Msg("android-apps: system fingerprint not stored")
+		}
 	}
 	return c, nil
 }
