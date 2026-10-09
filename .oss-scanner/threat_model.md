@@ -99,10 +99,7 @@ and `GOPROXY=off` set.
   trusted, so to exercise remote-client rules drive the handlers through the tests in
   `pkg/api/` rather than through this listener.
 - Tests: `go test -race -tags=validator_novalidatefn,expr_static_methods ./...`. The `mister/`
-  module is separate: `cd mister && go test ./...`. With no network interface besides loopback,
-  `TestGetAllLocalIPs` (`pkg/helpers`) and `TestWaitForAPIPortReleaseHonoursItsTimeout`
-  (`pkg/service/daemon`) fail; both assume a routed interface and say nothing about the code
-  under test.
+  module is separate: `cd mister && go test ./...`.
 - Fuzz targets: the `fuzz` task in `Taskfile.dist.yml` lists every target and its package. Run
   one with `go test -run '^$' -fuzz=FuzzParseToText -fuzztime=60s ./pkg/readers/shared/ndef`, or
   all with `task fuzz`.
