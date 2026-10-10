@@ -643,6 +643,9 @@ func systemRootContentsSources(
 	entries []models.BrowseEntry,
 ) ([]database.BrowseSource, []models.BrowseEntry) {
 	physical := make([]models.BrowseEntry, 0, len(entries))
+		if count.Hidden {
+			entry.Tags = append(entry.Tags, hiddenDirectoryTag())
+		}
 	virtual := make([]models.BrowseEntry, 0)
 	for i := range entries {
 		switch {

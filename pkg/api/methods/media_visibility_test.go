@@ -828,3 +828,47 @@ func TestUserDBOnlyRevisionDoesNotInvalidateBrowse(t *testing.T) {
 	_, ok = next.(models.BrowseResults)
 	require.True(t, ok)
 }
+
+// A folder can be hidden only where a browse can list it, so that there is
+// always an entry to unhide it from. A path above the library holds indexed
+// media too, and hiding it would empty a system with nothing to show for it.
+func TestHiddenFolderMustSitInsideTheLibrary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	systemDir := filepath.Join(root, "NES")
+	addTestMediaPaths(t, mediaDB, filepath.Join(systemDir, "Game", "Game.nes"))
+
+	platform := mocks.NewMockPlatform()
+	platform.On("RootDirs", mock.Anything).Return([]string{root})
+	env := requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		Platform: platform, Config: &config.Instance{},
+	}
+	hide := func(path string) error {
+		encoded, err := json.Marshal(map[string]any{"system": "NES", "path": path, "add": []string{"user:hidden"}})
+		require.NoError(t, err)
+		_, err = HandleMediaTagsUpdate(withParams(&env, string(encoded)))
+		return err
+	}
+
+	for _, outside := range []string{string(filepath.Separator), filepath.Dir(root), root} {
+		err := hide(outside)
+		require.ErrorContains(t, err, "not inside a library folder", outside)
+		var clientErr *models.ClientError
+		require.ErrorAs(t, err, &clientErr)
+		_, found, readErr := userDB.GetMediaUserData("NES", pathutil.CanonicalMediaPath(outside))
+		require.NoError(t, readErr)
+		assert.False(t, found, "nothing is stored for %s", outside)
+	}
+
+	require.NoError(t, hide(systemDir))
+	row, found, err := userDB.GetMediaUserData("NES", pathutil.CanonicalMediaPath(systemDir))
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.True(t, row.IsHidden)
+}

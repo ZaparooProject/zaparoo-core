@@ -872,9 +872,12 @@ type BrowseRouteCountsOptions struct {
 // callers should treat such routes as present with an unknown count rather than
 // as empty.
 type BrowseRouteCount struct {
-	Path         string
-	SystemIDs    []string
-	FileCount    int
+	Path      string
+	SystemIDs []string
+	FileCount int
+	// Hidden marks a route that is a hidden folder. Only a listing that
+	// includes hidden entries returns one.
+	Hidden       bool
 	CountUnknown bool
 }
 

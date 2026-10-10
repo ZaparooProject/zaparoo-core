@@ -299,6 +299,7 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	}
 	clearPrefixPolicyCache()
 	clearCoverAvailabilityCacheFor(db.sql.Load())
+	clearHiddenDirCountCacheFor(db.sql.Load())
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
 		clearImagePropertyTagCache()
@@ -2220,6 +2221,7 @@ func (db *MediaDB) Close() error {
 	clearUtilityTagCacheFor(sqlDB)
 	clearImagePropertyTagCacheFor(sqlDB)
 	unregisterCoverAvailabilityCacheOwner(sqlDB)
+	forgetHiddenDirCountCacheFor(sqlDB)
 	clearPrefixPolicyCacheFor(sqlDB)
 
 	closeErr := sqlDB.Close()
