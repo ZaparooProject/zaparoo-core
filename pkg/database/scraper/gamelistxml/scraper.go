@@ -1545,7 +1545,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	}
 
 	ch <- scraper.ScrapeUpdate{
-		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+		Done: true, Processed: totalProcessed, Total: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
 		TotalSteps: totalSteps, CurrentStep: totalSteps,
 	}
 }

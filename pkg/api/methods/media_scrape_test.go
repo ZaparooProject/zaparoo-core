@@ -2344,3 +2344,27 @@ func TestScrapeQueueAdvancePromotesJobScope(t *testing.T) {
 	require.Equal(t, scope, stored.Scope, "and must be persisted with it")
 	db.AssertExpectations(t)
 }
+
+// A scraper stopped by a cancel reports the context's own error as it ends.
+// That is the cancel arriving, not the run failing.
+func TestScrapingStatusFromUpdate_CancelIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	update := scraper.ScrapeUpdate{Done: true, FatalErr: context.Canceled, Processed: 3, Total: 9}
+
+	status := scrapingStatusFromUpdate(cancelled, "media-folder", false, &update, false, false)
+	assert.Equal(t, scrapeStateCancelled, status.State)
+	assert.Empty(t, status.Error)
+
+	// The same run ending on an error of its own is still a failure.
+	failed := scraper.ScrapeUpdate{Done: true, FatalErr: errors.New("disk gone")}
+	status = scrapingStatusFromUpdate(context.Background(), "media-folder", false, &failed, false, false)
+	assert.Equal(t, scrapeStateFailed, status.State)
+	assert.Equal(t, "disk gone", status.Error)
+
+	// An error that is not the cancel still fails a cancelled run's report.
+	both := scraper.ScrapeUpdate{Done: true, FatalErr: errors.New("disk gone")}
+	status = scrapingStatusFromUpdate(cancelled, "media-folder", false, &both, false, false)
+	assert.Equal(t, scrapeStateFailed, status.State)
+}

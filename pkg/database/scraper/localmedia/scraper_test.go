@@ -811,15 +811,21 @@ func TestScrape_PagesThroughLargeSystems(t *testing.T) {
 	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
 		DBID: system.DBID, ID: systemdefs.SystemNES, ROMPaths: []string{root},
 	}}, ch)
-	var lastProgress scraper.ScrapeUpdate
+	var lastProgress, final scraper.ScrapeUpdate
 	for update := range ch {
 		require.NoError(t, update.FatalErr)
 		if !update.Done {
 			lastProgress = update
+			continue
 		}
+		final = update
 	}
 	assert.Equal(t, count, lastProgress.Processed)
 	assert.Equal(t, len(want), lastProgress.Matched)
+	// The update that ends the run carries what the run did, not zeros.
+	assert.Equal(t, lastProgress.Processed, final.Processed)
+	assert.Equal(t, lastProgress.Processed, final.Total)
+	assert.Equal(t, len(want), final.Matched)
 
 	rows, err := db.GetMediaBySystemID(systemdefs.SystemNES)
 	require.NoError(t, err)

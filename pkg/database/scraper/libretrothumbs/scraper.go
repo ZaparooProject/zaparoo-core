@@ -274,7 +274,7 @@ func (r *run) loop(ctx context.Context, ch chan<- scraper.ScrapeUpdate) {
 		}
 	}
 	ch <- scraper.ScrapeUpdate{
-		Processed: all.processed, Matched: all.matched, Skipped: all.skipped,
+		Processed: all.processed, Total: all.processed, Matched: all.matched, Skipped: all.skipped,
 		TotalSteps: len(systems), CurrentStep: len(systems), Done: true,
 	}
 }

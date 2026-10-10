@@ -938,7 +938,14 @@ func checkAndResumeScraping(
 	// interruption even though no terminal invalidation ran.
 	invalidateInterruptedScrapeThumbnails(db.MediaDB, operation.Systems)
 	markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, false)
-	log.Info().Str("scraper", operation.ScraperID).Msg("detected interrupted media scraping, automatically resuming")
+	// A scrape queued behind an index waits here as pending and has not run
+	// yet; only one that was running when Core stopped was interrupted.
+	if operation.Version == 1 && operation.Status == mediadb.IndexingStatusPending {
+		log.Info().Str("scraper", operation.ScraperID).Msg("starting queued media scraping")
+	} else {
+		log.Info().Str("scraper", operation.ScraperID).
+			Msg("detected interrupted media scraping, automatically resuming")
+	}
 	env := requests.RequestEnv{
 		Context:      st.GetContext(),
 		Platform:     pl,

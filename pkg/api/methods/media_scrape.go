@@ -384,12 +384,23 @@ func ptrIfNotEmpty(v string) *string {
 	return &v
 }
 
+// scrapeCancelled reports whether a run's last update is the cancel arriving.
+// A scraper stopped mid-run hands back the context's error as it ends, which
+// is not a failure of its own.
+func scrapeCancelled(scrapeCtx context.Context, update *scraper.ScrapeUpdate) bool {
+	if !update.Done || scrapeCtx == nil || scrapeCtx.Err() == nil {
+		return false
+	}
+	return update.FatalErr == nil || errors.Is(update.FatalErr, context.Canceled) ||
+		errors.Is(update.FatalErr, context.DeadlineExceeded)
+}
+
 func scrapeState(scrapeCtx context.Context, update *scraper.ScrapeUpdate, paused bool) string {
 	switch {
+	case scrapeCancelled(scrapeCtx, update):
+		return scrapeStateCancelled
 	case update.FatalErr != nil:
 		return scrapeStateFailed
-	case update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil:
-		return scrapeStateCancelled
 	case update.Done:
 		return scrapeStateCompleted
 	case paused:
@@ -425,7 +436,7 @@ func scrapingStatusFromUpdate(
 		CurrentStep:        ptrIfPositive(update.CurrentStep),
 		CurrentStepDisplay: ptrIfNotEmpty(display),
 	}
-	if update.FatalErr != nil {
+	if update.FatalErr != nil && !scrapeCancelled(scrapeCtx, update) {
 		status.Error = update.FatalErr.Error()
 	}
 	if update.SystemID != "" {

@@ -68,6 +68,13 @@ type scraperImpl struct {
 	// scraped, so a row's candidate filenames are ruled out in memory instead
 	// of with a stat apiece.
 	dirNames *esmedia.DirNames
+	// run adds up the systems a run over whole systems has finished, for the
+	// update that ends it.
+	run runCounts
+}
+
+type runCounts struct {
+	processed, matched, skipped int
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
@@ -259,12 +266,16 @@ func (s *scraperImpl) scrapeLoop(
 		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
 		return
 	}
+	s.run = runCounts{}
 	for systemIdx := range systems {
 		if !s.scrapeSystem(ctx, opts, systems, systemIdx, ch) {
 			return
 		}
 	}
-	ch <- scraper.ScrapeUpdate{TotalSteps: len(systems), CurrentStep: len(systems), Done: true}
+	ch <- scraper.ScrapeUpdate{
+		Processed: s.run.processed, Total: s.run.processed, Matched: s.run.matched, Skipped: s.run.skipped,
+		TotalSteps: len(systems), CurrentStep: len(systems), Done: true,
+	}
 }
 
 // scrapeSystem scrapes one system. It returns false when the run has ended,
@@ -517,6 +528,9 @@ func (s *scraperImpl) scrapeSystem(
 		}
 		return false
 	}
+	s.run.processed += processed
+	s.run.matched += matched
+	s.run.skipped += skipped
 	return true
 }
 
