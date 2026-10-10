@@ -21,6 +21,8 @@ package hoststatus
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -47,8 +49,13 @@ func statusServer(t *testing.T, status int, hits *atomic.Int32) string {
 	return server.URL
 }
 
+// probe uses its own transport. httptest's Server.Close closes the idle
+// connections of http.DefaultTransport, which fails a request another parallel
+// subtest has just dialled on it.
 func probe(urls ...string) InternetState {
-	return NewProber(urls, nil).Probe(context.Background())
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	return NewProber(urls, transport).Probe(context.Background())
 }
 
 func TestProber_Probe(t *testing.T) {
@@ -71,10 +78,15 @@ func TestProber_Probe(t *testing.T) {
 
 	t.Run("nothing answering is no internet", func(t *testing.T) {
 		t.Parallel()
-		server := httptest.NewServer(http.NotFoundHandler())
-		url := server.URL
-		server.Close()
-		assert.Equal(t, InternetNone, probe(url))
+		// A dial that fails, not the port of a closed server: a parallel
+		// subtest's server can be handed that port and answer on it.
+		transport := &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("unreachable")
+			},
+		}
+		prober := NewProber([]string{"http://unreachable.invalid"}, transport)
+		assert.Equal(t, InternetNone, prober.Probe(context.Background()))
 	})
 
 	t.Run("a server error is no internet", func(t *testing.T) {
