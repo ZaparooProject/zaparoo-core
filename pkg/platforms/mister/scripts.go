@@ -13,11 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -26,6 +30,8 @@ const (
 	misterWidgetScriptPath  = "/tmp/widget_script"
 	misterScriptRunFlag     = "1"
 	misterWidgetRunFlag     = "2"
+	scriptsLauncherID       = "Scripts"
+	scriptExt               = ".sh"
 
 	// launchOriginEnv tells scripts which frontend launched them. Update All
 	// reads it to decide how to hand the console back after a core load. The
@@ -43,6 +49,9 @@ var (
 	startScriptCommand           = func(cmd *exec.Cmd) error { return cmd.Start() }
 	runHiddenScriptCommand       = func(cmd *exec.Cmd) error { return cmd.Run() }
 	killHiddenScriptProcessGroup = func(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }
+	scriptActiveCoreName         = mistermain.GetActiveCoreName
+	scriptFPGAActive             = func(pl *Platform) bool { return pl.isFPGAActive() }
+	scriptReturnToMenu           = func(pl *Platform) error { return pl.ReturnToMenu() }
 )
 
 func scriptIsActive(ctx context.Context) bool {
@@ -142,21 +151,8 @@ func runScriptContext(
 		}
 
 		// Wait for menu core to become active to ensure console state is reset
-		menuWaitCtx, menuWaitCancel := context.WithTimeout(ctx, 5*time.Second)
-		defer menuWaitCancel()
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
-		menuReady := false
-		for !menuReady {
-			select {
-			case <-menuWaitCtx.Done():
-				return errors.New("timed out waiting for menu core to load")
-			case <-ticker.C:
-				if mistermain.GetActiveCoreName() == misterconfig.MenuCore {
-					menuReady = true
-				}
-			}
+		if err := waitForMenuCore(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -211,9 +207,9 @@ export LC_ALL=en_US.UTF-8
 export HOME=/root
 export LESSKEY=/media/fat/linux/lesskey
 export ZAPAROO_RUN_SCRIPT=%s
-%scd $(dirname "%s")
+%scd "$(dirname %s)"
 %s
-`, runScript, launchOriginExport, bin, bin+" "+args)
+`, runScript, launchOriginExport, command.ShellQuote(bin), command.ShellQuote(bin)+" "+args)
 
 	err = writeScriptLauncher(scriptPath, []byte(launcher), 0o750)
 	if err != nil {
@@ -271,6 +267,121 @@ export ZAPAROO_RUN_SCRIPT=%s
 	consoleOwned = false
 
 	return nil
+}
+
+// waitForMenuCore blocks until MiSTer reports the menu core, which is when the
+// console is back at its normal resolution.
+func waitForMenuCore(ctx context.Context) error {
+	menuWaitCtx, menuWaitCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer menuWaitCancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-menuWaitCtx.Done():
+			return errors.New("timed out waiting for menu core to load")
+		case <-ticker.C:
+			if scriptActiveCoreName() == misterconfig.MenuCore {
+				return nil
+			}
+		}
+	}
+}
+
+// createScriptsLauncher exposes the MiSTer Scripts folder as the Scripts
+// system. A script launched this way runs on screen with no arguments;
+// mister.script is the way to pass arguments or run one hidden.
+func createScriptsLauncher(pl *Platform) platforms.Launcher {
+	return platforms.Launcher{
+		ID:            scriptsLauncherID,
+		SystemID:      systemdefs.SystemScript,
+		Folders:       []string{misterconfig.ScriptsDir},
+		Extensions:    []string{scriptExt},
+		NoActiveMedia: true,
+		Scanner:       scanScripts(misterconfig.ScriptsDir),
+		Launch:        launchScript(pl, misterconfig.ScriptsDir),
+	}
+}
+
+// scriptRelPath returns path relative to scriptsDir when it names a script
+// the Scripts system lists: a .sh file inside the folder with no hidden
+// segment, which keeps helper scripts under folders like .config out, and
+// not inside an archive, where it could not be run.
+func scriptRelPath(scriptsDir, path string) (string, bool) {
+	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), scriptExt) {
+		return "", false
+	}
+	rel, err := filepath.Rel(scriptsDir, filepath.Clean(path))
+	if err != nil || rel == "." {
+		return "", false
+	}
+	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.HasPrefix(segment, ".") || helpers.IsZip(segment) {
+			return "", false
+		}
+	}
+	return rel, true
+}
+
+func scanScripts(
+	scriptsDir string,
+) func(context.Context, *config.Instance, string, []platforms.ScanResult) ([]platforms.ScanResult, error) {
+	return func(
+		_ context.Context, _ *config.Instance, _ string, files []platforms.ScanResult,
+	) ([]platforms.ScanResult, error) {
+		scripts := make([]platforms.ScanResult, 0, len(files))
+		for i := range files {
+			if _, ok := scriptRelPath(scriptsDir, files[i].Path); !ok {
+				continue
+			}
+			// A script is known by its file name, so it is listed under
+			// exactly that instead of a title parsed out of it.
+			script := files[i]
+			base := filepath.Base(script.Path)
+			script.Name = strings.TrimSuffix(base, filepath.Ext(base))
+			scripts = append(scripts, script)
+		}
+		return scripts, nil
+	}
+}
+
+func launchScript(
+	pl *Platform,
+	scriptsDir string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		if _, ok := scriptRelPath(scriptsDir, path); !ok {
+			return nil, fmt.Errorf("invalid script: %s", path)
+		}
+		scriptPath := filepath.Clean(path)
+		if err := checkScriptFile(afero.NewOsFs(), scriptPath); err != nil {
+			return nil, err
+		}
+
+		ctx := context.Background()
+		if pl.launcherManager != nil {
+			ctx = pl.launcherManager.GetContext()
+		}
+
+		// The launch has already stopped tracked media, but a core Main is
+		// still running has to go too: a script needs the menu's console.
+		if scriptFPGAActive(pl) {
+			log.Debug().Msg("FPGA core active, returning to menu before script")
+			if err := scriptReturnToMenu(pl); err != nil {
+				return nil, fmt.Errorf("failed to return to menu: %w", err)
+			}
+			if err := waitForMenuCore(ctx); err != nil {
+				return nil, err
+			}
+		}
+
+		// The runner tracks the process and restores the console itself.
+		if err := runScriptContext(ctx, pl, scriptPath, "", false, ""); err != nil {
+			return nil, err
+		}
+		return nil, nil //nolint:nilnil // No process handle; the runner owns it.
+	}
 }
 
 func echoFile(path, s string) error {

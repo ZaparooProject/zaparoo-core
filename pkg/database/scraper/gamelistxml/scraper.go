@@ -365,7 +365,9 @@ func resolveSystemsFromPlatform(
 	}
 
 	pathsBySystem := make(map[string][]string, len(sysDefs))
-	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
+	systemPaths := mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs)
+	for i := range systemPaths {
+		pathResult := &systemPaths[i]
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
 	launchers := pl.Launchers(cfg)

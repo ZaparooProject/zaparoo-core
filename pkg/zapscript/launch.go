@@ -550,7 +550,7 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
-		allSystems := systemdefs.AllSystems()
+		allSystems := systemdefs.AllImplicitSystems()
 		systemIDs := make([]string, len(allSystems))
 		for i, sys := range allSystems {
 			systemIDs[i] = sys.ID
@@ -673,7 +673,7 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
+			systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -1372,7 +1372,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if !strings.Contains(query, "/") {
 		// search all systems
 		searchFilters := database.SearchFilters{
-			Systems: systemdefs.AllSystems(),
+			Systems: systemdefs.AllImplicitSystems(),
 			Query:   query,
 			Tags:    tagFilters,
 			Limit:   1,
@@ -1406,7 +1406,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
+		systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {

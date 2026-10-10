@@ -3202,3 +3202,115 @@ func TestCmdLaunch_AbsolutePathMustExist(t *testing.T) {
 		})
 	}
 }
+
+// explicitOnlySystemsQueried reports which ExplicitOnly systems a launch asked
+// the media database about, and whether an ordinary system was asked for too.
+func explicitOnlySystemsQueried(systemIDs []string) (explicitOnly []string, ordinary bool) {
+	for _, id := range systemIDs {
+		switch id {
+		case systemdefs.SystemScript, systemdefs.SystemApplication:
+			explicitOnly = append(explicitOnly, id)
+		case systemdefs.SystemNES:
+			ordinary = true
+		}
+	}
+	return explicitOnly, ordinary
+}
+
+func TestAllSystemsLaunchesSkipExplicitOnlySystems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		run   func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
+		name  string
+		cmd   string
+		query string
+	}{
+		{name: "random all", run: cmdRandom, cmd: "launch.random", query: "all"},
+		{name: "random all with query", run: cmdRandom, cmd: "launch.random", query: "all/update*"},
+		{name: "unscoped search", run: cmdSearch, cmd: "launch.search", query: "update"},
+		{name: "search all", run: cmdSearch, cmd: "launch.search", query: "all/update*"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var queried [][]string
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					query, ok := args.Get(1).(*database.MediaQuery)
+					require.True(t, ok)
+					queried = append(queried, query.Systems)
+				}).
+				Return(database.SearchResult{}, sql.ErrNoRows).Maybe()
+			mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					filters, ok := args.Get(1).(*database.SearchFilters)
+					require.True(t, ok)
+					ids := make([]string, len(filters.Systems))
+					for i := range filters.Systems {
+						ids[i] = filters.Systems[i].ID
+					}
+					queried = append(queried, ids)
+				}).
+				Return([]database.SearchResultWithCursor{}, nil).Maybe()
+
+			_, err := tt.run(mockPlatform, platforms.CmdEnv{
+				Cmd:      zapscript.Command{Name: tt.cmd, Args: []string{tt.query}},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			})
+
+			require.Error(t, err, "nothing matches, so nothing launches")
+			require.NotEmpty(t, queried)
+			for _, systemIDs := range queried {
+				explicitOnly, ordinary := explicitOnlySystemsQueried(systemIDs)
+				assert.Empty(t, explicitOnly)
+				assert.True(t, ordinary)
+			}
+			mockPlatform.AssertNotCalled(
+				t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+			)
+		})
+	}
+}
+
+func TestNamedExplicitOnlySystemIsStillLaunchable(t *testing.T) {
+	t.Parallel()
+
+	for _, systemID := range []string{systemdefs.SystemScript, systemdefs.SystemApplication} {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			const mediaPath = "/media/fat/Scripts/update_all.sh"
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+				mock.MatchedBy(func(query *database.MediaQuery) bool {
+					return len(query.Systems) == 1 && query.Systems[0] == systemID
+				}),
+			).Return(database.SearchResult{Path: mediaPath, SystemID: systemID}, nil)
+			mockPlatform.On(
+				"LaunchMedia", cfg, mediaPath, (*platforms.Launcher)(nil),
+				mock.Anything, (*platforms.LaunchOptions)(nil),
+			).Return(nil)
+
+			result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+				Cmd:      zapscript.Command{Name: "launch.random", Args: []string{systemID}},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			})
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}

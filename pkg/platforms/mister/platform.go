@@ -1326,16 +1326,17 @@ func splitAmigaVisionInstallPaths(paths []mediascanner.PathResult) (
 	preferred = make([]mediascanner.PathResult, 0, len(paths))
 	other = make([]mediascanner.PathResult, 0, len(paths))
 
-	for _, path := range paths {
+	for i := range paths {
+		path := &paths[i]
 		if !hasAmigaVisionImage(path.Path) {
 			log.Debug().Str("path", path.Path).Msg("skipping AmigaVision path without boot image")
 			continue
 		}
 		if isPreferredAmigaVisionPath(path.Path) {
-			preferred = append(preferred, path)
+			preferred = append(preferred, *path)
 			continue
 		}
-		other = append(other, path)
+		other = append(other, *path)
 	}
 
 	return preferred, other
@@ -1616,7 +1617,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			validPaths = append(validPaths, preferredPaths...)
 			validPaths = append(validPaths, otherPaths...)
 
-			for _, sf := range validPaths {
+			for pathIdx := range validPaths {
+				sf := &validPaths[pathIdx]
 				select {
 				case <-ctx.Done():
 					return results, ctx.Err()
@@ -1684,13 +1686,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			// Collect NEOGEO paths for filtering
 			neogeoPaths := make([]string, len(sfs))
-			for i, sf := range sfs {
-				neogeoPaths[i] = sf.Path
+			for i := range sfs {
+				neogeoPaths[i] = sfs[i].Path
 			}
 			log.Debug().Int("paths", len(sfs)).Strs("roots", neogeoPaths).Msg("neogeo scan paths found")
 
 			// First pass: load all romsets from all directories
-			for _, sf := range sfs {
+			for pathIdx := range sfs {
+				sf := &sfs[pathIdx]
 				select {
 				case <-ctx.Done():
 					return results, ctx.Err()
@@ -1740,7 +1743,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			} else {
 				osFs := afero.NewOsFs()
 				seenNeoGeoEntries := make(map[string]struct{})
-				for _, sf := range sfs {
+				for pathIdx := range sfs {
+					sf := &sfs[pathIdx]
 					select {
 					case <-ctx.Done():
 						return results, ctx.Err()
@@ -1776,6 +1780,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls = append(
 		ls, amiga, neogeo, neogeoMVS,
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
+		createScriptsLauncher(p),
 	)
 	setCoreAvailability(ls)
 

@@ -64,6 +64,10 @@ type System struct {
 	Aliases   []string
 	Fallbacks []string
 	Slugs     []string
+	// ExplicitOnly keeps the system out of launches that span every system,
+	// such as a random pick or an unscoped search. It can still be searched,
+	// browsed and launched when it is named.
+	ExplicitOnly bool
 }
 
 // Lazy initialization for system lookup map
@@ -412,6 +416,7 @@ const (
 	SystemTamagotchi          = "Tamagotchi"
 	SystemSolarus             = "Solarus"
 	SystemBennuGD             = "BennuGD"
+	SystemScript              = "Script"
 )
 
 // GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
@@ -551,6 +556,19 @@ func AllSystems() []System {
 		systems = append(systems, Systems[k])
 	}
 
+	return systems
+}
+
+// AllImplicitSystems returns every system a launch may pick without the
+// system being named, which is AllSystems without the ExplicitOnly ones.
+func AllImplicitSystems() []System {
+	all := AllSystems()
+	systems := make([]System, 0, len(all))
+	for i := range all {
+		if !all[i].ExplicitOnly {
+			systems = append(systems, all[i])
+		}
+	}
 	return systems
 }
 
@@ -1534,9 +1552,16 @@ var Systems = map[string]System{
 		MediaType: MediaTypeAudio,
 	},
 	SystemApplication: {
-		ID:        SystemApplication,
-		Aliases:   []string{"App", "Apps", "Software"},
-		MediaType: MediaTypeApplication,
+		ID:           SystemApplication,
+		Aliases:      []string{"App", "Apps", "Software"},
+		MediaType:    MediaTypeApplication,
+		ExplicitOnly: true,
+	},
+	SystemScript: {
+		ID:           SystemScript,
+		Aliases:      []string{"Scripts"},
+		MediaType:    MediaTypeApplication,
+		ExplicitOnly: true,
 	},
 	SystemMovie: {
 		ID:        SystemMovie,

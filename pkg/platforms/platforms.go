@@ -455,6 +455,9 @@ type Launcher struct {
 	ScanSkipInternalSymlinks bool
 	ScanOnly                 bool
 	Available                bool
+	// NoActiveMedia marks a launcher that runs an action instead of starting
+	// media, so Core publishes no active media for its launches.
+	NoActiveMedia bool
 }
 
 type BackupPattern struct {

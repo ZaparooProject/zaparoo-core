@@ -22,6 +22,7 @@ package platforms_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -439,6 +441,43 @@ func TestDoLaunch_ExternalLifecycleDefersActiveMedia(t *testing.T) {
 	assert.True(t, launchCalled)
 	assert.Nil(t, activeMedia, "external tracker must publish ActiveMedia after Steam starts the game")
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_NoActiveMediaLauncherPublishesNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, noActiveMedia := range []bool{true, false} {
+		t.Run(fmt.Sprintf("NoActiveMedia=%t", noActiveMedia), func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+			launchCalled := false
+			launcher := &platforms.Launcher{
+				ID:            "Scripts",
+				SystemID:      systemdefs.SystemScript,
+				NoActiveMedia: noActiveMedia,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					launchCalled = true
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			var activeMedia *models.ActiveMedia
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+				Launcher:       launcher,
+				Path:           "/media/fat/Scripts/update_all.sh",
+			}
+
+			require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "update_all" }))
+			assert.True(t, launchCalled)
+			assert.Equal(t, noActiveMedia, activeMedia == nil)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
 
 func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
