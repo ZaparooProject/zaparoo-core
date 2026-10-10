@@ -121,6 +121,9 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 	require.NotEmpty(t, updates)
 	assert.True(t, updates[len(updates)-1].Done)
 	assert.Equal(t, 1, updates[len(updates)-1].Matched)
+	assert.Equal(t, updates[len(updates)-1].Processed, updates[len(updates)-1].Total,
+		"a finished run reports its total, not zero")
+	assert.Positive(t, updates[len(updates)-1].Total)
 	mediaDB.AssertExpectations(t)
 	pl.AssertExpectations(t)
 }

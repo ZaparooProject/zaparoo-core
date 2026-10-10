@@ -314,20 +314,26 @@ func TestStopActiveLauncher(t *testing.T) {
 
 		activeMedia := &models.ActiveMedia{Name: "test"}
 		base := NewBase("test")
+		// The clock never advances, so neither the SIGTERM timeout nor the
+		// SIGKILL fallback behind it can fire: the stop returns only because
+		// the process exited on SIGTERM.
+		base.SetClock(clockwork.NewFakeClock())
 		base.trackedProcess = cmd.Process
 		base.setActiveMedia = func(m *models.ActiveMedia) {
 			activeMedia = m
 		}
 
-		start := time.Now()
-		err := base.StopActiveLauncher(platforms.StopForPreemption)
-		elapsed := time.Since(start)
+		stopped := make(chan error, 1)
+		go func() { stopped <- base.StopActiveLauncher(platforms.StopForPreemption) }()
+		select {
+		case err := <-stopped:
+			require.NoError(t, err)
+		case <-time.After(time.Minute):
+			require.Fail(t, "the process did not exit on SIGTERM")
+		}
 
-		require.NoError(t, err)
 		assert.Nil(t, base.trackedProcess)
 		assert.Nil(t, activeMedia)
-		// Should complete quickly (SIGTERM kills sleep immediately)
-		assert.Less(t, elapsed, 2*time.Second)
 	})
 
 	t.Run("sigkill_after_timeout", func(t *testing.T) {

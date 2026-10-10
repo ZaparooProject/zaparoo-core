@@ -435,7 +435,7 @@ func resolveRelativeBrowsePath(
 	if len(probeSystems) == 0 {
 		probeSystems = []systemdefs.System{*system}
 	}
-	for _, candidate := range relativeMediaPathCandidates(env, system.ID, remainder) {
+	holdsMedia := func(candidate string) (bool, error) {
 		prefix := candidate + "/"
 		dirCount, countErr := env.Database.MediaDB.BrowseDirCount(env.Context, database.BrowseDirCountOptions{
 			ExcludeHidden: env.ExcludeHidden,
@@ -443,10 +443,10 @@ func resolveRelativeBrowsePath(
 			Systems:       probeSystems,
 		})
 		if countErr != nil {
-			return "", true, fmt.Errorf("error resolving relative path: %w", countErr)
+			return false, fmt.Errorf("error resolving relative path: %w", countErr)
 		}
 		if dirCount > 0 {
-			return candidate, true, nil
+			return true, nil
 		}
 		fileCount, countErr := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
 			ExcludeHidden: env.ExcludeHidden,
@@ -454,9 +454,25 @@ func resolveRelativeBrowsePath(
 			Systems:       probeSystems,
 		})
 		if countErr != nil {
-			return "", true, fmt.Errorf("error resolving relative path: %w", countErr)
+			return false, fmt.Errorf("error resolving relative path: %w", countErr)
 		}
-		if fileCount > 0 {
+		return fileCount > 0, nil
+	}
+	for _, candidate := range relativeMediaPathCandidates(env, system.ID, remainder) {
+		found, probeErr := holdsMedia(candidate)
+		if probeErr != nil {
+			return "", true, probeErr
+		}
+		if found {
+			return candidate, true, nil
+		}
+	}
+	for _, candidate := range indexedRelativeMediaPathCandidates(env, system.ID, remainder) {
+		found, probeErr := holdsMedia(candidate)
+		if probeErr != nil {
+			return "", true, probeErr
+		}
+		if found {
 			return candidate, true, nil
 		}
 	}
@@ -627,6 +643,9 @@ func resolveSystemRootEntries(
 			entry.SystemID = &count.SystemIDs[0]
 		}
 		entry.RelPath = browseDirRelativePath(env, route, count.SystemIDs, systems)
+		if count.Hidden {
+			entry.Tags = append(entry.Tags, hiddenDirectoryTag())
+		}
 		if group, ok := schemeGroups[route]; ok {
 			entry.Group = &group
 		}
@@ -1907,6 +1926,9 @@ func preferLastPlayedDiscs(
 	}
 	for i := range preferred {
 		if index, ok := multiDisc[preferred[i].ChildDir]; ok {
+			// The folder's image is requested by its path, which serves the
+			// first disc's artwork when the launch target has none.
+			preferred[i].HasCover = preferred[i].HasCover || aliases[index].HasCover
 			aliases[index] = preferred[i]
 		}
 	}

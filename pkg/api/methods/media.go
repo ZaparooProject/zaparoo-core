@@ -1052,6 +1052,18 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.IndexPauser)
 	}
 
+	// The write lease comes first: a request that another operation refuses
+	// must not write to a database that operation holds, where the write
+	// would sit out its lock before the refusal was sent.
+	coordinator, err := database.GetMediaDBWriteCoordinator(env.Database.MediaDB)
+	if err != nil {
+		return nil, fmt.Errorf("get media database write coordinator for indexing: %w", err)
+	}
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	if err != nil {
+		return nil, mediaWriteClientError(err, database.MediaWriteOperationIndexing)
+	}
+
 	// An index the user starts covers every system it names again, including
 	// any auto-resume skipped. A request made while indexing runs is refused
 	// below, so the running index keeps its list.
@@ -1062,11 +1074,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	// Use app-scoped context — indexing outlives the API request
-	generate := GenerateMediaDB
-	if rebuild {
-		generate = GenerateMediaDBRebuild
-	}
-	err := generate(
+	err = startMediaDBGeneration(
 		env.State.GetContext(),
 		env.Platform,
 		env.Config,
@@ -1074,6 +1082,8 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems,
 		env.Database,
 		env.IndexPauser,
+		rebuild,
+		lease,
 	)
 	if err != nil {
 		return nil, err

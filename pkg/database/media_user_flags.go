@@ -25,6 +25,7 @@ import (
 
 	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/rs/zerolog/log"
 )
 
 // mediaUserFlagsMu serializes flag edits, so one edit's UserDB write and the
@@ -72,6 +73,24 @@ func ApplyMediaUserFlags(
 		}
 	}
 
+	// The two stores are separate files, so nothing makes the pair of writes
+	// atomic. The marker is what a kill between them leaves behind. One that
+	// is already there was left by an earlier write the reconcile has not yet
+	// answered, and stays for it.
+	markerHeld := false
+	if mediaDBID > 0 {
+		_, found, err := db.UserDB.GetDeviceState(DeviceStateKeyMediaUserFlagWrite)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read media user flag write marker: %w", err)
+		}
+		markerHeld = found
+		if !markerHeld {
+			if err := db.UserDB.SetDeviceState(DeviceStateKeyMediaUserFlagWrite, "1"); err != nil {
+				return nil, fmt.Errorf("failed to mark media user flag write: %w", err)
+			}
+		}
+	}
+
 	for _, flag := range MediaUserFlags {
 		value, ok := changes[flag]
 		if !ok {
@@ -115,11 +134,17 @@ func ApplyMediaUserFlags(
 			remove = append(remove, ref)
 		}
 	}
-	if len(written) == 0 {
+	if len(written) > 0 {
+		if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
+			return nil, fmt.Errorf("failed to update media tag projection: %w", err)
+		}
+	}
+	if markerHeld {
 		return written, nil
 	}
-	if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
-		return nil, fmt.Errorf("failed to update media tag projection: %w", err)
+	// A marker that cannot be cleared only costs the next start a reconcile.
+	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
+		log.Warn().Err(err).Msg("failed to clear the media user flag write marker")
 	}
 	return written, nil
 }

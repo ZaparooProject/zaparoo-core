@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -517,4 +518,15 @@ func TestDefaultSteamAppsDirs(t *testing.T) {
 
 		assert.Equal(t, platformSteamAppsDirs(""), DefaultSteamAppsDirs())
 	})
+}
+
+// The tracker reports a running app under the path the library scan indexes
+// it by, so what is playing is the indexed media.
+func TestMediaPathMatchesTheScannedPath(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, virtualpath.CreateVirtualPath("steam", "212680", "FTL: Faster Than Light"),
+		MediaPath(212680, "FTL: Faster Than Light"))
+	appID, ok := ExtractAppIDFromPath(MediaPath(212680, "FTL: Faster Than Light"))
+	require.True(t, ok)
+	assert.Equal(t, 212680, appID)
 }

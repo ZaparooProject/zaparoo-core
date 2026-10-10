@@ -171,7 +171,7 @@ func (h *hiddenMedia) countUnder(prefix string, systems []systemdefs.System) int
 		}
 	}
 	for i := range h.dirs {
-		if h.dirs[i].within(prefix) && hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+		if h.dirs[i].countedUnder(prefix) && hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
 			count += h.dirs[i].Count
 		}
 	}
@@ -190,7 +190,7 @@ func (h *hiddenMedia) countForSystem(systemID string) int {
 		}
 	}
 	for i := range h.dirs {
-		if h.dirs[i].SystemID == systemID {
+		if h.dirs[i].SystemID == systemID && h.dirs[i].Outer == "" {
 			count += h.dirs[i].Count
 		}
 	}
@@ -218,7 +218,7 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 		counts[rest[:slash]]++
 	}
 	for i := range h.dirs {
-		if !h.dirs[i].within(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+		if !h.dirs[i].countedUnder(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
 			continue
 		}
 		// The folder is the named child itself or somewhere beneath it.

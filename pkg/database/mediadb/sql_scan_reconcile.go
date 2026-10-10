@@ -58,8 +58,8 @@ type canonicalTagRow struct {
 // links that the scanner owns and that are absent from the staged desired set.
 // Non-scanner types (user tags, cover/scrape properties, scraper-exclusive
 // metadata, scraper run markers) are never treated as stale — deleting them
-// here would silently wipe scraped data on every re-index. Must stay in sync
-// with sqlGetNonScannerTagDBIDs.
+// here would silently wipe scraped data on every re-index. Neither is a link
+// a scraper wrote under a type the scanner also writes (MediaTags.Scraped).
 const (
 	scanFlagMissingBatchSize = 5000
 	// A row here writes to roughly nine Media indexes (vs. scanFlagMissingBatchSize's
@@ -95,6 +95,7 @@ const (
 	JOIN Tags t ON t.DBID = mt.TagDBID
 	JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 	WHERE m.SystemDBID = ?
+	  AND mt.Scraped = 0
 	  AND tt.Type NOT IN (?, ?, ?, ?)
 	  AND tt.Type NOT LIKE ?
 	  AND tt.Type NOT LIKE ?

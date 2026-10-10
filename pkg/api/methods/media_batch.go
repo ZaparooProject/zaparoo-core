@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 )
 
 const (
@@ -154,9 +155,12 @@ func resolveMediaRefs(env *requests.RequestEnv, refs []mediaRefParam) ([]resolve
 			continue
 		}
 
-		key := ref.System + "\x00" + ref.Path
+		// The index stores forward slashes, and Core reports a launched
+		// file's path with the host's separators.
+		path := pathutil.CanonicalMediaPath(ref.Path)
+		key := ref.System + "\x00" + path
 		if len(pathIndexes[key]) == 0 {
-			pathGroups[ref.System] = append(pathGroups[ref.System], ref.Path)
+			pathGroups[ref.System] = append(pathGroups[ref.System], path)
 		}
 		pathIndexes[key] = append(pathIndexes[key], i)
 	}

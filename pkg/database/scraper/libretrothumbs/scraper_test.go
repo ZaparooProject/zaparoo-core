@@ -171,6 +171,7 @@ func TestScrapeDownloadsMatchedThumbnailsOnce(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 3, last.Processed)
+	require.Equal(t, 3, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 2, last.Matched)
 	require.Equal(t, 1, last.Skipped)
 

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
@@ -145,6 +147,68 @@ func applyMediaLauncherOverrideForPath(
 }
 
 // findMediaInSystem returns the DBID of the media row for path in systemID.
+// indexedPathSpelling returns path the way the index spells it when the two
+// differ only in case. A case-insensitive filesystem opens a file under any
+// spelling, and a launch that carried the typed one on would start the right
+// file while recording a path no indexed media has: no media ID, no artwork,
+// and a history entry that names nothing. systemID narrows the lookup and may
+// be empty, in which case it is taken from the launcher that claims the path;
+// a path no system claims is left alone, since comparing it would mean
+// reading every path in the library.
+func indexedPathSpelling(pl platforms.Platform, env *platforms.CmdEnv, systemID, path string) string {
+	if env.Database == nil || env.Database.MediaDB == nil || helpers.ReURI.MatchString(path) {
+		return path
+	}
+	if systemID == "" {
+		launcher, found := inferLauncherForPath(pl, env, path)
+		if !found || launcher.SystemID == "" {
+			return path
+		}
+		systemID = launcher.SystemID
+	}
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
+	if err != nil {
+		return path
+	}
+	canonical := pathutil.CanonicalMediaPath(path)
+	if media, findErr := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, canonical); findErr != nil ||
+		media != nil {
+		return path
+	}
+	spelled, found, err := env.Database.MediaDB.FindMediaPathIgnoringCase(ctx, system.DBID, canonical)
+	if err != nil || !found {
+		return path
+	}
+	log.Debug().Str("requested", path).Str("indexed", spelled).Msg("launch path follows the indexed spelling")
+	return filepath.FromSlash(spelled)
+}
+
+// virtualIDPath matches a virtual path that names its media by ID alone, such
+// as steam://620, the form a tag is usually written in.
+var virtualIDPath = regexp.MustCompile(`^[a-z][a-z0-9+.-]*://[^/?#]+/?$`)
+
+// indexedVirtualPath returns the indexed path of the media a bare-ID virtual
+// path names. The index stores such media as scheme://id/name, so a launch
+// that carried the bare form on would start the right thing while recording
+// a path no indexed media has. Web links are not media paths and are left
+// alone, as is an ID the index holds no single entry for.
+func indexedVirtualPath(env *platforms.CmdEnv, path string) string {
+	if env.Database == nil || env.Database.MediaDB == nil || !virtualIDPath.MatchString(path) ||
+		strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	indexed, found, err := env.Database.MediaDB.FindMediaPathByPrefix(ctx, strings.TrimSuffix(path, "/")+"/")
+	if err != nil || !found {
+		return path
+	}
+	log.Debug().Str("requested", path).Str("indexed", indexed).Msg("launch path follows the indexed virtual path")
+	return indexed
+}
+
 func findMediaInSystem(ctx context.Context, env *platforms.CmdEnv, systemID, path string) (int64, bool) {
 	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
 	if err != nil {
@@ -1105,6 +1169,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		if findErr != nil {
 			return platforms.CmdResult{}, findErr
 		}
+		found = indexedPathSpelling(pl, &env, requestedSystemID, found)
 		log.Debug().Msgf("launching absolute path: %s", found)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1113,6 +1178,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	// match for uri style launch syntax
 	if helpers.ReURI.MatchString(path) {
+		path = indexedVirtualPath(&env, path)
 		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1124,6 +1190,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	var findErr error
 	var p string
 	if p, findErr = findFile(fs, pl, env.Cfg, path, env.PathRoot); findErr == nil {
+		p = indexedPathSpelling(pl, &env, requestedSystemID, p)
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1140,6 +1207,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		if system, lookupErr := systemdefs.LookupSystem(systemPart); lookupErr == nil {
 			fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath)
 			if found && !isDirectory(fs, fp) {
+				fp = indexedPathSpelling(pl, &env, foundSystemID, fp)
 				log.Debug().Msgf("launching found system path: %s", fp)
 				return platforms.CmdResult{
 					MediaChanged: true,
@@ -1171,6 +1239,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
+		fp = indexedPathSpelling(pl, &env, foundSystemID, fp)
 		log.Debug().Msgf("launching found system path: %s", fp)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1251,6 +1320,12 @@ func findSystemFile(
 
 	for i, f := range folders {
 		systemPath := filepath.Join(f, lookupPath)
+		// The format names a file below the launcher folder. A path that
+		// climbs out of it with ".." is some other file.
+		if !helpers.PathHasPrefix(systemPath, f) {
+			log.Debug().Msgf("system path leaves its launcher folder: %s", systemPath)
+			continue
+		}
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
 		if findErr == nil {
