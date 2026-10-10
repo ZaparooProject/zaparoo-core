@@ -98,11 +98,17 @@ func TestStorageReader_LeavesOutEmptyPlaceholderRoots(t *testing.T) {
 	sdMount := filepath.Join(sep, "media", "fat")
 	unplugged := filepath.Join(sep, "media", "usb0")
 	plugged := filepath.Join(sep, "media", "usb1")
+	linked := filepath.Join(sep, "media", "usb2")
+	linkedMount := filepath.Join(sep, "mnt", "drive")
+	unresolved := filepath.Join(sep, "media", "usb3")
 	data := filepath.Join(sep, "media", "fat", "zaparoo")
 	emptyOnData := filepath.Join(sep, "media", "fat", "empty")
 
-	mounts := map[string]string{games: sdMount, data: sdMount, emptyOnData: sdMount, unplugged: sep, plugged: plugged}
-	empty := map[string]bool{unplugged: true, plugged: true, emptyOnData: true}
+	mounts := map[string]string{
+		games: sdMount, data: sdMount, emptyOnData: sdMount, unplugged: sep, plugged: plugged,
+		linked: linkedMount, unresolved: sep,
+	}
+	empty := map[string]bool{unplugged: true, plugged: true, emptyOnData: true, linked: true, unresolved: true}
 	reader := &StorageReader{
 		FilesystemID: func(path string) (id, mountPoint string, err error) {
 			return mounts[path], mounts[path], nil
@@ -114,11 +120,22 @@ func TestStorageReader_LeavesOutEmptyPlaceholderRoots(t *testing.T) {
 			return DiskUsage{Total: 1000, Free: 400, Available: 400}, nil
 		},
 		IsEmpty: func(path string) bool { return empty[path] },
+		Resolve: func(path string) (string, error) {
+			switch path {
+			case linked:
+				return linkedMount, nil
+			case unresolved:
+				return "", errors.New("cannot resolve")
+			}
+			return path, nil
+		},
 	}
 
 	volumes, err := reader.Read([]StorageRoot{
 		{Path: unplugged, Role: RoleMedia},
 		{Path: plugged, Role: RoleMedia},
+		{Path: linked, Role: RoleMedia},
+		{Path: unresolved, Role: RoleMedia},
 		{Path: emptyOnData, Role: RoleMedia},
 		{Path: data, Role: RoleData},
 		{Path: games, Role: RoleMedia},
@@ -126,6 +143,8 @@ func TestStorageReader_LeavesOutEmptyPlaceholderRoots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []Volume{
 		{Path: plugged, Roles: []string{RoleMedia}, Total: 1000, Free: 400, Used: 600},
+		{Path: linkedMount, Roles: []string{RoleMedia}, Total: 1000, Free: 400, Used: 600},
+		{Path: sep, Roles: []string{RoleMedia}, Total: 300, Free: 0, Used: 300},
 		{Path: sdMount, Roles: []string{RoleData, RoleMedia}, Total: 1000, Free: 400, Used: 600},
-	}, volumes, "an empty drive that is mounted is still a media volume")
+	}, volumes, "an empty drive that is mounted, or a root that cannot be resolved, is still reported")
 }

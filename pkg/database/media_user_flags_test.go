@@ -407,6 +407,14 @@ func TestApplyMediaUserFlagsMarksTheWriteUntilProjected(t *testing.T) {
 
 	// What a kill leaves behind: the marker, and a projection that is behind.
 	require.NoError(t, db.UserDB.SetDeviceState(database.DeviceStateKeyMediaUserFlagWrite, "1"))
+	// A later write does not answer for the earlier one, so it leaves the
+	// marker for the reconcile.
+	_, err = database.ApplyMediaUserFlags(ctx, db, "NES", path, mediaDBID, map[database.MediaUserFlag]bool{
+		database.MediaUserFlagLiked: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, marker(), "a marker left by an earlier write survives a later one")
+	require.NoError(t, db.UserDB.SetMediaUserFlag("NES", path, database.MediaUserFlagLiked, false))
 	require.NoError(t, db.UserDB.SetMediaUserFlag("NES", path, database.MediaUserFlagHidden, false))
 	require.NoError(t, database.ReconcileMediaUserData(ctx, db))
 	assert.Empty(t, projectedUserTags(t, db, mediaDBID), "the reconcile brings MediaDB back in line")

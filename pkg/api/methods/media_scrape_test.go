@@ -2363,8 +2363,10 @@ func TestScrapingStatusFromUpdate_CancelIsNotAFailure(t *testing.T) {
 	assert.Equal(t, scrapeStateFailed, status.State)
 	assert.Equal(t, "disk gone", status.Error)
 
-	// An error that is not the cancel still fails a cancelled run's report.
+	// A cancelled run is stored as cancelled whatever error it ended on, and
+	// is reported the same way.
 	both := scraper.ScrapeUpdate{Done: true, FatalErr: errors.New("disk gone")}
 	status = scrapingStatusFromUpdate(cancelled, "media-folder", false, &both, false, false)
-	assert.Equal(t, scrapeStateFailed, status.State)
+	assert.Equal(t, scrapeStateCancelled, status.State)
+	assert.Empty(t, status.Error)
 }

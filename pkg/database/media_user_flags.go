@@ -74,10 +74,20 @@ func ApplyMediaUserFlags(
 	}
 
 	// The two stores are separate files, so nothing makes the pair of writes
-	// atomic. The marker is what a kill between them leaves behind.
+	// atomic. The marker is what a kill between them leaves behind. One that
+	// is already there was left by an earlier write the reconcile has not yet
+	// answered, and stays for it.
+	markerHeld := false
 	if mediaDBID > 0 {
-		if err := db.UserDB.SetDeviceState(DeviceStateKeyMediaUserFlagWrite, "1"); err != nil {
-			return nil, fmt.Errorf("failed to mark media user flag write: %w", err)
+		_, found, err := db.UserDB.GetDeviceState(DeviceStateKeyMediaUserFlagWrite)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read media user flag write marker: %w", err)
+		}
+		markerHeld = found
+		if !markerHeld {
+			if err := db.UserDB.SetDeviceState(DeviceStateKeyMediaUserFlagWrite, "1"); err != nil {
+				return nil, fmt.Errorf("failed to mark media user flag write: %w", err)
+			}
 		}
 	}
 
@@ -128,6 +138,9 @@ func ApplyMediaUserFlags(
 		if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
 			return nil, fmt.Errorf("failed to update media tag projection: %w", err)
 		}
+	}
+	if markerHeld {
+		return written, nil
 	}
 	// A marker that cannot be cleared only costs the next start a reconcile.
 	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
