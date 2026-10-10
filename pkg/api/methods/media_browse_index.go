@@ -189,7 +189,17 @@ func browseMediaIndexRequest(
 		})
 	}
 
-	prefix, err := resolveBrowseIndexPrefix(env, *params.Path)
+	path := *params.Path
+	if !platforms.IsSourceScheme(path) && !strings.Contains(path, "://") {
+		resolved, isRelative, resolveErr := resolveRelativeBrowsePath(env, path, systems)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if isRelative {
+			path = resolved
+		}
+	}
+	prefix, err := resolveBrowseIndexPrefix(env, path)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +213,7 @@ func browseMediaIndexRequest(
 		Tags:          tagFilters,
 		// A flat virtual scheme lists no directories (browseVirtual); every
 		// other path pages directories ahead of files (browsePathPrefix).
-		DirectoryFallback: browsePathListsDirectories(*params.Path),
+		DirectoryFallback: browsePathListsDirectories(path),
 	})
 	logBrowseTiming("index", prefix, started, len(result.Buckets))
 	if err != nil {
@@ -232,11 +242,7 @@ func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, er
 		return "", models.ClientErrf("invalid path: contains disallowed components")
 	}
 
-	var rootDirs []string
-	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
-	if !isPathUnderRoots(cleaned, rootDirs) {
+	if !isPathUnderRoots(cleaned, browseRootDirs(env)) {
 		return "", models.ClientErrf("path is not within an allowed root directory")
 	}
 

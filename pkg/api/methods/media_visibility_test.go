@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -871,4 +872,34 @@ func TestHiddenFolderMustSitInsideTheLibrary(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.True(t, row.IsHidden)
+}
+
+// Core reports a launched file's path with the host's separators, so a client
+// that tags what is playing sends a backslash path on Windows. The index
+// stores forward slashes, and the path has to be matched in that form.
+func TestMediaTagsUpdateAcceptsBackslashPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	stored := filepath.ToSlash(filepath.Join(t.TempDir(), "Game", "Game.nes"))
+	addTestMediaPaths(t, mediaDB, stored)
+	env := requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		Platform: mocks.NewMockPlatform(), Config: &config.Instance{},
+	}
+
+	encoded, err := json.Marshal(map[string]any{
+		"system": "NES", "path": strings.ReplaceAll(stored, "/", `\`), "add": []string{"user:playlater"},
+	})
+	require.NoError(t, err)
+	_, err = HandleMediaTagsUpdate(withParams(&env, string(encoded)))
+	require.NoError(t, err)
+
+	row, found, err := userDB.GetMediaUserData("NES", stored)
+	require.NoError(t, err)
+	require.True(t, found, "the flag is stored against the indexed path")
+	assert.True(t, row.IsPlayLater)
 }
