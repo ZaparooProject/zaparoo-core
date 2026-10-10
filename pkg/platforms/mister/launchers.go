@@ -71,6 +71,7 @@ var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"GenericVideo":             {},
 	"ScummVM":                  {},
 	"KitrinxNeoGeoPocketColor": {},
+	scriptsLauncherID:          {},
 }
 
 // misterDefaultScanExcludes names files MiSTer Main auto-loads or auto-mounts

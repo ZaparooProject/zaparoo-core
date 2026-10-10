@@ -244,6 +244,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		log.Debug().Msg("skipping ActiveMedia for details action")
 		return nil
 	}
+	if params.Launcher.NoActiveMedia {
+		log.Debug().Msg("skipping ActiveMedia - launcher does not start media")
+		return nil
+	}
 	if params.Launcher.Lifecycle == LifecycleExternal {
 		log.Debug().Msg("deferring ActiveMedia to external platform lifecycle tracker")
 		return nil

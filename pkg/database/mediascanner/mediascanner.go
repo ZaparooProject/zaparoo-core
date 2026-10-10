@@ -652,11 +652,12 @@ func getSystemPathsForLauncherCache(
 	// failures when multiple root folders resolve to the same directory
 	seen := make(map[string]bool)
 	deduplicated := make([]PathResult, 0, len(matches))
-	for _, m := range matches {
+	for i := range matches {
+		m := &matches[i]
 		key := m.System.ID + ":" + m.Path
 		if !seen[key] {
 			seen[key] = true
-			deduplicated = append(deduplicated, m)
+			deduplicated = append(deduplicated, *m)
 		}
 	}
 
@@ -1405,7 +1406,9 @@ func NewNamesIndexWithSources(
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
+	discovered := getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache)
+	for i := range discovered {
+		v := &discovered[i]
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	// Seeded only when one or more source roots fail to read below: the
@@ -1425,7 +1428,8 @@ func NewNamesIndexWithSources(
 		if sourceErr != nil {
 			return 0, fmt.Errorf("discover source root systems: %w", sourceErr)
 		}
-		for _, v := range sourcePaths {
+		for i := range sourcePaths {
+			v := &sourcePaths[i]
 			systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 		}
 		if len(failedRoots) > 0 {
