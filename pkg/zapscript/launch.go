@@ -129,6 +129,9 @@ func applyMediaLauncherOverrideForPath(
 		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
 	}
 
+	// The index stores forward slashes, and a launch path carries the host's
+	// separators.
+	path = pathutil.CanonicalMediaPath(path)
 	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
 	if found && launcher.SystemID != "" {
