@@ -857,7 +857,9 @@ func TestHiddenFolderMustSitInsideTheLibrary(t *testing.T) {
 		return err
 	}
 
-	for _, outside := range []string{string(filepath.Separator), filepath.Dir(root), root} {
+	// The filesystem root carries a drive letter on Windows.
+	fsRoot := filepath.VolumeName(root) + string(filepath.Separator)
+	for _, outside := range []string{fsRoot, filepath.Dir(root), root} {
 		err := hide(outside)
 		require.ErrorContains(t, err, "not inside a library folder", outside)
 		var clientErr *models.ClientError

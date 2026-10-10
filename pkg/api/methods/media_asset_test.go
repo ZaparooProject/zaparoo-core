@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -240,8 +241,11 @@ func TestHandleMediaAsset_SystemPathIdentity(t *testing.T) {
 	row := makeMediaFullRow(47, 470)
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("FindSystemBySystemID", row.System.SystemID).Return(row.System, nil).Once()
-	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, row.System.DBID, []string{row.Path}).
-		Return(map[string]database.Media{row.Path: row.Media}, nil).Once()
+	// The request carries the host's separators; the index is asked for the
+	// forward-slash form it stores.
+	indexedPath := pathutil.CanonicalMediaPath(row.Path)
+	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, row.System.DBID, []string{indexedPath}).
+		Return(map[string]database.Media{indexedPath: row.Media}, nil).Once()
 	expectAssetResolveByID(mockDB, row)
 	expectAssetProperties(mockDB, row, []database.MediaProperty{{
 		TypeTag: "property:manual", Text: manualPath,

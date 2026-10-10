@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -249,6 +250,42 @@ func TestApplyMediaLauncherOverride_SetsLauncherArg(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+// A launch path carries the host's separators while the index stores forward
+// slashes, so the row behind a backslash path is found by its indexed form.
+func TestApplyMediaLauncherOverrideForPath_BackslashPathMatchesIndexedRow(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := &config.Instance{}
+	indexedPath := "C:/roms/NES/game.nes"
+
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{ID: "Override", SystemID: "NES"}})
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{indexedPath}).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: indexedPath, DBID: 123}}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "Override",
+		}}, nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	got := applyMediaLauncherOverrideForPath(mockPlatform, &env, `C:\roms\NES\game.nes`, false)
+
+	assert.Equal(t, "Override", got)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 	t.Parallel()
 
@@ -271,8 +308,10 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return(launchers)
 	mockMediaDB.On("FindSystemBySystemID", "NES").
 		Return(database.System{DBID: 10, SystemID: "NES"}, nil)
-	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), absPath).
-		Return(&database.Media{DBID: 123, Path: absPath}, nil)
+	// The index stores forward slashes and is asked for the path in that form.
+	indexedPath := pathutil.CanonicalMediaPath(absPath)
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), indexedPath).
+		Return(&database.Media{DBID: 123, Path: indexedPath}, nil)
 	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
 		Return([]database.MediaProperty{{
 			TypeTag: launcherOverridePropertyTypeTag(),
@@ -1044,8 +1083,9 @@ func TestLaunchClosurePreservesArchiveMediaOverride(t *testing.T) {
 	mediaDB := helpers.NewMockMediaDBI()
 	mediaDB.On("FindSystemBySystemID", "SNES").
 		Return(database.System{DBID: 10, SystemID: "SNES"}, nil).Once()
-	mediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), archive).
-		Return(&database.Media{DBID: 123, Path: archive}, nil).Once()
+	indexedArchive := pathutil.CanonicalMediaPath(archive)
+	mediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), indexedArchive).
+		Return(&database.Media{DBID: 123, Path: indexedArchive}, nil).Once()
 	mediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
 		Return([]database.MediaProperty{{TypeTag: launcherOverridePropertyTypeTag(), Text: "Override"}}, nil).Once()
 	env := platforms.CmdEnv{
