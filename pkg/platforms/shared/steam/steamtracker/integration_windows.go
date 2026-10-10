@@ -177,7 +177,12 @@ func (pi *WindowsPlatformIntegration) onGameStart(appID, lifecycleID int, _ stri
 	if !found {
 		gameName, found = steam.FindAppNameByAppID(appID)
 	}
-	if !found {
+	// A named app is reported under the path the library scan indexes it
+	// by. An app with no manifest is not in the index under any path.
+	mediaPath := fmt.Sprintf("steam://%d", appID)
+	if found {
+		mediaPath = steam.MediaPath(appID, gameName)
+	} else {
 		gameName = steam.FormatGameName(appID, "")
 	}
 
@@ -194,7 +199,7 @@ func (pi *WindowsPlatformIntegration) onGameStart(appID, lifecycleID int, _ stri
 	activeMedia := models.NewActiveMedia(
 		systemdefs.SystemPC,
 		systemMeta.Name,
-		fmt.Sprintf("steam://%d", appID),
+		mediaPath,
 		gameName,
 		"Steam",
 	)
