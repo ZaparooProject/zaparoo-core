@@ -131,7 +131,9 @@ type runTotals struct {
 }
 
 func (t runTotals) done() scraper.ScrapeUpdate {
-	return scraper.ScrapeUpdate{Done: true, Processed: t.processed, Matched: t.matched, Skipped: t.skipped}
+	return scraper.ScrapeUpdate{
+		Done: true, Processed: t.processed, Total: t.processed, Matched: t.matched, Skipped: t.skipped,
+	}
 }
 
 func (s *scraperImpl) scrapeLoop(

@@ -1859,6 +1859,64 @@ func TestBuildBrowseResponse_MultiDiscDirectoryLaunchesLastPlayedDisc(t *testing
 	}
 }
 
+// Artwork is often stored against one disc only. A folder whose last played
+// disc has none still has the cover media.image serves for the folder's path,
+// so the entry must keep saying it has one.
+func TestBuildBrowseResponse_MultiDiscDirectoryKeepsCoverOfAnotherDisc(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirPath := filepath.ToSlash(filepath.Join(path, "Final Fantasy VII (USA)"))
+	alias := func(dbid int64, disc string, hasCover bool) []database.SingletonContainerAlias {
+		tags := []database.TagInfo{{Type: "disc", Tag: disc}}
+		return []database.SingletonContainerAlias{{
+			ChildDir: dirPath + "/",
+			Row: database.MediaFullRow{
+				Media: database.Media{
+					DBID:      dbid,
+					Path:      dirPath + "/Final Fantasy VII (USA) (Disc " + disc + ").cue",
+					ParentDir: dirPath + "/",
+				},
+				Title:  database.MediaTitle{DBID: 30, Name: "Final Fantasy VII"},
+				System: psxSystem,
+			},
+			Tags: tags, ZapScriptTags: tags, HasCover: hasCover, MultiDisc: true,
+		}}
+	}
+	disc1, disc2 := alias(20, "1", true), alias(21, "2", false)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := helpers.NewMockUserDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 2}}).Return(disc1, nil).Once()
+	mockUserDB.On("GetDistinctMediaHistory", mock.Anything, []string{"PSX"}, int64(0), lastPlayedDiscHistoryLimit).
+		Return([]database.MediaHistoryEntry{{SystemID: "PSX", MediaPath: disc2[0].Row.Path}}, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{
+			ChildDir: dirPath + "/", FileCount: 2, PreferredPath: disc2[0].Row.Path,
+		}}).Return(disc2, nil).Once()
+	mockMediaDB.On("GetMediaCoverColors", mock.Anything, mock.Anything).Return(map[int64]uint32{}, nil).Maybe()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Final Fantasy VII (USA)", FileCount: 2, SystemIDs: []string{"PSX"}}},
+		nil, defaultMaxResults, 0, 0, nil, false, []systemdefs.System{{ID: "PSX"}})
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, int64(21), browseResults.Entries[0].MediaID, "the last played disc is the launch target")
+	assert.True(t, browseResults.Entries[0].HasCover)
+}
+
 func TestBuildBrowseResponse_SingleLaunchTargetReadsNoHistory(t *testing.T) {
 	t.Parallel()
 
@@ -3769,6 +3827,7 @@ func TestHandleMediaBrowse_RelativePathNotFound(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirCount", mock.Anything, mock.Anything).Return(0, nil)
 	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.Anything).Return(0, nil)
+	mockSystemRootCandidatesNotReady(mockMediaDB)
 
 	path := "SNES/Gone"
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &path})
@@ -3822,4 +3881,54 @@ func TestHandleMediaBrowse_RelativePathShapeIsStrict(t *testing.T) {
 			mockMediaDB.AssertNotCalled(t, "BrowseDirCount", mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// A scan matches a launcher folder to a directory whatever its case and
+// indexes the directory's own spelling, so the relative path a browse reports
+// has to resolve to that directory, not to the launcher's spelling of it.
+func TestHandleMediaBrowse_RelativePathFollowsIndexedFolderCase(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	literalPrefix := filepath.ToSlash(filepath.Join(romsRoot, "snes", "USA")) + "/"
+	foundPath := filepath.ToSlash(filepath.Join(romsRoot, "SNES", "USA"))
+	foundPrefix := foundPath + "/"
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{{ID: "SNES", SystemID: "SNES", Folders: []string{"snes"}}})
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountSystemOpts(literalPrefix, "SNES")).Return(0, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(literalPrefix, "SNES")).Return(0, nil)
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{
+			Children: map[string][]string{romsRoot: {"SNES", "Other"}},
+			HasMedia: map[string]bool{romsRoot: true},
+		}, true, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountSystemOpts(foundPrefix, "SNES")).Return(0, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(foundPrefix, "SNES")).Return(1, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(foundPrefix)).Return(0, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
+		return opts.PathPrefix == foundPrefix && len(opts.Systems) == 0
+	})).Return(1, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(foundPrefix)).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return opts.PathPrefix == foundPrefix
+	})).Return([]database.SearchResultWithCursor{
+		{SystemID: "SNES", Name: "Chrono Trigger", Path: foundPath + "/Chrono Trigger.sfc", MediaID: 7},
+	}, nil)
+
+	path := "SNES/USA"
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &path})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, foundPath, browseResults.Path)
 }

@@ -52,8 +52,10 @@ func fillMissingScrapeTags(
 	ctx context.Context, c *scrapeWriteTxContext, id int64, title bool, values []database.TagInfo,
 ) error {
 	table, column := "MediaTags", "MediaDBID"
+	insertLink := insertScrapedMediaTagSQL
 	if title {
 		table, column = "MediaTitleTags", "MediaTitleDBID"
+		insertLink = "INSERT OR IGNORE INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)"
 	}
 	for _, tag := range values {
 		typeID, exclusive, err := c.resolveTagType(ctx, tag.Type)
@@ -85,8 +87,7 @@ func fillMissingScrapeTags(
 		if err != nil {
 			return fmt.Errorf("resolve missing scrape tag: %w", err)
 		}
-		if _, err := c.tx.ExecContext(ctx, "INSERT OR IGNORE INTO "+table+" ("+column+", TagDBID) VALUES (?, ?)",
-			id, tagID); err != nil {
+		if _, err := c.tx.ExecContext(ctx, insertLink, id, tagID); err != nil {
 			return fmt.Errorf("insert missing scrape tag: %w", err)
 		}
 	}

@@ -384,12 +384,20 @@ func ptrIfNotEmpty(v string) *string {
 	return &v
 }
 
+// scrapeCancelled reports whether a run's last update ends a cancelled run.
+// A scraper stopped mid-run hands back an error as it ends, usually the
+// context's own, which is the cancel arriving and not a failure. The stored
+// status of the run is decided the same way.
+func scrapeCancelled(scrapeCtx context.Context, update *scraper.ScrapeUpdate) bool {
+	return update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil
+}
+
 func scrapeState(scrapeCtx context.Context, update *scraper.ScrapeUpdate, paused bool) string {
 	switch {
+	case scrapeCancelled(scrapeCtx, update):
+		return scrapeStateCancelled
 	case update.FatalErr != nil:
 		return scrapeStateFailed
-	case update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil:
-		return scrapeStateCancelled
 	case update.Done:
 		return scrapeStateCompleted
 	case paused:
@@ -425,7 +433,7 @@ func scrapingStatusFromUpdate(
 		CurrentStep:        ptrIfPositive(update.CurrentStep),
 		CurrentStepDisplay: ptrIfNotEmpty(display),
 	}
-	if update.FatalErr != nil {
+	if update.FatalErr != nil && !scrapeCancelled(scrapeCtx, update) {
 		status.Error = update.FatalErr.Error()
 	}
 	if update.SystemID != "" {
@@ -773,7 +781,7 @@ func startMediaScrapeOperation(
 				if update.FatalErr != nil {
 					finalStatus = mediadb.IndexingStatusFailed
 				}
-				if update.Done && scrapeCtx.Err() != nil {
+				if scrapeCancelled(scrapeCtx, &update) {
 					finalStatus = mediadb.IndexingStatusCancelled
 				}
 				if update.Done {

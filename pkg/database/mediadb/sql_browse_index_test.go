@@ -230,7 +230,8 @@ func seedBrowseIndexGameDirs(t *testing.T, mediaDB *MediaDB, systemID, parent st
 	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: systemID, Name: systemID})
 	require.NoError(t, err)
 	for _, name := range names {
-		insertSystemMedia(t, mediaDB, system, name, filepath.Join(parent, name, name+".chd"))
+		// Media paths are stored with forward slashes on every platform.
+		insertSystemMedia(t, mediaDB, system, name, filepath.ToSlash(filepath.Join(parent, name, name+".chd")))
 	}
 }
 

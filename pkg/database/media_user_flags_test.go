@@ -363,3 +363,60 @@ func TestApplyMediaUserLauncherOverrideRefusedDuringLongMediaWrite(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, "RetroArch", row.LauncherOverride)
 }
+
+// markerProbeUserDB records whether the flag write marker was already saved
+// when the first flag reached UserDB.
+type markerProbeUserDB struct {
+	database.UserDBI
+	savedBeforeWrite *bool
+}
+
+func (m *markerProbeUserDB) SetMediaUserFlag(systemID, path string, flag database.MediaUserFlag, value bool) error {
+	if m.savedBeforeWrite != nil && !*m.savedBeforeWrite {
+		_, found, err := m.GetDeviceState(database.DeviceStateKeyMediaUserFlagWrite)
+		if err != nil {
+			return err //nolint:wrapcheck // test passthrough
+		}
+		*m.savedBeforeWrite = found
+	}
+	return m.UserDBI.SetMediaUserFlag(systemID, path, flag, value) //nolint:wrapcheck // test passthrough
+}
+
+// A flag is written to UserDB and then projected into MediaDB. A process
+// killed between the two leaves them apart, so the write is marked in UserDB
+// first: the marker outlives the kill and the next start reconciles.
+func TestApplyMediaUserFlagsMarksTheWriteUntilProjected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, path, mediaDBID := newFlagTestDB(t)
+	saved := false
+	db.UserDB = &markerProbeUserDB{UserDBI: db.UserDB, savedBeforeWrite: &saved}
+	marker := func() bool {
+		t.Helper()
+		_, found, err := db.UserDB.GetDeviceState(database.DeviceStateKeyMediaUserFlagWrite)
+		require.NoError(t, err)
+		return found
+	}
+
+	_, err := database.ApplyMediaUserFlags(ctx, db, "NES", path, mediaDBID, map[database.MediaUserFlag]bool{
+		database.MediaUserFlagHidden: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, saved, "the marker is saved before UserDB changes")
+	assert.False(t, marker(), "a projected write leaves nothing saved")
+
+	// What a kill leaves behind: the marker, and a projection that is behind.
+	require.NoError(t, db.UserDB.SetDeviceState(database.DeviceStateKeyMediaUserFlagWrite, "1"))
+	// A later write does not answer for the earlier one, so it leaves the
+	// marker for the reconcile.
+	_, err = database.ApplyMediaUserFlags(ctx, db, "NES", path, mediaDBID, map[database.MediaUserFlag]bool{
+		database.MediaUserFlagLiked: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, marker(), "a marker left by an earlier write survives a later one")
+	require.NoError(t, db.UserDB.SetMediaUserFlag("NES", path, database.MediaUserFlagLiked, false))
+	require.NoError(t, db.UserDB.SetMediaUserFlag("NES", path, database.MediaUserFlagHidden, false))
+	require.NoError(t, database.ReconcileMediaUserData(ctx, db))
+	assert.Empty(t, projectedUserTags(t, db, mediaDBID), "the reconcile brings MediaDB back in line")
+	assert.False(t, marker(), "and clears the marker it answered")
+}

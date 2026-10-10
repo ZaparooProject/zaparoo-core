@@ -3818,6 +3818,18 @@ func sqlBrowseRouteCounts(
 	if err != nil {
 		return nil, err
 	}
+	if !opts.ExcludeHidden {
+		dirs, dirsErr := loadHiddenDirs(ctx, db)
+		if dirsErr != nil {
+			return nil, dirsErr
+		}
+		for route, count := range counts {
+			if hiddenDirCovers(dirs, browseRouteCacheKey(route), count.SystemIDs, opts.Systems) {
+				count.Hidden = true
+				counts[route] = count
+			}
+		}
+	}
 	return applyHiddenToRouteCounts(counts, hidden, opts.Systems), nil
 }
 
@@ -4087,9 +4099,10 @@ func sqlBrowseSystemRootCandidates(
 }
 
 // applyHiddenToRootCandidates drops roots and child directories whose media is
-// entirely hidden. Only subtrees that actually hold hidden media are probed, and
-// the probe stops at the first visible row, so the work scales with the hidden
-// set rather than with the library.
+// entirely hidden. Only subtrees that actually hold hidden media are looked
+// at, and each is answered from the browse cache: what the cache counts under
+// the subtree less what is hidden there. A subtree the cache has no count for
+// is probed row by row instead, which stops at the first visible row.
 func applyHiddenToRootCandidates(
 	ctx context.Context,
 	db sqlQueryable,
@@ -4100,16 +4113,49 @@ func applyHiddenToRootCandidates(
 	if hidden.empty() {
 		return nil
 	}
+	hiddenUnder := make(map[string]int)
+	var prefixes []string
+	consider := func(prefix string) {
+		if _, seen := hiddenUnder[prefix]; seen {
+			return
+		}
+		count := hidden.countUnder(prefix, opts.Systems)
+		hiddenUnder[prefix] = count
+		if count > 0 {
+			prefixes = append(prefixes, prefix)
+		}
+	}
 	for root := range result.HasMedia {
+		consider(browseRouteCacheKey(root))
+	}
+	for root, children := range result.Children {
 		key := browseRouteCacheKey(root)
-		if hidden.countUnder(key, opts.Systems) == 0 {
-			continue
+		for _, name := range children {
+			consider(key + name + "/")
 		}
-		visible, err := sqlAnyVisibleMedia(ctx, db, key, opts.Systems, hidden)
-		if err != nil {
-			return err
+	}
+	cached, err := sqlBrowseRouteCountsFromCache(ctx, db, database.BrowseRouteCountsOptions{
+		Routes: prefixes, Systems: opts.Systems,
+	})
+	if err != nil {
+		return err
+	}
+	visible := func(prefix string) (bool, error) {
+		if hiddenUnder[prefix] == 0 {
+			return true, nil
 		}
-		if !visible {
+		if count, ok := cached[prefix]; ok {
+			return count.FileCount > hiddenUnder[prefix], nil
+		}
+		return sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems, hidden)
+	}
+
+	for root := range result.HasMedia {
+		shown, visibleErr := visible(browseRouteCacheKey(root))
+		if visibleErr != nil {
+			return visibleErr
+		}
+		if !shown {
 			delete(result.HasMedia, root)
 		}
 	}
@@ -4117,17 +4163,13 @@ func applyHiddenToRootCandidates(
 		key := browseRouteCacheKey(root)
 		kept := children[:0]
 		for _, name := range children {
-			prefix := key + name + "/"
-			if hidden.countUnder(prefix, opts.Systems) > 0 {
-				visible, err := sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems, hidden)
-				if err != nil {
-					return err
-				}
-				if !visible {
-					continue
-				}
+			shown, visibleErr := visible(key + name + "/")
+			if visibleErr != nil {
+				return visibleErr
 			}
-			kept = append(kept, name)
+			if shown {
+				kept = append(kept, name)
+			}
 		}
 		result.Children[root] = kept
 	}

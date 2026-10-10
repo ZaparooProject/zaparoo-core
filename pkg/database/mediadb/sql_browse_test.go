@@ -545,6 +545,9 @@ func TestSqlBrowseRouteCountsFromCache_UsesChildDirCounts(t *testing.T) {
 	mock.ExpectQuery("SELECT COALESCE\\(SUM").
 		WithArgs(int64(99), "SNES").
 		WillReturnRows(sqlmock.NewRows([]string{"FileCount", "SystemIDs"}).AddRow(123, "SNES"))
+	// A listing that includes hidden entries reads the hidden folders to say
+	// which routes are hidden.
+	expectNoHiddenDirectories(mock)
 
 	counts, err := sqlBrowseRouteCounts(context.Background(), db, database.BrowseRouteCountsOptions{
 		Routes:  []string{snesRoute},

@@ -37,15 +37,20 @@ type scrapeScope struct {
 	// each was measured with on target storage.
 	exclusiveDelete func(idPlaceholders string) string
 	tagTable        string
-	propTable       string
-	idColumn        string
-	title           bool
+	// tagLinkColumns and tagLinkValues are the column list and the per-row
+	// placeholder group of a tag link insert.
+	tagLinkColumns string
+	tagLinkValues  string
+	propTable      string
+	idColumn       string
+	title          bool
 }
 
 //nolint:gochecknoglobals // Fixed table descriptions.
 var (
 	scrapeMediaScope = scrapeScope{
 		tagTable: "MediaTags", propTable: "MediaProperties", idColumn: "MediaDBID",
+		tagLinkColumns: "MediaDBID, TagDBID, Scraped", tagLinkValues: "(?, ?, 1)",
 		exclusiveDelete: func(ids string) string {
 			return `DELETE FROM MediaTags WHERE MediaDBID IN (` + ids +
 				`) AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
@@ -53,6 +58,7 @@ var (
 	}
 	scrapeTitleScope = scrapeScope{
 		tagTable: "MediaTitleTags", propTable: "MediaTitleProperties", idColumn: "MediaTitleDBID",
+		tagLinkColumns: "MediaTitleDBID, TagDBID", tagLinkValues: "(?, ?)",
 		exclusiveDelete: func(ids string) string {
 			return `DELETE FROM MediaTitleTags WHERE MediaTitleDBID IN (` + ids +
 				`) AND EXISTS (` +
@@ -240,8 +246,8 @@ func insertScrapeTagLinks(
 			args = append(args, link.id, link.tagDBID)
 		}
 		//nolint:gosec // Safe: fixed table names and generated placeholders.
-		query := `INSERT OR IGNORE INTO ` + scope.tagTable + ` (` + scope.idColumn + `, TagDBID) VALUES ` +
-			prepareVariadic("(?, ?)", ",", len(chunk))
+		query := `INSERT OR IGNORE INTO ` + scope.tagTable + ` (` + scope.tagLinkColumns + `) VALUES ` +
+			prepareVariadic(scope.tagLinkValues, ",", len(chunk))
 		result, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to insert %s rows: %w", scope.tagTable, err)

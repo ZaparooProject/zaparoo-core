@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
@@ -232,6 +233,9 @@ func updateHiddenDirectory(
 	if !isDir {
 		return nil, false, nil
 	}
+	if hidden && !hiddenDirectoryIsListed(env, dirPath) {
+		return nil, true, models.ClientErrf("folder is not inside a library folder: %s", ref.Path)
+	}
 
 	changed, err := database.ApplyDirectoryHidden(env.Context, env.Database, system.SystemID, dirPath, hidden)
 	if err != nil {
@@ -249,6 +253,24 @@ func updateHiddenDirectory(
 		folderTags = append(folderTags, hiddenDirectoryTag())
 	}
 	return models.TagsResponse{Tags: folderTags}, true, nil
+}
+
+// hiddenDirectoryIsListed reports whether a browse lists dirPath as an entry
+// of its parent: a folder below one of the library's own folders. Those
+// folders and everything above them hold indexed media as well, but nothing
+// lists them, so a hide there would have no entry to be undone from. A virtual
+// path has no such folder above it and is left to the index.
+func hiddenDirectoryIsListed(env *requests.RequestEnv, dirPath string) bool {
+	if strings.Contains(dirPath, "://") {
+		return true
+	}
+	for _, root := range browseRootDirs(env) {
+		if helpers.PathHasPrefix(dirPath, root) &&
+			helpers.NormalizePathForComparison(dirPath) != helpers.NormalizePathForComparison(root) {
+			return true
+		}
+	}
+	return false
 }
 
 // hiddenDirectoryTag is how a hidden folder reports its state: the tag a

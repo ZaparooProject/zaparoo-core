@@ -682,3 +682,71 @@ func TestReconcileStagedSystem_ExistingLoneFileLosesVariantTag(t *testing.T) {
 	assert.Equal(t, int64(1), stats.TouchedTitles)
 	assert.Empty(t, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "game"))
 }
+
+// A scraper may put a tag on a media row whose type the scanner also writes,
+// such as a romset's region. The scanner cannot derive that tag from the
+// filename, but it did not write the link either, so a reindex that changes
+// nothing must leave it alone and leave the library revision where it was.
+func TestReconcileStagedSystem_ScraperMediaTagsSurviveReindex(t *testing.T) {
+	t.Parallel()
+
+	sentinel := database.TagInfo{Type: string(tags.ScraperType("test")), Tag: "scraped"}
+	scrapedRegion := database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "jp"}
+	writes := map[string]database.ScrapeWrite{
+		"replace":      {Sentinel: sentinel, MediaTags: []database.TagInfo{scrapedRegion}},
+		"fill missing": {Sentinel: sentinel, MediaTags: []database.TagInfo{scrapedRegion}, FillMissing: true},
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+			t.Cleanup(cleanup)
+			ctx := context.Background()
+			files := map[string][]database.ScanStagedTag{"alpha": nil, "beta": {variantTestRegion}}
+			stageVariantTestMedia(t, mediaDB, "Arcade", files)
+
+			var mediaID, titleID int64
+			require.NoError(t, mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx,
+				"SELECT DBID, MediaTitleDBID FROM Media WHERE Path = ?", "/roms/Arcade/alpha.bin",
+			).Scan(&mediaID, &titleID))
+			require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{{
+				MediaDBID: mediaID, MediaTitleDBID: titleID, Write: &write,
+			}}))
+			regions := func() []string {
+				t.Helper()
+				rows, err := mediaDB.UnsafeGetSQLDb().QueryContext(ctx, `
+					SELECT t.Tag FROM MediaTags mt
+					JOIN Tags t ON t.DBID = mt.TagDBID
+					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					WHERE mt.MediaDBID = ? AND tt.Type = ? ORDER BY t.Tag`, mediaID, string(tags.TagTypeRegion))
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				var found []string
+				for rows.Next() {
+					var tag string
+					require.NoError(t, rows.Scan(&tag))
+					found = append(found, tag)
+				}
+				require.NoError(t, rows.Err())
+				return found
+			}
+			require.Equal(t, []string{"jp"}, regions())
+			before, err := mediaDB.LibraryRevision(ctx, "Arcade")
+			require.NoError(t, err)
+
+			stats := stageVariantTestMedia(t, mediaDB, "Arcade", files)
+
+			assert.Equal(t, []string{"jp"}, regions(), "the scraper's tag is not the scanner's to delete")
+			assert.Zero(t, stats.TagLinksDeleted)
+			after, err := mediaDB.LibraryRevision(ctx, "Arcade")
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "an index that changed nothing must not move the revision")
+
+			// A tag the scanner wrote and no longer derives is still stale.
+			files["beta"] = nil
+			stats = stageVariantTestMedia(t, mediaDB, "Arcade", files)
+			assert.Equal(t, int64(1), stats.TagLinksDeleted)
+			assert.Equal(t, []string{"jp"}, regions())
+		})
+	}
+}
