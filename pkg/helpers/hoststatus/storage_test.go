@@ -85,3 +85,47 @@ func TestStorageReader_RealFilesystem(t *testing.T) {
 	assert.NotZero(t, volumes[0].Total)
 	assert.LessOrEqual(t, volumes[0].Free, volumes[0].Total)
 }
+
+// A platform lists places media may turn up, such as the mount points of
+// drives that are not plugged in. An empty one that is not a mount point of
+// its own is a directory on some other filesystem, which holds no media and
+// must not be reported as a media volume.
+func TestStorageReader_LeavesOutEmptyPlaceholderRoots(t *testing.T) {
+	t.Parallel()
+
+	sep := string(filepath.Separator)
+	games := filepath.Join(sep, "media", "fat", "games")
+	sdMount := filepath.Join(sep, "media", "fat")
+	unplugged := filepath.Join(sep, "media", "usb0")
+	plugged := filepath.Join(sep, "media", "usb1")
+	data := filepath.Join(sep, "media", "fat", "zaparoo")
+	emptyOnData := filepath.Join(sep, "media", "fat", "empty")
+
+	mounts := map[string]string{games: sdMount, data: sdMount, emptyOnData: sdMount, unplugged: sep, plugged: plugged}
+	empty := map[string]bool{unplugged: true, plugged: true, emptyOnData: true}
+	reader := &StorageReader{
+		FilesystemID: func(path string) (id, mountPoint string, err error) {
+			return mounts[path], mounts[path], nil
+		},
+		Usage: func(path string) (DiskUsage, error) {
+			if mounts[path] == sep {
+				return DiskUsage{Total: 300, Free: 0, Available: 0}, nil
+			}
+			return DiskUsage{Total: 1000, Free: 400, Available: 400}, nil
+		},
+		IsEmpty: func(path string) bool { return empty[path] },
+	}
+
+	volumes, err := reader.Read([]StorageRoot{
+		{Path: unplugged, Role: RoleMedia},
+		{Path: plugged, Role: RoleMedia},
+		{Path: emptyOnData, Role: RoleMedia},
+		{Path: data, Role: RoleData},
+		{Path: games, Role: RoleMedia},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []Volume{
+		{Path: plugged, Roles: []string{RoleMedia}, Total: 1000, Free: 400, Used: 600},
+		{Path: sdMount, Roles: []string{RoleData, RoleMedia}, Total: 1000, Free: 400, Used: 600},
+	}, volumes, "an empty drive that is mounted is still a media volume")
+}

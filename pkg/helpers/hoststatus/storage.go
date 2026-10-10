@@ -20,6 +20,11 @@
 package hoststatus
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,11 +43,13 @@ type StorageReader struct {
 	// FilesystemID returns the filesystem's identity and, where it is known,
 	// its mount point.
 	FilesystemID func(path string) (id, mountPoint string, err error)
+	// IsEmpty reports whether a directory holds nothing. It is optional.
+	IsEmpty func(path string) bool
 }
 
 // NewStorageReader returns a reader over the real filesystem.
 func NewStorageReader() *StorageReader {
-	return &StorageReader{Usage: DiskUsageOf, FilesystemID: FilesystemID}
+	return &StorageReader{Usage: DiskUsageOf, FilesystemID: FilesystemID, IsEmpty: dirIsEmpty}
 }
 
 // Read returns one volume per distinct filesystem, in the order its first
@@ -58,6 +65,9 @@ func (r *StorageReader) Read(roots []StorageRoot) ([]Volume, error) {
 		id, mountPoint, err := r.FilesystemID(root.Path)
 		if err != nil {
 			log.Debug().Err(err).Str("path", root.Path).Msg("skipping unreadable storage root")
+			continue
+		}
+		if root.Role == RoleMedia && r.isPlaceholder(root.Path, mountPoint) {
 			continue
 		}
 		if at, seen := index[id]; seen {
@@ -86,6 +96,28 @@ func (r *StorageReader) Read(roots []StorageRoot) ([]Volume, error) {
 		})
 	}
 	return volumes, nil
+}
+
+// isPlaceholder reports whether a media root is an empty directory on a
+// filesystem mounted somewhere else, such as the mount point of a drive that
+// is not plugged in. Its filesystem holds none of the device's media. An empty
+// directory that is itself the mount point is a real, empty volume, and one
+// whose mount point is not known is given the benefit of the doubt.
+func (r *StorageReader) isPlaceholder(path, mountPoint string) bool {
+	if r.IsEmpty == nil || mountPoint == "" || filepath.Clean(mountPoint) == filepath.Clean(path) {
+		return false
+	}
+	return r.IsEmpty(path)
+}
+
+func dirIsEmpty(path string) bool {
+	dir, err := os.Open(path) //nolint:gosec // A configured media root.
+	if err != nil {
+		return false
+	}
+	defer func() { _ = dir.Close() }()
+	_, err = dir.Readdirnames(1)
+	return errors.Is(err, io.EOF)
 }
 
 func addRole(roles []string, role string) []string {
