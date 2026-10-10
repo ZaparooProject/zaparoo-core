@@ -833,10 +833,7 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 		}
 		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
-			mediaDBID, tagDBID,
-		)
+		_, err := tx.ExecContext(ctx, insertMediaTagSQL, mediaDBID, tagDBID)
 		if err != nil {
 			return fmt.Errorf("failed to insert media tag link: %w", err)
 		}
@@ -2211,10 +2208,7 @@ func upsertMediaTagsWithContext(
 		}
 		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
-			mediaDBID, tagDBID,
-		)
+		_, err := tx.ExecContext(ctx, insertScrapedMediaTagSQL, mediaDBID, tagDBID)
 		if err != nil {
 			return fmt.Errorf("failed to insert media tag link: %w", err)
 		}
