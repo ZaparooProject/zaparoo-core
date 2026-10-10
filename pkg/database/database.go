@@ -1641,6 +1641,16 @@ type MediaDBI interface {
 	// FindSingleContainerLaunchMedia returns the one logical launch target in the
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
+	// FindMediaPathIgnoringCase returns the indexed spelling of the one
+	// present media path that equals path when case is ignored, within
+	// systemDBID or in any system when it is zero. found is false when no
+	// path or more than one matches.
+	FindMediaPathIgnoringCase(
+		ctx context.Context, systemDBID int64, path string,
+	) (spelled string, found bool, err error)
+	// FindMediaPathByPrefix returns the one present media path that starts
+	// with prefix. found is false when no path or more than one does.
+	FindMediaPathByPrefix(ctx context.Context, prefix string) (path string, found bool, err error)
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
 	// FindSingleContainerLaunchMediaBySystemID is FindSingleContainerLaunchMedia
 	// keyed by system ID, for callers that address a system by name rather than
