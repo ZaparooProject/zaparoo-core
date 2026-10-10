@@ -88,6 +88,80 @@ func (db *MediaDB) FindMediaBySystemAndPath(
 // given paths, keyed by path. The paths come from a user-sized list (every
 // media user data row of a system, say), so they are queried in chunks that
 // stay under SQLite's variable limit.
+// FindMediaPathIgnoringCase implements MediaDBI. The Path indexes collate by
+// byte, so this reads every path of the system (or of the library) from an
+// index and compares each one; callers reach for it only after an exact
+// lookup has missed.
+func (db *MediaDB) FindMediaPathIgnoringCase(
+	ctx context.Context, systemDBID int64, path string,
+) (spelled string, found bool, err error) {
+	conn := db.sql.Load()
+	if conn == nil {
+		return "", false, ErrNullSQL
+	}
+	path = pathutil.CanonicalMediaPath(path)
+	query := `SELECT Path FROM Media WHERE IsMissing = 0 AND Path = ? COLLATE NOCASE LIMIT 2`
+	args := []any{path}
+	if systemDBID != 0 {
+		query = `SELECT Path FROM Media WHERE SystemDBID = ? AND IsMissing = 0 AND Path = ? COLLATE NOCASE LIMIT 2`
+		args = []any{systemDBID, path}
+	}
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to find media path ignoring case: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var matches []string
+	for rows.Next() {
+		var match string
+		if scanErr := rows.Scan(&match); scanErr != nil {
+			return "", false, fmt.Errorf("failed to scan media path: %w", scanErr)
+		}
+		matches = append(matches, match)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return "", false, fmt.Errorf("failed to read media paths: %w", rowsErr)
+	}
+	if len(matches) != 1 {
+		return "", false, nil
+	}
+	return matches[0], true, nil
+}
+
+// FindMediaPathByPrefix implements MediaDBI. The prefix is an index range on
+// Path, so the cost does not depend on the size of the library.
+func (db *MediaDB) FindMediaPathByPrefix(ctx context.Context, prefix string) (path string, found bool, err error) {
+	conn := db.sql.Load()
+	if conn == nil {
+		return "", false, ErrNullSQL
+	}
+	upper := stringPrefixUpperBound(prefix)
+	if upper == "" {
+		return "", false, nil
+	}
+	rows, err := conn.QueryContext(ctx,
+		`SELECT Path FROM Media WHERE Path >= ? AND Path < ? AND IsMissing = 0 LIMIT 2`, prefix, upper)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to find media path by prefix: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var matches []string
+	for rows.Next() {
+		var match string
+		if scanErr := rows.Scan(&match); scanErr != nil {
+			return "", false, fmt.Errorf("failed to scan media path: %w", scanErr)
+		}
+		matches = append(matches, match)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return "", false, fmt.Errorf("failed to read media paths: %w", rowsErr)
+	}
+	if len(matches) != 1 {
+		return "", false, nil
+	}
+	return matches[0], true, nil
+}
+
 func (db *MediaDB) FindMediaBySystemAndPaths(
 	ctx context.Context, systemDBID int64, paths []string,
 ) (map[string]database.Media, error) {
@@ -833,10 +907,7 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 		}
 		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
-			mediaDBID, tagDBID,
-		)
+		_, err := tx.ExecContext(ctx, insertMediaTagSQL, mediaDBID, tagDBID)
 		if err != nil {
 			return fmt.Errorf("failed to insert media tag link: %w", err)
 		}
@@ -2211,10 +2282,7 @@ func upsertMediaTagsWithContext(
 		}
 		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
-			mediaDBID, tagDBID,
-		)
+		_, err := tx.ExecContext(ctx, insertScrapedMediaTagSQL, mediaDBID, tagDBID)
 		if err != nil {
 			return fmt.Errorf("failed to insert media tag link: %w", err)
 		}

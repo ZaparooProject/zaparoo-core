@@ -382,7 +382,13 @@ func findFile(
 		rootDirs := pathLookupRoots(pl.RootDirs(cfg), pathRoots...)
 		candidates = make([]string, 0, len(rootDirs))
 		for _, gf := range rootDirs {
-			candidates = append(candidates, filepath.Join(gf, statPath))
+			candidate := filepath.Join(gf, statPath)
+			// A relative path names a file below a games folder. One that
+			// climbs out of it with ".." is not looked up.
+			if !helpers.PathHasPrefix(candidate, gf) {
+				continue
+			}
+			candidates = append(candidates, candidate)
 		}
 	}
 

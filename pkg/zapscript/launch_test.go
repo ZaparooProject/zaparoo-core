@@ -117,9 +117,9 @@ func TestMediaIDForHistoryEntry_ResolvesMedia(t *testing.T) {
 	entry := database.MediaHistoryEntry{SystemID: "nes", MediaPath: mediaPath}
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("FindSystemBySystemID", "nes").
-		Return(database.System{DBID: 99, SystemID: "nes"}, nil).Once()
+		Return(database.System{DBID: 99, SystemID: "nes"}, nil)
 	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(99), mediaPath).
-		Return(&database.Media{DBID: 123}, nil).Once()
+		Return(&database.Media{DBID: 123}, nil)
 	env := platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
 
 	assert.Equal(t, int64(123), mediaIDForHistoryEntry(&env, &entry))
@@ -270,9 +270,9 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 	mockPlatform.On("RootDirs", cfg).Return([]string{root}).Maybe()
 	mockPlatform.On("Launchers", cfg).Return(launchers)
 	mockMediaDB.On("FindSystemBySystemID", "NES").
-		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil)
 	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), absPath).
-		Return(&database.Media{DBID: 123, Path: absPath}, nil).Once()
+		Return(&database.Media{DBID: 123, Path: absPath}, nil)
 	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
 		Return([]database.MediaProperty{{
 			TypeTag: launcherOverridePropertyTypeTag(),
@@ -445,9 +445,9 @@ func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing
 
 	mockPlatform.On("Launchers", cfg).Return(launchers)
 	mockMediaDB.On("FindSystemBySystemID", "NES").
-		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil)
 	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), uri).
-		Return(&database.Media{DBID: 123, Path: uri}, nil).Once()
+		Return(&database.Media{DBID: 123, Path: uri}, nil)
 	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
 		Return([]database.MediaProperty{}, nil).Once()
 	mockPlatform.On("LaunchMedia", cfg, uri, (*platforms.Launcher)(nil), db,
@@ -485,6 +485,13 @@ func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing
 	explicit := platforms.Launcher{ID: "Explicit", SystemID: "NES", Folders: []string{root}}
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicit})
+	// The path is looked up in the index to settle its spelling; here the
+	// index holds it exactly as given.
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES"}, nil).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(1), mock.Anything).
+		Return(&database.Media{DBID: 5}, nil).Maybe()
 	mockPlatform.On("LaunchMedia", cfg, absPath,
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "Explicit"

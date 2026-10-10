@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -271,4 +272,135 @@ func TestCmdLaunch_SystemPathReportsOwningSystem(t *testing.T) {
 			mockPlatform.AssertExpectations(t)
 		})
 	}
+}
+
+// A <system>/<path> launch names a file below one of that system's launcher
+// folders. A path that climbs out of the folder names a file somewhere else,
+// which the format does not reach.
+func TestFindSystemFile_StaysInsideTheLauncherFolder(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := launchTestAbsPath("path-root")
+	inside := filepath.Join(pathRoot, "A500", "Sub", "Game.adf")
+	otherSystem := filepath.Join(pathRoot, "Other", "Secret.adf")
+	aboveRoot := filepath.Join(filepath.Dir(pathRoot), "Outside.adf")
+	fs := helpers.NewMemoryFS()
+	for _, file := range []string{inside, otherSystem, aboveRoot} {
+		require.NoError(t, fs.WriteFile(file, []byte("rom"), 0o600))
+	}
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "amiga500", SystemID: systemdefs.SystemAmiga500, Folders: []string{"A500"}},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+	env := &platforms.CmdEnv{Cfg: cfg, PathRoot: pathRoot}
+	system, err := systemdefs.LookupSystem(systemdefs.SystemAmiga500)
+	require.NoError(t, err)
+
+	path, _, found := findSystemFile(fs.Fs, mockPlatform, env, system, filepath.Join("Sub", "Game.adf"))
+	require.True(t, found)
+	assert.Equal(t, inside, path)
+	path, _, found = findSystemFile(fs.Fs, mockPlatform, env, system, filepath.Join("Sub", "..", "Sub", "Game.adf"))
+	require.True(t, found, "a path that comes back inside the folder is still inside it")
+	assert.Equal(t, inside, path)
+
+	for _, escape := range []string{
+		filepath.Join("..", "Other", "Secret.adf"),
+		filepath.Join("Sub", "..", "..", "Other", "Secret.adf"),
+		filepath.Join("..", "..", "Outside.adf"),
+	} {
+		_, _, found = findSystemFile(fs.Fs, mockPlatform, env, system, escape)
+		assert.False(t, found, escape)
+	}
+}
+
+// A relative path is looked up below each games folder. One that climbs out
+// with ".." names a file outside every folder a relative path can reach.
+func TestFindFile_RelativePathStaysInsideItsRoot(t *testing.T) {
+	t.Parallel()
+
+	root := launchTestAbsPath("games")
+	inside := filepath.Join(root, "NES", "Game.nes")
+	outside := filepath.Join(filepath.Dir(root), "zaparoo", "config.toml")
+	fs := helpers.NewMemoryFS()
+	for _, file := range []string{inside, outside} {
+		require.NoError(t, fs.WriteFile(file, []byte("x"), 0o600))
+	}
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root})
+
+	found, err := findFile(fs.Fs, mockPlatform, cfg, filepath.Join("PSX", "..", "NES", "Game.nes"))
+	require.NoError(t, err, "a path that stays below the games folder is an ordinary relative path")
+	assert.Equal(t, inside, found)
+
+	for _, escape := range []string{
+		filepath.Join("..", "zaparoo", "config.toml"),
+		filepath.Join("NES", "..", "..", "zaparoo", "config.toml"),
+	} {
+		_, err = findFile(fs.Fs, mockPlatform, cfg, escape)
+		require.ErrorIs(t, err, ErrFileNotFound, escape)
+	}
+
+	// An absolute path is the caller naming the file outright, and is unchanged.
+	found, err = findFile(fs.Fs, mockPlatform, cfg, outside)
+	require.NoError(t, err)
+	assert.Equal(t, outside, found)
+}
+
+// A case-insensitive filesystem opens a file under any spelling of its path.
+// The launch carries on with the spelling the index holds, so what is
+// launched is the media the index knows.
+func TestIndexedPathSpelling(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	indexed := "/games/PSX/Crash Bandicoot (USA)/Crash Bandicoot (USA).chd"
+	scantest.IndexMediaPaths(t, mediaDB, systemdefs.SystemPSX, indexed)
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "psx", SystemID: systemdefs.SystemPSX, Folders: []string{"/games/PSX"}, Extensions: []string{".chd"}},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	env := &platforms.CmdEnv{Cfg: cfg, Database: &database.Database{MediaDB: mediaDB}}
+	typed := filepath.FromSlash("/games/psx/crash bandicoot (usa)/crash bandicoot (usa).chd")
+
+	assert.Equal(t, filepath.FromSlash(indexed), indexedPathSpelling(mockPlatform, env, systemdefs.SystemPSX, typed))
+	assert.Equal(t, filepath.FromSlash(indexed),
+		indexedPathSpelling(mockPlatform, env, "", filepath.FromSlash(indexed)),
+		"a path that is already the indexed one is returned as given")
+	unindexed := filepath.FromSlash("/games/psx/not indexed.chd")
+	assert.Equal(t, unindexed, indexedPathSpelling(mockPlatform, env, systemdefs.SystemPSX, unindexed))
+	assert.Equal(t, typed, indexedPathSpelling(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, systemdefs.SystemPSX, typed),
+		"no index, no other spelling to follow")
+}
+
+// A tag usually names a Steam game by ID alone, and the index holds it as
+// steam://id/name. The launch carries on with the indexed path.
+func TestIndexedVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	scantest.IndexMediaPaths(t, mediaDB, systemdefs.SystemPC, "steam://620/Portal%202", "steam://6200/Ghost%20Master")
+	env := &platforms.CmdEnv{Cfg: &config.Instance{}, Database: &database.Database{MediaDB: mediaDB}}
+
+	assert.Equal(t, "steam://620/Portal%202", indexedVirtualPath(env, "steam://620"))
+	assert.Equal(t, "steam://620/Portal%202", indexedVirtualPath(env, "steam://620/"))
+	for _, unchanged := range []string{
+		"steam://620/Portal%202",
+		"steam://999",
+		"steam://rungameid/620",
+		"https://620",
+		"steam://62",
+	} {
+		assert.Equal(t, unchanged, indexedVirtualPath(env, unchanged))
+	}
+	assert.Equal(t, "steam://620", indexedVirtualPath(&platforms.CmdEnv{}, "steam://620"))
 }

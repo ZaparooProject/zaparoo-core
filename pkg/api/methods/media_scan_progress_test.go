@@ -151,3 +151,34 @@ func TestHandleGenerateMedia_KeepsSkipListWhileIndexing(t *testing.T) {
 	require.Error(t, err)
 	mockMediaDB.AssertNotCalled(t, "SetIndexingSkippedSystems", mock.Anything)
 }
+
+// A request refused because another operation owns the media database is
+// refused before it writes anything: the write would wait on that operation's
+// lock, and the list belongs to whichever index runs next.
+func TestHandleGenerateMedia_RefusedDuringOptimizationWritesNothing(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	ClearIndexingStatus()
+	t.Cleanup(ClearIndexingStatus)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	require.NoError(t, db.MediaDB.SetIndexingSkippedSystems([]string{"NES"}))
+	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+	require.NoError(t, err)
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	_, err = HandleGenerateMedia(requests.RequestEnv{
+		Context: context.Background(), Params: []byte(`{"systems":["NES"]}`),
+		Database: db, Platform: mockPlatform, State: appState,
+		Config: &config.Instance{}, ClientID: "127.0.0.1:12345",
+	})
+	require.Error(t, err)
+	assert.Equal(t, models.ErrorCategoryBusy, errorCategory(t, err))
+	skipped, err := db.MediaDB.GetIndexingSkippedSystems()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NES"}, skipped)
+}

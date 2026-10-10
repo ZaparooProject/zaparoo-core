@@ -313,6 +313,12 @@ const DeviceStateKeyDeckTagsQueue = "deck_tags_queue"
 // It is kept in UserDB so a restore's restart carries it.
 const DeviceStateKeyMediaUserDataReconcile = "media_user_data_reconcile"
 
+// DeviceStateKeyMediaUserFlagWrite is the DeviceState key a media user flag
+// write holds from before it changes UserDB until MediaDB has followed. One
+// left behind by a process that was killed in between asks the next start for
+// the same reconcile.
+const DeviceStateKeyMediaUserFlagWrite = "media_user_flag_write"
+
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
 type Client struct {
@@ -872,9 +878,12 @@ type BrowseRouteCountsOptions struct {
 // callers should treat such routes as present with an unknown count rather than
 // as empty.
 type BrowseRouteCount struct {
-	Path         string
-	SystemIDs    []string
-	FileCount    int
+	Path      string
+	SystemIDs []string
+	FileCount int
+	// Hidden marks a route that is a hidden folder. Only a listing that
+	// includes hidden entries returns one.
+	Hidden       bool
 	CountUnknown bool
 }
 
@@ -1632,6 +1641,16 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
+	// FindMediaPathIgnoringCase returns the indexed spelling of the one
+	// present media path that equals path when case is ignored, within
+	// systemDBID or in any system when it is zero. found is false when no
+	// path or more than one matches.
+	FindMediaPathIgnoringCase(
+		ctx context.Context, systemDBID int64, path string,
+	) (spelled string, found bool, err error)
+	// FindMediaPathByPrefix returns the one present media path that starts
+	// with prefix. found is false when no path or more than one does.
+	FindMediaPathByPrefix(ctx context.Context, prefix string) (path string, found bool, err error)
 	// FindMediaIDsByPaths returns the system ID, path, media DBID, and title DBID
 	// of every Media row whose Path is in paths, in one query across all systems.
 	FindMediaIDsByPaths(ctx context.Context, paths []string) ([]MediaPathID, error)

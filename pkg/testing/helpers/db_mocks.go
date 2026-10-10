@@ -3578,6 +3578,18 @@ func (m *MockMediaDBI) FindMediaBySystemAndPath(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindMediaPathIgnoringCase(
+	ctx context.Context, systemDBID int64, path string,
+) (spelled string, found bool, err error) {
+	args := m.Called(ctx, systemDBID, path)
+	return args.String(0), args.Bool(1), args.Error(2) //nolint:wrapcheck // mock passes testify errors through
+}
+
+func (m *MockMediaDBI) FindMediaPathByPrefix(ctx context.Context, prefix string) (path string, found bool, err error) {
+	args := m.Called(ctx, prefix)
+	return args.String(0), args.Bool(1), args.Error(2) //nolint:wrapcheck // mock passes testify errors through
+}
+
 func (m *MockMediaDBI) FindMediaBySystemAndPaths(
 	ctx context.Context, systemDBID int64, paths []string,
 ) (map[string]database.Media, error) {

@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,9 +62,20 @@ type hiddenDir struct {
 	SystemID string
 	// Prefix is what every media path under the folder starts with.
 	Prefix string
+	// Outer is the Prefix of the nearest hidden folder of the same system
+	// that this one sits inside, or empty.
+	Outer string
 	// Count is the folder's present, not individually hidden media: what an
 	// aggregate that counted them has to give back.
 	Count int
+}
+
+// countedUnder reports whether an aggregate over prefix has to give this
+// folder's media back. A folder inside another hidden folder is left to the
+// outer one, whose count includes it, unless the aggregate starts inside the
+// outer folder and so never counted the rest of it.
+func (d *hiddenDir) countedUnder(prefix string) bool {
+	return d.within(prefix) && (d.Outer == "" || !strings.HasPrefix(d.Outer, prefix))
 }
 
 func hiddenDirPrefix(path string) string {
@@ -127,6 +139,15 @@ func loadHiddenDirs(ctx context.Context, db sqlQueryable) ([]hiddenDir, error) {
 	for i := range stored {
 		dirs = append(dirs, hiddenDir{SystemID: stored[i].SystemID, Prefix: hiddenDirPrefix(stored[i].Path)})
 	}
+	for i := range dirs {
+		for j := range dirs {
+			outer := dirs[j].Prefix
+			if i != j && dirs[j].SystemID == dirs[i].SystemID && outer != dirs[i].Prefix &&
+				strings.HasPrefix(dirs[i].Prefix, outer) && len(outer) > len(dirs[i].Outer) {
+				dirs[i].Outer = outer
+			}
+		}
+	}
 	return dirs, nil
 }
 
@@ -139,9 +160,90 @@ const hiddenDirCountSQL = `SELECT COUNT(*) FROM Media m
 	AND m.Path >= ? AND m.Path < ?
 	AND m.DBID NOT IN (` + hiddenMediaIDsSQL + `)`
 
+// hiddenDirCountCache keeps each hidden folder's count per database handle.
+// Counting a folder reads its whole index range, and every browse and system
+// listing needs every folder's count, so a hidden system of tens of thousands
+// of files would otherwise be recounted on each of those reads. A count stays
+// good until media rows change (invalidateCaches) or visibility does (the
+// preferences revision, which moves with every hide and unhide).
+type hiddenDirCountCache struct {
+	counts     map[hiddenDirCountKey]int
+	revision   string
+	generation uint64
+}
+
+type hiddenDirCountKey struct {
+	systemID string
+	prefix   string
+}
+
+var (
+	hiddenDirCountCacheMu  syncutil.Mutex
+	hiddenDirCountCacheMap map[sqlQueryable]*hiddenDirCountCache
+)
+
+// clearHiddenDirCountCacheFor forgets a handle's counts after its media rows
+// changed. A count that was being taken across the change is not stored.
+func clearHiddenDirCountCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+	hiddenDirCountCacheMu.Lock()
+	defer hiddenDirCountCacheMu.Unlock()
+	if entry := hiddenDirCountCacheMap[db]; entry != nil {
+		entry.generation++
+		entry.counts = nil
+	}
+}
+
+func forgetHiddenDirCountCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+	hiddenDirCountCacheMu.Lock()
+	defer hiddenDirCountCacheMu.Unlock()
+	delete(hiddenDirCountCacheMap, db)
+}
+
 // loadHiddenDirCounts fills in each folder's Count.
 func loadHiddenDirCounts(ctx context.Context, db sqlQueryable, dirs []hiddenDir) error {
+	if len(dirs) == 0 {
+		return nil
+	}
+	var revision string
+	err := db.QueryRowContext(ctx, `SELECT Value FROM DBConfig WHERE Name = ?`,
+		database.DeviceStateKeyMediaPreferencesRevision).Scan(&revision)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read media projection revision: %w", err)
+	}
+
+	handle := cacheHandle(db)
+	hiddenDirCountCacheMu.Lock()
+	if hiddenDirCountCacheMap == nil {
+		hiddenDirCountCacheMap = make(map[sqlQueryable]*hiddenDirCountCache)
+	}
+	entry := hiddenDirCountCacheMap[handle]
+	if entry == nil {
+		entry = &hiddenDirCountCache{}
+		hiddenDirCountCacheMap[handle] = entry
+	}
+	if entry.revision != revision {
+		entry.revision = revision
+		entry.counts = nil
+	}
+	generation := entry.generation
+	var missing []int
 	for i := range dirs {
+		count, ok := entry.counts[hiddenDirCountKey{systemID: dirs[i].SystemID, prefix: dirs[i].Prefix}]
+		if !ok {
+			missing = append(missing, i)
+			continue
+		}
+		dirs[i].Count = count
+	}
+	hiddenDirCountCacheMu.Unlock()
+
+	for _, i := range missing {
 		upper := stringPrefixUpperBound(dirs[i].Prefix)
 		if upper == "" {
 			continue
@@ -150,6 +252,21 @@ func loadHiddenDirCounts(ctx context.Context, db sqlQueryable, dirs []hiddenDir)
 			Scan(&dirs[i].Count); err != nil {
 			return fmt.Errorf("count hidden directory media: %w", err)
 		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	hiddenDirCountCacheMu.Lock()
+	defer hiddenDirCountCacheMu.Unlock()
+	if entry.generation != generation || entry.revision != revision {
+		return nil
+	}
+	if entry.counts == nil {
+		entry.counts = make(map[hiddenDirCountKey]int, len(dirs))
+	}
+	for _, i := range missing {
+		entry.counts[hiddenDirCountKey{systemID: dirs[i].SystemID, prefix: dirs[i].Prefix}] = dirs[i].Count
 	}
 	return nil
 }

@@ -20,6 +20,11 @@
 package hoststatus
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,11 +43,18 @@ type StorageReader struct {
 	// FilesystemID returns the filesystem's identity and, where it is known,
 	// its mount point.
 	FilesystemID func(path string) (id, mountPoint string, err error)
+	// IsEmpty reports whether a directory holds nothing. It is optional.
+	IsEmpty func(path string) bool
+	// Resolve follows the symlinks in a path, as FilesystemID does before it
+	// names a mount point. It is optional.
+	Resolve func(path string) (string, error)
 }
 
 // NewStorageReader returns a reader over the real filesystem.
 func NewStorageReader() *StorageReader {
-	return &StorageReader{Usage: DiskUsageOf, FilesystemID: FilesystemID}
+	return &StorageReader{
+		Usage: DiskUsageOf, FilesystemID: FilesystemID, IsEmpty: dirIsEmpty, Resolve: filepath.EvalSymlinks,
+	}
 }
 
 // Read returns one volume per distinct filesystem, in the order its first
@@ -58,6 +70,9 @@ func (r *StorageReader) Read(roots []StorageRoot) ([]Volume, error) {
 		id, mountPoint, err := r.FilesystemID(root.Path)
 		if err != nil {
 			log.Debug().Err(err).Str("path", root.Path).Msg("skipping unreadable storage root")
+			continue
+		}
+		if root.Role == RoleMedia && r.isPlaceholder(root.Path, mountPoint) {
 			continue
 		}
 		if at, seen := index[id]; seen {
@@ -86,6 +101,40 @@ func (r *StorageReader) Read(roots []StorageRoot) ([]Volume, error) {
 		})
 	}
 	return volumes, nil
+}
+
+// isPlaceholder reports whether a media root is an empty directory on a
+// filesystem mounted somewhere else, such as the mount point of a drive that
+// is not plugged in. Its filesystem holds none of the device's media. An empty
+// directory that is itself the mount point is a real, empty volume, and one
+// whose mount point is not known is given the benefit of the doubt, as is one
+// that cannot be resolved. The mount point is that of the resolved path, so a
+// root that is a symlink to a mount point is compared after following it.
+func (r *StorageReader) isPlaceholder(path, mountPoint string) bool {
+	if r.IsEmpty == nil || mountPoint == "" {
+		return false
+	}
+	resolved := path
+	if r.Resolve != nil {
+		var err error
+		if resolved, err = r.Resolve(path); err != nil {
+			return false
+		}
+	}
+	if filepath.Clean(mountPoint) == filepath.Clean(resolved) {
+		return false
+	}
+	return r.IsEmpty(path)
+}
+
+func dirIsEmpty(path string) bool {
+	dir, err := os.Open(path) //nolint:gosec // A configured media root.
+	if err != nil {
+		return false
+	}
+	defer func() { _ = dir.Close() }()
+	_, err = dir.Readdirnames(1)
+	return errors.Is(err, io.EOF)
 }
 
 func addRole(roles []string, role string) []string {

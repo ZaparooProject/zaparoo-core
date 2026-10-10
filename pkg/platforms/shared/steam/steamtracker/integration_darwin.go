@@ -115,7 +115,12 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	}
 
 	gameName, found := steam.FindAppNameByAppID(appID)
-	if !found {
+	// A named app is reported under the path the library scan indexes it
+	// by. An app with no manifest is not in the index under any path.
+	mediaPath := fmt.Sprintf("steam://%d", appID)
+	if found {
+		mediaPath = steam.MediaPath(appID, gameName)
+	} else {
 		gameName = steam.FormatGameName(appID, "")
 	}
 
@@ -132,7 +137,7 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	activeMedia := models.NewActiveMedia(
 		systemdefs.SystemPC,
 		systemMeta.Name,
-		fmt.Sprintf("steam://%d", appID),
+		mediaPath,
 		gameName,
 		"Steam",
 	)

@@ -363,3 +363,174 @@ func TestHiddenDirCoversEverySystemOfTheRow(t *testing.T) {
 	assert.True(t, hiddenDirCovers(dirs, "/roms/Shared/", nil, nil))
 	assert.False(t, hiddenDirCovers(dirs, "/roms/Other/", nil, nil))
 }
+
+// A hidden folder inside another hidden folder holds media the outer one
+// already gives back, so every count above both gives it back once. Browsing
+// inside the outer folder addresses it directly, and there the inner folder
+// is the only one that hides anything.
+func TestNestedHiddenDirectoriesAreCountedOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("DeepOne", root+"Outer/Inner/DeepOne.nes")
+	f.insert("DeepTwo", root+"Outer/Inner/DeepTwo.nes")
+	f.insert("Shallow", root+"Outer/Shallow.nes")
+	f.insert("Visible", root+"Visible.nes")
+	f.commit(t, true)
+	hideDirs(t, f.mediaDB, root+"Outer/Inner", root+"Outer")
+	systems := []systemdefs.System{f.system}
+
+	systemCounts, err := f.mediaDB.SystemMediaCounts(ctx, nil, true)
+	require.NoError(t, err)
+	require.Len(t, systemCounts, 1, "the system still has a visible game")
+	assert.Equal(t, 1, systemCounts[0].Count)
+
+	rootCounts, err := f.mediaDB.BrowseRootCounts(ctx, []string{root}, true)
+	require.NoError(t, err)
+	require.NotNil(t, rootCounts[root])
+	assert.Equal(t, 1, *rootCounts[root])
+
+	routes, err := f.mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes: []string{root}, Systems: systems, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, routes[root].FileCount)
+
+	inside, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root + "Outer/", Systems: systems, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, inside, "the inner folder stays hidden inside the outer one")
+	files, err := f.mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		PathPrefix: root + "Outer/", Systems: systems, ExcludeHidden: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, "Shallow", files[0].Name)
+}
+
+// Every browse and system listing needs each hidden folder's count, so the
+// count is taken once and kept until media rows or visibility change.
+func TestHiddenDirectoryCountIsKeptUntilSomethingChanges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("One", root+"Folder/One.nes")
+	f.insert("Two", root+"Folder/Two.nes")
+	f.insert("Outside", root+"Outside.nes")
+	f.commit(t, true)
+	hideDirs(t, f.mediaDB, root+"Folder")
+	visible := func() int {
+		t.Helper()
+		counts, err := f.mediaDB.BrowseRootCounts(ctx, []string{root}, true)
+		require.NoError(t, err)
+		require.NotNil(t, counts[root])
+		return *counts[root]
+	}
+	require.Equal(t, 1, visible())
+
+	// A row removed behind the database's back is not seen: the count was
+	// not taken again.
+	_, err := f.mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"UPDATE Media SET IsMissing = 1 WHERE Path = ?", root+"Folder/Two.nes")
+	require.NoError(t, err)
+	hiddenDirCountCacheMu.Lock()
+	cached := len(hiddenDirCountCacheMap[f.mediaDB.sql.Load()].counts)
+	hiddenDirCountCacheMu.Unlock()
+	assert.Equal(t, 1, cached)
+
+	// A change to media rows drops it.
+	f.mediaDB.invalidateCaches(invalidationScope{AllSystems: true, MediaRowsChanged: true})
+	dirs, err := loadHiddenDirs(ctx, f.mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.NoError(t, loadHiddenDirCounts(ctx, f.mediaDB.sql.Load(), dirs))
+	require.Len(t, dirs, 1)
+	assert.Equal(t, 1, dirs[0].Count, "the folder now holds one present file")
+
+	// So does a file hidden inside the folder, which the folder stops counting.
+	hideMediaPaths(t, f.mediaDB, root+"Folder/One.nes")
+	dirs, err = loadHiddenDirs(ctx, f.mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.NoError(t, loadHiddenDirCounts(ctx, f.mediaDB.sql.Load(), dirs))
+	assert.Equal(t, 0, dirs[0].Count)
+
+	// And a change to the hidden folders themselves.
+	hideDirs(t, f.mediaDB, root+"Folder", root+"Elsewhere")
+	dirs, err = loadHiddenDirs(ctx, f.mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.NoError(t, loadHiddenDirCounts(ctx, f.mediaDB.sql.Load(), dirs))
+	require.Len(t, dirs, 2)
+}
+
+// A system's route is the same folder a parent listing shows as a directory,
+// so a listing that includes hidden entries says a hidden one is hidden there
+// too: it is where a client enters a system and offers to unhide it.
+func TestHiddenDirectoryIsMarkedOnItsRoute(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("One", root+"Hidden/One.nes")
+	f.insert("Two", root+"Shown/Two.nes")
+	f.commit(t, true)
+	hideDirs(t, f.mediaDB, root+"Hidden")
+	systems := []systemdefs.System{f.system}
+	hiddenRoute, shownRoute := root+"Hidden", root+"Shown"
+
+	all, err := f.mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes: []string{hiddenRoute, shownRoute}, Systems: systems,
+	})
+	require.NoError(t, err)
+	require.Contains(t, all, hiddenRoute)
+	assert.True(t, all[hiddenRoute].Hidden)
+	assert.Equal(t, 1, all[hiddenRoute].FileCount)
+	require.Contains(t, all, shownRoute)
+	assert.False(t, all[shownRoute].Hidden)
+
+	visible, err := f.mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes: []string{hiddenRoute, shownRoute}, Systems: systems, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, visible, hiddenRoute)
+	require.Contains(t, visible, shownRoute)
+	assert.False(t, visible[shownRoute].Hidden)
+}
+
+// Whether a candidate still has something to show is the cached count under
+// it less what is hidden there, for hidden files and hidden folders alike.
+func TestRootCandidatesFollowHiddenCounts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("PartA", root+"Partly/A.nes")
+	f.insert("PartB", root+"Partly/B.nes")
+	f.insert("FileOnly", root+"FilesHidden/Only.nes")
+	f.insert("Deep", root+"FolderHidden/Deep/Deep.nes")
+	f.insert("Mixed1", root+"Mixed/Sub/One.nes")
+	f.insert("Mixed2", root+"Mixed/Two.nes")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"Partly/A.nes", root+"FilesHidden/Only.nes", root+"Mixed/Two.nes")
+	hideDirs(t, f.mediaDB, root+"FolderHidden/Deep", root+"Mixed/Sub")
+
+	candidates, ready, err := f.mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots: f.roots, Systems: []systemdefs.System{f.system}, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+	assert.Equal(t, []string{"Partly"}, candidates.Children[root],
+		"only the folder with a visible file left is a candidate")
+	assert.True(t, candidates.HasMedia[root])
+
+	all, _, err := f.mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots: f.roots, Systems: []systemdefs.System{f.system},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FilesHidden", "FolderHidden", "Mixed", "Partly"}, all.Children[root])
+}

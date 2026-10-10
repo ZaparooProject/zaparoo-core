@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -269,6 +270,12 @@ func FormatGameName(appID int, name string) string {
 		return name
 	}
 	return fmt.Sprintf("Steam Game %d", appID)
+}
+
+// MediaPath returns the virtual path of an installed app, spelled the way the
+// library scan indexes it, so media reported for the app is the indexed media.
+func MediaPath(appID int, name string) string {
+	return virtualpath.CreateVirtualPath("steam", strconv.Itoa(appID), name)
 }
 
 // ExtractAppIDFromPath extracts an AppID from a Steam virtual path.
