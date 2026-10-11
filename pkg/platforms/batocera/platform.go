@@ -16,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
@@ -859,5 +860,8 @@ func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+	}
 }

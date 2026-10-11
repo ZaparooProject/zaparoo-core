@@ -933,7 +933,7 @@ func startMediaDBGeneration(
 		db.QueueAllDeckTags()
 		if indexCtx.Err() == nil {
 			jobs := scrapeJobsForSources(availableScrapers, indexedSources)
-			if queueErr := enqueueScrapeJobs(db.MediaDB, jobs); queueErr != nil {
+			if queueErr := enqueueScrapeJobs(db.MediaDB, jobs, availableScrapers); queueErr != nil {
 				log.Error().Err(queueErr).Msg("failed to queue post-index scraping")
 			}
 		}

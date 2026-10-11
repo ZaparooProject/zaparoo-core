@@ -60,6 +60,8 @@ func TestTagTypeConstants(t *testing.T) {
 		{"Unlicensed", TagTypeUnlicensed, "unlicensed"},
 		{"Patch", TagTypePatch, "patch"},
 		{"MameParent", TagTypeMameParent, "mameparent"},
+		{"Compilation", TagTypeCompilation, "compilation"},
+		{"GameDatabase", TagTypeGameDatabase, "gamedatabase"},
 		{"Region", TagTypeRegion, "region"},
 		{"Year", TagTypeYear, "year"},
 		{"Video", TagTypeVideo, "video"},

@@ -85,6 +85,7 @@ func NewPlatformScraper(locate Locate) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{systemdefs.SystemPinball},
 		SupportsFillMissing: true,
+		AutoScrapeOrder:     scraper.AutoOrderDevice,
 		AutoScrapeLaunchers: []string{pinup.LauncherID},
 		Scrape: func(
 			ctx context.Context,

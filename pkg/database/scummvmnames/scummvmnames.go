@@ -28,17 +28,17 @@ package scummvmnames
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	_ "embed"
 	"strings"
 	"sync"
 	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed names.tsv.gz
+//go:embed names.tsv.zst
 var embedded []byte
 
 type game struct {
@@ -54,7 +54,7 @@ var (
 
 func load() {
 	games = make(map[string][]game)
-	zr, err := gzip.NewReader(bytes.NewReader(embedded))
+	zr, err := zstdembed.NewReader(bytes.NewReader(embedded))
 	if err != nil {
 		log.Error().Err(err).Msg("ScummVM names catalog unreadable")
 		return

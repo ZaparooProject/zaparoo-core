@@ -160,6 +160,18 @@ func extras(root string, modules map[string]*linkedModule) ([]extraComponent, er
 		files: []extraFile{{name: "LICENSE", text: vdf}},
 	})
 
+	gamedatabase, err := read("pkg/database/gamedatabase/LICENSE")
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, extraComponent{
+		component: credits.Component{
+			Name: "GameDataBase", URL: "https://github.com/PigSaint/GameDataBase", License: "CC-BY-4.0",
+			Note: "Game metadata by PigSaint, embedded with modifications described in the attribution.",
+		},
+		files: []extraFile{{name: "Attribution", text: gamedatabase}},
+	})
+
 	eff, err := read(filepath.Join(textsDir, "eff-wordlist.txt"))
 	if err != nil {
 		return nil, err

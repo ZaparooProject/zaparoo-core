@@ -21,13 +21,13 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +113,7 @@ func TestRunWritesSortedDeduplicatedCatalog(t *testing.T) {
 		[2]string{"sky:sky", "Beneath a Steel Sky"},
 		[2]string{"sky:sky", "Beneath a Steel Sky"}, // an exact repeat, as a re-listing would print
 	), 0o600))
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	require.NoError(t, run("2.9.1", in, out))
 
@@ -128,7 +128,7 @@ func readCatalog(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path) //nolint:gosec // test fixture path
 	require.NoError(t, err)
-	zr, err := gzip.NewReader(bytes.NewReader(data))
+	zr, err := zstdembed.NewReader(bytes.NewReader(data))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = zr.Close() })
 	contents, err := io.ReadAll(zr)
@@ -139,7 +139,7 @@ func readCatalog(t *testing.T, path string) []string {
 func TestRunReportsAnUnreadableInput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	err := run("2.9.1", filepath.Join(dir, "missing.txt"), out)
 
@@ -153,7 +153,7 @@ func TestRunReportsNoGamesFound(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "games.txt")
 	require.NoError(t, os.WriteFile(in, scummvmListGames(), 0o600))
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	err := run("2.9.1", in, out)
 

@@ -88,7 +88,7 @@ var (
 // RulesVersion changes whenever a rule in this file changes what it accepts.
 // MediaDB folds it into its vocabulary stamp, so an upgrade that narrows a rule
 // prunes stored values the new rule refuses. Bump it with any such change.
-const RulesVersion = 1
+const RulesVersion = 2
 
 // maxFreeTextTagLen bounds a free-text value in bytes.
 const maxFreeTextTagLen = 128
@@ -100,6 +100,7 @@ const maxSequenceNumber = 9999
 var (
 	reExtension  = regexp.MustCompile(`^[a-z0-9][a-z0-9_+-]{0,15}$`)
 	reSetname    = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+	reDatasetID  = regexp.MustCompile(`^[a-z0-9]{1,96}$`)
 	reVersion    = regexp.MustCompile(`^[0-9a-z]{1,8}(-[0-9a-z]{1,8}){0,4}$`)
 	reScraperID  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	reScrapeRun  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -164,7 +165,9 @@ var TagRules = map[TagType]TagRule{
 	TagTypeMameParent: {
 		Kind: KindFormat, Format: reSetname.MatchString,
 	},
-	TagTypeUser: {Kind: KindFormat, Format: isUserTag},
+	TagTypeCompilation:  {Kind: KindFormat, Format: reDatasetID.MatchString},
+	TagTypeGameDatabase: {Kind: KindFormat, Format: reDatasetID.MatchString},
+	TagTypeUser:         {Kind: KindFormat, Format: isUserTag},
 
 	TagTypeDeveloper: {Kind: KindFreeText},
 	TagTypePublisher: {Kind: KindFreeText},

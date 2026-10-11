@@ -587,6 +587,12 @@ type Scraper struct {
 	// AutoScrapeLaunchers opts successful index contributions into ordinary
 	// fill-missing jobs. Empty leaves this scraper manual-only.
 	AutoScrapeLaunchers []string
+	// AutoScrapeOrder places the scraper among the jobs an index queues:
+	// lower runs first, and scrapers with the same order run by ID. Index
+	// jobs only fill what is missing, so the scraper that runs first keeps
+	// any single-valued field two of them offer. See the scraper.AutoOrder
+	// constants.
+	AutoScrapeOrder     int
 	SupportsFillMissing bool
 	// AutoScrapeAllLaunchers opts in the contributions of every launcher, for
 	// a scraper that is not tied to particular ones.

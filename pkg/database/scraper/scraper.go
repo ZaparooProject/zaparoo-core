@@ -42,6 +42,21 @@ type MapResult struct {
 	MediaProps []database.MediaProperty
 }
 
+// Where a scraper sits among the jobs an index queues. Index jobs only fill
+// what is missing, so an earlier scraper's single-valued fields (year,
+// developer, publisher, arcade board) stand.
+const (
+	// AutoOrderDevice is for a source that describes this device's own
+	// library: its arcade catalog, its front end's database, its installed
+	// apps.
+	AutoOrderDevice = 100
+	// AutoOrderCatalog is for a general catalog of games matched by name.
+	AutoOrderCatalog = 200
+	// AutoOrderDocuments is for a source of documents and artwork that also
+	// carries some game facts.
+	AutoOrderDocuments = 300
+)
+
 // ScrapeOptions configures a scrape run.
 type ScrapeOptions struct {
 	// Scope narrows database selection; nil retains the legacy Systems behavior.

@@ -120,3 +120,12 @@ func TestWebBrowserLauncherReturnsOpenError(t *testing.T) {
 	require.ErrorContains(t, err, "failed to open URL in browser")
 	require.ErrorIs(t, err, assert.AnError)
 }
+
+func TestScrapersIncludeTheGameCatalog(t *testing.T) {
+	t.Parallel()
+	scrapers := (&Platform{}).Scrapers(nil)
+	for _, id := range []string{"gamelist.xml", "media-folder", "libretro-thumbnails", "gamedatabase"} {
+		require.Contains(t, scrapers, id)
+		assert.NotNil(t, scrapers[id].Scrape)
+	}
+}

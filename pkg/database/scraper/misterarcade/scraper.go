@@ -60,6 +60,7 @@ func NewPlatformScraper(systems []string, catalog Catalog, cache SetNameCache) p
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: supported,
 		SupportsFillMissing: true,
+		AutoScrapeOrder:     scraper.AutoOrderDevice,
 		// Every arcade launcher contributes: a set the catalog describes is
 		// indexed under Arcade and, where MiSTer classifies it, under its
 		// hardware system too, and both rows deserve the metadata.

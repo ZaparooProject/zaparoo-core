@@ -115,6 +115,7 @@ const (
 	SystemIntellivision       = "Intellivision"
 	SystemJaguar              = "Jaguar"
 	SystemJaguarCD            = "JaguarCD"
+	SystemLaserActive         = "LaserActive"
 	SystemMasterSystem        = "MasterSystem"
 	SystemMegaCD              = "MegaCD"
 	SystemMegaDuck            = "MegaDuck"
@@ -751,6 +752,10 @@ var Systems = map[string]System{
 	SystemJaguar: {
 		ID:    SystemJaguar,
 		Slugs: []string{"atarijaguar", "jag"},
+	},
+	SystemLaserActive: {
+		ID:    SystemLaserActive,
+		Slugs: []string{"pioneerlaseractive"},
 	},
 	SystemJaguarCD: {
 		ID:        SystemJaguarCD,

@@ -9,6 +9,7 @@ Current scraper implementations:
 - `mister-docs` imports locally installed MiSTer Downloader artwork, screenshots, title screens, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 - `mister-arcade` imports the MiSTer arcade catalog's metadata onto indexed `.mra` rows, keyed by the MAME set name declared inside each descriptor. It is registered on MiSTer and MiSTeX, reads the catalog those platforms already cache and embed, and runs automatically after arcade indexing.
 - `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept under Core's data directory, `libretro-thumbnails/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
+- `gamedatabase` fills in game facts from an embedded copy of [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase): genre, players, controls, save and add-on hardware, franchise, ports, compilation contents, release year, developer and publisher. It matches console titles by title slug and arcade sets by MAME set name, never by file hash, needs no network, and runs automatically after indexing. It is registered on every platform.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
 ## Code Layout
@@ -23,6 +24,9 @@ Current scraper implementations:
 | `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
 | `pkg/database/scraper/misterarcade/` | MiSTer arcade catalog reader, field mapping, and control-vocabulary normalisation |
 | `pkg/database/scraper/mra/` | Shared MiSTer arcade descriptor set-name reader |
+| `pkg/database/scraper/gamedatabase/` | GameDataBase tag grammar, vocabulary tables, title and set-name matching, and write mapping |
+| `pkg/database/gamedatabase/` | Embedded GameDataBase bundles, one per platform, and their streaming reader |
+| `scripts/gamedatabase/` | Generator for the embedded bundles from a pinned upstream commit |
 | `pkg/platforms/mister/arcade_scraper.go` | MiSTer/MiSTeX catalog and set-name-cache adapters for `mister-arcade` |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
@@ -47,7 +51,17 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 ### Ordinary Jobs After Indexing
 
-A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+
+Index jobs run in each scraper's `AutoScrapeOrder`, lowest first, then by scraper ID. They only fill what is missing, so the order decides which source keeps a single-valued field two of them offer:
+
+| Order | Constant | Scrapers |
+|---|---|---|
+| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, the Android apps scraper: sources that describe this device's own library |
+| 200 | `scraper.AutoOrderCatalog` | `gamedatabase`: a general catalog matched by name |
+| 300 | `scraper.AutoOrderDocuments` | `mister-docs`: documents and artwork that also carry some game facts |
+
+On MiSTer that is `mister-arcade`, then `gamedatabase`, then `mister-docs`. The order is read from the registered scrapers each time jobs are queued, never stored with a job, and jobs already waiting are sorted together with new ones: a job left from an earlier index cannot run ahead of a scraper that should precede it. Jobs a user requested keep their order and run before index jobs.
 
 The sequence is **index → existing optimization → ordinary scraping**. Successful indexing persists eligible jobs before its final notification. The existing service recovery watcher starts them after optimization releases its write lease; there is no separate automatic-job worker. All jobs use the same scrape pauser, gameplay throttling, progress notifications and executor.
 
@@ -65,11 +79,11 @@ These checks and inserts share the existing single/batch scrape transaction. A b
 
 ### Unchanged Systems
 
-A fill-missing run reconsiders a system only when something it depends on moved. Every scraper that runs after an index (`mister-docs`, `mister-arcade`, PinUP Popper and the Android apps scraper) stores a fingerprint per system in `DBConfig` (`ScrapeFingerprint:<scraper>:<system>`) when they complete it, on any run over whole systems. It joins the state of the scraper's source with the system's library revision.
+A fill-missing run reconsiders a system only when something it depends on moved. Every scraper that runs after an index (`mister-docs`, `mister-arcade`, `gamedatabase`, PinUP Popper and the Android apps scraper) stores a fingerprint per system in `DBConfig` (`ScrapeFingerprint:<scraper>:<system>`) when they complete it, on any run over whole systems. It joins the state of the scraper's source with the system's library revision.
 
 The library revision (`LibraryRevision:<system>` in `DBConfig`, read with `MediaDBI.LibraryRevision`) is a counter the index reconcile bumps, in its own transaction, when it inserted or renamed a title, inserted or changed a media row, flagged media missing, or added or removed a tag link for that system. Indexing a system whose files did not change leaves it where it was. Reading it is one keyed lookup, which matters on SD-card storage where even an index-only count of a large system takes minutes at background priority.
 
-For `mister-docs` the source state is one listing of names per pack folder serving the system: each TSV's size and modification time, plus the count of the other files and a digest of their names. For `mister-arcade` it is a digest of the catalog. For PinUP Popper it is Popper's own library as read from its database, plus a listing digest of every emulator's screen folders. The Android apps scraper has no source state: icons come from the host per package and fill-missing never replaces one already stored, so it compares the library revision alone, and it does not record a system in which the host could not supply an icon, so that system is tried again. An index-triggered run that finds the stored fingerprint unchanged reports the system and moves on without parsing a pack, reading a media row or writing anything.
+For `mister-docs` the source state is one listing of names per pack folder serving the system: each TSV's size and modification time, plus the count of the other files and a digest of their names. For `mister-arcade` it is a digest of the catalog. For `gamedatabase` it is the upstream commit the embedded data was built from and the bundles that serve the system, which only a new build of Core changes. For PinUP Popper it is Popper's own library as read from its database, plus a listing digest of every emulator's screen folders. The Android apps scraper has no source state: icons come from the host per package and fill-missing never replaces one already stored, so it compares the library revision alone, and it does not record a system in which the host could not supply an icon, so that system is tried again. An index-triggered run that finds the stored fingerprint unchanged reports the system and moves on without parsing a pack, reading a media row or writing anything.
 
 A manual or force run never consults the fingerprint and always does the full work, then stores a fresh one. That is also the way out when a source changed in a way the fingerprint cannot see, or when another tool removed metadata the scraper had filled. Truncating a system, or the whole database, deletes the fingerprints of the rows it removes, so rebuilt rows are always scraped again.
 
@@ -136,7 +150,7 @@ Tags are meant to be as stable as practical: a filter written today must mean th
 | Kind | Types | What a value must be |
 |---|---|---|
 | Closed list | every type not listed below, including `genre`, `region`, `lang`, `arcadeboard`, `players`, `input`, `search` | one of the type's values in `CanonicalTagDefinitions` |
-| Strict format | `year`, `builddate`, `rating`, `disc`, `disctotal`, `track`, `season`, `episode`, `issue`, `volume`, `set`, `alt`, `rev`, `patch`, `extension`, `mameparent`, `user`, and the `scraper.<id>` / `scraper-run.<id>` bookkeeping types | a value matching the type's rule, such as a year from 1950 to 2099, a real `YYYY-MM-DD` date, a rating from 0 to 100, a positive disc number, or a listed patch label with an optional version |
+| Strict format | `year`, `builddate`, `rating`, `disc`, `disctotal`, `track`, `season`, `episode`, `issue`, `volume`, `set`, `alt`, `rev`, `patch`, `extension`, `mameparent`, `compilation`, `gamedatabase`, `user`, and the `scraper.<id>` / `scraper-run.<id>` bookkeeping types | a value matching the type's rule, such as a year from 1950 to 2099, a real `YYYY-MM-DD` date, a rating from 0 to 100, a positive disc number, a GameDataBase game ID, or a listed patch label with an optional version |
 | Free text | `developer`, `publisher`, `credit` only | a company name in the form `NormalizeCompanyName` produces: lower-case words joined by single dashes |
 
 Company names are the only free text because they are the only values that cannot be listed. Adding a free-text type is a design change, not a scraper detail; `TestFreeTextTypesAreOnlyCompanyNames` exists to make that visible.
@@ -150,7 +164,7 @@ What this means for a scraper:
 
 MediaDB enforces the rules on every write path — scrape writes, `UpsertMediaTags`/`UpsertMediaTitleTags`, the scanner's staging, user flags and deck membership, and the legacy `InsertTag`/`InsertTagType` — so a value that slips past a scraper is refused and logged at warn rather than stored. When the vocabulary changes between releases, the next index run's seeding pass removes stored types and values the new rules refuse, together with every link to them (`sqlPruneOffVocabularyTags`).
 
-Each scraper's tests call `scrapertest.RequireValidWrite` on every write they build, and the MiSTer arcade catalog tests fail when the pinned catalog snapshot holds a category, platform or series that nothing maps, so refreshing the snapshot forces the new values to be curated.
+Each scraper's tests call `scrapertest.RequireValidWrite` on every write they build, and the MiSTer arcade catalog tests fail when the pinned catalog snapshot holds a category, platform or series that nothing maps, so refreshing the snapshot forces the new values to be curated. The `gamedatabase` tests do the same against the whole embedded dataset.
 
 Property rows are keyed by entity and property type tag. Re-scraping the same property type updates the row in place and preserves row DBID.
 
@@ -461,6 +475,7 @@ go test ./pkg/database/scraper/...
 go test ./pkg/database/mediadb/ -run 'Scrape|Property|Blob|Sentinel|MediaImage'
 go test ./pkg/api/methods/ -run 'Scrape|MediaImage|MediaMeta'
 go test ./pkg/platforms/mister/ -run 'Arcade'
+go test ./pkg/database/gamedatabase/ ./scripts/gamedatabase/
 ```
 
 ## MiSTer Arcade Catalog Behavior
@@ -542,6 +557,60 @@ in practice:
 - `region` is additive, so a row whose filename states a territory can gain the catalog's broader value beside it.
   On the same corpus 43 rows ended up carrying `world` next to a specific territory, because the catalog describes
   the romset's release while the filename describes which dump this is.
+
+## GameDataBase Behavior
+
+`pkg/database/gamedatabase` embeds [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase) (CC BY 4.0), the dataset Core's tag vocabulary is modelled on. `scripts/gamedatabase` builds it from a checkout of the upstream commit pinned in the script: it keeps each row's title, title screen, ID, region, release date, developer, publisher and tags, drops the native-script title and file-hash columns, merges the eight arcade manufacturer files into one bundle, and writes one zstd-compressed tab-separated bundle per platform plus `data/VERSION`. Refreshing the data is a change to the pinned commit and the regenerated files. A scrape decodes only the bundles of the system it is on.
+
+### Systems
+
+| Bundle | Systems |
+|---|---|
+| `nes`, `fds`, `sufami`, `virtualboy`, `pcfx`, `mastersystem`, `megacd`, `sega32x`, `saturn`, `laseractive` | `NES`, `FDS`, `Sufami`, `VirtualBoy`, `PCFX`, `MasterSystem`, `MegaCD`, `Sega32X`, `Saturn`, `LaserActive` |
+| `snes` and `satellaview` | `SNES`, `SNESMSU1` |
+| `n64` and `n64dd` | `Nintendo64` |
+| `gameboy`, then `gameboycolor` | `Gameboy`, `Gameboy2P`, `SuperGameboy`, `SGBMSU1` |
+| `gameboycolor`, then `gameboy` | `GameboyColor` |
+| `gba` | `GBA`, `GBA2P` |
+| `pcengine` | `TurboGrafx16`, `SuperGrafx` |
+| `pcenginecd` | `TurboGrafx16CD` |
+| `sg1000` | `SG1000`, `Multivision` |
+| `megadrive` | `Genesis`, `GenesisMSU`, `GenesisPlus` |
+| `gamegear` | `GameGear`, `GameGear2P` |
+| `neogeopocket` | `NeoGeoPocket`, `NeoGeoPocketColor` |
+| `arcade` | every system `arcadenames.IsArcadeSystem` accepts |
+
+A bundle listed after "then" is read only for titles the system's own bundles did not match: a Game Boy Color folder also holds Game Boy cartridges.
+
+### Matching
+
+Console titles are matched on slug. Each row's title and title-screen name go through the same filename-title parser and slug pipeline the indexer uses, and a row is kept when one of its keys equals a library title's slug. Upstream writes Japanese long vowels with macrons ("Bishōjo") where dump names spell them out ("Bishoujo"), so each name is also keyed with its long vowels spelled out, and the row's ID, which is upstream's own spelled-out form of the title, is a key too. One title usually has several rows, one per regional release, so the scraper picks one:
+
+1. Rows that are not the original retail release (`#unfinished`, `#unlicensed`, `#alt`, `#reboxed`, `#rerelease`) are passed over when an original row exists.
+2. Rows for a region the title's own files carry are kept. When the files carry exactly one region, that settles the region.
+3. Otherwise the first region in `[media] default_regions` that any remaining row has is used.
+4. If the rows left are releases of more than one game (different upstream IDs), the title is skipped: a slug two games share does not say which one the library holds.
+5. The earliest release wins, a fully dated one before a bare year in the same year, then upstream row order.
+
+Arcade files are matched on MAME set name: the archive's own name, or for a MiSTer `.mra` the set name inside it, read through the platform's set-name cache when it has one. A set match names one release outright, so no region choice is made. An arcade file with no set match falls back to the title match above.
+
+Every present file of a matched title gets the scraper's sentinel. The first, in path order, carries the title's tags.
+
+### Field Mapping
+
+A tag `#type:sub>child` becomes the Core value `sub:child` of the same type. Values Core names differently (`valueRenames`), upstream mistakes with one obvious reading (`tokenRecoveries`, `valueRecoveries`, `idRecoveries`) and mistakes without one (the skip lists) are tables in `gamedatabase/vocabulary.go`. `TestEveryEmbeddedValueIsCovered` reads every embedded row against them: a refresh that brings a value Core lacks fails until the value is added to the vocabulary or listed, and a table entry the data no longer needs fails too.
+
+| GameDataBase | Destination | Notes |
+|---|---|---|
+| `ID` | `MediaTitleTags: gamedatabase` | Exclusive. The game a title is, shared by its regional releases and its releases on other platforms |
+| Release date | `MediaTitleTags: year` | Exclusive. The year the date opens with |
+| Developer, Publisher | `MediaTitleTags: developer`, `publisher`, `credit` | Cells join several companies with `/`. The first takes the role; the rest are stored as `credit` |
+| `#genre` | `MediaTitleTags: genre` | The family beside the genre (`sports` and `sports:tennis`) |
+| `#players`, `#input`, `#addon`, `#embedded`, `#save`, `#compatibility`, `#based`, `#search`, `#port` | `MediaTitleTags` of the same type | Additive |
+| `#arcadeboard` | `MediaTitleTags: arcadeboard` | Exclusive. The first value, the most specific upstream gives |
+| `#compilation:id:id` | `MediaTitleTags: multigame:compilation` and one `compilation:<id>` per game | The IDs are other games' `gamedatabase` values, so a tag filter finds a compilation's games in the library |
+| `#mamerom:parent>set` | `MediaProperties: mame-setname`, `MediaTags: mameparent` | On the file the set matched. A parent set gets no `mameparent` |
+| Region, `#lang`, `#rev`, `#set`, `#alt`, `#disc`, `#unfinished`, `#unlicensed`, `#reboxed`, `#rerelease` | not imported | They describe one release or dump. A title match cannot know which one a file is; the filename parser can |
 
 ## PinUP Popper Behavior
 

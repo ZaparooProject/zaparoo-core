@@ -65,6 +65,7 @@ func (p *Platform) appScraper() platforms.Scraper {
 		ID: appScraperID, Name: "Installed Android apps",
 		SupportedSystemIDs:  appScraperSystems,
 		AutoScrapeLaunchers: launchers, SupportsFillMissing: true,
+		AutoScrapeOrder: scraper.AutoOrderDevice,
 		Scrape: func(
 			ctx context.Context, _ *config.Instance, _ platforms.Platform, _ afero.Fs,
 			db *database.Database, opts scraper.ScrapeOptions, _ platforms.ScraperCustomOptions,

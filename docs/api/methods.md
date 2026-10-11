@@ -1201,7 +1201,8 @@ alphabetically. Every tag type is either a closed list of canonical values, a st
 or one of the three free-text company types (`developer`, `publisher`, `credit`). Closed
 types such as `genre`, `region`, `lang` and `arcadeboard` have finite vocabularies and are
 returned in full, as are `year` and `rating`. The free-text types, the other format types
-(for example `extension`, `track`, `mameparent`, `builddate`) and `search`, whose franchise
+(for example `extension`, `track`, `mameparent`, `compilation`, `gamedatabase`, `builddate`) and
+`search`, whose franchise
 and feature values run long, are capped.
 
 ##### TagInfo object

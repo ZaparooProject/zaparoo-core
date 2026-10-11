@@ -47,6 +47,9 @@ func TestIsScannerOwnedType(t *testing.T) {
 		{tagType: TagTypeProperty, owned: false},
 		{tagType: TagTypeRating, owned: false},
 		{tagType: TagTypeGenre, owned: false},
+		{tagType: TagTypeMameParent, owned: false},
+		{tagType: TagTypeCompilation, owned: false},
+		{tagType: TagTypeGameDatabase, owned: false},
 		{tagType: ScraperType("igdb"), owned: false},
 		{tagType: ScraperRunType("igdb"), owned: false},
 		// An unknown type is scanner-owned by default: new scanner tag types
