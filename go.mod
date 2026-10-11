@@ -157,4 +157,4 @@ require (
 replace github.com/ZaparooProject/zaparoo-core/mister => ./mister
 
 // Preserve Expr semantics while enabling the validated static method profile.
-replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612
+replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261011230659-306590b14ef8
