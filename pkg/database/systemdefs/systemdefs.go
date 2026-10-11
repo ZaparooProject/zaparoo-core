@@ -374,6 +374,7 @@ const (
 	SystemNAOMI               = "NAOMI"
 	SystemNAOMI2              = "NAOMI2"
 	SystemOpenBOR             = "OpenBOR"
+	SystemDoom                = "Doom"
 	SystemPico8               = "Pico8"
 	SystemTIC80               = "TIC80"
 	SystemVideo               = "Video"
@@ -1230,7 +1231,7 @@ var Systems = map[string]System{
 		ID:        SystemDOS,
 		Aliases:   []string{"ao486", "MS-DOS"},
 		Slugs:     []string{"ibmpc", "pcdos", "microsoftdos", "ibmdos", "dosbox"},
-		Fallbacks: []string{SystemPC},
+		Fallbacks: []string{SystemPC, SystemDoom},
 	},
 	SystemApogee: {
 		ID:    SystemApogee,
@@ -1730,6 +1731,11 @@ var Systems = map[string]System{
 	},
 	SystemOpenBOR: {
 		ID: SystemOpenBOR,
+	},
+	SystemDoom: {
+		ID:        SystemDoom,
+		Slugs:     []string{"prboom", "gzdoom"},
+		Fallbacks: []string{SystemDOS},
 	},
 	SystemPico8: {
 		ID:    SystemPico8,

@@ -244,3 +244,15 @@ func TestSystemMapConsistency(t *testing.T) {
 		}
 	})
 }
+
+func TestDoomFoldersMapToDoom(t *testing.T) {
+	t.Parallel()
+
+	for _, folder := range []string{"doom", "prboom", "gzdoom"} {
+		systemID, err := GetSystemID(folder)
+		require.NoError(t, err, folder)
+		assert.Equal(t, systemdefs.SystemDoom, systemID, folder)
+		assert.True(t, HasExtension(folder, ".wad"), folder)
+	}
+	assert.False(t, HasExtension("dos", ".wad"))
+}
