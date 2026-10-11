@@ -417,6 +417,36 @@ func TestScopedScrapeWritesOnlyTheSelectedFile(t *testing.T) {
 	assert.Empty(t, lib.title(other, tags.TagTypeGameDatabase))
 }
 
+func TestScopedFillMissingKeepsWhatAnEarlierSourceWrote(t *testing.T) {
+	t.Parallel()
+	db := newLibrary(t)
+	selected := rom("SNES", "Super Mario World (USA).sfc")
+	other := rom("SNES", "Super Mario Kart (USA).sfc")
+	scantest.IndexMediaPaths(t, db, systemdefs.SystemSNES, selected, other)
+
+	lib := read(t, db, systemdefs.SystemSNES)
+	require.NoError(t, db.UpsertMediaTitleTags(context.Background(), lib.media[selected].MediaTitleDBID,
+		[]database.TagInfo{
+			{Type: string(tags.TagTypeYear), Tag: "1990"},
+			{Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenrePuzzle)},
+		}))
+
+	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{
+		FillMissing: true,
+		Scope: &database.ScrapeScope{
+			SystemID: systemdefs.SystemSNES, Path: selected, MediaID: lib.media[selected].DBID,
+		},
+	})
+	assert.Equal(t, 1, last.Matched)
+	assert.Equal(t, []string{"1990"}, lib.title(selected, tags.TagTypeYear), "a single-valued field is not replaced")
+	assert.Equal(t, []string{"action", "action:platformer", "puzzle"}, lib.title(selected, tags.TagTypeGenre),
+		"an additive field gains values")
+	assert.Equal(t, []string{"nintendo"}, lib.title(selected, tags.TagTypePublisher), "an empty field is filled")
+	assert.True(t, lib.scraped(selected))
+	assert.False(t, lib.scraped(other))
+	assert.Empty(t, lib.title(other, tags.TagTypePublisher))
+}
+
 func TestScrapeStopsWhenCancelled(t *testing.T) {
 	t.Parallel()
 	db := newLibrary(t)

@@ -371,6 +371,9 @@ func (s *scraperImpl) scrapeScope(
 		ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 		return
 	}
+	for i := range writeTargets {
+		writeTargets[i].Write.FillMissing = opts.FillMissing
+	}
 	scraper.ApplyScopedTargets(ctx, s.db, opts, selection, writeTargets, ch)
 }
 
