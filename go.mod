@@ -40,7 +40,6 @@ require (
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hbollon/go-edlib v1.7.0
-	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/klauspost/compress v1.19.2
 	github.com/mackerelio/go-osstat v0.2.8

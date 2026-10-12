@@ -21,6 +21,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -388,34 +389,67 @@ func (c *Instance) SetReaderConnections(rcs []ReadersConnect) {
 	c.vals.Readers.Connect = rcs
 }
 
-func (c *Instance) hasEnabledReaderConnectionLocked(driverID string) bool {
+// replacedDriverIDs maps a driver to the IDs of drivers it took over from.
+// Settings and connections written for a replaced driver apply to its
+// successor, so an install that disabled the old one does not find the new
+// one switched on.
+var replacedDriverIDs = map[string][]string{
+	"ccid": {"acr122pcsc"},
+}
+
+// driverConfigIDs returns the normalized IDs whose config applies to a driver:
+// its own first, then any it replaced.
+func driverConfigIDs(driverID string) []string {
 	normalizedID := normalizeDriverID(driverID)
+	return append([]string{normalizedID}, replacedDriverIDs[normalizedID]...)
+}
+
+func (c *Instance) hasEnabledReaderConnectionLocked(driverID string) bool {
+	ids := driverConfigIDs(driverID)
 	for _, conn := range c.vals.Readers.Connect {
-		if conn.IsEnabled() && normalizeDriverID(conn.Driver) == normalizedID {
+		if conn.IsEnabled() && slices.Contains(ids, normalizeDriverID(conn.Driver)) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *Instance) isDriverEnabledLocked(driverID string, defaultEnabled bool) bool {
-	normalizedID := normalizeDriverID(driverID)
-	for key, cfg := range c.vals.Readers.Drivers {
-		if normalizeDriverID(key) == normalizedID && cfg.Enabled != nil {
-			return *cfg.Enabled
+// driverSettingLocked returns the first value a [readers.drivers.<id>] entry
+// sets for a driver, looking at the driver's own entry before one written for
+// a driver it replaced. Distinct keys can normalize alike, so a tie is broken
+// on the key itself rather than on map iteration order. Caller must hold c.mu.
+func (c *Instance) driverSettingLocked(driverID string, pick func(DriverConfig) *bool) *bool {
+	for _, id := range driverConfigIDs(driverID) {
+		matched := ""
+		var value *bool
+		for key, cfg := range c.vals.Readers.Drivers {
+			if normalizeDriverID(key) != id {
+				continue
+			}
+			if picked := pick(cfg); picked != nil && (matched == "" || key < matched) {
+				matched, value = key, picked
+			}
 		}
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func (c *Instance) isDriverEnabledLocked(driverID string, defaultEnabled bool) bool {
+	enabled := c.driverSettingLocked(driverID, func(cfg DriverConfig) *bool { return cfg.Enabled })
+	if enabled != nil {
+		return *enabled
 	}
 	return defaultEnabled
 }
 
 func (c *Instance) isDriverAutoDetectEnabledLocked(driverID string, defaultAutoDetect bool) bool {
-	normalizedID := normalizeDriverID(driverID)
-	for key, cfg := range c.vals.Readers.Drivers {
-		if normalizeDriverID(key) == normalizedID && cfg.AutoDetect != nil {
-			return *cfg.AutoDetect
-		}
+	autoDetect := c.driverSettingLocked(driverID, func(cfg DriverConfig) *bool { return cfg.AutoDetect })
+	if autoDetect != nil {
+		return *autoDetect
 	}
-
 	return c.vals.Readers.AutoDetect && defaultAutoDetect
 }
 

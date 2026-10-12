@@ -21,518 +21,193 @@ package pn532
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	pn532 "github.com/ZaparooProject/go-pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag/tagsim"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestConvertNDEFToTokenText(t *testing.T) {
+func TestReadTag_NoTagOps(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		message  *pn532.NDEFMessage
-		expected string
-	}{
-		{
-			name:     "nil message returns empty string",
-			message:  nil,
-			expected: "",
-		},
-		{
-			name: "empty records returns empty string",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{},
-			},
-			expected: "",
-		},
-		{
-			name: "text record passes through directly",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{Text: "Hello World"},
-				},
-			},
-			expected: "Hello World",
-		},
-		{
-			name: "URI record passes through directly",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{URI: "https://example.com"},
-				},
-			},
-			expected: "https://example.com",
-		},
-		{
-			name: "text takes priority over URI",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{Text: "Priority Text", URI: "https://example.com"},
-				},
-			},
-			expected: "Priority Text",
-		},
-		{
-			name: "WiFi credentials convert to JSON",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{
-						WiFi: &pn532.WiFiCredential{
-							SSID:       "TestNetwork",
-							NetworkKey: "password123",
-						},
-					},
-				},
-			},
-			expected: `{"networkKey":"password123","ssid":"TestNetwork","type":"wifi"}`,
-		},
-		{
-			name: "VCard converts to JSON",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{
-						VCard: &pn532.VCardContact{
-							FormattedName: "John Doe",
-						},
-					},
-				},
-			},
-			expected: `{"contact":{"name":"John Doe"},"type":"vcard"}`,
-		},
-		{
-			name: "Smart Poster converts to JSON with hex payload",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{
-						Type:    pn532.NDEFTypeSmartPoster,
-						Payload: []byte{0xDE, 0xAD, 0xBE, 0xEF},
-					},
-				},
-			},
-			expected: `{"raw":"deadbeef","type":"smartposter"}`,
-		},
-		{
-			name: "generic payload converts to JSON",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{
-						Type:    "application/custom",
-						Payload: []byte{0x01, 0x02, 0x03},
-					},
-				},
-			},
-			expected: `{"payload":"010203","type":"unknown","typeField":"application/custom"}`,
-		},
-		{
-			name: "record with no content returns empty string",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{},
-				},
-			},
-			expected: "",
-		},
-		{
-			name: "only first record is processed",
-			message: &pn532.NDEFMessage{
-				Records: []pn532.NDEFRecord{
-					{Text: "First Record"},
-					{Text: "Second Record"},
-				},
-			},
-			expected: "First Record",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := convertNDEFToTokenText(tt.message)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestConvertWiFiToJSON(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		wifi     *pn532.WiFiCredential
-		validate func(t *testing.T, result string)
-		name     string
-	}{
-		{
-			name: "basic WiFi with SSID only",
-			wifi: &pn532.WiFiCredential{
-				SSID: "MyNetwork",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				assert.Equal(t, "MyNetwork", data["ssid"])
-				assert.NotContains(t, data, "networkKey")
-			},
-		},
-		{
-			name: "WiFi with network key",
-			wifi: &pn532.WiFiCredential{
-				SSID:       "SecureNetwork",
-				NetworkKey: "secret123",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				assert.Equal(t, "SecureNetwork", data["ssid"])
-				assert.Equal(t, "secret123", data["networkKey"])
-			},
-		},
-		{
-			name: "WiFi with auth type",
-			wifi: &pn532.WiFiCredential{
-				SSID:     "AuthNetwork",
-				AuthType: 2,
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				authType, ok := data["authType"].(float64)
-				require.True(t, ok, "authType should be a number")
-				assert.Equal(t, 2, int(authType))
-			},
-		},
-		{
-			name: "WiFi with encryption type",
-			wifi: &pn532.WiFiCredential{
-				SSID:           "EncryptedNetwork",
-				EncryptionType: 4,
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				encType, ok := data["encryptionType"].(float64)
-				require.True(t, ok, "encryptionType should be a number")
-				assert.Equal(t, 4, int(encType))
-			},
-		},
-		{
-			name: "WiFi with MAC address",
-			wifi: &pn532.WiFiCredential{
-				SSID:       "MACNetwork",
-				MACAddress: "AA:BB:CC:DD:EE:FF",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				assert.Equal(t, "AA:BB:CC:DD:EE:FF", data["macAddress"])
-			},
-		},
-		{
-			name: "WiFi with all fields",
-			wifi: &pn532.WiFiCredential{
-				SSID:           "FullNetwork",
-				NetworkKey:     "fullpass",
-				AuthType:       1,
-				EncryptionType: 2,
-				MACAddress:     "11:22:33:44:55:66",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "wifi", data["type"])
-				assert.Equal(t, "FullNetwork", data["ssid"])
-				assert.Equal(t, "fullpass", data["networkKey"])
-				authType, ok := data["authType"].(float64)
-				require.True(t, ok, "authType should be a number")
-				assert.Equal(t, 1, int(authType))
-				encType, ok := data["encryptionType"].(float64)
-				require.True(t, ok, "encryptionType should be a number")
-				assert.Equal(t, 2, int(encType))
-				assert.Equal(t, "11:22:33:44:55:66", data["macAddress"])
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := convertWiFiToJSON(tt.wifi)
-			tt.validate(t, result)
-		})
-	}
-}
-
-func TestConvertVCardToJSON(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		vcard    *pn532.VCardContact
-		validate func(t *testing.T, result string)
-		name     string
-	}{
-		{
-			name: "VCard with name only",
-			vcard: &pn532.VCardContact{
-				FormattedName: "Jane Smith",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "vcard", data["type"])
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				assert.Equal(t, "Jane Smith", contact["name"])
-			},
-		},
-		{
-			name: "VCard with phone numbers",
-			vcard: &pn532.VCardContact{
-				FormattedName: "Contact",
-				PhoneNumbers:  map[string]string{"mobile": "+1234567890", "work": "+0987654321"},
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				phones, ok := contact["phones"].(map[string]any)
-				require.True(t, ok, "phones should be a map")
-				assert.Len(t, phones, 2)
-				assert.Equal(t, "+1234567890", phones["mobile"])
-			},
-		},
-		{
-			name: "VCard with email addresses",
-			vcard: &pn532.VCardContact{
-				FormattedName:  "Email User",
-				EmailAddresses: map[string]string{"home": "user@example.com", "work": "work@company.com"},
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				emails, ok := contact["emails"].(map[string]any)
-				require.True(t, ok, "emails should be a map")
-				assert.Len(t, emails, 2)
-				assert.Equal(t, "user@example.com", emails["home"])
-			},
-		},
-		{
-			name: "VCard with organization",
-			vcard: &pn532.VCardContact{
-				FormattedName: "Employee",
-				Organization:  "Acme Corp",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				assert.Equal(t, "Acme Corp", contact["organization"])
-			},
-		},
-		{
-			name: "VCard with title",
-			vcard: &pn532.VCardContact{
-				FormattedName: "Manager",
-				Title:         "Software Engineer",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				assert.Equal(t, "Software Engineer", contact["title"])
-			},
-		},
-		{
-			name: "VCard with URL",
-			vcard: &pn532.VCardContact{
-				FormattedName: "Website User",
-				URL:           "https://example.com",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				assert.Equal(t, "https://example.com", contact["url"])
-			},
-		},
-		{
-			name: "VCard with all fields",
-			vcard: &pn532.VCardContact{
-				FormattedName:  "Full Contact",
-				PhoneNumbers:   map[string]string{"mobile": "+1111111111"},
-				EmailAddresses: map[string]string{"home": "full@example.com"},
-				Organization:   "Full Org",
-				Title:          "Full Title",
-				URL:            "https://full.example.com",
-			},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "vcard", data["type"])
-				contact, ok := data["contact"].(map[string]any)
-				require.True(t, ok, "contact should be a map")
-				assert.Equal(t, "Full Contact", contact["name"])
-				assert.NotNil(t, contact["phones"])
-				assert.NotNil(t, contact["emails"])
-				assert.Equal(t, "Full Org", contact["organization"])
-				assert.Equal(t, "Full Title", contact["title"])
-				assert.Equal(t, "https://full.example.com", contact["url"])
-			},
-		},
-		{
-			name:  "VCard with empty fields",
-			vcard: &pn532.VCardContact{},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "vcard", data["type"])
-				assert.NotContains(t, data, "contact")
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := convertVCardToJSON(tt.vcard)
-			tt.validate(t, result)
-		})
-	}
-}
-
-func TestConvertSmartPosterToJSON(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		validate func(t *testing.T, result string)
-		name     string
-		payload  []byte
-	}{
-		{
-			name:    "basic payload",
-			payload: []byte{0x01, 0x02, 0x03, 0x04},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "smartposter", data["type"])
-				assert.Equal(t, "01020304", data["raw"])
-			},
-		},
-		{
-			name:    "empty payload",
-			payload: []byte{},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "smartposter", data["type"])
-				assert.Empty(t, data["raw"])
-			},
-		},
-		{
-			name:    "payload with special bytes",
-			payload: []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "smartposter", data["type"])
-				assert.Equal(t, "deadbeefcafe", data["raw"])
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := convertSmartPosterToJSON(tt.payload)
-			tt.validate(t, result)
-		})
-	}
-}
-
-func TestConvertGenericRecordToJSON(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		validate   func(t *testing.T, result string)
-		name       string
-		recordType string
-		payload    []byte
-	}{
-		{
-			name:       "basic record",
-			recordType: "application/octet-stream",
-			payload:    []byte{0xAA, 0xBB, 0xCC},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "unknown", data["type"])
-				assert.Equal(t, "application/octet-stream", data["typeField"])
-				assert.Equal(t, "aabbcc", data["payload"])
-			},
-		},
-		{
-			name:       "custom MIME type",
-			recordType: "application/vnd.custom",
-			payload:    []byte{0x01, 0x02},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "unknown", data["type"])
-				assert.Equal(t, "application/vnd.custom", data["typeField"])
-				assert.Equal(t, "0102", data["payload"])
-			},
-		},
-		{
-			name:       "empty payload",
-			recordType: "empty",
-			payload:    []byte{},
-			validate: func(t *testing.T, result string) {
-				var data map[string]any
-				require.NoError(t, json.Unmarshal([]byte(result), &data))
-				assert.Equal(t, "unknown", data["type"])
-				assert.Equal(t, "empty", data["typeField"])
-				assert.Empty(t, data["payload"])
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := convertGenericRecordToJSON(tt.recordType, tt.payload)
-			tt.validate(t, result)
-		})
-	}
-}
-
-func TestReadNDEFData_NoTagOps(t *testing.T) {
-	t.Parallel()
-
-	// Test the early return path when tagOps is nil (no real device available)
-	reader := &Reader{
-		tagOps: nil,
-	}
-
+	reader := &Reader{tagOps: nil}
 	detectedTag := &pn532.DetectedTag{
 		UID:        "test-uid",
+		Type:       pn532.TagTypeNTAG,
 		TargetData: []byte{0x01, 0x02, 0x03},
 	}
 
-	uid, data := reader.readNDEFData(context.Background(), detectedTag)
+	tokenType, text, data := reader.readTag(context.Background(), detectedTag)
 
-	assert.Empty(t, uid, "uid should be empty when tagOps is nil")
-	assert.Equal(t, detectedTag.TargetData, data, "should return original target data")
+	assert.Equal(t, tokens.TypeNTAG, tokenType)
+	assert.Empty(t, text)
+	assert.Empty(t, data, "detection data is not tag memory and is not reported as it")
+}
+
+// pagedTag answers go-pn532's block read from an in-memory NTAG, stopping at
+// the last page as go-pn532 does.
+type pagedTag struct {
+	sim *tagsim.Type2
+}
+
+func (p *pagedTag) ReadBlocks(_ context.Context, start, end byte) ([]byte, error) {
+	pages := len(p.sim.Mem) / 4
+	if int(start) >= pages {
+		return nil, errors.New("page out of range")
+	}
+	last := min(int(end), pages-1)
+	return append([]byte(nil), p.sim.Mem[int(start)*4:(last+1)*4]...), nil
+}
+
+// classicTag answers go-pn532's block read from an in-memory MIFARE Classic
+// tag, authenticating each sector with whichever key works.
+type classicTag struct {
+	sim *tagsim.Classic
+}
+
+func (c *classicTag) ReadBlocks(ctx context.Context, start, end byte) ([]byte, error) {
+	var out []byte
+	for block := int(start); block <= int(end); block++ {
+		authErr := c.sim.Authenticate(ctx, block, nfctag.KeyA, nfctag.KeyNDEF)
+		if authErr != nil {
+			authErr = c.sim.Authenticate(ctx, block, nfctag.KeyA, nfctag.KeyFactory)
+		}
+		if authErr != nil {
+			return nil, fmt.Errorf("authenticate block %d: %w", block, authErr)
+		}
+		data, err := c.sim.ReadBlock(ctx, block)
+		if err != nil {
+			return nil, fmt.Errorf("read block %d: %w", block, err)
+		}
+		out = append(out, data...)
+	}
+	return out, nil
+}
+
+// textTLV is the NDEF data a tag holds for a short text record.
+//
+//nolint:gosec // test text is far shorter than 255 bytes
+func textTLV(text string) []byte {
+	record := append([]byte{0xD1, 0x01, byte(len(text) + 3), 'T', 0x02, 'e', 'n'}, text...)
+	out := append([]byte{0x03, byte(len(record))}, record...)
+	return append(out, 0xFE)
+}
+
+// The expected values are the ones the ccid and libnfc drivers' tests use for
+// the same tags: every driver must give the same token.
+func TestReadMemory_SameDataAsOtherDrivers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("NTAG", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewType2(tagsim.PagesNTAG215)
+		sim.SetUser(textTLV("@NES/Lode Runner"))
+
+		res, err := readMemory(ctx, &pagedTag{sim: sim}, nfctag.KindType2, sim.UID())
+
+		require.NoError(t, err)
+		assert.Equal(t, tokens.TypeNTAG, res.Type)
+		assert.Equal(t, "@NES/Lode Runner", res.Text)
+		assert.Equal(t, "0317d101135402656e404e45532f4c6f64652052756e6e6572fe000000000000",
+			hex.EncodeToString(res.Data))
+	})
+
+	t.Run("MIFARE Classic", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewClassic(16)
+		sim.Format()
+		sim.SetData(textTLV("test4"))
+
+		res, err := readMemory(ctx, &classicTag{sim: sim}, nfctag.KindClassic1K, sim.UID())
+
+		require.NoError(t, err)
+		assert.Equal(t, tokens.TypeMifare, res.Type)
+		assert.Equal(t, "030cd101085402656e7465737434fe00", hex.EncodeToString(res.Data))
+	})
+
+	t.Run("Amiibo", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewType2(tagsim.PagesNTAG215)
+		copy(sim.Mem[9:16], []byte{0x48, 0x0F, 0xE0, 0xF1, 0x10, 0xFF, 0xEE})
+		copy(sim.Mem[21*4:], []byte{1, 2, 3, 4, 5, 6, 7, 8})
+
+		res, err := readMemory(ctx, &pagedTag{sim: sim}, nfctag.KindType2, sim.UID())
+
+		require.NoError(t, err)
+		assert.Equal(t, tokens.TypeAmiibo, res.Type)
+		assert.Equal(t, []byte{1, 2, 3, 4, 5, 6, 7, 8}, res.Data)
+	})
+
+	t.Run("message that fills the tag", func(t *testing.T) {
+		t.Parallel()
+		// The last read runs past the tag's final page and comes back short.
+		sim := tagsim.NewType2(tagsim.PagesNTAG213)
+		text := strings.Repeat("z", 144-10)
+		_, err := nfctag.Write(ctx, &nfctag.Tag{IO: sim, UID: sim.UID(), Kind: nfctag.KindType2}, text)
+		require.NoError(t, err)
+
+		res, err := readMemory(ctx, &pagedTag{sim: sim}, nfctag.KindType2, sim.UID())
+
+		require.NoError(t, err)
+		assert.Equal(t, text, res.Text)
+	})
+
+	t.Run("read failure", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewClassic(16)
+		sim.SetKeys(1, nfctag.Key{1, 2, 3, 4, 5, 6})
+
+		res, err := readMemory(ctx, &classicTag{sim: sim}, nfctag.KindClassic1K, sim.UID())
+
+		require.Error(t, err)
+		assert.Equal(t, tokens.TypeMifare, res.Type)
+		assert.Empty(t, res.Data)
+	})
+}
+
+func TestBlockIO_IsReadOnly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	io := &blockIO{ops: &pagedTag{sim: tagsim.NewType2(tagsim.PagesNTAG213)}, type2: true}
+
+	require.ErrorIs(t, io.WriteBlock(ctx, 4, []byte{1, 2, 3, 4}), errReadOnly)
+	require.NoError(t, io.Authenticate(ctx, 4, nfctag.KeyA, nfctag.KeyNDEF))
+	_, err := io.ReadBlock(ctx, 256)
+	require.Error(t, err)
+	_, err = io.ReadBlock(ctx, -1)
+	require.Error(t, err)
+	_, err = io.ReadBlock(ctx, 200)
+	require.Error(t, err, "a page past the end of the tag")
+}
+
+func TestClassifyWriteError(t *testing.T) {
+	t.Parallel()
+	errFault := errors.New("transport fault")
+
+	noTag := classifyWriteError(errors.New("timeout waiting for tag"))
+	require.ErrorIs(t, noTag, readers.ErrTagNotDetected)
+
+	midPoll := classifyWriteError(fmt.Errorf("tag detection failed: %w", context.DeadlineExceeded))
+	require.ErrorIs(t, midPoll, readers.ErrTagNotDetected, "the wait can run out during a poll")
+
+	unsupported := classifyWriteError(fmt.Errorf("failed to create tag: %w", pn532.ErrInvalidTag))
+	require.ErrorIs(t, unsupported, readers.ErrUnsupportedTagType)
+	require.ErrorIs(t, unsupported, pn532.ErrInvalidTag)
+
+	other := classifyWriteError(errFault)
+	require.ErrorIs(t, other, errFault)
+	require.NotErrorIs(t, other, readers.ErrTagNotDetected)
+	require.NotErrorIs(t, other, readers.ErrUnsupportedTagType)
+
+	require.ErrorIs(t, classifyWriteError(context.Canceled), context.Canceled)
 }

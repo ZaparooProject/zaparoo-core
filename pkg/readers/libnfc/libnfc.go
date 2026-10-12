@@ -18,7 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc/tags"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/clausecker/nfc/v2"
@@ -26,7 +26,12 @@ import (
 )
 
 const (
-	timeToForgetCard          = 500 * time.Millisecond
+	// removalMisses is how many polls in a row must find no tag before it is
+	// reported removed, so one dropped poll is not a removal.
+	removalMisses = 2
+	// readAttempts is how many polls may fail to read a tag before it is
+	// reported by UID alone. A tag still being placed often fails the first.
+	readAttempts              = 3
 	connectMaxTries           = 10
 	timesToPoll               = 1
 	periodBetweenPolls        = 250 * time.Millisecond
@@ -36,7 +41,9 @@ const (
 	defaultWriteTimeoutTries  = 4 * 30 // ~30 seconds
 )
 
-var ErrWriteCancelled = errors.New("write operation was cancelled")
+// ErrWriteCancelled wraps context.Canceled, so a cancel the user asked for is
+// not logged as a write failure.
+var ErrWriteCancelled = fmt.Errorf("write operation was cancelled: %w", context.Canceled)
 
 type TransportTimeoutError struct {
 	Err    error
@@ -137,16 +144,23 @@ const (
 )
 
 type Reader struct {
-	cfg           *config.Instance
-	pnd           *nfc.Device
-	prevToken     *tokens.Token
-	write         chan WriteRequest
-	activeWrite   *WriteRequest
+	cfg         *config.Instance
+	pnd         *nfc.Device
+	prevToken   *tokens.Token
+	write       chan WriteRequest
+	activeWrite *WriteRequest
+	// readFailUID and readFailures count failed reads of the tag in the field.
+	readFailUID   string
 	conn          config.ReadersConnect
 	activeWriteMu syncutil.RWMutex
 	mu            syncutil.RWMutex // protects polling, pnd
-	polling       bool
-	mode          readerMode // Reader mode for different device types
+	readFailures  int
+	// misses counts polls in a row that found no tag.
+	misses  int
+	polling bool
+	// writtenTag is set while the tag last written is still on the reader.
+	writtenTag bool
+	mode       readerMode // Reader mode for different device types
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -260,15 +274,19 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 			if removed {
 				log.Info().Msg("token removed, sending to input queue")
 				iq <- readers.Scan{
-					Source:   tokens.SourceReader,
-					ReaderID: r.ReaderID(),
-					Token:    nil,
+					Source:            tokens.SourceReader,
+					ReaderID:          r.ReaderID(),
+					Token:             nil,
+					WrittenTagRemoved: r.writtenTag,
 				}
 				r.prevToken = nil
+				r.writtenTag = false
 			} else if token != nil {
 				if r.prevToken != nil && token.UID == r.prevToken.UID {
 					continue
 				}
+				// A different tag replaced the written one without a gap.
+				r.writtenTag = false
 
 				log.Info().Msg("new token detected, sending to input queue")
 				iq <- readers.Scan{
@@ -464,9 +482,11 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 	r.activeWriteMu.RUnlock()
 
 	req := WriteRequest{
-		Text:    text,
-		Result:  make(chan WriteRequestResult),
-		Cancel:  make(chan bool),
+		Text:   text,
+		Result: make(chan WriteRequestResult),
+		// Buffered so a cancel never blocks: once the tag is being written
+		// nothing is listening, and the write is left to finish.
+		Cancel:  make(chan bool, 1),
 		Ctx:     ctx,
 		Options: opts,
 	}
@@ -494,7 +514,10 @@ func (r *Reader) CancelWrite() {
 	r.activeWriteMu.RLock()
 	defer r.activeWriteMu.RUnlock()
 	if r.activeWrite != nil {
-		r.activeWrite.Cancel <- true
+		select {
+		case r.activeWrite.Cancel <- true:
+		default:
+		}
 	}
 }
 
@@ -818,7 +841,8 @@ func (r *Reader) pollDevice(
 	}
 
 	if count <= 0 {
-		if activeToken != nil && time.Since(activeToken.ScanTime) > timeToForgetCard {
+		r.misses++
+		if activeToken != nil && r.misses >= removalMisses {
 			log.Info().Msg("card removed")
 			activeToken = nil
 			removed = true
@@ -826,8 +850,10 @@ func (r *Reader) pollDevice(
 
 		return activeToken, removed, nil
 	}
+	r.misses = 0
 
-	tagUID := tags.GetTagUID(target)
+	uid := tags.UID(target)
+	tagUID := hex.EncodeToString(uid)
 	if tagUID == "" {
 		log.Warn().Msgf("unable to detect token ID: %s", target.String())
 	}
@@ -839,44 +865,39 @@ func (r *Reader) pollDevice(
 
 	log.Info().Msgf("found token ID: %s", tagUID)
 
-	var record tags.TagData
-	cardType := tags.GetTagType(target)
-
-	switch cardType {
-	case tokens.TypeNTAG:
-		log.Info().Msg("NTAG detected")
-		record, err = tags.ReadNtag(*pnd)
-		if err != nil {
-			return activeToken, removed, fmt.Errorf("error reading ntag: %w", err)
-		}
-	case tokens.TypeMifare:
-		log.Info().Msg("MIFARE detected")
-		record, err = tags.ReadMifare(*pnd, tagUID)
-		if err != nil {
-			return activeToken, removed, fmt.Errorf("error reading mifare: %w", err)
-		}
-	}
-
-	log.Debug().Msgf("record bytes: %s", hex.EncodeToString(record.Bytes))
-	tagText, err := ndef.ParseToText(record.Bytes)
+	res, err := nfctag.Read(context.Background(), &nfctag.Tag{
+		IO:   tags.NewIO(*pnd, uid),
+		UID:  uid,
+		Kind: tags.Kind(target),
+	})
 	if err != nil {
-		log.Warn().Err(err).Msgf("error parsing NDEF record")
-		tagText = ""
-	}
-
-	if tagText == "" {
-		log.Warn().Msg("no text NDEF found")
-	} else {
-		if e := log.Debug(); e.Enabled() {
-			e.Msgf("decoded text NDEF: %s", zapscript.ForLog(tagText))
+		if r.readFailUID != tagUID {
+			r.readFailUID = tagUID
+			r.readFailures = 0
 		}
+		r.readFailures++
+		if r.readFailures < readAttempts {
+			return activeToken, removed, fmt.Errorf("error reading %s tag: %w", res.Type, err)
+		}
+		// A tag that cannot be read is still a tag: it is reported by UID so
+		// it can be used through a mapping.
+		log.Warn().Err(err).Msgf("could not read %s tag, reporting it by UID", res.Type)
+	}
+	r.readFailUID = ""
+	r.readFailures = 0
+
+	log.Info().Msgf("%s tag detected", res.Type)
+	if res.Text == "" {
+		log.Debug().Msg("no text NDEF found")
+	} else if e := log.Debug(); e.Enabled() {
+		e.Msgf("decoded text NDEF: %s", zapscript.ForLog(res.Text))
 	}
 
 	card := &tokens.Token{
-		Type:     record.Type,
+		Type:     res.Type,
 		UID:      tagUID,
-		Text:     tagText,
-		Data:     hex.EncodeToString(record.Bytes),
+		Text:     res.Text,
+		Data:     hex.EncodeToString(res.Data),
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
 		ReaderID: r.ReaderID(),
@@ -978,7 +999,8 @@ func (r *Reader) writeTag(req *WriteRequest) {
 		return
 	}
 
-	cardUID := tags.GetTagUID(target)
+	uid := tags.UID(target)
+	cardUID := hex.EncodeToString(uid)
 	log.Info().Msgf("found tag with ID: %s", cardUID)
 	if req.Options.ExcludeUID != "" && cardUID == req.Options.ExcludeUID {
 		req.Result <- WriteRequestResult{
@@ -993,82 +1015,37 @@ func (r *Reader) writeTag(req *WriteRequest) {
 		return
 	}
 
-	cardType := tags.GetTagType(target)
-	var bytesWritten []byte
-
-	switch cardType {
-	case tokens.TypeMifare:
-		bytesWritten, err = tags.WriteMifare(*pnd, req.Text, cardUID)
-		if err != nil {
-			log.Error().Msgf("error writing to mifare: %s", err)
-			req.Result <- WriteRequestResult{
-				Err: err,
-			}
-			return
+	res, err := nfctag.Write(context.Background(), &nfctag.Tag{
+		IO:   tags.NewIO(*pnd, uid),
+		UID:  uid,
+		Kind: tags.Kind(target),
+	}, req.Text)
+	if err != nil {
+		if errors.Is(err, nfctag.ErrVerify) {
+			err = &DataCorruptedError{Device: r.conn.ConnectionString(), Err: err}
 		}
-	case tokens.TypeNTAG:
-		bytesWritten, err = tags.WriteNtag(*pnd, req.Text)
-		if err != nil {
-			log.Error().Msgf("error writing to ntag: %s", err)
-			req.Result <- WriteRequestResult{
-				Err: err,
-			}
-			return
-		}
-	default:
-		log.Warn().Msgf("unsupported tag type: %s", cardType)
 		req.Result <- WriteRequestResult{
-			Err: fmt.Errorf("%w: %s", readers.ErrUnsupportedTagType, cardType),
+			Err: fmt.Errorf("failed to write to tag: %w", err),
 		}
 		return
 	}
 
-	verificationTries := 3
-	var t *tokens.Token
-	for i := range verificationTries {
-		var verifyErr error
-		t, _, verifyErr = r.pollDevice(pnd, nil, timesToPoll, periodBetweenPolls)
-		if verifyErr == nil && t != nil {
-			break
-		}
-		if i >= verificationTries-1 {
-			log.Error().Msgf("write verification failed after %d attempts: %v", verificationTries, verifyErr)
-			req.Result <- WriteRequestResult{
-				Err: &DataCorruptedError{
-					Device: r.conn.ConnectionString(),
-					Err:    fmt.Errorf("write verification failed: %w", verifyErr),
-				},
-			}
-			return
-		}
-		log.Warn().Msgf("write verification attempt %d failed, retrying: %v", i+1, verifyErr)
-		time.Sleep(50 * time.Millisecond)
+	t := &tokens.Token{
+		Type:     res.Type,
+		UID:      cardUID,
+		Text:     res.Text,
+		Data:     hex.EncodeToString(res.Data),
+		ScanTime: time.Now(),
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
-	if t.UID != cardUID {
-		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUID)
-		req.Result <- WriteRequestResult{
-			Err: &DataCorruptedError{
-				Device: r.conn.ConnectionString(),
-				Err:    fmt.Errorf("ID mismatch after write: expected %s, got %s", cardUID, t.UID),
-			},
-		}
-		return
-	}
-
-	if t.Text != req.Text {
-		log.Error().Msg("text mismatch after write")
-		req.Result <- WriteRequestResult{
-			Err: &DataCorruptedError{
-				Device: r.conn.ConnectionString(),
-				Err:    fmt.Errorf("text mismatch after write: expected %s, got %s", req.Text, t.Text),
-			},
-		}
-		return
-	}
-
-	log.Info().Msgf("successfully wrote to card: %s", hex.EncodeToString(bytesWritten))
+	log.Info().Msgf("successfully wrote to card: %s", cardUID)
+	// The written tag stays quiet until it leaves the reader, and its removal
+	// is flagged so the next tap of it is a normal scan.
 	r.prevToken = t
+	r.writtenTag = true
+	r.misses = 0
 	req.Result <- WriteRequestResult{
 		Token: t,
 	}

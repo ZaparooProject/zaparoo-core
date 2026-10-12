@@ -3039,7 +3039,7 @@ None.
 
 | Key      | Type   | Required | Description                                      |
 | :------- | :----- | :------- | :----------------------------------------------- |
-| driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "acr122pcsc"). |
+| driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "ccid").       |
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
@@ -5002,7 +5002,7 @@ None.
 | :----------- | :------- | :------- | :-------------------------------------------- |
 | id           | string   | Yes      | Device path or system identifier of the reader. Legacy field, prefer `readerId` for stable identification. |
 | readerId     | string   | Yes      | Stable reader ID, deterministic across restarts. Format: `{driver}-{hash}`. |
-| driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"acr122pcsc"`, `"file"`). |
+| driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"ccid"`, `"file"`).       |
 | info         | string   | Yes      | Human-readable information about the reader.  |
 | scanMode     | string   | Yes      | Effective scan mode for this reader (`"tap"` or `"hold"`), resolving its `[[readers.connect]]` entry, then its `[readers.drivers.<id>]` entry, then the global `readers.scan.mode`. |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
