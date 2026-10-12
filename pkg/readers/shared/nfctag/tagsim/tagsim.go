@@ -80,6 +80,11 @@ func NewType2(pages int) *Type2 {
 		ccSize = byte((pages - 4) * pageSize / 8) //nolint:gosec // test tags are far below 2040 bytes
 	}
 	copy(tag.Mem[3*pageSize:], []byte{0xE1, 0x10, ccSize, 0x00})
+	if pages >= PagesNTAG213 {
+		// The first configuration page, four from the end: AUTH0 is FFh on a
+		// tag as delivered.
+		copy(tag.Mem[(pages-4)*pageSize:], []byte{0x04, 0x00, 0x00, 0xFF})
+	}
 	return tag
 }
 

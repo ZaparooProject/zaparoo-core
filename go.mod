@@ -10,7 +10,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.3
 	github.com/RoaringBitmap/roaring/v2 v2.29.0
 	github.com/ZaparooProject/go-gameid v0.2.0
-	github.com/ZaparooProject/go-pn532 v0.26.0
+	github.com/ZaparooProject/go-pn532 v0.26.1
 	github.com/ZaparooProject/go-zapscript v0.20.0
 	github.com/ZaparooProject/zaparoo-core/mister v0.1.0
 	github.com/adrg/xdg v0.5.3

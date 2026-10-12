@@ -230,9 +230,12 @@ func TestReadType2_OversizedLengthStopsAtEndOfMemory(t *testing.T) {
 
 type failingIO struct {
 	nfctag.BlockIO
-	failRead  int
-	corrupt   bool
-	readCalls int
+	// failReadAddr and failWriteAddr make one address fail when set.
+	failReadAddr  *int
+	failWriteAddr *int
+	failRead      int
+	readCalls     int
+	corrupt       bool
 }
 
 var errIO = errors.New("io failure")
@@ -240,6 +243,9 @@ var errIO = errors.New("io failure")
 func (f *failingIO) ReadBlock(ctx context.Context, addr int) ([]byte, error) {
 	f.readCalls++
 	if f.failRead != 0 && f.readCalls >= f.failRead {
+		return nil, errIO
+	}
+	if f.failReadAddr != nil && *f.failReadAddr == addr {
 		return nil, errIO
 	}
 	data, err := f.BlockIO.ReadBlock(ctx, addr)
@@ -250,6 +256,16 @@ func (f *failingIO) ReadBlock(ctx context.Context, addr int) ([]byte, error) {
 		data[0] ^= 0xFF
 	}
 	return data, nil
+}
+
+func (f *failingIO) WriteBlock(ctx context.Context, addr int, data []byte) error {
+	if f.failWriteAddr != nil && *f.failWriteAddr == addr {
+		return errIO
+	}
+	if err := f.BlockIO.WriteBlock(ctx, addr, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
 }
 
 func TestReadType2_ReadFailureStillReportsType(t *testing.T) {
@@ -336,6 +352,61 @@ func TestWriteType2_WritesMissingCapabilityContainer(t *testing.T) {
 			assert.Equal(t, "hello", res.Text, "a tag this package wrote must read back")
 		})
 	}
+}
+
+// The capability container cannot be undone. It is written only once the
+// message is on the tag and verified, and only for a variant the tag itself
+// shows.
+func TestWriteType2_BlankContainerIsNotGuessedOrWrittenEarly(t *testing.T) {
+	t.Parallel()
+	blankCC := []byte{0x00, 0x00, 0x00, 0x00}
+
+	t.Run("data write fails", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewType2(tagsim.PagesNTAG215)
+		sim.ClearCC()
+		page := 5
+		tag := &nfctag.Tag{
+			IO: &failingIO{BlockIO: sim, failWriteAddr: &page}, UID: sim.UID(), Kind: nfctag.KindType2,
+		}
+
+		_, err := nfctag.Write(context.Background(), tag, "hello")
+
+		require.ErrorIs(t, err, errIO)
+		assert.Equal(t, blankCC, sim.Mem[12:16], "a write that fails part way leaves the tag as it was found")
+	})
+
+	// An NTAG216 whose configuration page fails to read, as a passing RF
+	// fault would make it. Page 131, where an NTAG215 keeps its
+	// configuration, reads fine and is blank user memory.
+	t.Run("larger variant's page fails to read", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewType2(tagsim.PagesNTAG216)
+		sim.ClearCC()
+		before := append([]byte(nil), sim.Mem...)
+		page := 227
+		tag := &nfctag.Tag{
+			IO: &failingIO{BlockIO: sim, failReadAddr: &page}, UID: sim.UID(), Kind: nfctag.KindType2,
+		}
+
+		_, err := nfctag.Write(context.Background(), tag, "hello")
+
+		require.ErrorIs(t, err, readers.ErrUnsupportedTagType)
+		assert.Equal(t, before, sim.Mem, "the tag must not be marked as a smaller variant, or written at all")
+	})
+
+	t.Run("configuration changed from delivery", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewType2(tagsim.PagesNTAG215)
+		sim.ClearCC()
+		sim.Mem[131*4+3] = 0x10
+		before := append([]byte(nil), sim.Mem...)
+
+		_, err := nfctag.Write(context.Background(), type2Tag(sim), "hello")
+
+		require.ErrorIs(t, err, readers.ErrUnsupportedTagType)
+		assert.Equal(t, before, sim.Mem)
+	})
 }
 
 func TestWriteType2_RefusesTagsItCannotFormat(t *testing.T) {

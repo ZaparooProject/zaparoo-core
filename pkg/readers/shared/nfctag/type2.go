@@ -59,17 +59,23 @@ var legoDimensionsMatcher = []byte{
 	0x65, 0x6E,
 }
 
-// type2Sizes probes for the NTAG variant when the capability container is
-// missing: the first page of the last readable block of each variant, from the
-// largest down.
-var type2Sizes = []struct {
-	probePage int
-	ccSize    byte
+// type2Variants gives each NTAG variant's first configuration page, from the
+// largest down. It identifies a tag whose capability container is blank.
+var type2Variants = []struct {
+	configPage int
+	ccSize     byte
 }{
-	{probePage: 227, ccSize: ccSizeNTAG216},
-	{probePage: 131, ccSize: ccSizeNTAG215},
-	{probePage: 41, ccSize: ccSizeNTAG213},
+	{configPage: 227, ccSize: ccSizeNTAG216},
+	{configPage: 131, ccSize: ccSizeNTAG215},
+	{configPage: 41, ccSize: ccSizeNTAG213},
 }
+
+// type2AUTH0 is where the AUTH0 byte sits in a configuration page, and the
+// value it has on a tag as delivered.
+const (
+	type2AUTH0Offset  = 3
+	type2AUTH0Default = 0xFF
+)
 
 // type2UserBytes returns the user memory size for a capability container size
 // byte. The NTAG variants have slightly more usable memory than the container
@@ -161,15 +167,17 @@ func writeType2(ctx context.Context, tag *Tag, text string, payload []byte) (Res
 
 	cc := header[type2CCPage*type2PageSize:]
 	ccSize := cc[2]
+	needsContainer := false
 	switch {
 	case cc[0] == type2CCMagic:
 	case bytes.Equal(cc, make([]byte, type2PageSize)):
 		// The container is one-time programmable, so it can only be written
 		// while it is still blank. Without it other readers ignore the tag.
-		ccSize, err = formatType2(ctx, tag.IO)
+		ccSize, err = blankType2Size(ctx, tag.IO)
 		if err != nil {
 			return Result{}, err
 		}
+		needsContainer = true
 	default:
 		return Result{}, ErrUnsupported
 	}
@@ -199,21 +207,36 @@ func writeType2(ctx context.Context, tag *Tag, text string, payload []byte) (Res
 		return Result{}, ErrVerify
 	}
 
+	// The container is written last: it cannot be undone, so a tag only
+	// becomes an NDEF tag once it holds a complete, verified message.
+	if needsContainer {
+		container := []byte{type2CCMagic, type2CCVersion, ccSize, 0x00}
+		if writeErr := tag.IO.WriteBlock(ctx, type2CCPage, container); writeErr != nil {
+			return Result{}, fmt.Errorf("write capability container: %w", writeErr)
+		}
+	}
+
 	return Result{Type: tokens.TypeNTAG, Text: text, Data: mem}, nil
 }
 
-// formatType2 writes the capability container on a tag that has none and
-// returns its size byte.
-func formatType2(ctx context.Context, io BlockIO) (byte, error) {
-	for _, size := range type2Sizes {
-		if _, err := io.ReadBlock(ctx, size.probePage); err != nil {
+// blankType2Size returns the capability container size byte for a tag whose
+// container is blank, or ErrUnsupported when the tag cannot be identified.
+//
+// A wrong size could never be corrected, so the variant has to be shown by the
+// tag, not inferred from a read that failed: a larger variant's page failing
+// to read can be a passing RF fault. Each variant keeps its configuration at a
+// different page, and the first of those pages ends in the AUTH0 byte, which
+// is FFh on a tag as delivered. On any larger variant the same page is blank
+// user memory.
+func blankType2Size(ctx context.Context, io BlockIO) (byte, error) {
+	for _, variant := range type2Variants {
+		config, err := io.ReadBlock(ctx, variant.configPage)
+		if err != nil || len(config) <= type2AUTH0Offset {
 			continue
 		}
-		cc := []byte{type2CCMagic, type2CCVersion, size.ccSize, 0x00}
-		if err := io.WriteBlock(ctx, type2CCPage, cc); err != nil {
-			return 0, fmt.Errorf("write capability container: %w", err)
+		if config[type2AUTH0Offset] == type2AUTH0Default {
+			return variant.ccSize, nil
 		}
-		return size.ccSize, nil
 	}
 	return 0, ErrUnsupported
 }
