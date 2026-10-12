@@ -71,6 +71,18 @@ const (
 	TagInputTouchscreen           TagValue = "touchscreen"
 	TagInputTouchscreenResistive  TagValue = "touchscreen:resistive"
 	TagInputTouchscreenCapacitive TagValue = "touchscreen:capacitive"
+	TagInputAccelerometer         TagValue = "accelerometer"
+	TagInputButtons               TagValue = "buttons"
+	TagInputButtons9              TagValue = "buttons:9"
+	TagInputDDRPad                TagValue = "ddrpad"
+	TagInputHRM                   TagValue = "hrm"
+	TagInputJoystick              TagValue = "joystick"
+	TagInputPedals                TagValue = "pedals"
+	TagInputPedals3               TagValue = "pedals:3"
+	TagInputPositional            TagValue = "positional"
+	TagInputPuncher6              TagValue = "puncher:6"
+	TagInputPuncher7              TagValue = "puncher:7"
+	TagInputStick                 TagValue = "stick"
 )
 
 // Players tag values
@@ -234,6 +246,8 @@ const (
 	TagGameGenreNotAGameSDK             TagValue = "notagame:sdk"
 	TagGameGenreNotAGameSlideshow       TagValue = "notagame:slideshow"
 	TagGameGenreNotAGameSound           TagValue = "notagame:sound"
+	TagGameGenreSimManagement           TagValue = "sim:management"
+	TagGameGenreSportsRoller            TagValue = "sports:roller"
 )
 
 // Save tag values
@@ -699,14 +713,44 @@ const (
 	TagAddonLEDBugsensor    TagValue = "led:bugsensor"
 
 	// Misc
-	TagAddonPocketsakura         TagValue = "pocketsakura"
-	TagAddonSpectrumcommunicator TagValue = "spectrumcommunicator"
-	TagAddonRSS                  TagValue = "rss"
-	TagAddonPocketcamera         TagValue = "pocketcamera"
-	TagAddonCapturecassette      TagValue = "capturecassette"
-	TagAddonPhotoreader          TagValue = "photoreader"
-	TagAddonDevelobox            TagValue = "develobox"
-	TagAddonTeststation          TagValue = "teststation"
+	TagAddonPocketsakura          TagValue = "pocketsakura"
+	TagAddonSpectrumcommunicator  TagValue = "spectrumcommunicator"
+	TagAddonRSS                   TagValue = "rss"
+	TagAddonPocketcamera          TagValue = "pocketcamera"
+	TagAddonCapturecassette       TagValue = "capturecassette"
+	TagAddonPhotoreader           TagValue = "photoreader"
+	TagAddonDevelobox             TagValue = "develobox"
+	TagAddonTeststation           TagValue = "teststation"
+	TagAddonBackup                TagValue = "backup"
+	TagAddonController            TagValue = "controller"
+	TagAddonDrawing               TagValue = "drawing"
+	TagAddonExpansion             TagValue = "expansion"
+	TagAddonGlasses               TagValue = "glasses"
+	TagAddonHealth                TagValue = "health"
+	TagAddonKeyboard              TagValue = "keyboard"
+	TagAddonLED                   TagValue = "led"
+	TagAddonLightgun              TagValue = "lightgun"
+	TagAddonLink                  TagValue = "link"
+	TagAddonLinkGbacable          TagValue = "link:gbacable"
+	TagAddonLinkGbalinkcable      TagValue = "link:gbalinkcable"
+	TagAddonLinkJoycarry          TagValue = "link:joycarry"
+	TagAddonLinkWirelessadapter   TagValue = "link:wirelessadapter"
+	TagAddonLockon                TagValue = "lockon"
+	TagAddonMic                   TagValue = "mic"
+	TagAddonMIDI                  TagValue = "midi"
+	TagAddonMouse                 TagValue = "mouse"
+	TagAddonMultitap              TagValue = "multitap"
+	TagAddonOnline                TagValue = "online"
+	TagAddonOnlineNetcard         TagValue = "online:netcard"
+	TagAddonPeripheral            TagValue = "peripheral"
+	TagAddonPrinter               TagValue = "printer"
+	TagAddonReader                TagValue = "reader"
+	TagAddonReaderBattlechip      TagValue = "reader:battlechip"
+	TagAddonReaderCardereader     TagValue = "reader:cardereader"
+	TagAddonReaderCardereaderplus TagValue = "reader:cardereaderplus"
+	TagAddonReaderMultipluston    TagValue = "reader:multipluston"
+	TagAddonROB                   TagValue = "rob"
+	TagAddonVibration             TagValue = "vibration"
 )
 
 // Embedded tag values - Internal cartridge hardware
@@ -764,9 +808,21 @@ const (
 	TagEmbeddedAccelerometer TagValue = "accelerometer"
 
 	// Other embedded hardware
-	TagEmbeddedLED         TagValue = "led"
-	TagEmbeddedGBKiss      TagValue = "gbkiss"
-	TagEmbeddedPocketsonar TagValue = "pocketsonar"
+	TagEmbeddedLED                TagValue = "led"
+	TagEmbeddedGBKiss             TagValue = "gbkiss"
+	TagEmbeddedPocketsonar        TagValue = "pocketsonar"
+	TagEmbeddedBackup             TagValue = "backup"
+	TagEmbeddedChip               TagValue = "chip"
+	TagEmbeddedChipFlashdacs      TagValue = "chip:flashdacs"
+	TagEmbeddedHealth             TagValue = "health"
+	TagEmbeddedHealthBloodglucose TagValue = "health:bloodglucose"
+	TagEmbeddedMotion             TagValue = "motion"
+	TagEmbeddedMotionGyroscope    TagValue = "motion:gyroscope"
+	TagEmbeddedSlot               TagValue = "slot"
+	TagEmbeddedSlotAAABattery     TagValue = "slot:aaabattery"
+	TagEmbeddedSlotCompactflash   TagValue = "slot:compactflash"
+	TagEmbeddedUVSensor           TagValue = "uvsensor"
+	TagEmbeddedVibration          TagValue = "vibration"
 )
 
 // Cabinet orientation tag values (arcade)
@@ -1011,17 +1067,21 @@ const (
 
 // Based tag values
 const (
-	TagBasedManganime    TagValue = "manganime"
-	TagBasedMovie        TagValue = "movie"
-	TagBasedDisney       TagValue = "disney"
-	TagBasedDND          TagValue = "dnd"
-	TagBasedJurassicpark TagValue = "jurassicpark"
-	TagBasedLooneytunes  TagValue = "looneytunes"
-	TagBasedMarvel       TagValue = "marvel"
-	TagBasedSimpsons     TagValue = "simpsons"
-	TagBasedSmurfs       TagValue = "smurfs"
-	TagBasedStarwars     TagValue = "starwars"
-	TagBasedTMNT         TagValue = "tmnt"
+	TagBasedManganime      TagValue = "manganime"
+	TagBasedMovie          TagValue = "movie"
+	TagBasedDisney         TagValue = "disney"
+	TagBasedDND            TagValue = "dnd"
+	TagBasedJurassicpark   TagValue = "jurassicpark"
+	TagBasedLooneytunes    TagValue = "looneytunes"
+	TagBasedMarvel         TagValue = "marvel"
+	TagBasedSimpsons       TagValue = "simpsons"
+	TagBasedSmurfs         TagValue = "smurfs"
+	TagBasedStarwars       TagValue = "starwars"
+	TagBasedTMNT           TagValue = "tmnt"
+	TagBasedCartoonnetwork TagValue = "cartoonnetwork"
+	TagBasedHannabarbera   TagValue = "hannabarbera"
+	TagBasedNickelodeon    TagValue = "nickelodeon"
+	TagBasedBased          TagValue = "based"
 )
 
 // Search tag values
@@ -1391,6 +1451,18 @@ const (
 	TagPortAtariFalcon          TagValue = "atari:falcon"
 	TagPortSega32X              TagValue = "sega:32x"
 	TagPortWonderSwan           TagValue = "wonderswan"
+	TagPortApple                TagValue = "apple"
+	TagPortAtari                TagValue = "atari"
+	TagPortCommodore            TagValue = "commodore"
+	TagPortGP32                 TagValue = "gp32"
+	TagPortNEC                  TagValue = "nec"
+	TagPortNintendo             TagValue = "nintendo"
+	TagPortNintendoGamecube     TagValue = "nintendo:gamecube"
+	TagPortSega                 TagValue = "sega"
+	TagPortSharp                TagValue = "sharp"
+	TagPortSony                 TagValue = "sony"
+	TagPortSonyPlaystation2     TagValue = "sony:playstation2"
+	TagPortXbox                 TagValue = "xbox"
 )
 
 // Rerelease tag values
@@ -1448,6 +1520,17 @@ const (
 	TagRereleaseNinjajajamaru            TagValue = "ninjajajamaru"
 	TagRereleaseZeldacollection          TagValue = "zeldacollection"
 	TagRereleasePCEMini                  TagValue = "pcemini"
+	TagRereleaseEvercade                 TagValue = "evercade"
+	TagRereleaseGamenokanzume            TagValue = "gamenokanzume"
+	TagRereleaseMdclassics3              TagValue = "mdclassics:3"
+	TagRereleaseMdmini                   TagValue = "mdmini"
+	TagRereleaseNamcoanthology           TagValue = "namcoanthology"
+	TagRereleaseNamcot                   TagValue = "namcot"
+	TagRereleaseRockmanclassic           TagValue = "rockmanclassic"
+	TagRereleaseRockmanexeadvance        TagValue = "rockmanexeadvance"
+	TagRereleaseSmashpack1               TagValue = "smashpack:1"
+	TagRereleaseSmashpack3               TagValue = "smashpack:3"
+	TagRereleaseVirtualconsole           TagValue = "virtualconsole"
 )
 
 // Set tag values
@@ -1480,15 +1563,17 @@ const (
 	TagLangZHTrad TagValue = "zh-trad" // Traditional Chinese
 	TagLangZHHans TagValue = "zh-hans" // Simplified Chinese (Hans)
 	TagLangPTBR   TagValue = "pt-br"   // Brazilian Portuguese
+	TagLangFremen TagValue = "fremen"
 )
 
 // Program revision tag values (NES-specific)
 const (
-	TagRevPRG  TagValue = "prg"
-	TagRevPRG0 TagValue = "prg:0"
-	TagRevPRG1 TagValue = "prg:1"
-	TagRevPRG2 TagValue = "prg:2"
-	TagRevPRG3 TagValue = "prg:3"
+	TagRevPRG       TagValue = "prg"
+	TagRevPRG0      TagValue = "prg:0"
+	TagRevPRG1      TagValue = "prg:1"
+	TagRevPRG2      TagValue = "prg:2"
+	TagRevPRG3      TagValue = "prg:3"
+	TagRevNobattery TagValue = "nobattery"
 )
 
 // Unfinished (demo) variant tag values
@@ -1757,8 +1842,39 @@ const (
 	TagArcadeBoardUniversalMrDo           TagValue = "universal:mrdo"
 
 	// Williams
-	TagArcadeBoardWilliamsGen1 TagValue = "williams:gen1"
-	TagArcadeBoardWilliamsGen2 TagValue = "williams:gen2"
+	TagArcadeBoardWilliamsGen1         TagValue = "williams:gen1"
+	TagArcadeBoardWilliamsGen2         TagValue = "williams:gen2"
+	TagArcadeBoardCapcom               TagValue = "capcom"
+	TagArcadeBoardIrem                 TagValue = "irem"
+	TagArcadeBoardJaleco               TagValue = "jaleco"
+	TagArcadeBoardKonami               TagValue = "konami"
+	TagArcadeBoardKonami573            TagValue = "konami:573"
+	TagArcadeBoardKonami573A           TagValue = "konami:573a"
+	TagArcadeBoardKonamiBubble         TagValue = "konami:bubble"
+	TagArcadeBoardKonamiCobra          TagValue = "konami:cobra"
+	TagArcadeBoardKonamiDJMain         TagValue = "konami:djmain"
+	TagArcadeBoardKonamiGV             TagValue = "konami:gv"
+	TagArcadeBoardKonamiGX             TagValue = "konami:gx"
+	TagArcadeBoardKonamiGX330          TagValue = "konami:gx330"
+	TagArcadeBoardKonamiGX361          TagValue = "konami:gx361"
+	TagArcadeBoardKonamiHornet         TagValue = "konami:hornet"
+	TagArcadeBoardKonamiM2             TagValue = "konami:m2"
+	TagArcadeBoardKonamiNWKTR          TagValue = "konami:nwktr"
+	TagArcadeBoardKonamiPolygonet      TagValue = "konami:polygonet"
+	TagArcadeBoardKonamiUltra          TagValue = "konami:ultra"
+	TagArcadeBoardKonamiViper          TagValue = "konami:viper"
+	TagArcadeBoardKonamiZR107          TagValue = "konami:zr107"
+	TagArcadeBoardMidway               TagValue = "midway"
+	TagArcadeBoardNamco                TagValue = "namco"
+	TagArcadeBoardNintendo             TagValue = "nintendo"
+	TagArcadeBoardSega                 TagValue = "sega"
+	TagArcadeBoardSNK                  TagValue = "snk"
+	TagArcadeBoardStern                TagValue = "stern"
+	TagArcadeBoardTaito                TagValue = "taito"
+	TagArcadeBoardTecfri               TagValue = "tecfri"
+	TagArcadeBoardToaplan              TagValue = "toaplan"
+	TagArcadeBoardVectorbeam           TagValue = "vectorbeam"
+	TagArcadeBoardNintendoPlaychoice10 TagValue = "nintendo:playchoice10"
 )
 
 // Unlicensed publisher tag values
@@ -1793,8 +1909,16 @@ const (
 
 // Reboxed (bundle) tag values
 const (
-	TagReboxedBundle        TagValue = "bundle"
-	TagReboxedBundleGenesis TagValue = "bundle:genesis"
+	TagReboxedBundle         TagValue = "bundle"
+	TagReboxedBundleGenesis  TagValue = "bundle:genesis"
+	TagReboxedBanprestobest  TagValue = "banprestobest"
+	TagReboxedBestprice      TagValue = "bestprice"
+	TagReboxedEbikore        TagValue = "ebikore"
+	TagReboxedHudsonthebest  TagValue = "hudsonthebest"
+	TagReboxedKikangentei    TagValue = "kikangentei"
+	TagReboxedKonamithebest  TagValue = "konamithebest"
+	TagReboxedOkaidokuban    TagValue = "okaidokuban"
+	TagReboxedValueselection TagValue = "valueselection"
 )
 
 // Year tag values
@@ -2148,4 +2272,20 @@ const (
 	TagSearchFranchiseXyanide               TagValue = "franchise:xyanide"
 	TagSearchFranchiseYs                    TagValue = "franchise:ys"
 	TagSearchFranchiseYuGiOh                TagValue = "franchise:yugioh"
+	TagSearch3D                             TagValue = "3d"
+	TagSearchFeature                        TagValue = "feature"
+	TagSearchFranchise                      TagValue = "franchise"
+	TagSearchKeyword                        TagValue = "keyword"
+	TagSearchSoftware                       TagValue = "software"
+	TagSearchSoftwareADX                    TagValue = "software:adx"
+	TagSearchSoftwareCinepak                TagValue = "software:cinepak"
+	TagSearchSoftwareCybersound             TagValue = "software:cybersound"
+	TagSearchSoftwareGAX                    TagValue = "software:gax"
+	TagSearchSoftwareGEMS                   TagValue = "software:gems"
+	TagSearchSoftwareKrisalis               TagValue = "software:krisalis"
+	TagSearchSoftwareMusyx                  TagValue = "software:musyx"
+	TagSearchSoftwareSegasound              TagValue = "software:segasound"
+	TagSearchSoftwareSofdec                 TagValue = "software:sofdec"
+	TagSearchSoftwareTruemotion             TagValue = "software:truemotion"
+	TagSearchTate                           TagValue = "tate"
 )

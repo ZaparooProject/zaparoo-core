@@ -2,7 +2,7 @@ version: "3"
 
 vars:
   # Pinned so CI, cross-lint and the pre-push hook all agree on one version.
-  GOLANGCI_LINT_VERSION: v2.13.2
+  GOLANGCI_LINT_VERSION: v2.14.0
 
 tasks:
   setup:

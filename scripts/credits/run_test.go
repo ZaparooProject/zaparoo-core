@@ -155,6 +155,7 @@ ENV LIBNFC_COMMIT="3fa0751ad58fb0053d3de2e61bbbd4066259104c"
 	}
 	write(filepath.Join(textsDir, "eff-wordlist.txt"), "EFF attribution")
 	write("internal/vdfbinary/LICENSE", mitText)
+	write("pkg/database/gamedatabase/LICENSE", "GameDataBase by PigSaint is licensed under CC BY 4.0")
 	write("mod/sqlite/sqlite3-binding.c", fakeSQLite)
 	write("mod/sqlite/LICENSE", mitText)
 	write("mod/malgo/miniaudio.h", fakeMiniaudio)
@@ -268,6 +269,13 @@ func TestExtrasFailWhenInputsAreMissing(t *testing.T) {
 			t.Helper()
 			require.NoError(t, os.Remove(filepath.Join(c.root, "internal", "vdfbinary", "LICENSE")))
 		}},
+		{
+			name: "GameDataBase attribution", want: "gamedatabase/LICENSE",
+			mutate: func(t *testing.T, c *fakeCheckout) {
+				t.Helper()
+				require.NoError(t, os.Remove(filepath.Join(c.root, "pkg", "database", "gamedatabase", "LICENSE")))
+			},
+		},
 		{name: "EFF attribution", want: "eff-wordlist.txt", mutate: func(t *testing.T, c *fakeCheckout) {
 			t.Helper()
 			require.NoError(t, os.Remove(filepath.Join(c.root, textsDir, "eff-wordlist.txt")))

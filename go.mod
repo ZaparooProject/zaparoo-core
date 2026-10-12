@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.27.1
+go 1.27.2
 
 require (
 	fyne.io/systray v1.12.2
@@ -42,6 +42,7 @@ require (
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
+	github.com/klauspost/compress v1.19.2
 	github.com/mackerelio/go-osstat v0.2.8
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/miekg/dns v1.1.73
@@ -61,7 +62,7 @@ require (
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.11.0
 	golang.org/x/image v0.46.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
@@ -110,7 +111,6 @@ require (
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
@@ -157,4 +157,4 @@ require (
 replace github.com/ZaparooProject/zaparoo-core/mister => ./mister
 
 // Preserve Expr semantics while enabling the validated static method profile.
-replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612
+replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261011230659-306590b14ef8

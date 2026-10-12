@@ -69,3 +69,10 @@ func TestIsArcadeSystem(t *testing.T) {
 	require.True(t, SetArchive(".ZIP"))
 	require.False(t, SetArchive(".mra"))
 }
+
+func BenchmarkLoad(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		load()
+	}
+}

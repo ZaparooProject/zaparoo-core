@@ -58,6 +58,7 @@ func NewPlatformScraper(setNames SetNameCache) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{},
 		SupportsFillMissing: true,
+		AutoScrapeOrder:     scraper.AutoOrderDocuments,
 		// It only reads packs already on the card and skips a system that has
 		// none, so every indexed system queues a fill-missing run.
 		AutoScrapeAllLaunchers: true,

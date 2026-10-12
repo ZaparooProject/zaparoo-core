@@ -1,0 +1,26 @@
+data/*.tsv.zst: game titles, IDs, regions, release dates, developers,
+publishers and classification tags
+
+Source: GameDataBase by PigSaint, https://github.com/PigSaint/GameDataBase.
+The upstream commit and its date are recorded in data/VERSION.
+scripts/gamedatabase regenerates the files from a checkout of that commit and
+is the preferred form for modifying them.
+
+Changes made to the upstream data: the "Title (exact)" and "Title screen
+(exact)" columns and the four file-hash columns are removed; the eight arcade
+manufacturer files are merged into one; whitespace inside a cell is collapsed
+to single spaces; and each file is re-encoded as tab-separated text and
+compressed with Zstandard. Rows and the remaining cells are otherwise as
+upstream publishes them.
+
+GameDataBase © 2024 by PigSaint is licensed under CC BY 4.0.
+
+Creative Commons Attribution 4.0 International
+https://creativecommons.org/licenses/by/4.0/
+
+This license requires that reusers give credit to the creator. It allows
+reusers to distribute, remix, adapt, and build upon the material in any
+medium or format, even for commercial purposes.
+
+GameDataBase is named here to credit its author and to identify the source
+of the data; Zaparoo is not affiliated with or endorsed by its author.

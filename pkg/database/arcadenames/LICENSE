@@ -1,4 +1,4 @@
-names.tsv.gz: arcade set names, descriptions, years and manufacturers
+names.tsv.zst: arcade set names, descriptions, years and manufacturers
 
 Source: the machine list (mameNNNNlx.zip) published with each MAME release,
 https://github.com/mamedev/mame/releases. The MAME version is recorded on the

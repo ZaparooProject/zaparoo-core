@@ -25,6 +25,7 @@ import (
 	"go/token"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -164,6 +165,15 @@ func TestValidateTagValue(t *testing.T) {
 		{TagTypeSearch, "franchise:castlevania", true},
 		{TagTypeSearch, "franchise:not-a-listed-series", false},
 		// Format rules.
+		{TagTypeCompilation, "starsoldier", true},
+		{TagTypeCompilation, "hector87", true},
+		{TagTypeCompilation, "Star Soldier", false},
+		{TagTypeCompilation, "", false},
+		{TagTypeGameDatabase, "supermarioworld", true},
+		{TagTypeGameDatabase, "super-mario-world", false},
+		{TagTypeGameDatabase, "kingoffightersr1/melonchannoseichounikki", false},
+		{TagTypeGameDatabase, strings.Repeat("a", 96), true},
+		{TagTypeGameDatabase, strings.Repeat("a", 97), false},
 		{TagTypeYear, "1987", true},
 		{TagTypeYear, "198x", true},
 		{TagTypeYear, "1949", false},

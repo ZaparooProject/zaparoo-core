@@ -1376,6 +1376,44 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	assert.Equal(t, "cancelled", status.State)
 }
 
+func TestScrapeQueueSortsWaitingJobsWithNewOnes(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	// An earlier index left a catalog job waiting; this one adds the device's
+	// own arcade source, which must fill first.
+	waiting := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "gamedatabase", RunID: "waiting", FillMissing: true, Systems: []string{"Arcade"},
+		Pending: []database.ScrapeJob{
+			{ScraperID: "mister-docs", RunID: "docs", FillMissing: true, Systems: []string{"Arcade"}},
+		},
+	}
+	db.On("GetScrapingOperation").Return(waiting, true, nil).Once()
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		var ok bool
+		stored, ok = args.Get(0).(database.ScrapingOperation)
+		require.True(t, ok)
+	}).Return(nil).Once()
+	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+
+	scrapers := map[string]platforms.Scraper{
+		"mister-arcade": {ID: "mister-arcade", AutoScrapeOrder: scraper.AutoOrderDevice},
+		"gamedatabase":  {ID: "gamedatabase", AutoScrapeOrder: scraper.AutoOrderCatalog},
+		"mister-docs":   {ID: "mister-docs", AutoScrapeOrder: scraper.AutoOrderDocuments},
+	}
+	arcade := database.ScrapeJob{ScraperID: "mister-arcade", FillMissing: true, Systems: []string{"Arcade"}}
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{arcade}, scrapers))
+
+	require.Equal(t, "mister-arcade", stored.ScraperID)
+	require.NotEmpty(t, stored.RunID)
+	require.Len(t, stored.Pending, 2)
+	require.Equal(t, "gamedatabase", stored.Pending[0].ScraperID)
+	require.Equal(t, "waiting", stored.Pending[0].RunID, "the waiting job keeps its run and its markers")
+	require.Equal(t, "mister-docs", stored.Pending[1].ScraperID)
+}
+
 func TestScrapeQueuePreservesAndDeduplicatesPendingWork(t *testing.T) {
 	ClearScrapingStatus()
 	t.Cleanup(ClearScrapingStatus)
@@ -1393,7 +1431,7 @@ func TestScrapeQueuePreservesAndDeduplicatesPendingWork(t *testing.T) {
 	}).Return(nil).Once()
 	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
 	job := database.ScrapeJob{ScraperID: "local", FillMissing: true, Systems: []string{"Pinball"}}
-	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{job, job}))
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{job, job}, nil))
 	require.Equal(t, old.ScraperID, stored.ScraperID)
 	require.Equal(t, old.RunID, stored.RunID)
 	require.True(t, stored.Force)
@@ -2313,7 +2351,7 @@ func TestScrapeQueueKeepsScopeAcrossTheQueue(t *testing.T) {
 	// A post-index fill-missing job for the same scraper and system must not be
 	// deduplicated against the scoped one: they are different requests.
 	wide := database.ScrapeJob{ScraperID: "manual", FillMissing: true, Systems: []string{"SNES"}}
-	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}))
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}, nil))
 	require.Equal(t, scope, stored.Scope, "the running scope must survive being folded into the queue")
 	require.Len(t, stored.Pending, 1, "a whole-system job is not a duplicate of a scoped one")
 	require.Nil(t, stored.Pending[0].Scope)

@@ -325,6 +325,7 @@ func TestAppScraperIncludesProfileLaunchers(t *testing.T) {
 	require.Contains(t, s.AutoScrapeLaunchers, installedAppsID)
 	require.Contains(t, s.AutoScrapeLaunchers, installedAppsNonGameID)
 	require.Contains(t, p.Scrapers(nil), appScraperID)
+	require.Contains(t, p.Scrapers(nil), "gamedatabase")
 }
 
 // Both installed-apps systems are covered, so a non-game app still gets its

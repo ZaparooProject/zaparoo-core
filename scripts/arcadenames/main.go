@@ -17,19 +17,17 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Command arcadenames builds pkg/database/arcadenames/names.tsv.gz from a
+// Command arcadenames builds pkg/database/arcadenames/names.tsv.zst from a
 // MAME release's machine list, the mameNNNNlx.zip asset MAME publishes with
 // every release (https://github.com/mamedev/mame/releases). It keeps only
 // runnable arcade machines and only their set name, description, year and
 // manufacturer.
 //
-// Usage: go run ./scripts/arcadenames mame0289lx.zip pkg/database/arcadenames/names.tsv.gz
+// Usage: go run ./scripts/arcadenames mame0289lx.zip pkg/database/arcadenames/names.tsv.zst
 package main
 
 import (
 	"archive/zip"
-	"bytes"
-	"compress/gzip"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -37,6 +35,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 )
 
 type control struct {
@@ -158,18 +158,11 @@ func run(in, out string) error {
 		}, "\t"))
 	}
 	slices.Sort(rows)
-	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	packed, err := zstdembed.Compress(fmt.Appendf(nil, "# MAME %s\n%s\n", version, strings.Join(rows, "\n")))
 	if err != nil {
-		return fmt.Errorf("gzip: %w", err)
+		return fmt.Errorf("compress catalog: %w", err)
 	}
-	if _, err := fmt.Fprintf(zw, "# MAME %s\n%s\n", version, strings.Join(rows, "\n")); err != nil {
-		return fmt.Errorf("write catalog: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("gzip: %w", err)
-	}
-	if err := os.WriteFile(out, buf.Bytes(), 0o644); err != nil { //nolint:gosec // checked-in data file
+	if err := os.WriteFile(out, packed, 0o644); err != nil { //nolint:gosec // checked-in data file
 		return fmt.Errorf("write %s: %w", out, err)
 	}
 	//nolint:forbidigo // CLI output
@@ -179,7 +172,7 @@ func run(in, out string) error {
 
 func main() {
 	if len(os.Args) != 3 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: arcadenames <mameNNNNlx.zip|mame.xml> <names.tsv.gz>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: arcadenames <mameNNNNlx.zip|mame.xml> <names.tsv.zst>")
 		os.Exit(2)
 	}
 	if err := run(os.Args[1], os.Args[2]); err != nil {
