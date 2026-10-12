@@ -24,6 +24,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
@@ -77,6 +78,7 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		rs232barcode.NewReader(cfg),

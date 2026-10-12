@@ -325,7 +325,7 @@ type Reader struct {
 	lastToken                 *tokens.Token
 	cancel                    context.CancelFunc
 	realDevice                *pn532.Device
-	tagOps                    *tagops.TagOperations
+	tagOps                    tagReader
 	transportFactory          TransportFactory
 	deviceFactory             DeviceFactory
 	sessionFactory            SessionFactory
@@ -553,8 +553,7 @@ func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 }
 
 func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
-	tokenType := r.convertTagType(detectedTag.Type)
-	ndefText, rawData := r.readNDEFData(ctx, detectedTag)
+	tokenType, ndefText, rawData := r.readTag(ctx, detectedTag)
 
 	token := &tokens.Token{
 		Type:     tokenType,
@@ -989,10 +988,30 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 		if writeErr != nil {
 			return nil, writeErr
 		}
-		return nil, fmt.Errorf("failed to write to tag: %w", err)
+		return nil, fmt.Errorf("failed to write to tag: %w", classifyWriteError(err))
 	}
 
 	return resultToken, nil
+}
+
+// writeWaitTimeout is the text of the error go-pn532 returns when no tag was
+// presented in time. It has no exported value to compare against. When the
+// time runs out during a poll instead of between two, go-pn532 returns that
+// poll's deadline error, so both mean the same thing.
+const writeWaitTimeout = "timeout waiting for tag"
+
+// classifyWriteError marks the two write failures that are the user's doing,
+// not the reader's, so they are logged the same way on every driver: no tag
+// presented, and a tag that cannot be written.
+func classifyWriteError(err error) error {
+	switch {
+	case errors.Is(err, pn532.ErrInvalidTag):
+		return fmt.Errorf("%w: %w", readers.ErrUnsupportedTagType, err)
+	case strings.Contains(err.Error(), writeWaitTimeout), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", readers.ErrTagNotDetected, err)
+	default:
+		return err
+	}
 }
 
 func (r *Reader) CancelWrite() {

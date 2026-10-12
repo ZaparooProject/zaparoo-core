@@ -10,7 +10,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.3
 	github.com/RoaringBitmap/roaring/v2 v2.29.0
 	github.com/ZaparooProject/go-gameid v0.2.0
-	github.com/ZaparooProject/go-pn532 v0.26.0
+	github.com/ZaparooProject/go-pn532 v0.26.1
 	github.com/ZaparooProject/go-zapscript v0.20.0
 	github.com/ZaparooProject/zaparoo-core/mister v0.1.0
 	github.com/adrg/xdg v0.5.3
@@ -40,7 +40,6 @@ require (
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hbollon/go-edlib v1.7.0
-	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/klauspost/compress v1.19.2
 	github.com/mackerelio/go-osstat v0.2.8

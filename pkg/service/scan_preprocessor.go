@@ -88,6 +88,15 @@ func (p *scanPreprocessor) Process(readerID string, scan *tokens.Token, readerEr
 	return scanNormalRemoval
 }
 
+// Forget drops the token tracked for readerID without treating it as a
+// removal. A tag that was written and then lifted is reported apart from an
+// ordinary removal, so nothing else clears the reader's entry: left in place,
+// it made the same tag look like a duplicate when it was presented again
+// holding the text it had before the write.
+func (p *scanPreprocessor) Forget(readerID string) {
+	delete(p.prevTokens, readerID)
+}
+
 // PrevToken returns the token readerID currently reports as present, or nil.
 func (p *scanPreprocessor) PrevToken(readerID string) *tokens.Token {
 	return p.prevTokens[readerID]

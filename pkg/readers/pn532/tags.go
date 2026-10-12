@@ -21,11 +21,12 @@ package pn532
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
+	"errors"
+	"fmt"
 
 	pn532 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/tagops"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -45,45 +46,95 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 	}
 }
 
-func (r *Reader) readNDEFData(ctx context.Context, detectedTag *pn532.DetectedTag) (uid string, data []byte) {
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
-
-	// Use tagOps for tag operations (mocks won't reach here in tests)
+// readTag returns what a newly detected tag holds, as a token carries it.
+//
+// go-pn532 reads the NDEF message. The shared tag layer then decides what
+// kind of token the tag is and supplies its memory, so a tag gives the same
+// token here as on any other reader.
+func (r *Reader) readTag(ctx context.Context, detectedTag *pn532.DetectedTag) (tokenType, text string, data []byte) {
+	tokenType = r.convertTagType(detectedTag.Type)
 	if r.tagOps == nil {
-		log.Debug().Str("uid", detectedTag.UID).Msg("tagOps not available, returning target data")
-		return "", detectedTag.TargetData
+		log.Debug().Str("uid", detectedTag.UID).Msg("tagOps not available, reporting tag by UID")
+		return tokenType, "", nil
 	}
 
-	// Apply timeout to the passed context for NDEF operations
 	ctx, cancel := context.WithTimeout(ctx, ndefReadTimeout)
 	defer cancel()
 
+	msg := r.readNDEFMessage(ctx, detectedTag)
+	text = nfctag.TextFromMessage(msg)
+	if msg != nil && len(msg.Records) > 0 && text == "" {
+		log.Warn().
+			Str("uid", detectedTag.UID).
+			Str("tagType", string(detectedTag.Type)).
+			Str("recordType", string(msg.Records[0].Type)).
+			Msg("NDEF records found but no text/URI could be extracted - unsupported format")
+	}
+
+	kind := r.memoryKind(detectedTag.Type, msg)
+	if kind == nfctag.KindUnknown {
+		return tokenType, text, nil
+	}
+	res, err := readMemory(ctx, r.tagOps, kind, detectedTag.UIDBytes)
+	if err != nil {
+		log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("could not read tag memory")
+	}
+	if res.Type == tokens.TypeAmiibo || res.Type == tokens.TypeLegoDimensions {
+		// A toy's contents are not ZapScript. They stay available in Data.
+		return res.Type, "", res.Data
+	}
+	return tokenType, text, res.Data
+}
+
+// memoryKind returns the tag kind to read memory as, or KindUnknown to skip.
+//
+// A MIFARE Classic tag is only read when it holds an NDEF message. go-pn532
+// opens a blank tag with its factory key, and other readers report a blank
+// tag with no data at all.
+func (r *Reader) memoryKind(tagType pn532.TagType, msg *pn532.NDEFMessage) nfctag.Kind {
+	switch tagType {
+	case pn532.TagTypeNTAG:
+		return nfctag.KindType2
+	case pn532.TagTypeMIFARE:
+		if msg == nil || len(msg.Records) == 0 {
+			return nfctag.KindUnknown
+		}
+		if info, err := r.tagOps.GetTagInfo(); err == nil && info.Sectors > classic1KSectors {
+			return nfctag.KindClassic4K
+		}
+		return nfctag.KindClassic1K
+	case pn532.TagTypeFeliCa, pn532.TagTypeUnknown, pn532.TagTypeAny:
+		return nfctag.KindUnknown
+	default:
+		return nfctag.KindUnknown
+	}
+}
+
+// readNDEFMessage reads the tag's NDEF message through go-pn532, or returns
+// nil when the tag has none or could not be read.
+func (r *Reader) readNDEFMessage(ctx context.Context, detectedTag *pn532.DetectedTag) *pn532.NDEFMessage {
 	// Initialize tagops from the already-detected tag.
 	// We use InitFromDetectedTag instead of DetectTag because the polling loop
 	// already detected the tag via InListPassiveTarget. Calling DetectTag would
 	// perform a redundant detection with InRelease(0) which can corrupt tag state.
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.InitFromDetectedTag")
 	if err := r.tagOps.InitFromDetectedTag(ctx, detectedTag); err != nil {
 		logTraceableError(err, "init tag for NDEF")
 		log.Warn().Err(err).
 			Str("uid", detectedTag.UID).
 			Str("tagType", string(detectedTag.Type)).
 			Msg("failed to initialize tag for NDEF reading")
-		return "", detectedTag.TargetData
+		return nil
 	}
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: tagOps.InitFromDetectedTag completed")
 
 	r.logTagInfo(detectedTag)
 
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.ReadNDEF")
 	ndefMessage, err := r.tagOps.ReadNDEF(ctx)
-	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
 		log.Warn().Err(err).
 			Str("uid", detectedTag.UID).
 			Str("tagType", string(detectedTag.Type)).
 			Msg("failed to read NDEF data from tag")
-		return "", detectedTag.TargetData
+		return nil
 	}
 
 	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
@@ -92,163 +143,87 @@ func (r *Reader) readNDEFData(ctx context.Context, detectedTag *pn532.DetectedTa
 			Str("tagType", string(detectedTag.Type)).
 			Bool("messageNil", ndefMessage == nil).
 			Msg("tag has no NDEF records - may be blank or incompatible format")
-		return "", detectedTag.TargetData
 	}
-
-	record := ndefMessage.Records[0]
-	log.Debug().
-		Str("uid", detectedTag.UID).
-		Int("recordCount", len(ndefMessage.Records)).
-		Str("recordType", string(record.Type)).
-		Bool("hasText", record.Text != "").
-		Bool("hasURI", record.URI != "").
-		Int("payloadLen", len(record.Payload)).
-		Msg("NDEF: processing records")
-
-	tokenText := convertNDEFToTokenText(ndefMessage)
-
-	if tokenText == "" {
-		log.Warn().
-			Str("uid", detectedTag.UID).
-			Str("tagType", string(detectedTag.Type)).
-			Str("recordType", string(record.Type)).
-			Int("payloadLen", len(record.Payload)).
-			Msg("NDEF records found but no text/URI could be extracted - unsupported format")
-	}
-
-	return tokenText, detectedTag.TargetData
+	return ndefMessage
 }
 
-// convertNDEFToTokenText converts NDEF message to token text:
-// - Text and URI records pass through directly
-// - WiFi and VCard records convert to JSON
-// - Other types convert to generic JSON with payload
-func convertNDEFToTokenText(ndefMessage *pn532.NDEFMessage) string {
-	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
-		return ""
-	}
+const classic1KSectors = 16
 
-	// Only first record is used (NDEF standard primary payload)
-	record := ndefMessage.Records[0]
-
-	if record.Text != "" {
-		return record.Text
-	}
-
-	if record.URI != "" {
-		return record.URI
-	}
-
-	if record.WiFi != nil {
-		return convertWiFiToJSON(record.WiFi)
-	}
-
-	if record.VCard != nil {
-		return convertVCardToJSON(record.VCard)
-	}
-
-	if record.Type == pn532.NDEFTypeSmartPoster {
-		return convertSmartPosterToJSON(record.Payload)
-	}
-
-	if len(record.Payload) > 0 {
-		return convertGenericRecordToJSON(string(record.Type), record.Payload)
-	}
-
-	return ""
+// blockReader is go-pn532's block read. On a MIFARE Classic tag it
+// authenticates each sector itself.
+type blockReader interface {
+	ReadBlocks(ctx context.Context, startBlock, endBlock byte) ([]byte, error)
 }
 
-func convertWiFiToJSON(wifi *pn532.WiFiCredential) string {
-	wifiData := map[string]any{
-		"type": "wifi",
-		"ssid": wifi.SSID,
-	}
+// tagReader is the part of go-pn532's tag operations the driver reads a tag
+// through.
+type tagReader interface {
+	blockReader
+	InitFromDetectedTag(ctx context.Context, tag *pn532.DetectedTag) error
+	ReadNDEF(ctx context.Context) (*pn532.NDEFMessage, error)
+	GetTagInfo() (*tagops.TagInfo, error)
+}
 
-	if wifi.NetworkKey != "" {
-		wifiData["networkKey"] = wifi.NetworkKey
-	}
-	if wifi.AuthType != 0 {
-		wifiData["authType"] = wifi.AuthType
-	}
-	if wifi.EncryptionType != 0 {
-		wifiData["encryptionType"] = wifi.EncryptionType
-	}
-	if wifi.MACAddress != "" {
-		wifiData["macAddress"] = wifi.MACAddress
-	}
+var _ tagReader = (*tagops.TagOperations)(nil)
 
-	jsonBytes, err := json.Marshal(wifiData)
+// blockIO gives the shared tag layer read access to a tag through go-pn532.
+// Writes stay with go-pn532, so it does not offer them.
+type blockIO struct {
+	ops   blockReader
+	type2 bool
+}
+
+var (
+	_ nfctag.BlockIO       = (*blockIO)(nil)
+	_ nfctag.Authenticator = (*blockIO)(nil)
+)
+
+var errReadOnly = errors.New("tag writes go through go-pn532")
+
+func (b *blockIO) ReadBlock(ctx context.Context, addr int) ([]byte, error) {
+	end := addr
+	if b.type2 {
+		// One native read returns four pages.
+		end = addr + nfctag.BlockSize/4 - 1
+	}
+	if addr < 0 || addr > 0xFF {
+		return nil, fmt.Errorf("block %d out of range", addr)
+	}
+	end = min(end, 0xFF)
+
+	data, err := b.ops.ReadBlocks(ctx, byte(addr), byte(end))
 	if err != nil {
-		log.Debug().Err(err).Msg("failed to marshal WiFi data to JSON")
-		return ""
+		return nil, fmt.Errorf("read blocks %d-%d: %w", addr, end, err)
 	}
-	return string(jsonBytes)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("read blocks %d-%d: no data", addr, end)
+	}
+	// go-pn532 stops at the tag's last page, so the final read of a tag
+	// comes back short.
+	block := make([]byte, nfctag.BlockSize)
+	copy(block, data)
+	return block, nil
 }
 
-func convertVCardToJSON(vcard *pn532.VCardContact) string {
-	vcardData := map[string]any{
-		"type": "vcard",
-	}
-
-	contact := make(map[string]any)
-	if vcard.FormattedName != "" {
-		contact["name"] = vcard.FormattedName
-	}
-	if len(vcard.PhoneNumbers) > 0 {
-		contact["phones"] = vcard.PhoneNumbers
-	}
-	if len(vcard.EmailAddresses) > 0 {
-		contact["emails"] = vcard.EmailAddresses
-	}
-	if vcard.Organization != "" {
-		contact["organization"] = vcard.Organization
-	}
-	if vcard.Title != "" {
-		contact["title"] = vcard.Title
-	}
-	if vcard.URL != "" {
-		contact["url"] = vcard.URL
-	}
-
-	if len(contact) > 0 {
-		vcardData["contact"] = contact
-	}
-
-	jsonBytes, err := json.Marshal(vcardData)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to marshal VCard data to JSON")
-		return ""
-	}
-	return string(jsonBytes)
+func (*blockIO) WriteBlock(context.Context, int, []byte) error {
+	return errReadOnly
 }
 
-func convertSmartPosterToJSON(payload []byte) string {
-	posterData := map[string]any{
-		"type": "smartposter",
-		"raw":  hex.EncodeToString(payload),
-	}
-
-	jsonBytes, err := json.Marshal(posterData)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to marshal smart poster data to JSON")
-		return ""
-	}
-	return string(jsonBytes)
+// Authenticate has nothing to do: go-pn532 authenticates inside its reads.
+func (*blockIO) Authenticate(context.Context, int, nfctag.KeyType, nfctag.Key) error {
+	return nil
 }
 
-func convertGenericRecordToJSON(recordType string, payload []byte) string {
-	genericData := map[string]any{
-		"type":      "unknown",
-		"typeField": recordType,
-		"payload":   hex.EncodeToString(payload),
-	}
-
-	jsonBytes, err := json.Marshal(genericData)
+func readMemory(ctx context.Context, ops blockReader, kind nfctag.Kind, uid []byte) (nfctag.Result, error) {
+	res, err := nfctag.Read(ctx, &nfctag.Tag{
+		IO:   &blockIO{ops: ops, type2: kind == nfctag.KindType2},
+		UID:  uid,
+		Kind: kind,
+	})
 	if err != nil {
-		log.Debug().Err(err).Msg("failed to marshal generic record data to JSON")
-		return ""
+		return res, fmt.Errorf("read tag memory: %w", err)
 	}
-	return string(jsonBytes)
+	return res, nil
 }
 
 // logTagInfo logs detailed tag information including manufacturer and type details.

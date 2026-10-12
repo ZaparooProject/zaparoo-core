@@ -4,6 +4,10 @@ SUBSYSTEMS=="usb", ATTRS{idProduct}=="7523", ATTRS{idVendor}=="1a86", MODE="0660
 # Allow user access to PN532Killer USB UART readers
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{product}=="PN532Killer-UART", MODE="0660", TAG+="uaccess"
 
+# Allow user access to USB smart card (CCID) NFC readers, which Zaparoo talks to
+# directly when the system has no PC/SC service holding them
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:0b0000:*", TAG+="uaccess"
+
 # Example of allowing user access to all USB serial devices
 # SUBSYSTEMS=="usb-serial", TAG+="uaccess"
 
