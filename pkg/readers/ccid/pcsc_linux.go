@@ -158,7 +158,12 @@ func (c pcscError) Error() string {
 }
 
 func pcscResult(rv C.zap_long, op string) error {
-	code := pcscError(uint32(rv)) //nolint:gosec // truncation to the 32-bit code is the point
+	return classifyPCSC(pcscError(uint32(rv)), op) //nolint:gosec // truncation to the 32-bit code is the point
+}
+
+// classifyPCSC turns a result code into an error, marking the codes that mean
+// the reader or the whole service has gone.
+func classifyPCSC(code pcscError, op string) error {
 	if code == pcscSuccess {
 		return nil
 	}
@@ -206,13 +211,19 @@ func (c *dlContext) ListReaders() ([]string, error) {
 		return nil, err
 	}
 
+	return splitReaderNames(buf[:size]), nil
+}
+
+// splitReaderNames splits the list the service returns: names ending in a
+// zero byte, with one more zero byte after the last.
+func splitReaderNames(buf []byte) []string {
 	var names []string
-	for _, name := range strings.Split(string(buf[:size]), "\x00") {
+	for _, name := range strings.Split(string(buf), "\x00") {
 		if name != "" {
 			names = append(names, name)
 		}
 	}
-	return names, nil
+	return names
 }
 
 func (c *dlContext) Status(name string) (pcscStatus, error) {

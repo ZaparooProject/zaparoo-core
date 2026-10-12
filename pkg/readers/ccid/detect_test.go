@@ -228,8 +228,44 @@ func TestRegistry(t *testing.T) {
 	assert.True(t, reg.firstTime(logKey("seen", "a")), "a reader that comes back is reported again")
 	assert.False(t, reg.firstTime(logKey("seen", "b")))
 	assert.False(t, reg.firstTime("not tied to a reader"))
-	assert.True(t, reg.hasSeen("b"))
+	assert.True(t, reg.hasSeen("b"), "a reader that is still there stays known")
 	assert.False(t, reg.powerFailed("c"), "the failure count starts again for a replugged reader")
+
+	reg.prune(map[string]bool{})
+	assert.False(t, reg.hasSeen("b"))
+}
+
+// A direct USB path is a port, not a device. A reader that showed a
+// contactless tag there and was unplugged must not vouch for whatever is
+// plugged into the same port next, such as a security key.
+func TestDetect_SeenReaderIsForgottenWhenUnplugged(t *testing.T) {
+	t.Parallel()
+	b := newFakeBackend("usb")
+	dev := b.add(unknownInfo(), profileBR500)
+	dev.place(ntagWithText("hello"))
+	r := newTestReader(b)
+	require.NoError(t, probe(r, unknownPath))
+	require.NoError(t, r.Close())
+	require.True(t, r.registry.hasSeen(unknownPath))
+
+	// Unplugged: one detect pass with the port empty.
+	b.infos = nil
+	unplugged := newTestReader(b)
+	unplugged.registry = r.registry
+	require.Empty(t, unplugged.Detect(nil))
+
+	// A different device on the same port, with nothing on it yet.
+	key := b.add(unknownInfo(), profileBR500)
+	replugged := newTestReader(b)
+	replugged.registry = r.registry
+	assert.Empty(t, replugged.Detect(nil), "the new device has shown nothing and is left alone")
+
+	// It holds a contact card: it is vetted like any untested reader.
+	key.placeCard(atrSecurityKey, true)
+	b.cards[unknownPath] = true
+	require.Equal(t, "ccid:"+unknownPath, replugged.Detect(nil))
+	require.ErrorIs(t, probe(replugged, unknownPath), errNotContactless)
+	assert.Empty(t, key.transmits)
 }
 
 func TestKnownReaders(t *testing.T) {

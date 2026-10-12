@@ -142,6 +142,13 @@ func (g *registry) prune(listed map[string]bool) {
 			delete(g.powerFailures, path)
 		}
 	}
+	// A USB path is a port, not a device. Whatever is plugged into that port
+	// next has to show a contactless tag itself before it is attached.
+	for path := range g.seen {
+		if !listed[path] {
+			delete(g.seen, path)
+		}
+	}
 	for key := range g.logged {
 		if path, ok := loggedPath(key); ok && !listed[path] {
 			delete(g.logged, key)

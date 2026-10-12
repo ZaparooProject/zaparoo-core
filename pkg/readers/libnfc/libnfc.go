@@ -143,18 +143,50 @@ const (
 	modeLegacyI2C
 )
 
+// device is the part of a libnfc device the reader uses.
+type device interface {
+	tags.Transceiver
+	InitiatorPollTarget(modulations []nfc.Modulation, times int, period time.Duration) (int, nfc.Target, error)
+	String() string
+	Connection() string
+	Close() error
+}
+
+// readRetries counts failed reads of the tag in the field. A tag still being
+// placed often fails its first read, so it is only reported by UID alone once
+// it has failed readAttempts times in a row.
+type readRetries struct {
+	uid      string
+	failures int
+}
+
+// failed records a failed read of the tag with uid and reports whether it has
+// now failed often enough to stop retrying.
+func (r *readRetries) failed(uid string) bool {
+	if r.uid != uid {
+		r.uid = uid
+		r.failures = 0
+	}
+	r.failures++
+	return r.failures >= readAttempts
+}
+
+// reset forgets the count: the tag was read, was given up on, or has left.
+func (r *readRetries) reset() {
+	r.uid = ""
+	r.failures = 0
+}
+
 type Reader struct {
-	cfg         *config.Instance
-	pnd         *nfc.Device
-	prevToken   *tokens.Token
-	write       chan WriteRequest
-	activeWrite *WriteRequest
-	// readFailUID and readFailures count failed reads of the tag in the field.
-	readFailUID   string
+	cfg           *config.Instance
+	pnd           device
+	prevToken     *tokens.Token
+	write         chan WriteRequest
+	activeWrite   *WriteRequest
 	conn          config.ReadersConnect
+	reads         readRetries
 	activeWriteMu syncutil.RWMutex
 	mu            syncutil.RWMutex // protects polling, pnd
-	readFailures  int
 	// misses counts polls in a row that found no tag.
 	misses  int
 	polling bool
@@ -225,7 +257,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 
 	r.mu.Lock()
 	r.conn = device
-	r.pnd = &pnd
+	r.pnd = pnd
 	r.polling = true
 	r.prevToken = nil
 	r.mu.Unlock()
@@ -820,7 +852,7 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 }
 
 func (r *Reader) pollDevice(
-	pnd *nfc.Device,
+	pnd device,
 	activeToken *tokens.Token,
 	ttp int,
 	pbp time.Duration,
@@ -842,6 +874,9 @@ func (r *Reader) pollDevice(
 
 	if count <= 0 {
 		r.misses++
+		// A tag that left takes its failed reads with it: the same tag coming
+		// back gets the full number of attempts again.
+		r.reads.reset()
 		if activeToken != nil && r.misses >= removalMisses {
 			log.Info().Msg("card removed")
 			activeToken = nil
@@ -866,25 +901,19 @@ func (r *Reader) pollDevice(
 	log.Info().Msgf("found token ID: %s", tagUID)
 
 	res, err := nfctag.Read(context.Background(), &nfctag.Tag{
-		IO:   tags.NewIO(*pnd, uid),
+		IO:   tags.NewIO(pnd, uid),
 		UID:  uid,
 		Kind: tags.Kind(target),
 	})
 	if err != nil {
-		if r.readFailUID != tagUID {
-			r.readFailUID = tagUID
-			r.readFailures = 0
-		}
-		r.readFailures++
-		if r.readFailures < readAttempts {
+		if !r.reads.failed(tagUID) {
 			return activeToken, removed, fmt.Errorf("error reading %s tag: %w", res.Type, err)
 		}
 		// A tag that cannot be read is still a tag: it is reported by UID so
 		// it can be used through a mapping.
 		log.Warn().Err(err).Msgf("could not read %s tag, reporting it by UID", res.Type)
 	}
-	r.readFailUID = ""
-	r.readFailures = 0
+	r.reads.reset()
 
 	log.Info().Msgf("%s tag detected", res.Type)
 	if res.Text == "" {
@@ -1016,7 +1045,7 @@ func (r *Reader) writeTag(req *WriteRequest) {
 	}
 
 	res, err := nfctag.Write(context.Background(), &nfctag.Tag{
-		IO:   tags.NewIO(*pnd, uid),
+		IO:   tags.NewIO(pnd, uid),
 		UID:  uid,
 		Kind: tags.Kind(target),
 	}, req.Text)

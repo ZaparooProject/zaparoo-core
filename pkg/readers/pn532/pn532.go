@@ -325,7 +325,7 @@ type Reader struct {
 	lastToken                 *tokens.Token
 	cancel                    context.CancelFunc
 	realDevice                *pn532.Device
-	tagOps                    *tagops.TagOperations
+	tagOps                    tagReader
 	transportFactory          TransportFactory
 	deviceFactory             DeviceFactory
 	sessionFactory            SessionFactory

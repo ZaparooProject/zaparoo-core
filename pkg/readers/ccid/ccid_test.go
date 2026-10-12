@@ -630,3 +630,203 @@ func TestReader_UsesTheFirstBackendThatHasTheReader(t *testing.T) {
 	assert.Equal(t, 1, pcsc.closed)
 	assert.Equal(t, 1, usb.closed)
 }
+
+// With no PC/SC service, a reader some other program holds would otherwise go
+// unexplained. It is reported once, not on every detect pass.
+func TestReader_ReportsUnusableReaderOnce(t *testing.T) {
+	t.Parallel()
+	pcsc := newFakeBackend("pcsc")
+	pcsc.listErr = errors.New("service not running")
+	usb := newFakeBackend("usb")
+	busy := readerInfo{
+		Path: "usb:1-5:0", Name: "Busy Reader", Unusable: "in use by another program", Busy: true,
+		Details: map[string]string{"usbID": "1234:5678"},
+	}
+	usb.add(&busy, profileACR122U)
+	tpdu := readerInfo{Path: "usb:1-6:0", Name: "Contact Reader", Unusable: "reader does not exchange whole APDUs"}
+	usb.add(&tpdu, profileACR122U)
+	r := newTestReader(pcsc, usb)
+
+	assert.Empty(t, r.Detect(nil))
+
+	assert.False(t, r.registry.firstTime(logKey("unusable", busy.Path)), "the busy reader was reported")
+	assert.False(t, r.registry.firstTime(logKey("unusable", tpdu.Path)))
+	assert.Empty(t, usb.opened)
+	assert.Empty(t, r.Detect(nil), "a second pass has nothing new to say")
+}
+
+// While every backend works, a busy reader is the PC/SC service doing its job.
+func TestReader_BusyReaderIsNotReportedWhilePCSCWorks(t *testing.T) {
+	t.Parallel()
+	usb := newFakeBackend("usb")
+	busy := readerInfo{Path: "usb:1-5:0", Name: "Busy Reader", Unusable: "in use by another program", Busy: true}
+	usb.add(&busy, profileACR122U)
+	r := newTestReader(newFakeBackend("pcsc"), usb)
+
+	assert.Empty(t, r.Detect(nil))
+
+	assert.True(t, r.registry.firstTime(logKey("unusable", busy.Path)))
+}
+
+func TestReader_FirstTagOnAnUntestedReaderIsRecordedOnce(t *testing.T) {
+	t.Parallel()
+	unknown := readerInfo{Path: "usb:1-7:0", Name: "Generic NFC Reader"}
+
+	t.Run("read succeeds", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileBR500)
+		dev.place(ntagWithText("hello"))
+		r, iq := attach(t, dev, &unknown)
+
+		ticks(t, r, iq, 1)
+
+		require.Len(t, drain(iq), 1)
+		assert.False(t, r.registry.firstTime(logKey("first-tag", unknown.Path)))
+		assert.True(t, r.diagnosed)
+	})
+
+	t.Run("read fails", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileBR500)
+		dev.place(ntagWithText("a message long enough to need several reads from the tag"))
+		dev.failReadsFrom = 2
+		r, iq := attach(t, dev, &unknown)
+
+		ticks(t, r, iq, 1)
+
+		scans := drain(iq)
+		require.Len(t, scans, 1, "the tag is still reported, by UID")
+		assert.Empty(t, scans[0].Token.Text)
+		assert.False(t, r.registry.firstTime(logKey("first-tag", unknown.Path)))
+	})
+
+	t.Run("known reader", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileACR122U)
+		dev.place(ntagWithText("hello"))
+		r, iq := attach(t, dev, &testInfo)
+
+		ticks(t, r, iq, 1)
+
+		assert.True(t, r.registry.firstTime(logKey("first-tag", testInfo.Path)),
+			"nothing to record for a tested reader")
+	})
+}
+
+func TestReader_TickStopsWhenClosedOrCancelled(t *testing.T) {
+	t.Parallel()
+	iq := make(chan readers.Scan, 1)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	r, _ := attach(t, newSimDevice(profileACR122U), &testInfo)
+	assert.True(t, r.tick(cancelled, iq))
+
+	assert.True(t, newTestReader().tick(context.Background(), iq), "a reader that is not open has nothing to poll")
+	require.NoError(t, r.OnMediaChange(nil))
+}
+
+func TestReader_ScanIsDroppedWhenNobodyIsListening(t *testing.T) {
+	t.Parallel()
+	dev := newSimDevice(profileACR122U)
+	dev.place(ntagWithText("hello"))
+	r, _ := attach(t, dev, &testInfo)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		// An unbuffered queue with no reader: the send must give up with the
+		// context instead of blocking the reader for good.
+		r.send(ctx, make(chan readers.Scan), &readers.Scan{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("send blocked after its context ended")
+	}
+}
+
+func TestReader_WriteWaitsOutATagThatIsNotReady(t *testing.T) {
+	t.Parallel()
+	dev := newSimDevice(profileBR500)
+	tag := tagsim.NewType2(tagsim.PagesNTAG215)
+	dev.place(tag)
+	dev.notReady = 1
+	r, _ := attach(t, dev, &testInfo)
+
+	token, err := r.Write("hello")
+
+	require.NoError(t, err)
+	assert.Equal(t, hex.EncodeToString(tag.UID()), token.UID)
+	assert.Positive(t, dev.reactivations, "the reader was asked to identify the tag again")
+}
+
+func TestReader_WriteFailsWhenTheReaderGoes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unplugged", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileACR122U)
+		dev.pollErr = errReaderGone
+		r, _ := attach(t, dev, &testInfo)
+
+		_, err := r.Write("hello")
+
+		require.ErrorIs(t, err, errReaderGone)
+	})
+
+	t.Run("a failed poll is retried", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileACR122U)
+		dev.pollErr = errors.New("transfer failed")
+		r, _ := attach(t, dev, &testInfo)
+		r.writeWait = 20 * time.Millisecond
+
+		_, err := r.Write("hello")
+
+		require.ErrorIs(t, err, readers.ErrTagNotDetected)
+	})
+
+	t.Run("write fails on the tag", func(t *testing.T) {
+		t.Parallel()
+		dev := newSimDevice(profileACR122U)
+		dev.place(tagsim.NewType2(tagsim.PagesNTAG215))
+		dev.failReadsFrom = 1
+		r, _ := attach(t, dev, &testInfo)
+
+		_, err := r.Write("hello")
+
+		require.ErrorContains(t, err, "failed to write to tag")
+	})
+}
+
+func TestReader_OpenReportsBackendFailure(t *testing.T) {
+	t.Parallel()
+	b := newFakeBackend("usb")
+	b.infos = append(b.infos, testInfo)
+	r := newTestReader(b)
+
+	err := r.Open(config.ReadersConnect{Driver: DriverID, Path: testInfo.Path}, make(chan readers.Scan, 1),
+		readers.OpenOpts{})
+
+	require.ErrorIs(t, err, errReaderGone, "the reader was listed and then could not be opened")
+	assert.False(t, r.Connected())
+}
+
+func TestOpen_ProbeFailsWhenThePollFails(t *testing.T) {
+	t.Parallel()
+	b := newFakeBackend("usb")
+	dev := b.add(&readerInfo{Path: "usb:1-8:0", Name: "Flaky Reader"}, profileBR500)
+	dev.pollErr = errors.New("transfer failed")
+	r := newTestReader(b)
+
+	err := r.Open(config.ReadersConnect{Driver: DriverID, Path: "usb:1-8:0"}, make(chan readers.Scan, 1),
+		readers.OpenOpts{Probing: true})
+
+	require.ErrorContains(t, err, "transfer failed")
+	assert.True(t, dev.closed)
+	assert.False(t, r.registry.isIgnored("usb:1-8:0"), "a failed transfer says nothing about what the reader is")
+}

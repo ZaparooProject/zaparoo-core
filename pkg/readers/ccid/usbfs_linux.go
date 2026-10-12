@@ -80,7 +80,10 @@ type usbfsLink struct {
 }
 
 func openUSBFS(target *usbTarget) (usbLink, error) {
-	node := fmt.Sprintf(usbDeviceNode, target.bus, target.dev)
+	return openUSBFSNode(fmt.Sprintf(usbDeviceNode, target.bus, target.dev), target)
+}
+
+func openUSBFSNode(node string, target *usbTarget) (usbLink, error) {
 	file, err := os.OpenFile(node, os.O_RDWR, 0) //nolint:gosec // path is built from sysfs bus and device numbers
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -187,16 +190,21 @@ func (l *usbfsLink) Send(ctx context.Context, msg []byte) error {
 // a read ends at a short packet or when the buffer fills, so it never waits
 // past the end of a message.
 func (l *usbfsLink) Receive(ctx context.Context, want int) ([]byte, error) {
-	size := l.packet
-	if want > size {
-		size = (want + l.packet - 1) / l.packet * l.packet
-	}
-	buf := make([]byte, size)
+	buf := make([]byte, receiveSize(want, l.packet))
 	n, err := l.bulk(ctx, l.in, buf)
 	if err != nil {
 		return nil, err
 	}
 	return buf[:n], nil
+}
+
+// receiveSize is the buffer to offer for a read that still needs want bytes:
+// want rounded up to whole packets, and never less than one packet.
+func receiveSize(want, packet int) int {
+	if want <= packet {
+		return packet
+	}
+	return (want + packet - 1) / packet * packet
 }
 
 func (l *usbfsLink) Close() error {

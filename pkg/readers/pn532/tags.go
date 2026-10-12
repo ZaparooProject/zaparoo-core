@@ -155,6 +155,17 @@ type blockReader interface {
 	ReadBlocks(ctx context.Context, startBlock, endBlock byte) ([]byte, error)
 }
 
+// tagReader is the part of go-pn532's tag operations the driver reads a tag
+// through.
+type tagReader interface {
+	blockReader
+	InitFromDetectedTag(ctx context.Context, tag *pn532.DetectedTag) error
+	ReadNDEF(ctx context.Context) (*pn532.NDEFMessage, error)
+	GetTagInfo() (*tagops.TagInfo, error)
+}
+
+var _ tagReader = (*tagops.TagOperations)(nil)
+
 // blockIO gives the shared tag layer read access to a tag through go-pn532.
 // Writes stay with go-pn532, so it does not offer them.
 type blockIO struct {
