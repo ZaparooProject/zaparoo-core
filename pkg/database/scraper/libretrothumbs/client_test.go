@@ -176,3 +176,29 @@ func TestIndexAddsLocalThumbnailsWithoutCachingThem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "A (USA)\n", string(cached))
 }
+
+// A user's copy of a thumbnail is the listed one even when the file name
+// differs from the listing in letter case; it must be used, not downloaded
+// again over the user's copy or, offline, not at all.
+func TestImageUsesLocalFileThatDiffersOnlyInCase(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	c := newClient(fs, "/d", "http://127.0.0.1:1")
+	local := filepath.Join(c.dir, nesPlaylist, "Named_Boxarts", "foo bar (usa).png")
+	require.NoError(t, afero.WriteFile(fs, local, []byte("\x89PNG\r\n\x1a\nmine"), 0o644))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(c.dir, nesPlaylist, "index.txt"),
+		[]byte("Foo Bar (USA)\n"), 0o644))
+	ix, err := c.index(t.Context(), nesPlaylist)
+	require.NoError(t, err)
+	name, ok := ix.match("Foo Bar (USA)", "")
+	require.True(t, ok)
+	require.Equal(t, "Foo Bar (USA)", name, "the listed spelling wins the match")
+
+	got, err := c.image(t.Context(), nesPlaylist, "Named_Boxarts", name, false)
+
+	require.NoError(t, err, "the unreachable server is never asked")
+	assert.Equal(t, local, got)
+
+	_, err = c.image(t.Context(), nesPlaylist, "Named_Snaps", name, false)
+	require.Error(t, err, "the case-folded lookup stays inside the one kind's folder")
+}
