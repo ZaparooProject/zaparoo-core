@@ -49,11 +49,12 @@ var ArtworkDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage): {"image", "images", "miximages", "custom"},
 	string(tags.TagPropertyImageBoxart): {
 		"boxart", "boxart2d", "box2d", "boxart2dfront", "box2dfront", "cover", "covers",
+		"boxarts", "box", "named_boxarts",
 	},
 	string(tags.TagPropertyImageBoxart3D):   {"boxart3d", "3dbox", "3dboxes"},
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback", "backcover", "backcovers"},
-	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
+	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots", "snap", "snaps", "named_snaps"},
 	string(tags.TagPropertyImageThumbnail): {
 		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
 	},
@@ -62,6 +63,7 @@ var ArtworkDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageFanart):  {"fanart", "fanarts"},
 	string(tags.TagPropertyImageTitleshot): {
 		"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle",
+		"title", "titles", "named_titles",
 	},
 	string(tags.TagPropertyImageMap): {"map", "maps"},
 }
@@ -78,12 +80,17 @@ func DirectoryArtworkDirCandidates(propValue string) []string {
 	return append([]string{"folders", "folder"}, candidates...)
 }
 
-// StatMediaDirs reads <rootPath>/media and returns subdirectory name to path.
+// StatMediaDirs reads <rootPath>/media and returns lowercased subdirectory
+// name to path.
 func StatMediaDirs(rootPath string) map[string]string {
 	return StatMediaDirsFS(afero.NewOsFs(), rootPath)
 }
 
-// StatMediaDirsFS reads <rootPath>/media using fs and returns subdirectory name to path.
+// StatMediaDirsFS reads <rootPath>/media using fs and returns subdirectory
+// name to path. Names are lowercased so they match ArtworkDirCandidates
+// whatever case the folder was created in; the path keeps the on-disk
+// spelling. When two folders differ only by case, the one already lowercase
+// wins, otherwise the first listed does.
 func StatMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	mediaRoot := filepath.Join(rootPath, "media")
 	entries, err := afero.ReadDir(fs, mediaRoot)
@@ -92,9 +99,14 @@ func StatMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	}
 	dirs := make(map[string]string, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
-			dirs[e.Name()] = filepath.Join(mediaRoot, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		key := strings.ToLower(e.Name())
+		if _, taken := dirs[key]; taken && e.Name() != key {
+			continue
+		}
+		dirs[key] = filepath.Join(mediaRoot, e.Name())
 	}
 	return dirs
 }

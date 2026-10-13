@@ -239,7 +239,11 @@ func statSourceMediaDirs(ctx context.Context, listings *sourceDirListings, rootP
 		if childErr != nil {
 			continue
 		}
-		dirs[entry.Name] = childPath
+		key := strings.ToLower(entry.Name)
+		if _, taken := dirs[key]; taken && entry.Name != key {
+			continue
+		}
+		dirs[key] = childPath
 	}
 	return dirs
 }
@@ -317,5 +321,5 @@ func isSourceSegmentsPropForNames(propPath, root, dir, name string) bool {
 	if err != nil {
 		return false
 	}
-	return propPath == candidate
+	return strings.EqualFold(propPath, candidate)
 }

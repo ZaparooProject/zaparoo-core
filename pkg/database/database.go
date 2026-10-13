@@ -1053,7 +1053,9 @@ type MediaWithFullPath struct {
 
 // ScrapeWrite is the database-level write payload produced by a scraper for a
 // matched Media row. Sentinel is written after all metadata so interrupted runs
-// can safely retry the record.
+// can safely retry the record. A zero Sentinel writes the metadata without
+// marking the record done, so a run that only got part of what it wanted
+// keeps what it found and is retried.
 type ScrapeWrite struct {
 	Sentinel   TagInfo
 	MediaTags  []TagInfo

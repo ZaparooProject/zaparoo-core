@@ -2262,6 +2262,9 @@ func applyScrapeWriteTarget(
 			return fmt.Errorf("upsert media properties: %w", err)
 		}
 	}
+	if write.Sentinel.Type == "" {
+		return nil
+	}
 	sentinel := []database.TagInfo{write.Sentinel}
 	if err := upsertMediaTagsWithContext(ctx, writeCtx, target.MediaDBID, sentinel); err != nil {
 		return fmt.Errorf("upsert sentinel tag: %w", err)

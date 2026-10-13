@@ -45,6 +45,9 @@ func fillMissingScrapeTarget(ctx context.Context, c *scrapeWriteTxContext, targe
 	if err := fillMissingScrapeProperties(ctx, c, target.MediaTitleDBID, true, write.TitleProps); err != nil {
 		return err
 	}
+	if write.Sentinel.Type == "" {
+		return nil
+	}
 	return upsertMediaTagsWithContext(ctx, c, target.MediaDBID, []database.TagInfo{write.Sentinel})
 }
 
