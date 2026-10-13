@@ -603,13 +603,13 @@ A tag `#type:sub>child` becomes the Core value `sub:child` of the same type. Val
 
 | GameDataBase | Destination | Notes |
 |---|---|---|
-| `ID` | `MediaTitleTags: gamedatabase` | Exclusive. The game a title is, shared by its regional releases and its releases on other platforms |
+| `ID` | `MediaTitleProperties: gamedatabase-id` | The game a title is, shared by its regional releases and its releases on other platforms. Invalid dataset IDs are dropped |
 | Release date | `MediaTitleTags: year` | Exclusive. The year the date opens with |
 | Developer, Publisher | `MediaTitleTags: developer`, `publisher`, `credit` | Cells join several companies with `/`. The first takes the role; the rest are stored as `credit` |
 | `#genre` | `MediaTitleTags: genre` | The family beside the genre (`sports` and `sports:tennis`) |
 | `#players`, `#input`, `#addon`, `#embedded`, `#save`, `#compatibility`, `#based`, `#search`, `#port` | `MediaTitleTags` of the same type | Additive |
 | `#arcadeboard` | `MediaTitleTags: arcadeboard` | Exclusive. The first value, the most specific upstream gives |
-| `#compilation:id:id` | `MediaTitleTags: multigame:compilation` and one `compilation:<id>` per game | The IDs are other games' `gamedatabase` values, so a tag filter finds a compilation's games in the library |
+| `#compilation:id:id` | `MediaTitleTags: multigame:compilation`, `MediaTitleProperties: gamedatabase-contains` | JSON array of unique raw member IDs in source order. Malformed IDs are reported and dropped |
 | `#mamerom:parent>set` | `MediaProperties: mame-setname`, `MediaTags: mameparent` | On the file the set matched. A parent set gets no `mameparent` |
 | Region, `#lang`, `#rev`, `#set`, `#alt`, `#disc`, `#unfinished`, `#unlicensed`, `#reboxed`, `#rerelease` | not imported | They describe one release or dump. A title match cannot know which one a file is; the filename parser can |
 
