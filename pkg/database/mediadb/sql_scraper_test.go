@@ -3411,3 +3411,39 @@ func TestScrapeWriteStoresNumericTagsPadded(t *testing.T) {
 		[]string{"input:buttons:0002", "input:joystick:0004", "players:0002"}, stored,
 		"numeric tag values must be stored padded, and only padded")
 }
+
+// A write with no sentinel keeps what it found without marking the record
+// done, on every write path, so a scraper that got only part of a record can
+// have it retried.
+func TestApplyScrapeWriteWithoutSentinelStoresDataButNoMarker(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"single", "batch", "fill-single", "fill-batch"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupScraperTestDB(t)
+			defer cleanup()
+			write := &database.ScrapeWrite{
+				FillMissing: mode == "fill-single" || mode == "fill-batch",
+				MediaProps:  []database.MediaProperty{{TypeTag: "property:image-boxart", Text: "box.png"}},
+			}
+			if mode == "single" || mode == "fill-single" {
+				require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, write))
+			} else {
+				require.NoError(t, db.ApplyScrapeResults(t.Context(), []database.ScrapeWriteTarget{
+					{MediaDBID: 1, MediaTitleDBID: 1, Write: write},
+				}))
+			}
+
+			var image string
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaProperties WHERE MediaDBID=1 AND TypeTagDBID=2").Scan(&image))
+			require.Equal(t, "box.png", image)
+			var scraperTags int
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(), `
+				SELECT COUNT(*) FROM MediaTags mt JOIN Tags t ON mt.TagDBID=t.DBID
+				JOIN TagTypes tt ON t.TypeDBID=tt.DBID WHERE mt.MediaDBID=1 AND tt.Type LIKE 'scraper.%'`,
+			).Scan(&scraperTags))
+			require.Zero(t, scraperTags, "no done marker is written")
+		})
+	}
+}

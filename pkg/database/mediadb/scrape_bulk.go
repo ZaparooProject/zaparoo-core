@@ -373,6 +373,9 @@ func upsertScrapeSentinelsBulk(
 	exclusiveDeletes := make(map[int64]map[int64]struct{})
 	for i := range targets {
 		sentinel := targets[i].Write.Sentinel
+		if sentinel.Type == "" {
+			continue
+		}
 		typeDBID, isExclusive, err := writeCtx.resolveTagType(ctx, sentinel.Type)
 		if err != nil {
 			return err

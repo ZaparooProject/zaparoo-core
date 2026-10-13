@@ -199,7 +199,8 @@ type result struct {
 }
 
 // thumbnails downloads every kind of thumbnail for one row. A missing image is
-// not an error; a failed request is, and leaves the row for a later run.
+// not an error; a failed request is, and leaves the row for a later run with
+// the thumbnails that did arrive.
 func (r *run) thumbnails(
 	ctx context.Context, systemID string, indexes map[string]*index, row *database.MediaWithFullPath,
 ) result {
@@ -238,8 +239,15 @@ func (r *run) thumbnails(
 				continue
 			}
 			if err != nil {
-				out.err = err
-				return out
+				// Keep the kinds that did arrive: the row is written with them
+				// and retried for this one.
+				if out.err == nil {
+					out.err = err
+				}
+				if ctx.Err() != nil {
+					return out
+				}
+				continue
 			}
 			out.props = append(out.props, database.MediaProperty{
 				TypeTag: tags.PropertyTypeTag(kindProperty[kind]), Text: imagePath,
@@ -387,22 +395,26 @@ loop:
 		}
 		c.processed++
 		if res.err != nil {
-			c.skipped++
 			log.Debug().Err(res.err).Str("path", res.row.Path).Msg("libretro thumbnail download failed")
-			progress(&scraper.SourceError{Path: res.row.Path, Err: res.err})
-			continue
+			if len(res.props) == 0 {
+				c.skipped++
+				progress(&scraper.SourceError{Path: res.row.Path, Err: res.err})
+				continue
+			}
 		}
 		if len(res.props) == 0 {
 			c.skipped++
 			progress(nil)
 			continue
 		}
-		write := &database.ScrapeWrite{
-			Sentinel: scraper.SentinelTagInfo(scraperID), FillMissing: r.opts.FillMissing,
-			MediaProps: res.props,
-		}
-		if r.opts.RunID != "" {
-			write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, r.opts.RunID))
+		write := &database.ScrapeWrite{FillMissing: r.opts.FillMissing, MediaProps: res.props}
+		// A row that lost some thumbnails keeps the ones it got but is not
+		// marked done, so the next run fetches the rest.
+		if res.err == nil {
+			write.Sentinel = scraper.SentinelTagInfo(scraperID)
+			if r.opts.RunID != "" {
+				write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, r.opts.RunID))
+			}
 		}
 		if err := batch.add(ctx, database.ScrapeWriteTarget{
 			MediaDBID: res.row.DBID, MediaTitleDBID: res.row.MediaTitleDBID, Write: write,
@@ -410,6 +422,10 @@ loop:
 			return fail(err)
 		}
 		c.matched++
+		if res.err != nil {
+			progress(&scraper.SourceError{Path: res.row.Path, Err: res.err})
+			continue
+		}
 		progress(nil)
 	}
 	// Downloads that finished are kept even when the run was cancelled: the

@@ -21,9 +21,11 @@ package libretrothumbs
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -98,4 +100,79 @@ func TestWriteFileHandlesConcurrentWritesToTheSamePath(t *testing.T) {
 	entries, err := afero.ReadDir(fs, filepath.Dir(path))
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "no leftover .part files")
+}
+
+// index.txt saved by a Windows editor ends every line in \r\n, and a stray
+// space is easy to leave. Neither may stop a name matching.
+func TestIndexTrimsEachCachedLine(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	c := newClient(fs, "/d", "http://example.invalid")
+	cache := filepath.Join(c.dir, nesPlaylist, "index.txt")
+	require.NoError(t, afero.WriteFile(fs, cache,
+		[]byte("Super Smash Bros. - Smash Remix\r\nTrailing Space (USA) \r\n\r\n"), 0o644))
+
+	ix, err := c.index(t.Context(), nesPlaylist)
+
+	require.NoError(t, err)
+	name, ok := ix.match("Super Smash Bros. - Smash Remix", "")
+	require.True(t, ok)
+	assert.Equal(t, "Super Smash Bros. - Smash Remix", name)
+	name, ok = ix.match("Trailing Space (USA)", "")
+	require.True(t, ok)
+	assert.Equal(t, "Trailing Space (USA)", name)
+}
+
+// A listing the server can no longer give is not worth losing the one already
+// cached just because a week has passed.
+func TestIndexKeepsAnExpiredCacheWhenTheRefreshFails(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	c := newClient(fs, "/d", "http://127.0.0.1:1")
+	cache := filepath.Join(c.dir, nesPlaylist, "index.txt")
+	require.NoError(t, afero.WriteFile(fs, cache, []byte("Old Game (USA)\n"), 0o644))
+	c.now = func() time.Time { return time.Now().Add(indexMaxAge + time.Hour) }
+
+	ix, err := c.index(t.Context(), nesPlaylist)
+
+	require.NoError(t, err)
+	_, ok := ix.match("Old Game (USA)", "")
+	assert.True(t, ok)
+}
+
+func TestIndexFailsWhenNothingIsCachedOrLocal(t *testing.T) {
+	t.Parallel()
+	c := newClient(afero.NewMemMapFs(), "/d", "http://127.0.0.1:1")
+
+	_, err := c.index(t.Context(), nesPlaylist)
+
+	require.Error(t, err)
+}
+
+// Local names join the listing without being written into the cache, which
+// stays a mirror of the server.
+func TestIndexAddsLocalThumbnailsWithoutCachingThem(t *testing.T) {
+	t.Parallel()
+	server := &fakeServer{images: map[string]bool{"Named_Boxarts/A (USA)": true}}
+	ts := httptest.NewServer(server)
+	t.Cleanup(ts.Close)
+	fs := afero.NewMemMapFs()
+	c := newClient(fs, "/d", ts.URL)
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(c.dir, nesPlaylist, "Named_Snaps", "Mine.png"),
+		[]byte("\x89PNG\r\n\x1a\n"), 0o644))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(c.dir, nesPlaylist, "Named_Snaps", "Empty.png"),
+		nil, 0o644))
+
+	ix, err := c.index(t.Context(), nesPlaylist)
+
+	require.NoError(t, err)
+	for _, name := range []string{"A (USA)", "Mine"} {
+		_, ok := ix.exact[name]
+		assert.True(t, ok, name)
+	}
+	_, ok := ix.exact["Empty"]
+	assert.False(t, ok, "an empty file is not a thumbnail")
+	cached, err := afero.ReadFile(fs, filepath.Join(c.dir, nesPlaylist, "index.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "A (USA)\n", string(cached))
 }

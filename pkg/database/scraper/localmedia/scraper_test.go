@@ -840,3 +840,96 @@ func TestScrape_PagesThroughLargeSystems(t *testing.T) {
 		assert.Equal(t, art, props[0].Text)
 	}
 }
+
+// Art in a media folder is read after every index without the user asking,
+// ahead of catalog sources, and only fills what is missing.
+func TestNewPlatformScraper_RunsAfterEveryIndexAsAFillMissingDeviceSource(t *testing.T) {
+	t.Parallel()
+
+	s := NewPlatformScraper()
+
+	assert.True(t, s.SupportsFillMissing)
+	assert.True(t, s.AutoScrapeAllLaunchers)
+	assert.Equal(t, scraper.AutoOrderDevice, s.AutoScrapeOrder)
+	assert.Empty(t, s.SupportedSystemIDs, "every system, not a list")
+}
+
+// "Boxart" and "Snaps" are not the lowercase names ES uses, but they are what
+// a person copying art in by hand types.
+func TestScrape_ReadsArtworkFromDifferentlyCasedAndAliasedFolders(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemRoot := filepath.Join(root, "n64")
+	romPath := filepath.Join(systemRoot, "Super Smash Bros. - Smash Remix.z64")
+	boxartPath := filepath.Join(systemRoot, "media", "Boxart", "Super Smash Bros. - Smash Remix.png")
+	snapPath := filepath.Join(systemRoot, "media", "Snaps", "Super Smash Bros. - Smash Remix.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, os.MkdirAll(systemRoot, 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxartPath, []byte("boxart"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, snapPath, []byte("snap"), 0o600))
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{{
+		ID: "n64", SystemID: "Nintendo64", Folders: []string{"n64"}, Extensions: []string{".z64"},
+	}})
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("IndexedSystems").Return([]string{"Nintendo64"}, nil)
+	mockDB.On("FindSystemBySystemID", "Nintendo64").
+		Return(database.System{DBID: 1, SystemID: "Nintendo64", Name: "Nintendo 64"}, nil)
+	mockDB.On("GetMediaBySystemID", "Nintendo64").Return([]database.MediaWithFullPath{
+		{DBID: 11, MediaTitleDBID: 101, Path: romPath, SystemID: "Nintendo64"},
+	}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(101),
+		mock.MatchedBy(func(write *database.ScrapeWrite) bool {
+			assert.True(t, write.FillMissing, "an automatic run only fills what is missing")
+			require.Len(t, write.MediaProps, 2)
+			assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), write.MediaProps[0].TypeTag)
+			assert.Equal(t, filepath.ToSlash(boxartPath), write.MediaProps[0].Text)
+			assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageScreenshot), write.MediaProps[1].TypeTag)
+			assert.Equal(t, filepath.ToSlash(snapPath), write.MediaProps[1].Text)
+			return true
+		}),
+	).Return(nil).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	require.NoError(t, NewPlatformScraper().Scrape(
+		context.Background(), cfg, pl, fs, &database.Database{MediaDB: mockDB},
+		scraper.ScrapeOptions{FillMissing: true}, nil, ch,
+	))
+	var last scraper.ScrapeUpdate
+	for update := range ch {
+		last = update
+	}
+	assert.True(t, last.Done)
+	mockDB.AssertExpectations(t)
+}
+
+// A forced rescrape cleans up art that has gone, which has to recognise the
+// stored path of art found in a folder spelled differently from the lookup
+// name.
+func TestDeleteStaleLocalMediaProps_RecognisesDifferentlyCasedFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "media", "Boxart", "Game.png")
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(11)).Return([]database.MediaProperty{{
+		TypeTag:     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+		TypeTagDBID: 101,
+		Text:        filepath.ToSlash(stalePath),
+	}}, nil)
+	mockDB.On("DeleteMediaProperty", mock.Anything, int64(11), int64(101)).Return(nil).Once()
+
+	s := &scraperImpl{db: mockDB, fs: afero.NewMemMapFs()}
+	deleted, err := s.deleteStaleLocalMediaProps(context.Background(), &database.MediaWithFullPath{
+		DBID: 11, MediaTitleDBID: 101, Path: filepath.Join(root, "Game.nes"), SystemID: "NES",
+	}, []string{root}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	mockDB.AssertExpectations(t)
+}

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -174,30 +175,140 @@ func validThumbnailNames(names []string) []string {
 	return kept
 }
 
-// index returns a playlist's box art names, from a cache younger than a week
-// when there is one. Every kind shares the box art names.
+// index returns a playlist's thumbnail names: the server's listing (from a
+// cache younger than a week when there is one) plus every PNG already on disk
+// under the playlist's thumbnail folders, so a picture a user dropped in is
+// matched without being listed anywhere. Every kind shares the box art names.
+// An unreachable server only fails the playlist when nothing local can stand
+// in for it.
 func (c *client) index(ctx context.Context, playlist string) (*index, error) {
-	cache := filepath.Join(c.dir, playlist, "index.txt")
-	if info, err := c.fs.Stat(cache); err == nil && c.now().Sub(info.ModTime()) < indexMaxAge {
-		if data, readErr := afero.ReadFile(c.fs, cache); readErr == nil {
-			// A cached name is validated again, not trusted as already clean:
-			// it was, but a tampered or pre-fix cache file must not defeat
-			// the same check parseIndex applies to a fresh listing.
-			return newIndex(validThumbnailNames(strings.Split(strings.TrimSpace(string(data)), "\n"))), nil
+	local := c.localNames(playlist)
+	listed, err := c.listing(ctx, playlist)
+	if err != nil {
+		if len(local) == 0 {
+			return nil, err
 		}
+		log.Warn().Err(err).Str("playlist", playlist).
+			Msg("libretro thumbnail listing unavailable, using local thumbnails only")
+		listed = nil
+	}
+	return newIndex(mergeNames(listed, local)), nil
+}
+
+// listing returns the server's names for a playlist, cached in index.txt. A
+// cache older than a week is refreshed, and is still used when the refresh
+// fails, so being offline does not discard names already known.
+func (c *client) listing(ctx context.Context, playlist string) ([]string, error) {
+	cache := filepath.Join(c.dir, playlist, "index.txt")
+	var cached []string
+	var haveCache, fresh bool
+	if info, err := c.fs.Stat(cache); err == nil {
+		if data, readErr := afero.ReadFile(c.fs, cache); readErr == nil {
+			cached, haveCache = parseCachedIndex(data), true
+			fresh = c.now().Sub(info.ModTime()) < indexMaxAge
+		}
+	}
+	if fresh {
+		return cached, nil
 	}
 	listing, err := c.get(ctx, c.folderURL(playlist, kinds[0]), indexMaxBytes)
 	if errors.Is(err, errNotFound) {
-		return newIndex(nil), nil
+		return nil, nil
 	}
 	if err != nil {
+		if haveCache {
+			log.Warn().Err(err).Str("playlist", playlist).Msg("libretro thumbnail refresh failed, using older listing")
+			return cached, nil
+		}
 		return nil, err
 	}
 	names := parseIndex(listing)
 	if err := c.writeFile(cache, []byte(strings.Join(names, "\n")+"\n")); err != nil {
 		return nil, err
 	}
-	return newIndex(names), nil
+	return names, nil
+}
+
+// parseCachedIndex reads names from index.txt. Each line is trimmed, so a file
+// saved with Windows line endings or stray spaces still matches. A name is
+// validated again, not trusted as already clean: it was, but a tampered or
+// pre-fix cache file must not defeat the same check parseIndex applies to a
+// fresh listing.
+func parseCachedIndex(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return validThumbnailNames(lines)
+}
+
+// localNames lists the thumbnails already stored for a playlist, under any
+// kind's folder, as names without the .png extension.
+func (c *client) localNames(playlist string) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	foundKind := false
+	for _, kind := range kinds {
+		entries, err := afero.ReadDir(c.fs, filepath.Join(c.dir, playlist, kind))
+		if err != nil {
+			continue
+		}
+		foundKind = true
+		for _, entry := range entries {
+			name, ok := strings.CutSuffix(entry.Name(), ".png")
+			if !ok || entry.IsDir() || entry.Size() == 0 || !validThumbnailName(name) {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	if !foundKind {
+		c.logUnrecognisedFolders(playlist)
+	}
+	return names
+}
+
+// logUnrecognisedFolders says what a playlist's folder holds when none of it
+// is a thumbnail folder Core reads, which is what a wrong folder name looks
+// like (the names are case-sensitive).
+func (c *client) logUnrecognisedFolders(playlist string) {
+	entries, err := afero.ReadDir(c.fs, filepath.Join(c.dir, playlist))
+	if err != nil {
+		return
+	}
+	var dirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry.Name())
+		}
+	}
+	if len(dirs) > 0 {
+		log.Debug().Str("playlist", playlist).Strs("folders", dirs).Strs("expected", kinds).
+			Msg("libretro thumbnails: no recognised thumbnail folder")
+	}
+}
+
+// mergeNames returns listed followed by the local names it does not already
+// hold.
+func mergeNames(listed, local []string) []string {
+	if len(local) == 0 {
+		return listed
+	}
+	have := make(map[string]struct{}, len(listed))
+	for _, name := range listed {
+		have[name] = struct{}{}
+	}
+	merged := listed[:len(listed):len(listed)]
+	for _, name := range local {
+		if _, ok := have[name]; !ok {
+			merged = append(merged, name)
+		}
+	}
+	return merged
 }
 
 // image returns the local path of one thumbnail, downloading it unless an

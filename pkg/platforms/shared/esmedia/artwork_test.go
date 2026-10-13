@@ -485,3 +485,52 @@ func (c *countingFs) Open(name string) (afero.File, error) {
 	c.lists++
 	return c.Fs.Open(name) //nolint:wrapcheck // test passthrough
 }
+
+// People create media folders in whatever case their tools or habits give
+// them, and on a case-sensitive card "Boxart" is not "boxart".
+func TestStatMediaDirsFS_MatchesFolderNamesIgnoringCase(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("roms", "n64")
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "Boxart"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "SCREENSHOTS"), 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "media", "Boxart", "Game.png"), []byte("x"), 0o600))
+
+	dirs := StatMediaDirsFS(fs, root)
+
+	assert.Equal(t, filepath.Join(root, "media", "Boxart"), dirs["boxart"], "the path keeps the on-disk spelling")
+	assert.Equal(t, filepath.Join(root, "media", "SCREENSHOTS"), dirs["screenshots"])
+	file := FindFileFS(fs, []string{"Game.png"}, ArtworkDirCandidates[string(tags.TagPropertyImageBoxart)], dirs)
+	require.NotNil(t, file)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "media", "Boxart", "Game.png")), file.Path)
+}
+
+func TestStatMediaDirsFS_PrefersTheLowercaseFolderWhenCasesCollide(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("roms", "n64")
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "Boxart"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "boxart"), 0o750))
+
+	dirs := StatMediaDirsFS(fs, root)
+
+	assert.Equal(t, filepath.Join(root, "media", "boxart"), dirs["boxart"])
+}
+
+// The folder names libretro and common scraper tools use for the same three
+// pictures are read as well.
+func TestArtworkDirCandidates_AcceptsLibretroAndCommonFolderNames(t *testing.T) {
+	t.Parallel()
+
+	for prop, names := range map[tags.TagValue][]string{
+		tags.TagPropertyImageBoxart:     {"named_boxarts", "boxarts", "box"},
+		tags.TagPropertyImageScreenshot: {"named_snaps", "snaps", "snap"},
+		tags.TagPropertyImageTitleshot:  {"named_titles", "titles", "title"},
+	} {
+		for _, name := range names {
+			assert.Contains(t, ArtworkDirCandidates[string(prop)], name, "%s for %s", name, prop)
+		}
+	}
+}
