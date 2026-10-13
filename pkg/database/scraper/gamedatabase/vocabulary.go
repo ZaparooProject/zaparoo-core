@@ -20,6 +20,7 @@
 package gamedatabase
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -66,7 +67,6 @@ var titleTypes = map[tags.TagType]struct{}{
 	tags.TagTypePort:          {},
 	tags.TagTypeArcadeBoard:   {},
 	tags.TagTypeMultigame:     {},
-	tags.TagTypeCompilation:   {},
 }
 
 // variantTypes are the upstream tags that mark a row as something other than
@@ -240,13 +240,20 @@ func regionValues(cell string) (values []tags.TagValue, unknown []string) {
 	return values, unknown
 }
 
+var datasetIDPattern = regexp.MustCompile(`^[a-z0-9]{1,96}$`)
+
+// validDatasetID validates catalog identifiers independently of user-facing tags.
+func validDatasetID(id string) bool {
+	return datasetIDPattern.MatchString(id)
+}
+
 // datasetID returns a row's game ID in the form Core stores, repairing the
 // IDs listed in idRecoveries. ok is false for a row with no usable ID.
 func datasetID(raw string) (id string, ok bool) {
 	if fixed, listed := idRecoveries[raw]; listed {
 		raw = fixed
 	}
-	if !tags.IsValidTagValue(tags.TagTypeGameDatabase, raw) {
+	if !validDatasetID(raw) {
 		return "", false
 	}
 	return raw, true

@@ -137,8 +137,8 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 | Storage | Scope | Current normal `gamelist.xml` use |
 |---|---|---|
 | `MediaTags` | ROM-level variant metadata | region, lang, scraper sentinel |
-| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise) |
-| `MediaTitleProperties` | Title-level shared static content | description, XML game ID |
+| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise), multigame (compilation classification) |
+| `MediaTitleProperties` | Title-level shared static content | description, XML game ID, GameDataBase identity and raw compilation member IDs |
 | `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
 
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
@@ -150,13 +150,14 @@ Tags are meant to be as stable as practical: a filter written today must mean th
 | Kind | Types | What a value must be |
 |---|---|---|
 | Closed list | every type not listed below, including `genre`, `region`, `lang`, `arcadeboard`, `players`, `input`, `search` | one of the type's values in `CanonicalTagDefinitions` |
-| Strict format | `year`, `builddate`, `rating`, `disc`, `disctotal`, `track`, `season`, `episode`, `issue`, `volume`, `set`, `alt`, `rev`, `patch`, `extension`, `mameparent`, `compilation`, `gamedatabase`, `user`, and the `scraper.<id>` / `scraper-run.<id>` bookkeeping types | a value matching the type's rule, such as a year from 1950 to 2099, a real `YYYY-MM-DD` date, a rating from 0 to 100, a positive disc number, a GameDataBase game ID, or a listed patch label with an optional version |
+| Strict format | `year`, `builddate`, `rating`, `disc`, `disctotal`, `track`, `season`, `episode`, `issue`, `volume`, `set`, `alt`, `rev`, `patch`, `extension`, `mameparent`, `user`, and the `scraper.<id>` / `scraper-run.<id>` bookkeeping types | a value matching the type's rule, such as a year from 1950 to 2099, a real `YYYY-MM-DD` date, a rating from 0 to 100, a positive disc number, or a listed patch label with an optional version |
 | Free text | `developer`, `publisher`, `credit` only | a company name in the form `NormalizeCompanyName` produces: lower-case words joined by single dashes |
 
 Company names are the only free text because they are the only values that cannot be listed. Adding a free-text type is a design change, not a scraper detail; `TestFreeTextTypesAreOnlyCompanyNames` exists to make that visible.
 
 What this means for a scraper:
 
+- **Keep identifiers out of user-facing tags.** External catalog IDs and file hashes belong in properties, not identity tag types. GameDataBase stores title identity in `property:gamedatabase-id` and compilation member IDs as a JSON string array in `property:gamedatabase-contains`. Members retain raw source spelling and order, with duplicates removed and malformed IDs reported and dropped. No game-name vocabulary or alias mapping is maintained for membership. The user-facing classification remains `multigame:compilation`; individual members are not tags.
 - **Map or drop.** A scraper maps its source's wording onto an existing canonical value, through a table in its package or a shared lookup (`tags.LookupRegionWord`, `LookupLanguageWord`, `LookupArcadeBoard`, `LookupFranchise`). A source value with no mapping is dropped, never stored as it was written. Genres follow the GameDataBase taxonomy (`shmup:v`, `action:platformer`, `parlor:pinball`), series are `search:franchise:<name>`, and boards are `arcadeboard:<vendor>:<board>`.
 - **Say what was dropped.** Record each dropped value with `scraper.UnmappedValues.Note` and call `LogSummary` once at the end of a run. The summary is logged at info with counts and examples per tag type, so the mapping tables can be grown from what real sources contain.
 - **No labels on shared values.** A closed or format value is one row shared by every title that carries it, so it has no per-source display name. Only free-text tags keep the source's spelling as a label (`t-and-e-soft` labelled `T&E Soft`).

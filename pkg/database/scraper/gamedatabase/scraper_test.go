@@ -109,6 +109,16 @@ func (l *library) title(path string, tagType tags.TagType) []string {
 	return values(infos, tagType)
 }
 
+// titleProperty reads catalog identifiers from title properties, never tag links.
+func (l *library) titleProperty(path string, property tags.TagValue) []string {
+	l.t.Helper()
+	row, ok := l.media[path]
+	require.True(l.t, ok, "%s is not indexed", path)
+	props, err := l.db.GetMediaTitleProperties(context.Background(), row.MediaTitleDBID)
+	require.NoError(l.t, err)
+	return propertyValues(l.t, props, property)
+}
+
 // file returns the media-level tags of a path.
 func (l *library) file(path string, tagType tags.TagType) []string {
 	l.t.Helper()
@@ -164,7 +174,7 @@ func TestScrapeDescribesATitleFromTheRowForItsFilesRegion(t *testing.T) {
 
 	lib := read(t, db, systemdefs.SystemSNES)
 	assert.Equal(t, []string{"1992"}, lib.title(europe, tags.TagTypeYear), "the European release, not the first one")
-	assert.Equal(t, []string{"supermarioworld"}, lib.title(europe, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"supermarioworld"}, lib.titleProperty(europe, tags.TagPropertyGameDatabaseID))
 	assert.Equal(t, []string{"action", "action:platformer"}, lib.title(europe, tags.TagTypeGenre))
 	assert.Equal(t, []string{"2", "alt"}, lib.title(europe, tags.TagTypePlayers))
 	assert.Equal(t, []string{"backup"}, lib.title(europe, tags.TagTypeSave))
@@ -203,7 +213,8 @@ func TestScrapeMatchesOnTheTitleScreenName(t *testing.T) {
 
 	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{})
 	assert.Equal(t, 1, last.Matched)
-	assert.Equal(t, []string{"alfredchicken"}, read(t, db, systemdefs.SystemSNES).title(path, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"alfredchicken"},
+		read(t, db, systemdefs.SystemSNES).titleProperty(path, tags.TagPropertyGameDatabaseID))
 }
 
 func TestScrapeMatchesAJapaneseTitleSpelledWithoutMacrons(t *testing.T) {
@@ -216,7 +227,7 @@ func TestScrapeMatchesAJapaneseTitleSpelledWithoutMacrons(t *testing.T) {
 	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{})
 	assert.Equal(t, 1, last.Matched)
 	assert.Equal(t, []string{"bishoujosenshisailormoon"},
-		read(t, db, systemdefs.SystemSNES).title(path, tags.TagTypeGameDatabase))
+		read(t, db, systemdefs.SystemSNES).titleProperty(path, tags.TagPropertyGameDatabaseID))
 }
 
 func TestScrapeLeavesATitleTwoGamesShare(t *testing.T) {
@@ -243,7 +254,8 @@ func TestScrapePassesOverAPrototypeThatSharesATitle(t *testing.T) {
 
 	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{})
 	assert.Equal(t, 1, last.Matched)
-	assert.Equal(t, []string{"hook8bit"}, read(t, db, systemdefs.SystemGameboy).title(path, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"hook8bit"},
+		read(t, db, systemdefs.SystemGameboy).titleProperty(path, tags.TagPropertyGameDatabaseID))
 }
 
 func TestScrapeRecordsWhatACompilationContains(t *testing.T) {
@@ -255,9 +267,50 @@ func TestScrapeRecordsWhatACompilationContains(t *testing.T) {
 	runScraper(t, db, nil, nil, scraper.ScrapeOptions{})
 
 	lib := read(t, db, systemdefs.SystemSNES)
-	assert.Equal(t, []string{"hector87", "starforce", "starsoldier"}, lib.title(path, tags.TagTypeCompilation))
+	assert.Equal(t, []string{"starforce", "starsoldier", "hector87"},
+		lib.titleProperty(path, tags.TagPropertyGameDatabaseContains))
+	assert.Empty(t, lib.title(path, tags.TagType("compilation")))
+	assert.Empty(t, lib.title(path, tags.TagType("gamedatabase")))
 	assert.Equal(t, []string{"compilation"}, lib.title(path, tags.TagTypeMultigame))
-	assert.Equal(t, []string{"caravanshootingcollection"}, lib.title(path, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"caravanshootingcollection"}, lib.titleProperty(path, tags.TagPropertyGameDatabaseID))
+}
+
+func TestCompilationPropertiesRespectFillMissingAndForce(t *testing.T) {
+	t.Parallel()
+	for name, existing := range map[string]bool{"missing": false, "existing": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			db := newLibrary(t)
+			path := rom("SNES", "Caravan Shooting Collection (Japan).sfc")
+			scantest.IndexMediaPaths(t, db, systemdefs.SystemSNES, path)
+			lib := read(t, db, systemdefs.SystemSNES)
+			props := []database.MediaProperty{{
+				TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseID), Text: "existingid",
+			}}
+			if existing {
+				props = append(props, database.MediaProperty{
+					TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseContains), Text: `["existingmember"]`,
+				})
+			}
+			require.NoError(t,
+				db.UpsertMediaTitleProperties(context.Background(), lib.media[path].MediaTitleDBID, props))
+
+			runScraper(t, db, nil, nil, scraper.ScrapeOptions{FillMissing: true})
+			assert.Equal(t, []string{"existingid"}, lib.titleProperty(path, tags.TagPropertyGameDatabaseID))
+			want := []string{"starforce", "starsoldier", "hector87"}
+			if existing {
+				want = []string{"existingmember"}
+			}
+			assert.Equal(t, want, lib.titleProperty(path, tags.TagPropertyGameDatabaseContains))
+			assert.Equal(t, []string{"compilation"}, lib.title(path, tags.TagTypeMultigame))
+
+			runScraper(t, db, nil, nil, scraper.ScrapeOptions{Force: true})
+			assert.Equal(t, []string{"caravanshootingcollection"},
+				lib.titleProperty(path, tags.TagPropertyGameDatabaseID))
+			assert.Equal(t, []string{"starforce", "starsoldier", "hector87"},
+				lib.titleProperty(path, tags.TagPropertyGameDatabaseContains), "force replaces complete property value")
+		})
+	}
 }
 
 func TestScrapeSplitsJointDevelopersIntoOneDeveloperAndCredits(t *testing.T) {
@@ -304,7 +357,7 @@ func TestScrapeUsesAnotherSystemsBundleOnlyForWhatItsOwnLacks(t *testing.T) {
 	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{})
 	assert.Equal(t, 1, last.Matched)
 	assert.Equal(t, []string{"donkeykongland"},
-		read(t, db, systemdefs.SystemGameboyColor).title(path, tags.TagTypeGameDatabase))
+		read(t, db, systemdefs.SystemGameboyColor).titleProperty(path, tags.TagPropertyGameDatabaseID))
 }
 
 func TestFillMissingKeepsWhatAnEarlierSourceWrote(t *testing.T) {
@@ -342,7 +395,7 @@ func TestFillMissingSkipsASystemUntilItsLibraryChanges(t *testing.T) {
 	last := runScraper(t, db, nil, nil, opts)
 	assert.Equal(t, 2, last.Processed, "an index that changed the system is scraped again")
 	assert.Equal(t, []string{"supermariokart"},
-		read(t, db, systemdefs.SystemSNES).title(second, tags.TagTypeGameDatabase))
+		read(t, db, systemdefs.SystemSNES).titleProperty(second, tags.TagPropertyGameDatabaseID))
 }
 
 func TestScrapeMatchesArcadeArchivesBySetName(t *testing.T) {
@@ -412,9 +465,9 @@ func TestScopedScrapeWritesOnlyTheSelectedFile(t *testing.T) {
 	assert.Equal(t, 1, last.Matched)
 
 	assert.True(t, lib.scraped(selected))
-	assert.Equal(t, []string{"supermarioworld"}, lib.title(selected, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"supermarioworld"}, lib.titleProperty(selected, tags.TagPropertyGameDatabaseID))
 	assert.False(t, lib.scraped(other))
-	assert.Empty(t, lib.title(other, tags.TagTypeGameDatabase))
+	assert.Empty(t, lib.titleProperty(other, tags.TagPropertyGameDatabaseID))
 }
 
 func TestScopedFillMissingKeepsWhatAnEarlierSourceWrote(t *testing.T) {
@@ -431,6 +484,9 @@ func TestScopedFillMissingKeepsWhatAnEarlierSourceWrote(t *testing.T) {
 			{Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenrePuzzle)},
 		}))
 
+	require.NoError(t, db.UpsertMediaTitleProperties(context.Background(), lib.media[selected].MediaTitleDBID,
+		[]database.MediaProperty{{TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseID), Text: "existingid"}}))
+
 	last := runScraper(t, db, nil, nil, scraper.ScrapeOptions{
 		FillMissing: true,
 		Scope: &database.ScrapeScope{
@@ -442,6 +498,9 @@ func TestScopedFillMissingKeepsWhatAnEarlierSourceWrote(t *testing.T) {
 	assert.Equal(t, []string{"action", "action:platformer", "puzzle"}, lib.title(selected, tags.TagTypeGenre),
 		"an additive field gains values")
 	assert.Equal(t, []string{"nintendo"}, lib.title(selected, tags.TagTypePublisher), "an empty field is filled")
+	assert.Equal(t, []string{"existingid"}, lib.titleProperty(selected, tags.TagPropertyGameDatabaseID),
+		"fill-missing preserves existing identity properties")
+
 	assert.True(t, lib.scraped(selected))
 	assert.False(t, lib.scraped(other))
 	assert.Empty(t, lib.title(other, tags.TagTypePublisher))
