@@ -21,6 +21,7 @@ package gamedatabase
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -41,8 +42,19 @@ import (
 // database indexed through the production scan pipeline, so a title is
 // matched on the slug the indexer really gives its file.
 
+// absPath returns an absolute path in the slash form the index stores. On
+// Windows that needs a drive, or a scope on the path is rejected as relative.
+func absPath(parts ...string) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	root := filepath.VolumeName(wd) + string(filepath.Separator)
+	return filepath.ToSlash(filepath.Join(append([]string{root}, parts...)...))
+}
+
 func rom(system, name string) string {
-	return filepath.Join(string(filepath.Separator), "roms", system, name)
+	return absPath("roms", system, name)
 }
 
 func newLibrary(t *testing.T) *mediadb.MediaDB {
@@ -426,8 +438,8 @@ func TestScrapeReadsADescriptorsSetNameFromTheCacheThenTheFile(t *testing.T) {
 	t.Parallel()
 	db := newLibrary(t)
 	fs := afero.NewMemMapFs()
-	cached := filepath.Join(string(filepath.Separator), "media", "fat", "_Arcade", "Ten Yard Fight (Japan).mra")
-	onDisk := filepath.Join(string(filepath.Separator), "media", "fat", "_Arcade", "Versus Ten Yard Fight.mra")
+	cached := absPath("media", "fat", "_Arcade", "Ten Yard Fight (Japan).mra")
+	onDisk := absPath("media", "fat", "_Arcade", "Versus Ten Yard Fight.mra")
 	require.NoError(t, fs.MkdirAll(filepath.Dir(onDisk), 0o750))
 	require.NoError(t, afero.WriteFile(fs, onDisk, []byte(
 		"<misterromdescription><name>Vs</name><setname>vs10yard</setname>"+

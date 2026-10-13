@@ -1439,6 +1439,94 @@ launcher = "snes-retroarch"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_SystemPathFormatAcceptsHostSeparators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		rel  []string
+	}{
+		{name: "file in launcher folder", rel: []string{"snes", "game.sfc"}},
+		{name: "file in subfolder", rel: []string{"snes", "Sub Dir", "game.sfc"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			want := filepath.Join(tmpDir, filepath.Join(tt.rel[1:]...))
+			require.NoError(t, os.MkdirAll(filepath.Dir(want), 0o750))
+			require.NoError(t, os.WriteFile(want, []byte("test"), 0o600))
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "snes-retroarch"
+`))
+			snesLauncher := platforms.Launcher{
+				ID:       "snes-retroarch",
+				SystemID: "SNES",
+				Folders:  []string{tmpDir},
+				Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+					return &os.Process{}, nil
+				},
+			}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{snesLauncher})
+			mockPlatform.On("RootDirs", cfg).Return([]string{})
+			mockPlatform.On("LaunchMedia", cfg, want,
+				mock.MatchedBy(func(l *platforms.Launcher) bool {
+					return l != nil && l.ID == "snes-retroarch"
+				}),
+				(*database.Database)(nil),
+				(*platforms.LaunchOptions)(nil)).Return(nil)
+
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{Name: "launch", Args: []string{filepath.Join(tt.rel...)}},
+				Cfg: cfg,
+			}
+
+			result, err := cmdLaunch(mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCmdLaunch_SystemPathFormatDoesNotLaunchADirectory(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "Game.chd"), 0o750))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "snes-retroarch", SystemID: "SNES", Folders: []string{tmpDir},
+	}})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{filepath.Join("snes", "Game.chd")},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorIs(t, err, ErrFileNotFound)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+}
+
 func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 	t.Parallel()
 
