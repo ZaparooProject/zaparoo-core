@@ -284,64 +284,67 @@ func (c *arcadeSystemCache) scanFiles(
 		default:
 		}
 
-		arcadePath, err := mediascanner.FindPath(ctx, filepath.Join(root, "_Arcade"))
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+		for _, folder := range arcadeScanFolders() {
+			arcadePath, err := mediascanner.FindPath(ctx, filepath.Join(root, folder))
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
 			}
-			continue
-		}
-		walkErr := afero.Walk(
-			c.platform.filesystem(),
-			arcadePath,
-			func(path string, info os.FileInfo, walkEntryErr error) error {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if walkEntryErr != nil {
-					return walkEntryErr
-				}
-				if info.IsDir() {
-					if matcher.ShouldSkipScanDirectory(systemdefs.SystemArcade, path) {
-						log.Info().Str("path", path).Msg("skipping launcher-excluded MiSTer arcade directory")
-						return filepath.SkipDir
+			walkErr := afero.Walk(
+				c.platform.filesystem(),
+				arcadePath,
+				func(path string, info os.FileInfo, walkEntryErr error) error {
+					if err := ctx.Err(); err != nil {
+						return err
 					}
-					return nil
-				}
-				if info.Mode()&os.ModeSymlink != 0 {
-					if readLink != nil {
-						skip, skipErr := matcher.ShouldSkipScanSymlink(
-							systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+					if walkEntryErr != nil {
+						return walkEntryErr
+					}
+					if info.IsDir() {
+						if matcher.ShouldSkipScanDirectory(systemdefs.SystemArcade, path) {
+							log.Info().Str("path", path).Msg("skipping launcher-excluded MiSTer arcade directory")
+							return filepath.SkipDir
+						}
+						return nil
+					}
+					if info.Mode()&os.ModeSymlink != 0 {
+						if readLink != nil {
+							skip, skipErr := matcher.ShouldSkipScanSymlink(
+								systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+							)
+							if skipErr != nil {
+								log.Debug().Err(skipErr).Str("path", path).
+									Msg("unable to read MiSTer arcade symlink")
+							} else if skip {
+								return nil
+							}
+						}
+						broken, brokenErr := matcher.ShouldSkipBrokenScanSymlink(
+							systemdefs.SystemArcade, path,
+							func() (bool, error) { return arcadeSymlinkTargetExists(c.platform.filesystem(), path) },
 						)
-						if skipErr != nil {
-							log.Debug().Err(skipErr).Str("path", path).
-								Msg("unable to read MiSTer arcade symlink")
-						} else if skip {
+						if brokenErr == nil && broken {
 							return nil
 						}
 					}
-					broken, brokenErr := matcher.ShouldSkipBrokenScanSymlink(
-						systemdefs.SystemArcade, path,
-						func() (bool, error) { return arcadeSymlinkTargetExists(c.platform.filesystem(), path) },
-					)
-					if brokenErr == nil && broken {
-						return nil
+					ext := filepath.Ext(path)
+					if strings.EqualFold(ext, ".mra") || strings.EqualFold(ext, ".mgl") {
+						results = append(results, platforms.ScanResult{Path: path})
 					}
-				}
-				ext := filepath.Ext(path)
-				if strings.EqualFold(ext, ".mra") || strings.EqualFold(ext, ".mgl") {
-					results = append(results, platforms.ScanResult{Path: path})
-				}
-				return nil
-			},
-		)
-		// Walk can finish without observing cancellation when the last entry
-		// is already in flight, so partial results must not look complete.
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if walkErr != nil {
-			log.Warn().Err(walkErr).Str("path", arcadePath).Msg("unable to scan MiSTer arcade files for classification")
+					return nil
+				},
+			)
+			// Walk can finish without observing cancellation when the last entry
+			// is already in flight, so partial results must not look complete.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if walkErr != nil {
+				log.Warn().Err(walkErr).Str("path", arcadePath).
+					Msg("unable to scan MiSTer arcade files for classification")
+			}
 		}
 	}
 	return results, nil
