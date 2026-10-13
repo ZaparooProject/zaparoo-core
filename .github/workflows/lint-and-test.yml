@@ -397,10 +397,32 @@ jobs:
               -t "${{ env.ZIGCC_IMAGE }}" scripts/zigcc
           fi
 
+      # go.mod can require a newer Go than the zigcc image ships, in which case
+      # every go command downloads the full toolchain first (about 75 MB). A
+      # stalled download otherwise hangs go list inside golangci-lint, past its
+      # own --timeout, so fetch it here with a deadline and share the result.
+      - name: Fetch Go toolchain and modules
+        run: |
+          mkdir -p "${RUNNER_TEMP}/gomod"
+          chmod 777 "${RUNNER_TEMP}/gomod"
+          for attempt in 1 2; do
+            docker rm -f go-fetch >/dev/null 2>&1 || true
+            if timeout 300 docker run --rm --name go-fetch \
+              -v "${PWD}:/build" \
+              -v "${RUNNER_TEMP}/gomod:/home/build/go" \
+              ${{ env.ZIGCC_IMAGE }} go mod download; then
+              exit 0
+            fi
+            echo "Go fetch attempt ${attempt} failed or timed out"
+          done
+          docker rm -f go-fetch >/dev/null 2>&1 || true
+          exit 1
+
       - name: Cross-platform lint (${{ matrix.target }})
         run: |
           docker run --rm \
             -v "${PWD}:/build" \
+            -v "${RUNNER_TEMP}/gomod:/home/build/go" \
             -e GOOS=${{ matrix.target }} \
             -e GOARCH=amd64 \
             -e CGO_ENABLED=1 \
