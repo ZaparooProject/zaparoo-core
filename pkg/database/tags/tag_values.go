@@ -2136,6 +2136,12 @@ const (
 	TagPropertyMAMESetName      TagValue = "mame-setname"      // MAME/MRA romset identity
 )
 
+// Catalog identifiers are title properties, not user-facing tags.
+const (
+	TagPropertyGameDatabaseID       TagValue = "gamedatabase-id"       // GameDataBase title identity
+	TagPropertyGameDatabaseContains TagValue = "gamedatabase-contains" // JSON array of raw compilation member IDs
+)
+
 // Patch labels, the canonical names for the patch families ROM-hack
 // collections use (see patchLabelAliases in filename_parser.go).
 const (

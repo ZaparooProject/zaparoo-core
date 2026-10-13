@@ -33,7 +33,6 @@ func TestIsCappedTagTypeFollowsTagRules(t *testing.T) {
 	t.Parallel()
 	for _, capped := range []tags.TagType{
 		tags.TagTypeDeveloper, tags.TagTypePublisher, tags.TagTypeCredit, tags.TagTypeMameParent,
-		tags.TagTypeCompilation, tags.TagTypeGameDatabase,
 		tags.TagTypeExtension, tags.TagTypeTrack, tags.TagTypeBuildDate, tags.TagTypeUser,
 		tags.TagTypeSearch, tags.ScraperType("gamelist.xml"), "no-such-type",
 	} {

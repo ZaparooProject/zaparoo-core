@@ -198,8 +198,8 @@ func TestTableTargetsAreCoreValues(t *testing.T) {
 		valid(typedValue{Type: tags.TagTypeRegion, Value: value})
 	}
 	for raw, id := range idRecoveries {
-		assert.True(t, tags.IsValidTagValue(tags.TagTypeGameDatabase, id), "%q repairs to %q", raw, id)
-		assert.False(t, tags.IsValidTagValue(tags.TagTypeGameDatabase, raw), "%q needs no repair", raw)
+		assert.True(t, validDatasetID(id), "%q repairs to %q", raw, id)
+		assert.False(t, validDatasetID(raw), "%q needs no repair", raw)
 	}
 	for raw, fixed := range tokenRecoveries {
 		_, ok := parseToken(raw)
@@ -225,6 +225,20 @@ func TestEveryEmbeddedRowBuildsAValidWrite(t *testing.T) {
 		b.addTitle(row, &parsed)
 		b.addSet(&parsed)
 		scrapertest.RequireValidWrite(t, b.write)
+		if id, ok := datasetID(row.ID); ok {
+			assert.Equal(t, []string{id}, propertyValues(t, b.write.TitleProps, tags.TagPropertyGameDatabaseID))
+		}
+		var members []string
+		for _, id := range parsed.contains {
+			if !slices.Contains(members, id) {
+				members = append(members, id)
+			}
+		}
+		assert.Equal(t, members, propertyValues(t, b.write.TitleProps, tags.TagPropertyGameDatabaseContains), row.Title)
+		for _, info := range append(b.write.TitleTags, b.write.MediaTags...) {
+			assert.NotEqual(t, "gamedatabase", info.Type)
+			assert.NotEqual(t, "compilation", info.Type)
+		}
 
 		perType := map[string]int{}
 		for _, info := range b.write.TitleTags {

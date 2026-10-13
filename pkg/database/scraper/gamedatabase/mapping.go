@@ -20,6 +20,8 @@
 package gamedatabase
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -37,7 +39,7 @@ type rowTags struct {
 	// values are the row's tags as Core values, of every type, in the order
 	// upstream wrote them.
 	values []typedValue
-	// contains are the IDs of the games a compilation row contains.
+	// contains keeps raw source IDs, not canonical game names.
 	contains []string
 	// unknown are the tags and values with no mapping.
 	unknown []typedValue
@@ -154,8 +156,8 @@ func (t *rowTags) readSet(tok *token) {
 func (t *rowTags) readCompilation(tok *token) {
 	t.values = append(t.values, bareValues[typeCompilation])
 	note := func(id string) {
-		if !tags.IsValidTagValue(tags.TagTypeCompilation, id) {
-			t.unknown = append(t.unknown, typedValue{Type: tags.TagTypeCompilation, Value: tags.TagValue(id)})
+		if !validDatasetID(id) {
+			t.unknown = append(t.unknown, typedValue{Type: tags.TagTypeProperty, Value: tags.TagValue(id)})
 			return
 		}
 		t.contains = append(t.contains, id)
@@ -229,7 +231,9 @@ func (b *writeBuilder) title(tagType tags.TagType, value tags.TagValue) {
 // addTitle writes what a row says about the game to the title.
 func (b *writeBuilder) addTitle(row *gdb.Row, parsed *rowTags) {
 	if id, ok := datasetID(row.ID); ok {
-		b.title(tags.TagTypeGameDatabase, tags.TagValue(id))
+		b.write.TitleProps = append(b.write.TitleProps, database.MediaProperty{
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseID), Text: id,
+		})
 	}
 	if year, ok := releaseYear(row.Date); ok {
 		b.title(tags.TagTypeYear, tags.TagValue(year))
@@ -255,8 +259,18 @@ func (b *writeBuilder) addTitle(row *gdb.Row, parsed *rowTags) {
 		}
 		b.title(value.Type, value.Value)
 	}
-	for _, id := range parsed.contains {
-		b.title(tags.TagTypeCompilation, tags.TagValue(id))
+	if len(parsed.contains) > 0 {
+		ids := make([]string, 0, len(parsed.contains))
+		for _, id := range parsed.contains {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+		// One text property preserves source membership without a game-name vocabulary.
+		encoded, _ := json.Marshal(ids)
+		b.write.TitleProps = append(b.write.TitleProps, database.MediaProperty{
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseContains), Text: string(encoded),
+		})
 	}
 	for i := range parsed.unknown {
 		b.note(parsed.unknown[i].Type, string(parsed.unknown[i].Value))

@@ -112,7 +112,7 @@ func matchKeys(row *gdb.Row, id string, slugger *slugger) []string {
 			add(slugger.slug(spelled))
 		}
 	}
-	if tags.IsValidTagValue(tags.TagTypeGameDatabase, id) {
+	if validDatasetID(id) {
 		add(id)
 	}
 	return keys

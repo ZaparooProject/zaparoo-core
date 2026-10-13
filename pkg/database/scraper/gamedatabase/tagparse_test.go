@@ -138,11 +138,12 @@ func TestReadTagsCompilationsAndDiscs(t *testing.T) {
 	t.Parallel()
 	parsed := readTags("#compilation:starforce:starsoldier>hector87")
 	assert.Equal(t, []string{"starforce", "starsoldier", "hector87"}, parsed.contains,
-		"upstream separates a compilation's games with either mark")
+		"both source separators preserve raw member IDs")
 	assert.Equal(t, []typedValue{{tags.TagTypeMultigame, tags.TagMultigameCompilation}}, parsed.values)
 
 	bare := readTags("#compilation")
 	assert.Empty(t, bare.contains)
+	assert.Empty(t, bare.unknown)
 	assert.Equal(t, []typedValue{{tags.TagTypeMultigame, tags.TagMultigameCompilation}}, bare.values)
 
 	disc := readTags("#disc:2>1")
@@ -175,7 +176,7 @@ func FuzzReadTags(f *testing.F) {
 			t.Fatalf("accepted set name %q", parsed.setName)
 		}
 		for _, id := range parsed.contains {
-			if !tags.IsValidTagValue(tags.TagTypeCompilation, id) {
+			if !validDatasetID(id) {
 				t.Fatalf("accepted compilation ID %q", id)
 			}
 		}

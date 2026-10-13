@@ -36,9 +36,6 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeYear:      true,
 	TagTypeRating:    true,
 
-	// One GameDataBase game per title
-	TagTypeGameDatabase: true,
-
 	// File-level single-value types
 	TagTypeRev:         true,
 	TagTypeDisc:        true,
@@ -88,7 +85,7 @@ func IsUserOwnedType(t TagType) bool {
 func IsScannerOwnedType(t TagType) bool {
 	switch t {
 	case TagTypeUser, TagTypeProperty, TagTypeRating, TagTypeGenre,
-		TagTypeMameParent, TagTypeCompilation, TagTypeGameDatabase:
+		TagTypeMameParent:
 		return false
 	default:
 	}

@@ -20,6 +20,8 @@
 package gamedatabase
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -28,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func buildTitle(row *gdb.Row, unmapped *scraper.UnmappedValues) *database.ScrapeWrite {
@@ -49,7 +52,7 @@ func TestAddTitleWritesGameFactsAndLeavesReleaseFacts(t *testing.T) {
 	scrapertest.RequireValidWrite(t, write)
 
 	title := write.TitleTags
-	assert.Equal(t, []string{"example"}, values(title, tags.TagTypeGameDatabase))
+	assert.Equal(t, []string{"example"}, propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseID))
 	assert.Equal(t, []string{"1995"}, values(title, tags.TagTypeYear))
 	assert.Equal(t, []string{"nintendo"}, values(title, tags.TagTypeDeveloper))
 	assert.Equal(t, []string{"tose"}, values(title, tags.TagTypeCredit), "the developer is not also its own credit")
@@ -83,6 +86,7 @@ func TestAddTitleDropsWhatItCannotStore(t *testing.T) {
 	}, unmapped)
 	scrapertest.RequireValidWrite(t, write)
 	assert.Equal(t, []database.TagInfo{{Type: "players", Tag: "1"}}, write.TitleTags)
+	assert.Empty(t, write.TitleProps, "invalid catalog IDs are not stored")
 	assert.Equal(t, 1, unmapped.Count(tags.TagTypeGenre))
 	assert.Equal(t, 1, unmapped.Count(tags.TagTypeYear), "an unlisted unreadable date is reported")
 
@@ -170,7 +174,87 @@ func FuzzBuildWrite(f *testing.F) {
 				t.Fatalf("%d %s values for one title", count, tagType)
 			}
 		}
+		members := propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseContains)
+		seen := make(map[string]struct{}, len(members))
+		for _, member := range members {
+			require.True(t, validDatasetID(member))
+			_, duplicate := seen[member]
+			require.False(t, duplicate, "compilation property contains duplicate ID")
+			seen[member] = struct{}{}
+		}
+		for _, info := range append(write.TitleTags, write.MediaTags...) {
+			require.NotEqual(t, "compilation", info.Type)
+			require.NotEqual(t, "gamedatabase", info.Type)
+		}
 		regionValues(region)
 		sortDate(date)
 	})
+}
+
+func propertyValues(t *testing.T, props []database.MediaProperty, property tags.TagValue) []string {
+	t.Helper()
+	for _, prop := range props {
+		if prop.TypeTag != tags.PropertyTypeTag(property) {
+			continue
+		}
+		if property == tags.TagPropertyGameDatabaseContains {
+			var ids []string
+			require.NoError(t, json.Unmarshal([]byte(prop.Text), &ids))
+			return ids
+		}
+		return []string{prop.Text}
+	}
+	return nil
+}
+
+func TestCatalogIDsArePropertiesNotTags(t *testing.T) {
+	t.Parallel()
+	write := buildTitle(&gdb.Row{ID: "example", Tags: "#compilation:starforce:starsoldier>hector87:starforce"}, nil)
+	scrapertest.RequireValidWrite(t, write)
+	assert.Equal(t, []string{"example"}, propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseID))
+	require.Len(t, write.TitleProps, 2)
+	assert.Equal(t, []string{"starforce", "starsoldier", "hector87"},
+		propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseContains))
+	assert.Equal(t, `["starforce","starsoldier","hector87"]`, write.TitleProps[1].Text)
+	assert.Equal(t, []string{"compilation"}, values(write.TitleTags, tags.TagTypeMultigame))
+	for _, tag := range append(write.TitleTags, write.MediaTags...) {
+		assert.NotEqual(t, "gamedatabase", tag.Type)
+		assert.NotEqual(t, "compilation", tag.Type)
+	}
+}
+
+func TestCompilationPropertiesPreserveRawIDsAndRejectMalformedIDs(t *testing.T) {
+	t.Parallel()
+	unmapped := &scraper.UnmappedValues{}
+	write := buildTitle(&gdb.Row{
+		ID: "collection", Tags: "#compilation:culdcept:culcept:futuregame:culdcept:bad_id",
+	}, unmapped)
+	scrapertest.RequireValidWrite(t, write)
+	assert.Equal(t, []string{"culdcept", "culcept", "futuregame"},
+		propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseContains),
+		"preserve aliases and previously unseen valid IDs; deduplicate only identical strings")
+	assert.Equal(t, 1, unmapped.Count(tags.TagTypeProperty))
+	assert.Equal(t, []string{"compilation"}, values(write.TitleTags, tags.TagTypeMultigame))
+	assert.Equal(t, []string{"collection"}, propertyValues(t, write.TitleProps, tags.TagPropertyGameDatabaseID))
+	require.Len(t, write.TitleProps, 2)
+	assert.Empty(t, write.MediaProps, "membership belongs to title, not ROM")
+}
+
+func TestCompilationWithoutValidMembersOmitsProperty(t *testing.T) {
+	t.Parallel()
+	for _, cell := range []string{"", "#compilation", "#compilation:bad_id"} {
+		write := buildTitle(&gdb.Row{Tags: cell}, nil)
+		scrapertest.RequireValidWrite(t, write)
+		assert.Empty(t, write.TitleProps, cell)
+	}
+}
+
+func TestDatasetIDFormat(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"supermarioworld", "starsoldier", strings.Repeat("a", 96)} {
+		assert.True(t, validDatasetID(id), id)
+	}
+	for _, id := range []string{"", "super-mario-world", "Star Soldier", "two/ids", strings.Repeat("a", 97)} {
+		assert.False(t, validDatasetID(id), id)
+	}
 }

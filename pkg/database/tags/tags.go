@@ -127,8 +127,6 @@ const (
 	TagTypeUnlicensed    TagType = "unlicensed"    // Unlicensed/bootleg/hacks
 	TagTypePatch         TagType = "patch"         // Applied ROM patches and modifications
 	TagTypeMameParent    TagType = "mameparent"    // MAME parent ROM relationship
-	TagTypeCompilation   TagType = "compilation"   // Game contained in a compilation, by GameDataBase ID
-	TagTypeGameDatabase  TagType = "gamedatabase"  // GameDataBase ID of the game a title is
 	TagTypeRegion        TagType = "region"        // Release region
 	TagTypeYear          TagType = "year"          // Release year
 	TagTypeBuildDate     TagType = "builddate"     // Romset/build date (YYYY-MM-DD); MiSTer arcade YYMMDD
@@ -1106,14 +1104,6 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// MAME parent setnames; format rule, no list.
 	},
 
-	TagTypeCompilation: {
-		// GameDataBase IDs of the games a compilation contains; format rule, no list.
-	},
-
-	TagTypeGameDatabase: {
-		// GameDataBase IDs; format rule, no list.
-	},
-
 	TagTypeDeveloper: {
 		// Free text: company names, normalised by NormalizeCompanyName.
 	},
@@ -1315,6 +1305,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyVideo,
 		TagPropertyManual,
 		TagPropertyXMLGameID,
+		TagPropertyGameDatabaseID,
+		TagPropertyGameDatabaseContains,
 		TagPropertyGameID,
 		TagPropertyLauncherOverride,
 		TagPropertyMAMESetName,
