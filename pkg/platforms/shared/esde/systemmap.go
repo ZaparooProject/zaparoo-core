@@ -345,6 +345,11 @@ var SystemMap = map[string]SystemInfo{
 		Extensions: []string{".zip", ".dmy"},
 		LauncherID: "DICE",
 	},
+	"doom": {
+		SystemID:   systemdefs.SystemDoom,
+		Extensions: []string{".wad", ".iwad", ".pwad"},
+		LauncherID: "Doom",
+	},
 	"doom3": {
 		SystemID:   systemdefs.SystemPC,
 		Extensions: []string{".d3"},
@@ -542,7 +547,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "GX4000",
 	},
 	"gzdoom": {
-		SystemID:   systemdefs.SystemDOS,
+		SystemID:   systemdefs.SystemDoom,
 		Extensions: []string{".wad", ".iwad", ".pwad", ".gzdoom"},
 		LauncherID: "GZDoom",
 	},
@@ -908,7 +913,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "Ports",
 	},
 	"prboom": {
-		SystemID:   systemdefs.SystemDOS,
+		SystemID:   systemdefs.SystemDoom,
 		Extensions: []string{".wad", ".iwad", ".pwad"},
 		LauncherID: "PRBoom",
 	},

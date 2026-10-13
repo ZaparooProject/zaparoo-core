@@ -163,13 +163,7 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemPCFX, DefaultCore: "mednafen_pcfx", Policy: PolicyFree, ESFolder: "pcfx"},
 	{SystemID: systemdefs.SystemPET2001, DefaultCore: "vice_xpet", Policy: PolicyFree, ESFolder: "pet"},
 	{SystemID: systemdefs.SystemPokemonMini, DefaultCore: "pokemini", Policy: PolicyFree, ESFolder: "pokemini"},
-	{
-		SystemID: systemdefs.SystemDOS, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom",
-		// Android doesn't distinguish a separate PrBoom folder/system; it lists
-		// prboom as one of its "DOS" alternates (below), attached to the "dos"
-		// folder entry.
-		PerProfileCore: map[Profile]string{ProfileAndroid: ""},
-	},
+	{SystemID: systemdefs.SystemDoom, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom"},
 	{
 		SystemID: systemdefs.SystemPSP, DefaultCore: "ppsspp", Policy: PolicyFree, ESFolder: "psp",
 		PerProfileCore: map[Profile]string{ProfileApplianceARM: ""},
@@ -416,7 +410,7 @@ var androidCoreAlternates = []androidAlternates{
 	{SystemID: systemdefs.SystemCPS3, Cores: []string{"fbalpha2012_cps3"}},
 	{SystemID: systemdefs.SystemColecoVision, Cores: []string{"bluemsx", "jollycv"}},
 	{SystemID: systemdefs.SystemCommodoreCDTV, Cores: []string{"amiberry", "puae2021"}},
-	{SystemID: systemdefs.SystemDOS, Cores: []string{"prboom", "dosbox_core", "dosbox", "dosbox_svn"}},
+	{SystemID: systemdefs.SystemDOS, Cores: []string{"dosbox_core", "dosbox", "dosbox_svn"}},
 	{SystemID: systemdefs.SystemFDS, Cores: []string{"fceumm", "fixnes", "mesen2", "nestopia", "rustynes"}},
 	{
 		SystemID: systemdefs.SystemGBA,

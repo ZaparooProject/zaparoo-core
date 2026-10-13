@@ -1041,3 +1041,23 @@ func TestSystemsWithFallbacks(t *testing.T) {
 		assert.Equal(t, []string{SystemAmigaCD32, SystemAmiga}, ids)
 	})
 }
+
+// Doom is its own system, tied to DOS in both directions so media filed under
+// either one still finds the other's launchers.
+func TestDoomSystemFallsBackToDOSAndBack(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"Doom", "doom", "PrBoom", "gzdoom"} {
+		system, err := LookupSystem(name)
+		require.NoError(t, err, name)
+		assert.Equal(t, SystemDoom, system.ID, name)
+	}
+
+	doom, err := GetSystem(SystemDoom)
+	require.NoError(t, err)
+	assert.Equal(t, []string{SystemDOS}, doom.Fallbacks)
+
+	dos, err := GetSystem(SystemDOS)
+	require.NoError(t, err)
+	assert.Contains(t, dos.Fallbacks, SystemDoom)
+}

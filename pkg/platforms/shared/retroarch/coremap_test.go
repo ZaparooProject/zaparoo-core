@@ -170,3 +170,17 @@ func TestCoreDefinitionsReturnsCopy(t *testing.T) {
 	}
 	assert.Equal(t, original, coreDefinitions[0].DefaultCore)
 }
+
+func TestPrBoomLaunchesDoomOnEveryProfile(t *testing.T) {
+	t.Parallel()
+
+	for _, profile := range []Profile{ProfileApplianceARM, ProfileDesktop, ProfileAndroid} {
+		var systems []string
+		for _, launch := range CoreLaunches(profile) {
+			if launch.Core == "prboom_libretro.so" {
+				systems = append(systems, launch.SystemID)
+			}
+		}
+		assert.Equal(t, []string{systemdefs.SystemDoom}, systems, "profile %s", profile)
+	}
+}

@@ -252,6 +252,7 @@ const (
 	SystemCasioPV2000            = "CasioPV2000"
 	SystemCoCo2                  = "CoCo2"
 	SystemDOS                    = "DOS"
+	SystemDoom                   = "Doom"
 	SystemEDSAC                  = "EDSAC"
 	SystemGalaksija              = "Galaksija"
 	SystemInteract               = "Interact"
@@ -1235,7 +1236,7 @@ var Systems = map[string]System{
 		ID:        SystemDOS,
 		Aliases:   []string{"ao486", "MS-DOS"},
 		Slugs:     []string{"ibmpc", "pcdos", "microsoftdos", "ibmdos", "dosbox"},
-		Fallbacks: []string{SystemPC},
+		Fallbacks: []string{SystemPC, SystemDoom},
 	},
 	SystemApogee: {
 		ID:    SystemApogee,
@@ -1735,6 +1736,11 @@ var Systems = map[string]System{
 	},
 	SystemOpenBOR: {
 		ID: SystemOpenBOR,
+	},
+	SystemDoom: {
+		ID:        SystemDoom,
+		Slugs:     []string{"prboom", "gzdoom"},
+		Fallbacks: []string{SystemDOS},
 	},
 	SystemPico8: {
 		ID:    SystemPico8,

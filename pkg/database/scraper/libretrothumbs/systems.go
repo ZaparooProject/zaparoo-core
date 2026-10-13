@@ -60,6 +60,7 @@ var playlists = map[string][]string{
 	"CPS3":                  {"FBNeo - Arcade Games", "MAME"},
 	"CreatiVision":          {"VTech - CreatiVision"},
 	"DOS":                   {"DOS"},
+	"Doom":                  {"DOOM"},
 	"Dreamcast":             {"Sega - Dreamcast"},
 	"FDS":                   {"Nintendo - Family Computer Disk System"},
 	"GameCom":               {"Tiger - Game.com"},
