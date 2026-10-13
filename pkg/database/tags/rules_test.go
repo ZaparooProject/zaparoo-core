@@ -212,6 +212,9 @@ func TestValidateTagValue(t *testing.T) {
 		// Free text: normalised company names.
 		{TagTypeDeveloper, "t-and-e-soft", true},
 		{TagTypeDeveloper, "T&E Soft", false},
+		{TagTypeDeveloper, "Nintendo", false},
+		{TagTypeDeveloper, "\u54660\u03d20", true},
+		{TagTypeDeveloper, "ϒ", true},
 		{TagTypePublisher, "nintendo", true},
 		{TagTypePublisher, "nin:tendo", false},
 		{TagTypeCredit, "", false},
