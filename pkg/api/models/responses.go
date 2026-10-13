@@ -181,6 +181,7 @@ type SettingsResponse struct {
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
+	LauncherPreference        []string           `json:"launcherPreference"`
 	AudioVolume               int                `json:"audioVolume"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`

@@ -1463,6 +1463,143 @@ func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownLauncher(t *testing.T
 	assert.Empty(t, got[0].BeforeExit)
 }
 
+func launcherPreferenceEnv(
+	t *testing.T,
+	cfg *config.Instance,
+	params *models.UpdateSettingsParams,
+) requests.RequestEnv {
+	t.Helper()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis", Groups: []string{"libretro"}},
+		{ID: "snes9x", SystemID: "SNES"},
+	})
+
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	return requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+		IsLocal:       true,
+	}
+}
+
+func TestHandleSettings_LauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{})
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.NotNil(t, resp.LauncherPreference)
+	assert.Empty(t, resp.LauncherPreference)
+
+	cfg.SetLauncherPreference([]string{"snes9x", "libretro", "Native"})
+	result, err = HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"snes9x", "libretro", "Native"}, resp.LauncherPreference)
+}
+
+func TestHandleSettingsUpdate_LauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := config.NewConfig(dir, config.Values{})
+	require.NoError(t, err)
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{
+		LauncherPreference: &[]string{"SNES9X", "libretro", "retroarch"},
+	})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"SNES9X", "libretro", "retroarch"}, cfg.LauncherPreference())
+
+	reloaded, err := config.NewConfig(dir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"SNES9X", "libretro", "retroarch"}, reloaded.LauncherPreference())
+}
+
+func TestHandleSettingsUpdate_LauncherPreference_RejectsUnknownAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	for name, list := range map[string][]string{
+		"unknown": {"snes9x", "doesnotexist"},
+		"empty":   {"snes9x", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+			cfg.SetLauncherPreference([]string{"retroarch"})
+			require.NoError(t, cfg.Save())
+
+			env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{LauncherPreference: &list})
+			_, err = HandleSettingsUpdate(env)
+			require.Error(t, err)
+			assert.Equal(t, []string{"retroarch"}, cfg.LauncherPreference())
+		})
+	}
+}
+
+// A client that reads the list, reorders it and sends it back must not be
+// refused for an entry the config already held, even one this platform lacks.
+func TestHandleSettingsUpdate_LauncherPreference_KeepsStoredUnknownEntry(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetLauncherPreference([]string{"RetroDECK", "snes9x"})
+	require.NoError(t, cfg.Save())
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{
+		LauncherPreference: &[]string{"snes9x", "retrodeck"},
+	})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"snes9x", "retrodeck"}, cfg.LauncherPreference())
+}
+
+func TestHandleSettingsUpdate_LauncherPreference_ClearAndOmit(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetLauncherPreference([]string{"snes9x"})
+	require.NoError(t, cfg.Save())
+
+	omit := true
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{DebugLogging: &omit})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"snes9x"}, cfg.LauncherPreference())
+
+	env = launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{LauncherPreference: &[]string{}})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.LauncherPreference())
+}
+
 // TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem verifies the
 // validate:"required,system" tag rejects payloads with an unknown system.
 func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem(t *testing.T) {

@@ -397,10 +397,43 @@ jobs:
               -t "${{ env.ZIGCC_IMAGE }}" scripts/zigcc
           fi
 
+      # go.mod can require a newer Go than the zigcc image ships. The container
+      # then downloads the full toolchain (about 75 MB) before every go command,
+      # and a stalled download hangs go list inside golangci-lint past its own
+      # --timeout. Use the runner's setup-go toolchain inside the container
+      # instead, so nothing is downloaded from the module proxy.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Fetch modules
+        run: |
+          mkdir -p "${RUNNER_TEMP}/gomod"
+          chmod 777 "${RUNNER_TEMP}/gomod"
+          for attempt in 1 2; do
+            docker rm -f go-fetch >/dev/null 2>&1 || true
+            if timeout 300 docker run --rm --name go-fetch \
+              -v "${PWD}:/build" \
+              -v "$(go env GOROOT):/usr/local/go:ro" \
+              -v "${RUNNER_TEMP}/gomod:/home/build/go" \
+              -e GOTOOLCHAIN=local \
+              ${{ env.ZIGCC_IMAGE }} go mod download; then
+              exit 0
+            fi
+            echo "Module fetch attempt ${attempt} failed or timed out"
+          done
+          docker rm -f go-fetch >/dev/null 2>&1 || true
+          exit 1
+
       - name: Cross-platform lint (${{ matrix.target }})
         run: |
           docker run --rm \
             -v "${PWD}:/build" \
+            -v "$(go env GOROOT):/usr/local/go:ro" \
+            -v "${RUNNER_TEMP}/gomod:/home/build/go" \
+            -e GOTOOLCHAIN=local \
             -e GOOS=${{ matrix.target }} \
             -e GOARCH=amd64 \
             -e CGO_ENABLED=1 \

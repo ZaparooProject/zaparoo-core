@@ -3023,6 +3023,7 @@ None.
 | encryption                | boolean                                   | Yes      | Whether paired encryption is required for remote WebSocket connections. Localhost remains exempt. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
+| launcherPreference        | string[]                                  | Yes      | Global launcher preference (`[launchers] preference`), in order. Each entry is a launcher ID or group name. When a launch names no launcher and the system has no `systemDefaults` launcher, the first entry with an available launcher for the media's system is used. Empty when unset. |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
 | updateChannel             | string                                    | Yes      | Release channel used for update checks: `stable` or `beta`. Defaults to `stable`. |
@@ -3087,7 +3088,8 @@ None.
         "system": "Genesis",
         "launcher": "retroarch"
       }
-    ]
+    ],
+    "launcherPreference": ["retroarch", "libretro"]
   }
 }
 ```
@@ -3117,6 +3119,7 @@ An object containing any of the following optional keys:
 | encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
+| launcherPreference        | string[]                                  | No       | Replace the global launcher preference list, keeping its order. `[]` clears it. Each entry must match a known launcher ID or group (case-insensitive), unless it is already in the current list. |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
 | updateChannel             | string                                    | No       | Release channel used for update checks: `stable` or `beta`. |
