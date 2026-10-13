@@ -122,6 +122,12 @@ func (c *Instance) LauncherPreference() []string {
 	return append([]string(nil), c.vals.Launchers.Preference...)
 }
 
+func (c *Instance) SetLauncherPreference(preference []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Launchers.Preference = append([]string(nil), preference...)
+}
+
 func (c *Instance) DefaultMediaDir() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

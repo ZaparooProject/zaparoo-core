@@ -210,6 +210,7 @@ type UpdateSettingsParams struct {
 	// the validator stops at the slice and every element goes unchecked.
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty" validate:"omitempty,dive"`
 	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
+	LauncherPreference        *[]string           `json:"launcherPreference,omitempty" validate:"omitempty,dive,required"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`

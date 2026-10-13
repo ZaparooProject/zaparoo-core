@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -75,6 +76,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersScanIgnoreSystem:   make([]string, 0),
 		ReadersConnect:            readersConnect,
 		SystemDefaults:            systemDefaults,
+		LauncherPreference:        make([]string, 0),
 		ErrorReporting:            env.Config.ErrorReporting(),
 		Encryption:                env.Config.EncryptionEnabled(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
@@ -86,6 +88,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
+	resp.LauncherPreference = append(resp.LauncherPreference, env.Config.LauncherPreference()...)
 	if isLocalOrAdmin(&env) {
 		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
 		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
@@ -207,6 +210,14 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		var err error
 		systemDefaults, err = buildSystemDefaults(env.LauncherCache, *params.SystemDefaults)
 		if err != nil {
+			return nil, err
+		}
+	}
+
+	if params.LauncherPreference != nil {
+		if err := validateLauncherPreference(
+			env.LauncherCache, *params.LauncherPreference, env.Config.LauncherPreference(),
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -389,6 +400,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		)
 	}
 
+	if params.LauncherPreference != nil {
+		log.Debug().Int("count", len(*params.LauncherPreference)).Msg("updating launchers.preference")
+		env.Config.SetLauncherPreference(*params.LauncherPreference)
+	}
+
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
@@ -492,6 +508,26 @@ func buildSystemDefaults(cache *helpers.LauncherCache, in []models.SystemDefault
 		})
 	}
 	return out, nil
+}
+
+// validateLauncherPreference checks that every entry of the global launcher
+// preference list names a known launcher ID or group. An entry the stored list
+// already holds is accepted unchecked: config may name a launcher this platform
+// lacks, and a client that reorders the list it read must not be refused for an
+// entry it never touched.
+func validateLauncherPreference(cache *helpers.LauncherCache, in, existing []string) error {
+	for _, ref := range in {
+		if slices.ContainsFunc(existing, func(e string) bool { return strings.EqualFold(e, ref) }) {
+			continue
+		}
+		if cache == nil {
+			return errors.New("launcher cache unavailable, cannot validate launcher reference")
+		}
+		if !launcherRefExists(cache, ref) {
+			return models.ClientErrf("unknown launcher %q in launcherPreference", ref)
+		}
+	}
+	return nil
 }
 
 // carryUnmodelledSystemDefaults copies forward the system default fields that
