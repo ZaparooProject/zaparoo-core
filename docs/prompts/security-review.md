@@ -6,13 +6,14 @@ Perform a security audit of zaparoo-core focusing on areas static analysis misse
 
 3. **WebSocket message size limits**: Verify melody config in `pkg/api/server.go` prevents memory exhaustion from oversized messages. Check MaxMessageSize and WriteBufferSize settings.
 
-4. **NDEF parser boundary analysis**: Run extended fuzzing on the 5 fuzz functions in `pkg/readers/shared/ndef/parser_fuzz_test.go`:
+4. **NDEF and CCID parser boundary analysis**: Run extended fuzzing on the NFC tag and CCID parsers:
    ```
-   go test -run "^$" -fuzz=FuzzParseToText -fuzztime=5m ./pkg/readers/shared/ndef/
-   go test -run "^$" -fuzz=FuzzValidateNDEFMessage -fuzztime=5m ./pkg/readers/shared/ndef/
-   go test -run "^$" -fuzz=FuzzExtractTLVPayload -fuzztime=5m ./pkg/readers/shared/ndef/
-   go test -run "^$" -fuzz=FuzzParseTextPayload -fuzztime=5m ./pkg/readers/shared/ndef/
-   go test -run "^$" -fuzz=FuzzParseURIPayload -fuzztime=5m ./pkg/readers/shared/ndef/
+   go test -run "^$" -fuzz=FuzzTextFromMemory -fuzztime=5m ./pkg/readers/shared/nfctag/
+   go test -run "^$" -fuzz=FuzzReadType2 -fuzztime=5m ./pkg/readers/shared/nfctag/
+   go test -run "^$" -fuzz=FuzzReadClassic -fuzztime=5m ./pkg/readers/shared/nfctag/
+   go test -run "^$" -fuzz=FuzzATR -fuzztime=5m ./pkg/readers/ccid/
+   go test -run "^$" -fuzz=FuzzConn -fuzztime=5m ./pkg/readers/ccid/proto/
+   go test -run "^$" -fuzz=FuzzParseInterfaces -fuzztime=5m ./pkg/readers/ccid/proto/
    ```
 
 5. **nolint:gosec directive audit**: Find all `nolint:gosec` directives and verify each is still justified. Flag any that suppress warnings about user-controlled input.
