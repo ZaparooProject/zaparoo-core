@@ -226,60 +226,21 @@ tasks:
     cmds:
       - |
         exit_code=0
-        targets=(
-          "FuzzParseToText ./pkg/readers/shared/ndef"
-          "FuzzValidateNDEFMessage ./pkg/readers/shared/ndef"
-          "FuzzExtractTLVPayload ./pkg/readers/shared/ndef"
-          "FuzzParseTextPayload ./pkg/readers/shared/ndef"
-          "FuzzParseURIPayload ./pkg/readers/shared/ndef"
-          "FuzzParseFilenameToCanonicalTags ./pkg/database/tags"
-          "FuzzExtractTags ./pkg/database/tags"
-          "FuzzParseTitleFromFilename ./pkg/database/tags"
-          "FuzzExtractSpecialPatterns ./pkg/database/tags"
-          "FuzzParseLine ./pkg/readers/rs232barcode"
-          "FuzzDecodeURIIfNeeded ./pkg/helpers"
-          "FuzzCanonicalScrapePath ./pkg/database"
-          "FuzzIsValidExtension ./pkg/helpers"
-          "FuzzFilenameFromPath ./pkg/helpers"
-          "FuzzContainsControlChar ./pkg/helpers"
-          "FuzzIsValidScheme ./pkg/helpers"
-          "FuzzIsValidPort ./pkg/helpers"
-          "FuzzGetPathExt ./pkg/helpers"
-          "FuzzGetPathBase ./pkg/helpers"
-          "FuzzGetPathDir ./pkg/helpers"
-          "FuzzSplitCommand ./pkg/helpers"
-          "FuzzParseVirtualPathStr ./pkg/helpers/virtualpath"
-          "FuzzPayloadMemberPath ./pkg/platforms/updatepayload"
-          "FuzzParseGameListXML ./pkg/platforms/shared/esapi"
-          "FuzzResolveGamePath ./pkg/platforms/shared/esde"
-          "FuzzParseMoonlightTarget ./pkg/platforms/shared/launchers"
-          "FuzzParseBottlesMetadata ./pkg/platforms/shared/launchers"
-          "FuzzFindPath ./pkg/database/mediascanner"
-          "FuzzReadTags ./pkg/database/scraper/gamedatabase"
-          "FuzzBuildWrite ./pkg/database/scraper/gamedatabase"
-          "FuzzProcessRequestObject ./pkg/api"
-          "FuzzEstablishSession ./pkg/api/middleware"
-          "FuzzStartSession ./pkg/api"
-          "FuzzHandleRun ./pkg/api/methods"
-          "FuzzHandleMediaLookupCandidates ./pkg/api/methods"
-          "FuzzTitleCandidateSimilarityBound ./pkg/database/mediadb"
-          "FuzzRPCIDUnmarshalJSON ./pkg/api/models"
-          "FuzzMQTTMessageHandler ./pkg/readers/mqtt"
-          "FuzzParseMQTTPath ./pkg/readers/mqtt"
-          "FuzzParseMQTTProtocol ./pkg/readers/mqtt"
-          "FuzzAdvargsParse ./pkg/zapscript/advargs"
-          "FuzzFetchWellKnown ./pkg/zapscript"
-          "FuzzCheckMappingUID ./pkg/service"
-          "FuzzCheckMappingText ./pkg/service"
-          "FuzzCheckMappingData ./pkg/service"
-          "FuzzBuildStructuralCommand ./pkg/service/remote"
-          "FuzzParseDefaultRouteInterface ./pkg/helpers/hoststatus"
-          "FuzzParseInputModalias ./pkg/helpers/hoststatus"
-          "FuzzConnectorName ./pkg/helpers/hoststatus"
-          "FuzzMountSource ./pkg/helpers/hoststatus"
-          "FuzzParsePmsetDetail ./pkg/helpers/power"
-          "FuzzDetailFrom ./pkg/helpers/power"
-        )
+        targets=()
+        while IFS= read -r pkg; do
+          if ! listing="$(go test -list '^Fuzz' "./${pkg}")"; then
+            echo "FAIL: listing fuzz targets in ${pkg}"
+            exit_code=1
+            continue
+          fi
+          while IFS= read -r func; do
+            targets+=("${func} ${pkg}")
+          done < <(grep '^Fuzz' <<< "${listing}")
+        done < <(grep -rl --include='*_test.go' '^func Fuzz' pkg | xargs -n1 dirname | sort -u)
+        if [ "${#targets[@]}" -eq 0 ]; then
+          echo "FAIL: no fuzz targets discovered"
+          exit 1
+        fi
         for target in "${targets[@]}"; do
           func="${target%% *}"
           pkg="${target#* }"

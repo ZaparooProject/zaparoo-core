@@ -54,7 +54,7 @@ Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-
 ## High-risk areas
 
 - Authentication and authorization: `pkg/api/middleware/`, `pkg/config/auth.go`, client pairing, encryption, and profile permissions.
-- Parsing and execution: `pkg/readers/shared/ndef/`, `pkg/zapscript/`, command execution, archive extraction, and launcher handling.
+- Parsing and execution: `pkg/readers/shared/nfctag/`, `pkg/zapscript/`, command execution, archive extraction, and launcher handling.
 - Durable state: database migrations, backups, config migration, and profile data swapping.
 - Updates: `pkg/service/updater/`, `pkg/service/updater/otameta/`, `.github/workflows/ota-*.yml`, `.github/actions/ota-metadata/`, and `scripts/generate-update-manifest/`.
 
