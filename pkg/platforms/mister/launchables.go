@@ -123,6 +123,10 @@ var misterOtherLaunchableDefinitions = []misterOtherLaunchableDefinition{
 		Name: "GenMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GenMidi"),
 	},
 	{
+		ConfigID: "MisterOtherGroovy", ID: launchables.MisterOtherGroovy,
+		Name: "Groovy", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Utility", "Groovy"),
+	},
+	{
 		ConfigID: "MisterOtherQuake", ID: launchables.MisterOtherQuake,
 		Name: "MiSTer Quake", Category: misterLaunchableCategoryOther,
 		LoadPath: filepath.Join("_Other", "Quake"),

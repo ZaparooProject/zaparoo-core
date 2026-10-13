@@ -90,6 +90,17 @@ var misterDefaultScanExcludes = []string{
 	"sid_data.bin",
 }
 
+// arcadeScanFolders are the folders indexed as Arcade media, as declared by
+// the catalog. _Utility holds MRAs for test and streaming tools such as
+// MiSTercade and Groovy setups.
+func arcadeScanFolders() []string {
+	definition, err := catalog.Get(systemdefs.SystemArcade)
+	if err != nil || len(definition.Folders) == 0 {
+		return []string{"_Arcade"}
+	}
+	return definition.Folders
+}
+
 // arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
 // Organizer script generates: its ORGDIR_DIRECTORIES category folders plus the
 // default _Organized container. They hold symlinks (or copies, with
@@ -736,41 +747,6 @@ func launchAltCoreWithDefinition(
 		log.Debug().Str("rbf", sn.RBF).Str("launcher", definition.LauncherID).Msgf("launching alt core: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to launch game: %w", err)
-		}
-
-		err = activegame.SetActiveGame(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
-		}
-		return nil, nil
-	}
-}
-
-//nolint:unused // keeping as reference for future implementation
-func launchGroovyCore() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	// Merge into mrext?
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-		sn := cores.Core{
-			ID:  "Groovy",
-			RBF: "_Utility/Groovy",
-			Slots: []cores.Slot{
-				{
-					Label: "GMC",
-					Exts:  []string{".gmc"},
-					Mgl: &cores.MGLParams{
-						Delay:  2,
-						Method: "f",
-						Index:  1,
-					},
-				},
-			},
-		}
-
-		log.Debug().Msgf("launching Groovy core: %v", sn)
-
-		err := mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -2928,7 +2904,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:                       systemdefs.SystemArcade,
 			SystemID:                 systemdefs.SystemArcade,
-			Folders:                  []string{"_Arcade"},
+			Folders:                  arcadeScanFolders(),
 			Extensions:               []string{".mra", ".mgl"},
 			ScanDirectoryExcludes:    arcadeOrganizerScanDirectoryExcludes,
 			ScanSkipInternalSymlinks: true,

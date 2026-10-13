@@ -489,6 +489,40 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 	}, results)
 }
 
+func TestArcadeSystemCacheScanFilesIncludesUtilityFolder(t *testing.T) {
+	root := t.TempDir()
+	arcadeDir := filepath.Join(root, "_Arcade")
+	utilityDir := filepath.Join(root, "_Utility")
+	require.NoError(t, os.MkdirAll(arcadeDir, 0o750))
+	require.NoError(t, os.MkdirAll(utilityDir, 0o750))
+	arcadeMRA := filepath.Join(arcadeDir, "Pooyan.mra")
+	utilityMRA := filepath.Join(utilityDir, "MiSTercade Test.mra")
+	utilityRBF := filepath.Join(utilityDir, "Groovy_20240101.rbf")
+	for _, path := range []string{arcadeMRA, utilityMRA, utilityRBF} {
+		require.NoError(t, os.WriteFile(path, []byte("test"), 0o600))
+	}
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
+	platform := NewPlatform()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(platform.Launchers(cfg))
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+	assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, utilityMRA))
+	assert.False(t, matcher.MatchSystemFile(systemdefs.SystemArcade, utilityRBF))
+
+	results, err := newArcadeSystemCache(platform).scanFiles(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []platforms.ScanResult{
+		{Path: arcadeMRA},
+		{Path: utilityMRA},
+	}, results)
+}
+
 // cancellingLinkFs cancels the scan while a symlink target is being read, so
 // the walk finishes without any later entry observing the cancellation.
 type cancellingLinkFs struct {

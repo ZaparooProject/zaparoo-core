@@ -583,7 +583,8 @@
     "Arcade": {
       "id": "Arcade",
       "folders": [
-        "_Arcade"
+        "_Arcade",
+        "_Utility"
       ],
       "extensions": [
         ".mra",

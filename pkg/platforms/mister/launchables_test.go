@@ -20,7 +20,7 @@ import (
 func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	items := (&Platform{}).Launchables(&config.Instance{})
 
-	require.Len(t, items, 37)
+	require.Len(t, items, 38)
 	seenSystems := make(map[string]string, len(items))
 	seenMedia := make(map[string]launchables.VirtualMedia, len(items))
 	for _, item := range items {
@@ -49,6 +49,7 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 		"Game of Life",
 		"GBMidi",
 		"GenMidi",
+		"Groovy",
 		"MiSTer Quake",
 		"Sonic Mania",
 		"Slug Cross",
@@ -99,6 +100,27 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	require.True(t, ok, "Paprium virtual media missing")
 	assert.Equal(t, launchables.MisterGenesisPaprium, paprium.ID)
 	assert.Equal(t, systemdefs.SystemGenesis, paprium.SystemID)
+}
+
+func TestLaunchablesIncludeGroovyUtilityCore(t *testing.T) {
+	t.Parallel()
+
+	var groovy *misterOtherLaunchableDefinition
+	for i := range misterOtherLaunchableDefinitions {
+		if misterOtherLaunchableDefinitions[i].ConfigID == "MisterOtherGroovy" {
+			groovy = &misterOtherLaunchableDefinitions[i]
+		}
+	}
+	require.NotNil(t, groovy, "Groovy launchable definition missing")
+	assert.Equal(t, launchables.MisterOtherGroovy, groovy.ID)
+	assert.Equal(t, "Other", groovy.Category)
+	assert.Equal(t, filepath.Join("_Utility", "Groovy"), groovy.LoadPath)
+
+	root := t.TempDir()
+	assert.False(t, coreExists(root, groovy.LoadPath), "absent RBF must hide the launchable")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "_Utility"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "_Utility", "Groovy_20240101.rbf"), []byte("rbf"), 0o600))
+	assert.True(t, coreExists(root, groovy.LoadPath))
 }
 
 func TestLaunchOtherCoreUsesInjectedLauncher(t *testing.T) {
@@ -292,7 +314,7 @@ load_path = "_Other/Arduboy"
 
 	items := (&Platform{}).Launchables(cfg)
 
-	require.Len(t, items, 38)
+	require.Len(t, items, 39)
 
 	var found *launchables.VirtualSystem
 	for i := range items {
