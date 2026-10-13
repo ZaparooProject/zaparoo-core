@@ -1239,7 +1239,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
-	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
+	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found && !isDirectory(fs, fp) {
 		fp = indexedPathSpelling(pl, &env, foundSystemID, fp)
 		log.Debug().Msgf("launching found system path: %s", fp)
 		return platforms.CmdResult{

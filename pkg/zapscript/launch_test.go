@@ -1497,6 +1497,36 @@ launcher = "snes-retroarch"
 	}
 }
 
+func TestCmdLaunch_SystemPathFormatDoesNotLaunchADirectory(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "Game.chd"), 0o750))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "snes-retroarch", SystemID: "SNES", Folders: []string{tmpDir},
+	}})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{filepath.Join("snes", "Game.chd")},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorIs(t, err, ErrFileNotFound)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+}
+
 func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 	t.Parallel()
 
