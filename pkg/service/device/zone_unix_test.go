@@ -216,3 +216,25 @@ func TestZoneCache_WalksOnlyWhenTheFileChanges(t *testing.T) {
 	require.NoError(t, os.Chtimes(f.localtime, later, later))
 	assert.Equal(t, "Australia/Sydney", cache.name(f.localtime, f.zoneinfo))
 }
+
+func TestZoneCache_IncompleteWalkIsUnknownAndNotCached(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+
+	f := newZoneFixture(t)
+	f.zone(t, "Australia/Perth", "perth")
+	f.zone(t, "Australia/West", "perth")
+	unreadable := filepath.Join(f.zoneinfo, "Australia", "West")
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+	f.table(t, "zone1970.tab", "Australia/Perth")
+	f.copyOf(t, "perth")
+
+	var cache zoneCache
+	assert.Empty(t, cache.name(f.localtime, f.zoneinfo))
+
+	require.NoError(t, os.Chmod(unreadable, 0o600))
+	assert.Equal(t, "Australia/Perth", cache.name(f.localtime, f.zoneinfo))
+}

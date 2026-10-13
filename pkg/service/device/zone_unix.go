@@ -23,6 +23,7 @@ package device
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -95,7 +96,12 @@ func (c *zoneCache) name(localtime, zoneinfo string) string {
 	if c.set && c.key == key {
 		return c.value
 	}
-	c.key, c.value, c.set = key, matchZoneFile(localtime, zoneinfo), true
+	value, complete := matchZoneFile(localtime, zoneinfo)
+	if !complete {
+		// A database that could not be read in full may read fine next time.
+		return ""
+	}
+	c.key, c.value, c.set = key, value, true
 	return c.value
 }
 
@@ -123,27 +129,42 @@ func trimZoneVariant(name string) string {
 // matchZoneFile finds the zone whose file has the same contents as the
 // machine's. Zones that share a file are the same rules under different names,
 // so the one listed in the zone tables wins, and nothing is returned when that
-// still leaves more than one.
-func matchZoneFile(localtime, zoneinfo string) string {
+// still leaves more than one. The second result is false when the zone database
+// could not be read in full, in which case no name is given: a zone that went
+// unread might have been a second match.
+func matchZoneFile(localtime, zoneinfo string) (string, bool) {
 	want, err := os.ReadFile(localtime) //nolint:gosec // G304: a fixed system path
-	if err != nil || !bytes.HasPrefix(want, []byte(tzifMagic)) {
-		return ""
+	if err != nil {
+		return "", false
+	}
+	if !bytes.HasPrefix(want, []byte(tzifMagic)) {
+		return "", true
 	}
 
 	candidates := map[string]struct{}{}
-	_ = filepath.WalkDir(zoneinfo, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			// An unreadable entry is not a match, and the rest still count.
-			return nil //nolint:nilerr // see above
+	complete := true
+	walkErr := filepath.WalkDir(zoneinfo, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			// Keep scanning what can be read, but remember the gap.
+			complete = false
+			return nil //nolint:nilerr // the gap is recorded in complete
 		}
 		if entry.IsDir() && entry.Name() == "right" && path != zoneinfo {
 			return filepath.SkipDir
 		}
-		if name, ok := sameZoneFile(zoneinfo, path, entry, want); ok {
+		name, matched, err := sameZoneFile(zoneinfo, path, entry, want)
+		if err != nil {
+			complete = false
+			return nil //nolint:nilerr // the gap is recorded in complete
+		}
+		if matched {
 			candidates[name] = struct{}{}
 		}
 		return nil
 	})
+	if walkErr != nil || !complete {
+		return "", false
+	}
 
 	for _, table := range zoneTables {
 		if len(candidates) <= 1 {
@@ -161,36 +182,43 @@ func matchZoneFile(localtime, zoneinfo string) string {
 		}
 	}
 	if len(candidates) != 1 {
-		return ""
+		return "", true
 	}
 	for name := range candidates {
-		return name
+		return name, true
 	}
-	return ""
+	return "", true
 }
 
 // sameZoneFile reports whether a file in the zone database is a zone with
-// exactly the given contents, and the name of that zone if so.
-func sameZoneFile(zoneinfo, path string, entry fs.DirEntry, want []byte) (string, bool) {
+// exactly the given contents, and the name of that zone if so. The error is
+// set when the file could not be checked.
+func sameZoneFile(zoneinfo, path string, entry fs.DirEntry, want []byte) (name string, matched bool, err error) {
 	if !entry.Type().IsRegular() {
-		return "", false
+		return "", false, nil
 	}
 	if _, skip := zoneinfoNonZones[entry.Name()]; skip {
-		return "", false
+		return "", false, nil
 	}
 	info, err := entry.Info()
-	if err != nil || info.Size() != int64(len(want)) {
-		return "", false
+	if err != nil {
+		return "", false, fmt.Errorf("stat zone file: %w", err)
+	}
+	if info.Size() != int64(len(want)) {
+		return "", false, nil
 	}
 	got, err := os.ReadFile(path) //nolint:gosec // G304: a file found inside the zone database
-	if err != nil || !bytes.Equal(got, want) {
-		return "", false
+	if err != nil {
+		return "", false, fmt.Errorf("read zone file: %w", err)
+	}
+	if !bytes.Equal(got, want) {
+		return "", false, nil
 	}
 	rel, err := filepath.Rel(zoneinfo, path)
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("name zone file: %w", err)
 	}
-	return trimZoneVariant(filepath.ToSlash(rel)), true
+	return trimZoneVariant(filepath.ToSlash(rel)), true, nil
 }
 
 // listedZones reads the zone names from a zone table, whose third column is
