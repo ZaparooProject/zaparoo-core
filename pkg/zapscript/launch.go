@@ -1206,7 +1206,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// title format so a path with no extension, or one inside a zip, is not
 	// mistaken for a title. A directory is left to the title check, where a
 	// game's own folder name has always resolved.
-	if systemPart, lookupPath, ok := strings.Cut(path, "/"); ok && lookupPath != "" {
+	if systemPart, lookupPath, ok := cutSystemPath(path); ok && lookupPath != "" {
 		if system, lookupErr := systemdefs.LookupSystem(systemPart); lookupErr == nil {
 			fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath)
 			if found && !isDirectory(fs, fp) {
@@ -1227,12 +1227,10 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	// TODO: create central function for parsing the <system>/<path> format
 	// attempt to parse the <system>/<path> format
-	ps := strings.SplitN(path, "/", 2)
-	if len(ps) < 2 {
+	systemID, lookupPath, ok := cutSystemPath(path)
+	if !ok {
 		return platforms.CmdResult{}, fmt.Errorf("invalid launch format: %s", path)
 	}
-
-	systemID, lookupPath := ps[0], ps[1]
 
 	system, err := systemdefs.LookupSystem(systemID)
 	if err != nil {
@@ -1337,6 +1335,18 @@ func findSystemFile(
 		log.Debug().Err(findErr).Msgf("error finding system file: %s", lookupPath)
 	}
 	return "", "", false
+}
+
+// cutSystemPath splits the <system>/<path> format at its first separator. The
+// host's own separator counts as well as a forward slash, so a path typed with
+// backslashes on Windows names the same file. Elsewhere a backslash is a
+// filename character and only a forward slash splits.
+func cutSystemPath(path string) (systemPart, rest string, ok bool) {
+	i := strings.IndexAny(path, "/"+string(filepath.Separator))
+	if i < 0 {
+		return "", "", false
+	}
+	return path[:i], path[i+1:], true
 }
 
 // isDirectory reports whether path is an existing directory. A path that
