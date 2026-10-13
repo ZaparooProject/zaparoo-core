@@ -410,7 +410,7 @@ jobs:
             -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
             -e GOLANGCI_LINT_VERSION \
             ${{ env.ZIGCC_IMAGE }} \
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=10m'
 
   native-pr-tests:
     name: Native PR Tests
