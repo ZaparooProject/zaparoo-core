@@ -233,9 +233,15 @@ tasks:
             exit_code=1
             continue
           fi
+          found=0
           while IFS= read -r func; do
             targets+=("${func} ${pkg}")
-          done < <(grep '^Fuzz' <<< "${listing}")
+            found=$((found + 1))
+          done < <(grep '^Fuzz' <<< "${listing}" || true)
+          if [ "${found}" -eq 0 ]; then
+            echo "FAIL: no fuzz targets listed in ${pkg}"
+            exit_code=1
+          fi
         done < <(grep -rl --include='*_test.go' '^func Fuzz' pkg | xargs -n1 dirname | sort -u)
         if [ "${#targets[@]}" -eq 0 ]; then
           echo "FAIL: no fuzz targets discovered"
