@@ -34,6 +34,7 @@ import (
 	"github.com/go-ole/go-ole/oleutil"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 // NewDefaults returns the generic readers for Windows.
@@ -162,27 +163,38 @@ const (
 	comChangedMode = 0x80010106
 )
 
+// initCOM readies COM on the calling thread, which must stay locked to its OS
+// thread until the returned function has run. The second result is false when
+// COM cannot be set up.
+func initCOM() (release func(), ok bool) {
+	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
+		var oleErr *ole.OleError
+		if !errors.As(err, &oleErr) {
+			return nil, false
+		}
+		switch oleErr.Code() {
+		case comAlreadyInitialized:
+			return ole.CoUninitialize, true
+		case comChangedMode:
+			return func() {}, true
+		default:
+			return nil, false
+		}
+	}
+	return ole.CoUninitialize, true
+}
+
 // networkListConnected asks the Network List Manager whether Windows believes
 // it has internet access. The second result is false when it cannot be asked.
 func networkListConnected() (connected, ok bool) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		var oleErr *ole.OleError
-		if !errors.As(err, &oleErr) {
-			return false, false
-		}
-		switch oleErr.Code() {
-		case comAlreadyInitialized:
-			defer ole.CoUninitialize()
-		case comChangedMode:
-		default:
-			return false, false
-		}
-	} else {
-		defer ole.CoUninitialize()
+	release, initialized := initCOM()
+	if !initialized {
+		return false, false
 	}
+	defer release()
 
 	unknown, err := ole.CreateInstance(ole.NewGUID(clsidNetworkListManager), ole.IID_IUnknown)
 	if err != nil {
@@ -211,8 +223,9 @@ type bluetoothFindRadioParams struct {
 	size uint32
 }
 
-// readWindowsBluetooth reports whether Windows has a usable Bluetooth radio.
-// It only enumerates; nothing here can turn a radio on.
+// readWindowsBluetooth reports whether Windows has a usable Bluetooth radio
+// and whether it is switched on. It only reads; nothing here can turn a radio
+// on.
 func readWindowsBluetooth() (Bluetooth, error) {
 	dll := windows.NewLazySystemDLL("bthprops.cpl")
 	findFirst := dll.NewProc("BluetoothFindFirstRadio")
@@ -232,7 +245,7 @@ func readWindowsBluetooth() (Bluetooth, error) {
 	if radio != 0 {
 		_ = windows.CloseHandle(radio)
 	}
-	return Bluetooth{Present: true}, nil
+	return Bluetooth{Present: true, Powered: readWindowsBluetoothPowered()}, nil
 }
 
 const (
@@ -327,7 +340,24 @@ func readWindowsSystem() (System, error) {
 	if err != nil {
 		return System{}, fmt.Errorf("reading hostname: %w", err)
 	}
-	return System{Hostname: hostname}, nil
+	return System{Hostname: hostname, Model: readWindowsModel()}, nil
+}
+
+// readWindowsModel reads the product name the firmware gave Windows. It is ""
+// when the machine reports none or only a placeholder.
+func readWindowsModel() string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = key.Close() }()
+
+	value, _, err := key.GetStringValue("SystemProductName")
+	if err != nil {
+		return ""
+	}
+	model, _ := usableModel(value)
+	return model
 }
 
 const (

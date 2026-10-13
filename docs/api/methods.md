@@ -6233,7 +6233,7 @@ Each volume has `path` (where it is mounted, or a directory on it when that is n
 
 Virtual controllers, including the one Core creates for [`input.gamepad`](#inputgamepad), are not listed.
 
-On Windows, controllers are read through XInput: at most four, with no name or IDs, and a battery `level` without a `percent`.
+On Windows, controllers are read through XInput: at most four, with no name or IDs, and a battery `level` without a `percent`. XInput cannot tell a virtual gamepad made by another program, such as one from ViGEm, from a real one, so Core lists it as a wired controller.
 
 ##### Time object
 
@@ -6242,6 +6242,8 @@ On Windows, controllers are read through XInput: at most four, with no name or I
 | clockReliable | boolean         | Yes      | `false` when the clock is clearly unset, as on a device with no clock battery before it syncs. |
 | timezone      | string \| null  | Yes      | IANA time zone name.                                                                          |
 | utcOffset     | number          | Yes      | Current offset from UTC in seconds.                                                           |
+
+`timezone` is `null` when the name cannot be worked out: on Windows before 10 version 1903, and where the device keeps a copy of a zone file that matches several zones, such as MiSTer's `/media/fat/linux/timezone`. When Core names a zone from a copied file, the zone has the same rules as the one that was chosen but may carry another name that shares them.
 
 ##### System object
 
