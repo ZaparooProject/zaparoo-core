@@ -625,6 +625,11 @@ func (m *Monitor) probeOnce(ctx context.Context) {
 }
 
 func (m *Monitor) current() Snapshot {
+	// Worked out before the lock is taken: naming the zone can mean reading the
+	// zone database, which is no reason to hold up the monitor.
+	now := m.clock.Now()
+	timezone, utcOffset := localZone(now)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -636,9 +641,8 @@ func (m *Monitor) current() Snapshot {
 	}
 	snap.PlatformID = m.platform.ID()
 
-	now := m.clock.Now()
 	snap.ClockReliable = helpers.IsClockReliable(now)
-	snap.Timezone, snap.UTCOffset = localZone(now)
+	snap.Timezone, snap.UTCOffset = timezone, utcOffset
 
 	names := [sectionCount]string{
 		sectionPower:       models.DeviceSectionPower,

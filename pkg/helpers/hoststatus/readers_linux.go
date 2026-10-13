@@ -391,15 +391,6 @@ type LinuxSystem struct {
 	ModelPaths []string
 }
 
-// placeholderModels are what firmware reports when the vendor never filled
-// the field in.
-var placeholderModels = map[string]struct{}{
-	"to be filled by o.e.m.": {},
-	"system product name":    {},
-	"default string":         {},
-	"none":                   {},
-}
-
 // Read reports the hostname and hardware model.
 func (r *LinuxSystem) Read() (System, error) {
 	var system System
@@ -407,15 +398,14 @@ func (r *LinuxSystem) Read() (System, error) {
 		system.Hostname = hostname
 	}
 	for _, path := range r.ModelPaths {
-		model, ok := readTrimmed(r.Fs, path)
-		if !ok || model == "" {
+		raw, ok := readTrimmed(r.Fs, path)
+		if !ok {
 			continue
 		}
-		if _, placeholder := placeholderModels[strings.ToLower(model)]; placeholder {
-			continue
+		if model, usable := usableModel(raw); usable {
+			system.Model = model
+			break
 		}
-		system.Model = model
-		break
 	}
 	return system, nil
 }

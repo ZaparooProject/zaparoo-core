@@ -24,6 +24,57 @@ import (
 	"strings"
 )
 
+// placeholderModels are what firmware reports when the vendor never filled
+// the field in.
+var placeholderModels = map[string]struct{}{
+	"to be filled by o.e.m.": {},
+	"system product name":    {},
+	"default string":         {},
+	"none":                   {},
+}
+
+// usableModel cleans up a hardware model string read from firmware. The second
+// result is false when nothing useful is left, because the field was empty or
+// holds a placeholder.
+func usableModel(raw string) (string, bool) {
+	model := strings.Trim(raw, "\x00 \t\r\n")
+	if model == "" {
+		return "", false
+	}
+	if _, placeholder := placeholderModels[strings.ToLower(model)]; placeholder {
+		return "", false
+	}
+	return model, true
+}
+
+// Windows.Devices.Radios.RadioState values.
+const (
+	radioStateOn       = 1
+	radioStateOff      = 2
+	radioStateDisabled = 3
+)
+
+// combineRadioStates folds the states of an adapter's radios into one answer:
+// on when any radio is on, off when some radio is known to be off and none is
+// on, and nil when no radio reports a state.
+func combineRadioStates(states []int32) *bool {
+	off := false
+	for _, state := range states {
+		switch state {
+		case radioStateOn:
+			on := true
+			return &on
+		case radioStateOff, radioStateDisabled:
+			off = true
+		}
+	}
+	if !off {
+		return nil
+	}
+	powered := false
+	return &powered
+}
+
 // routeFlagUp is RTF_UP, the flag the kernel sets on a route it is using.
 const routeFlagUp = 0x1
 

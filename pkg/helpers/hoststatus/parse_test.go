@@ -286,3 +286,55 @@ func FuzzConnectorName(f *testing.F) {
 		}
 	})
 }
+
+func TestUsableModel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		raw    string
+		want   string
+		usable bool
+	}{
+		{name: "real model", raw: "Raspberry Pi 5", want: "Raspberry Pi 5", usable: true},
+		{name: "trimmed", raw: "  OptiPlex 7090\x00\r\n", want: "OptiPlex 7090", usable: true},
+		{name: "empty", raw: ""},
+		{name: "whitespace only", raw: " \x00\t\n"},
+		{name: "oem placeholder", raw: "To Be Filled By O.E.M."},
+		{name: "board placeholder", raw: "System Product Name"},
+		{name: "default string", raw: "Default string"},
+		{name: "none", raw: "None"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, usable := usableModel(tt.raw)
+			assert.Equal(t, tt.usable, usable)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCombineRadioStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		want   *bool
+		name   string
+		states []int32
+	}{
+		{name: "no radios", states: nil, want: nil},
+		{name: "unknown only", states: []int32{0}, want: nil},
+		{name: "on", states: []int32{radioStateOn}, want: new(true)},
+		{name: "off", states: []int32{radioStateOff}, want: new(false)},
+		{name: "disabled", states: []int32{radioStateDisabled}, want: new(false)},
+		{name: "one on among off", states: []int32{radioStateOff, radioStateOn}, want: new(true)},
+		{name: "off with unknown", states: []int32{0, radioStateOff}, want: new(false)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, combineRadioStates(tt.states))
+		})
+	}
+}
