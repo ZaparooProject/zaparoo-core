@@ -404,14 +404,10 @@ func timedExit(
 		}
 
 		log.Info().Msg("exiting media")
-		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
-		if err != nil {
-			log.Warn().Msgf("error killing launcher: %s", err)
-			if errors.Is(err, platforms.ErrStopFailed) {
-				// The media is still running, so do not tell the rest of the
-				// service it ended; active media stays as it is.
-				return
-			}
+		if !stopMediaForExit(svc) {
+			// The media is still running, so do not tell the rest of the
+			// service it ended; active media stays as it is.
+			return
 		}
 
 		if svc.PlaylistQueue != nil {
@@ -1168,4 +1164,19 @@ preprocessing:
 			}
 		}
 	}
+}
+
+// stopMediaForExit stops the media a released hold card owned. The stop is
+// recorded first so the clear that follows is not taken for the game quitting,
+// and withdrawn when it did not take effect. It reports false when the media is
+// known to still be running.
+func stopMediaForExit(svc *ServiceContext) bool {
+	cancelStop := svc.State.RecordMediaStop(models.MediaStopReasonStopped)
+	err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
+	if err == nil {
+		return true
+	}
+	cancelStop()
+	log.Warn().Msgf("error killing launcher: %s", err)
+	return !errors.Is(err, platforms.ErrStopFailed)
 }

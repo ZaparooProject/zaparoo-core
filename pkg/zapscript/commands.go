@@ -54,6 +54,7 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	RecordMediaStop    func(reason string) (cancel func())
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
@@ -578,6 +579,7 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		RecordMediaStop:    opts.RecordMediaStop,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,

@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -108,6 +109,11 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	log.Info().Str("action", action).Str("launcher", launcherID).Msg("executing control command")
 
+	cancelStop := func() {}
+	if action == platforms.ControlStop {
+		cancelStop = env.RecordStop(apimodels.MediaStopReasonStopped)
+	}
+
 	var err error
 	switch {
 	case control.Func != nil:
@@ -129,6 +135,7 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		err = fmt.Errorf("control %q has no implementation", action)
 	}
 	if err != nil {
+		cancelStop()
 		return platforms.CmdResult{}, fmt.Errorf("control action %q failed: %w", action, err)
 	}
 

@@ -550,6 +550,50 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 	second.stopAndDeregister()
 }
 
+func TestLongformPlaybackManager_LateDrainOfReplacedSourceIsNotNatural(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.wav")
+	secondPath := filepath.Join(dir, "second.wav")
+	require.NoError(t, os.WriteFile(firstPath, validWAVHeader(), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	var reports []bool
+	m.SetDrainCallback(mediaslot.Primary, func(natural bool) { reports = append(reports, natural) })
+
+	require.NoError(t, m.Play(mediaslot.Primary, firstPath, PlaybackOptions{}))
+	first := m.primary
+	require.NoError(t, m.Play(mediaslot.Primary, secondPath, PlaybackOptions{}))
+	second := m.primary
+	require.NotNil(t, second)
+
+	// The first source reached EOF on the device goroutine before the
+	// replacement stopped it, so it drains late without the stopped flag set.
+	first.stopped.Store(false)
+	first.onDrained()
+	assert.Equal(t, []bool{false}, reports, "replaced source must not drain as natural")
+	assert.Same(t, second, m.primary, "late drain must not clear the replacement")
+
+	second.onDrained()
+	assert.Equal(t, []bool{false, true}, reports, "current source drains as natural")
+	assert.Nil(t, m.primary)
+
+	// A stopped source is never natural either, even without the stopped flag.
+	require.NoError(t, m.Play(mediaslot.Primary, firstPath, PlaybackOptions{}))
+	third := m.primary
+	require.NoError(t, m.Stop(mediaslot.Primary))
+	third.stopped.Store(false)
+	third.onDrained()
+	assert.Equal(t, []bool{false, true, false}, reports)
+	second.stopAndDeregister()
+}
+
 // TestLongformPlaybackManager_InvalidSlot verifies every mutating method returns
 // an error when given a slot name that is neither primary nor background.
 func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
