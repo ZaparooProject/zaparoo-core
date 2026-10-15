@@ -20,8 +20,6 @@
 package state
 
 import (
-	"time"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
@@ -123,20 +121,8 @@ func (s *State) activeMediaGenerationOf(media *models.ActiveMedia) (uint64, bool
 // holds for it, and does nothing otherwise. The check and the clear are one
 // step, so media another launcher published meanwhile is left alone.
 func (s *State) FinishActiveMediaIf(owns func(*models.ActiveMedia) bool) bool {
-	s.mu.Lock()
-	if s.activeMedia == nil || !owns(s.activeMedia) {
-		s.mu.Unlock()
-		return false
-	}
-	gen := s.activeMediaReadyGen
-	s.stopIntent = mediaStopIntent{
-		reason: models.MediaStopReasonFinished,
-		gen:    gen,
-		at:     time.Now(),
-	}
-	s.mu.Unlock()
-
-	return s.updateActiveMediaState(nil, func(media *models.ActiveMedia) bool {
-		return s.activeMediaReadyGen == gen && media != nil && owns(media)
-	})
+	// The condition runs with s.mu held.
+	return s.updateActiveMediaStateAs(nil, func(media *models.ActiveMedia) bool {
+		return media != nil && owns(media)
+	}, models.MediaStopReasonFinished)
 }

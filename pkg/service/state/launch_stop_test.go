@@ -21,6 +21,7 @@ package state
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -66,11 +67,87 @@ func TestLaunch_StopBeforePublishCancelsIt(t *testing.T) {
 
 	access, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
-	defer access.Release()
 	st.RecordMediaStop(models.MediaStopReasonStopped) // nothing is running yet
 	access.SetActiveMedia(testMedia("new.sfc"))
 
 	assert.Nil(t, st.ActiveMedia(), "the overtaken launch publishes nothing")
+	// The launch holds the launch gate until it returns, and the stop waits
+	// for it.
+	select {
+	case <-stopped:
+		t.Fatal("the stop ran before the launch released the launch gate")
+	default:
+	}
+	access.Release()
+	<-stopped
+}
+
+// Media a newer launch published before the deferred stop ran is not the
+// media that stop was meant for.
+func TestLaunch_AbandonedStopLeavesNewerMediaAlone(t *testing.T) {
+	t.Parallel()
+	st, _, stopped := newLaunchStopState(t)
+	abandoned := make(chan string, 1)
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) { abandoned <- media.Path })
+
+	overtaken, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	st.RecordMediaStop(models.MediaStopReasonStopped)
+
+	// A newer launch is in flight, on its own goroutine as launches are,
+	// while the first is called off.
+	newerReady := make(chan struct{})
+	newerGo := make(chan struct{})
+	newerDone := make(chan struct{})
+	go func() {
+		defer close(newerDone)
+		newer, acquireErr := st.AcquireMediaLaunch()
+		if acquireErr != nil {
+			t.Error(acquireErr)
+			close(newerReady)
+			return
+		}
+		close(newerReady)
+		<-newerGo
+		newer.SetActiveMedia(testMedia("newer.sfc"))
+		newer.Release()
+	}()
+	<-newerReady
+
+	overtaken.SetActiveMedia(testMedia("abandoned.sfc"))
+	close(newerGo)
+	<-newerDone
+	overtaken.Release()
+
+	assert.Never(t, func() bool {
+		select {
+		case <-stopped:
+			return true
+		case <-abandoned:
+			return true
+		default:
+			return false
+		}
+	}, 200*time.Millisecond, 10*time.Millisecond, "the newer launch's media must not be stopped")
+	require.NotNil(t, st.ActiveMedia())
+	assert.Equal(t, "newer.sfc", st.ActiveMedia().Path)
+}
+
+// What the platform's own stop cannot find because nothing was published, such
+// as native audio, is stopped through the abandon callback.
+func TestLaunch_AbandonedLaunchRunsTheAbandonCallback(t *testing.T) {
+	t.Parallel()
+	st, _, stopped := newLaunchStopState(t)
+	abandoned := make(chan string, 1)
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) { abandoned <- media.Path })
+
+	access, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	st.RecordMediaStop(models.MediaStopReasonStopped)
+	access.SetActiveMedia(testMedia("new.sfc"))
+	access.Release()
+
+	assert.Equal(t, "new.sfc", <-abandoned)
 	<-stopped
 }
 

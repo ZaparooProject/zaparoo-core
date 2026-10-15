@@ -240,6 +240,16 @@ func executeTokenZapScript(
 		plsc.HoldToken = nil
 	}
 
+	// A stop command holds the media stop gate while it runs. If a command
+	// panics and the caller recovers, the gate still has to open, or every
+	// later launch waits on it forever.
+	var heldStopGate func()
+	defer func() {
+		if heldStopGate != nil {
+			heldStopGate()
+		}
+	}()
+
 	for i := 0; i < len(cmds); i++ {
 		if err := runCtx.Err(); err != nil {
 			return err
@@ -411,7 +421,14 @@ func executeTokenZapScript(
 					Name: cmd.Name, Err: fmt.Errorf("wait for in-flight media launch: %w", gateErr),
 				}
 			}
-			releaseStopGate = release
+			released := false
+			releaseStopGate = func() {
+				if !released {
+					released = true
+					release()
+				}
+			}
+			heldStopGate = releaseStopGate
 		}
 
 		result, err := zapscript.RunCommand(

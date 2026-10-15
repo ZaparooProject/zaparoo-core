@@ -280,6 +280,18 @@ func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop 
 	return nil
 }
 
+// stopAbandonedNativeAudio stops native-audio playback that a launch started
+// before a stop overtook it. The launch published no media, so the stop paths
+// that look for published media never reach the playback.
+func stopAbandonedNativeAudio(svc *ServiceContext, media *models.ActiveMedia) {
+	if media.LauncherID != platforms.NativeAudioLauncherID || svc.PlaybackManager == nil {
+		return
+	}
+	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		log.Warn().Err(err).Msg("failed to stop native audio that a stop overtook")
+	}
+}
+
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
 	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
 		if !natural {
@@ -695,6 +707,10 @@ func startServiceWithOptions(
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) {
+		stopAbandonedNativeAudio(svc, media)
+	})
+
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
 		select {

@@ -199,7 +199,7 @@ Media has stopped on server.
 | mediaPath  | string | Yes      | Path to media file on server.                  |
 | launcherId | string | Yes      | ID of the launcher.                            |
 | elapsed    | number | Yes      | Duration of the media session in seconds.      |
-| slot       | string | No       | Media slot, `background` for background audio. Omitted for primary media. |
+| slot       | string | No       | Media slot: `primary`, or `background` for background audio. |
 | reason     | string | No       | Why the media stopped: `finished` (it reached its natural end), `exited` (it ended without Core asking, such as a player quitting a game), `stopped` (Core stopped it on request) or `replaced` (other media took its place). Omitted by Core versions that do not report it, so treat a missing value as unknown. |
 
 #### Example
@@ -214,6 +214,7 @@ Media has stopped on server.
     "mediaName": "Super Mario World",
     "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
     "launcherId": "SNES",
+    "slot": "primary",
     "elapsed": 2730,
     "reason": "exited"
   }
