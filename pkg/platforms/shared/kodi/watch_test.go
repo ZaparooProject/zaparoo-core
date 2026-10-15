@@ -176,7 +176,11 @@ func TestWatch_PlayOfOtherLibraryItemIsSkippedUntilOurs(t *testing.T) {
 	require.NoError(t, kodi.RunTracked(r.client, r.opts, exp, func(c kodi.KodiClient) error {
 		return c.LaunchSong("kodi-song://9/Track")
 	}))
-	require.Eventually(t, func() bool { return r.srv.WebSocketClients() == 1 }, waitFor, tick)
+	// The first socket closes and only the second watcher remains. The open
+	// count alone can read 1 while only the first socket is registered.
+	require.Eventually(t, func() bool {
+		return r.srv.WebSocketsAccepted() == 2 && r.srv.WebSocketClients() == 1
+	}, waitFor, tick)
 
 	r.push(t, "Player.OnPlay", playData(map[string]any{"type": "song", "id": 3}))
 	r.push(t, "Player.OnStop", stopData(map[string]any{"type": "song", "id": 3}, true))
@@ -326,8 +330,11 @@ func TestWatch_SecondLaunchCancelsFirstWatcher(t *testing.T) {
 	require.NoError(t, kodi.RunTracked(r.client, opts, kodi.Expectation{}, func(c kodi.KodiClient) error {
 		return c.LaunchMovie("kodi-movie://8/Ronin")
 	}))
-	// The first socket closes and only the second watcher remains.
-	require.Eventually(t, func() bool { return r.srv.WebSocketClients() == 1 }, waitFor, tick)
+	// The first socket closes and only the second watcher remains. The open
+	// count alone can read 1 while only the first socket is registered.
+	require.Eventually(t, func() bool {
+		return r.srv.WebSocketsAccepted() == 2 && r.srv.WebSocketClients() == 1
+	}, waitFor, tick)
 
 	r.push(t, "Player.OnPlay", playData(movie(8)))
 	r.push(t, "Player.OnStop", stopData(movie(8), true))

@@ -601,6 +601,42 @@ func (p *Platform) settle(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// unpublishedGameWait bounds how long to wait for EmulationStation to report
+// a game whose launch a stop overtook, and unpublishedGamePoll is how often it
+// asks. EmulationStation takes a few seconds to start an emulator.
+const (
+	unpublishedGameWait = 10 * time.Second
+	unpublishedGamePoll = 500 * time.Millisecond
+)
+
+func (p *Platform) hasActiveMedia() bool {
+	return p.activeMedia != nil && p.activeMedia() != nil
+}
+
+// stopUnpublishedGame stops the game a launch started after a stop overtook
+// it. The game may not be running yet, so it waits for EmulationStation to
+// report one, up to unpublishedGameWait.
+func (p *Platform) stopUnpublishedGame() {
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	deadline := clock.Now().Add(unpublishedGameWait)
+	for {
+		if _, running, err := esapi.APIRunningGame(); err == nil && running {
+			log.Info().Msg("a stop came while the game was starting, stopping it")
+			if killErr := esapi.APIEmuKill(); killErr != nil {
+				log.Warn().Err(killErr).Msg("failed to stop a game that a stop overtook")
+			}
+			return
+		}
+		if !clock.Now().Before(deadline) {
+			return
+		}
+		clock.Sleep(unpublishedGamePoll)
+	}
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
@@ -670,6 +706,13 @@ func (p *Platform) LaunchMedia(
 	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	// A stop that came while the game was starting overtook this launch. Core
+	// then published no media for the game, so that stop found nothing to
+	// stop and the game would keep running unnoticed.
+	if launchCtx.Err() != nil && !isKodiLauncher(launcher.ID) && !p.hasActiveMedia() {
+		p.stopUnpublishedGame()
 	}
 
 	// Delay for non-Kodi launches (ES API needs settling time)

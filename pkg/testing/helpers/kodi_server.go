@@ -40,6 +40,7 @@ type MockKodiServer struct {
 	requests [][]byte
 	failing  map[kodi.APIMethod]bool
 	sockets  []*websocket.Conn
+	accepted int
 	mu       syncutil.Mutex
 	wsMu     syncutil.Mutex
 }
@@ -150,6 +151,7 @@ func (m *MockKodiServer) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 	m.wsMu.Lock()
 	m.sockets = append(m.sockets, conn)
+	m.accepted++
 	m.wsMu.Unlock()
 	// Drain client frames so close frames are processed.
 	go func() {
@@ -180,6 +182,16 @@ func (m *MockKodiServer) WebSocketClients() int {
 	m.wsMu.Lock()
 	defer m.wsMu.Unlock()
 	return len(m.sockets)
+}
+
+// WebSocketsAccepted returns the number of notification sockets accepted so
+// far, open or closed. A test that replaces one watcher with another waits
+// for this to count the new socket, because the open count can read 1 while
+// only the old socket is registered.
+func (m *MockKodiServer) WebSocketsAccepted() int {
+	m.wsMu.Lock()
+	defer m.wsMu.Unlock()
+	return m.accepted
 }
 
 // PushNotification sends a JSON-RPC notification to every connected socket.

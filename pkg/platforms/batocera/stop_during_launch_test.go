@@ -154,3 +154,89 @@ func TestLaunchMedia_StopAfterSettleBeforeLaunchAborts(t *testing.T) {
 	require.ErrorIs(t, sl.waitResult(t), context.Canceled)
 	assert.Empty(t, sl.launched)
 }
+
+// startOvertakenLaunch runs a LaunchMedia of an ES game. With stopDuringLaunch
+// a stop lands while the launcher is running, before Core publishes media. With
+// publish false the publication is dropped, as State does for a launch a stop
+// overtook.
+func startOvertakenLaunch(t *testing.T, stopDuringLaunch, publish bool) error {
+	t.Helper()
+	esServer := helpers.NewMockESAPIServer(t)
+	esServer.WithNoRunningGame()
+
+	cfg, cfgErr := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, cfgErr)
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+
+	clock := clockwork.NewFakeClock()
+	var published *models.ActiveMedia
+	platform := &Platform{
+		cfg:             cfg,
+		clock:           clock,
+		launcherManager: state.NewLauncherManager(),
+		activeMedia:     func() *models.ActiveMedia { return published },
+		setActiveMedia:  func(m *models.ActiveMedia) { published = m },
+	}
+	launcher := &platforms.Launcher{
+		ID:       "SNES",
+		SystemID: systemdefs.SystemSNES,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			// ES starts the emulator, and a stop lands before Core publishes.
+			esServer.WithRunningGame(&esapi.RunningGameResponse{
+				ID: "1", Name: "Game", SystemName: "snes", Path: "/userdata/roms/snes/game.sfc",
+			})
+			if stopDuringLaunch {
+				assert.NoError(t, platform.StopActiveLauncher(platforms.StopForMenu))
+			}
+			return nil, nil //nolint:nilnil // No process to track.
+		},
+	}
+	opts := &platforms.LaunchOptions{}
+	if !publish {
+		opts.ActiveMediaPublisher = func(*models.ActiveMedia) {}
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- platform.LaunchMedia(cfg, "/userdata/roms/snes/game.sfc", launcher, db, opts)
+	}()
+	if !stopDuringLaunch {
+		// The settle after the launch runs on the fake clock.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, clock.BlockUntilContext(ctx, 1))
+		clock.Advance(esSettleDelay)
+	}
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("LaunchMedia did not return")
+		return nil
+	}
+}
+
+func gameRunning(t *testing.T) bool {
+	t.Helper()
+	_, running, err := esapi.APIRunningGame()
+	require.NoError(t, err)
+	return running
+}
+
+func TestLaunchMedia_StopDuringTheLaunchStopsTheUnpublishedGame(t *testing.T) {
+	require.NoError(t, startOvertakenLaunch(t, true, false))
+	assert.False(t, gameRunning(t), "the game a stop overtook must not keep running")
+}
+
+func TestLaunchMedia_NoStopLeavesTheGameRunning(t *testing.T) {
+	require.NoError(t, startOvertakenLaunch(t, false, false))
+	assert.True(t, gameRunning(t))
+}
+
+// A stop that lands once the media is published stops it through the normal
+// path, so the launch must not stop the game itself.
+func TestLaunchMedia_PublishedGameIsLeftToTheNormalStop(t *testing.T) {
+	require.NoError(t, startOvertakenLaunch(t, true, true))
+	assert.True(t, gameRunning(t))
+}
