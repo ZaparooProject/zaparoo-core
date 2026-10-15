@@ -126,3 +126,32 @@ func TestRunTokenZapScript_ScanLaunchOvertakenByAStopPublishesNothing(t *testing
 	assert.Nil(t, svc.State.ActiveMedia())
 	<-stopped
 }
+
+// A stop command that panics and is recovered must not leave the stop gate
+// locked, or every later launch would wait on it forever.
+func TestRunTokenZapScript_PanickingStopStillOpensTheStopGate(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	kept := mockPlatform.ExpectedCalls[:0]
+	for _, call := range mockPlatform.ExpectedCalls {
+		if call.Method != "ReturnToMenu" {
+			kept = append(kept, call)
+		}
+	}
+	mockPlatform.ExpectedCalls = kept
+	mockPlatform.On("ReturnToMenu").Run(func(mock.Arguments) { panic("the menu failed to open") }).Return(nil)
+
+	err := runTokenZapScriptRecovering(svc, tokens.Token{
+		Text: "**stop", Source: tokens.SourceAPI, ScanTime: time.Now(),
+	}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)})
+	require.ErrorIs(t, err, errLaunchPanicked)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	release, gateErr := svc.State.AcquireMediaStop(ctx)
+	require.NoError(t, gateErr, "the stop gate must be open once the command is over")
+	release()
+}

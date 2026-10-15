@@ -262,3 +262,34 @@ func TestNativeAudioDrain_BackgroundStaleDrainKeepsOtherMedia(t *testing.T) {
 	assert.NotNil(t, svc.State.BackgroundMedia())
 	assert.Empty(t, rec.reasons(mediaslot.Background))
 }
+
+func TestStopAbandonedNativeAudio_StopsOnlyNativeAudioPrimary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("native audio", func(t *testing.T) {
+		t.Parallel()
+		svc, _ := newRecordedService(t)
+		rec := &servicePlaybackRecorder{}
+		svc.PlaybackManager = rec
+
+		stopAbandonedNativeAudio(svc, nativeTrack("track"))
+		assert.Equal(t, []string{mediaslot.Primary}, rec.stopped)
+	})
+
+	t.Run("another launcher is left alone", func(t *testing.T) {
+		t.Parallel()
+		svc, _ := newRecordedService(t)
+		rec := &servicePlaybackRecorder{}
+		svc.PlaybackManager = rec
+
+		stopAbandonedNativeAudio(svc, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "emulator"))
+		assert.Empty(t, rec.stopped)
+	})
+
+	t.Run("no playback manager", func(t *testing.T) {
+		t.Parallel()
+		svc, _ := newRecordedService(t)
+
+		assert.NotPanics(t, func() { stopAbandonedNativeAudio(svc, nativeTrack("track")) })
+	})
+}

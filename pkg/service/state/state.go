@@ -87,6 +87,7 @@ type State struct {
 	deviceMonitor         *device.Monitor
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
+	onLaunchAbandoned     func(*models.ActiveMedia)
 	mediaObservers        []MediaObserver
 	beforeExitHook        func()
 	pendingLaunchOverride *PendingLaunchOverride
@@ -356,6 +357,16 @@ func (s *State) SetOnMediaStopHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStopHook = hook
+}
+
+// SetOnLaunchAbandoned registers the callback run when a stop overtakes a
+// launch whose media was about to be published. It stops anything the launch
+// started that the platform's own stop cannot find because nothing was
+// published, such as native audio playback. Pass nil to clear it.
+func (s *State) SetOnLaunchAbandoned(hook func(*models.ActiveMedia)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onLaunchAbandoned = hook
 }
 
 // SetBeforeExitHook registers the callback run just before active media is
@@ -818,18 +829,50 @@ func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 }
 
 // abandonOvertakenLaunch drops the publication of media whose launch a stop
-// overtook, and asks the platform to stop what that launch started. The stop
-// runs apart from the launch, which still holds the launch gate.
+// overtook, and has what that launch started stopped. The launch still holds
+// the launch gate, so the stop runs once it is released.
 func (s *State) abandonOvertakenLaunch(media *models.ActiveMedia) {
 	log.Info().Str("path", media.Path).Msg("a stop came during the launch, not publishing its media")
+	s.mu.RLock()
+	gen := s.activeMediaReadyGen
+	hook := s.onLaunchAbandoned
+	s.mu.RUnlock()
+	if s.platform == nil && hook == nil {
+		return
+	}
+	go s.stopAbandonedLaunch(media, gen, hook)
+}
+
+// stopAbandonedLaunch stops what an abandoned launch started. It waits for the
+// launch gate, which the launch holds until it returns, so that a launch begun
+// meanwhile is either not started yet or already published. Media published
+// since the launch was abandoned belongs to a newer launch, and the stop must
+// not reach it.
+func (s *State) stopAbandonedLaunch(media *models.ActiveMedia, gen uint64, hook func(*models.ActiveMedia)) {
+	release, err := acquireExclusiveGate(s.ctx, &s.mediaLaunchMu)
+	if err != nil {
+		log.Debug().Err(err).Msg("not stopping a launch that a stop overtook")
+		return
+	}
+	defer release()
+
+	s.mu.RLock()
+	superseded := s.activeMedia != nil && s.activeMediaReadyGen != gen
+	s.mu.RUnlock()
+	if superseded {
+		log.Info().Str("path", media.Path).Msg("newer media was published, leaving it running")
+		return
+	}
+
+	if hook != nil {
+		hook(media)
+	}
 	if s.platform == nil {
 		return
 	}
-	go func() {
-		if err := s.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
-			log.Warn().Err(err).Msg("failed to stop a launch that a stop overtook")
-		}
-	}()
+	if err := s.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
+		log.Warn().Err(err).Msg("failed to stop a launch that a stop overtook")
+	}
 }
 
 // AcquireMediaStop waits for in-flight media launches, then prevents another
@@ -1091,6 +1134,16 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 // whether the state changed. A non-nil cond is evaluated against the current
 // media under the lock and vetoes the update when it returns false.
 func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*models.ActiveMedia) bool) bool {
+	return s.updateActiveMediaStateAs(media, cond, "")
+}
+
+// updateActiveMediaStateAs is updateActiveMediaState with the reason the media
+// ends when the update clears it. A non-empty endReason takes the place of any
+// recorded stop, and is chosen in the same critical section that clears the
+// media, so a condition that fails leaves a recorded stop untouched.
+func (s *State) updateActiveMediaStateAs(
+	media *models.ActiveMedia, cond func(*models.ActiveMedia) bool, endReason string,
+) bool {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another
@@ -1116,6 +1169,9 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 		readyCh := s.activeMediaReadyCh
 		endedGen := s.activeMediaReadyGen
 		reason := s.takeStopReasonLocked(models.MediaStopReasonExited)
+		if endReason != "" {
+			reason = endReason
+		}
 		observers := s.mediaObservers
 		s.activeMedia = media
 		s.activeMediaReady = false
