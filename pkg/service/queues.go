@@ -989,24 +989,6 @@ func storePlaylist(svc *ServiceContext, slot string, pls *playlists.Playlist) {
 	svc.AutoAdvance.PlaylistChanged(slot)
 }
 
-// commandStopsPrimaryNow reports whether cmd stops the running primary media
-// itself, as opposed to queueing something that does later. Such a command
-// has to wait for a launch in flight, or it finds nothing to stop and the
-// launch then goes on to start what it was meant to end.
-func commandStopsPrimaryNow(cmd gozapscript.Command) bool {
-	if commandTargetsBackgroundSlot(cmd) {
-		return false
-	}
-	switch cmd.Name {
-	case gozapscript.ZapScriptCmdStop, gozapscript.ZapScriptCmdPlaylistStop, gozapscript.ZapScriptCmdPlaylistPause:
-		return true
-	case gozapscript.ZapScriptCmdLaunchSystem:
-		return len(cmd.Args) == 1 && strings.EqualFold(cmd.Args[0], platforms.SystemMenu)
-	default:
-		return false
-	}
-}
-
 func handlePlaylist(
 	svc *ServiceContext,
 	pls *playlists.Playlist,
