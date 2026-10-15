@@ -36,7 +36,7 @@ import (
 )
 
 const deckColumns = `DBID, DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-	PlaylistID, AdvanceMs, IdleMs, CountdownMs`
+	PlaylistID`
 
 const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID, Scripts, Metadata,
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
@@ -52,9 +52,6 @@ func (db *UserDB) CreateDeck(deck *database.Deck) error {
 	}
 	if len(deck.Items) > database.DeckMaxItems {
 		return database.ErrDeckItemLimit
-	}
-	if err := deck.Rotation.Validate(); err != nil {
-		return fmt.Errorf("create deck: %w", err)
 	}
 	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
 		deck.CreatedAt, deck.UpdatedAt = now, now
@@ -97,7 +94,7 @@ func (db *UserDB) ListDecks() ([]database.Deck, error) {
 }
 
 // UpdateDeck edits a deck in one transaction. It loads the deck with its
-// items, lets edit change the deck's Name, Description, Metadata, Rotation and Items,
+// items, lets edit change the deck's Name, Description, Metadata and Items,
 // and stores those fields; edit's other changes are ignored. An item that
 // still carries the DBID of one of the deck's items keeps that row, so its ID
 // and creation time survive the edit. Any other item is inserted, and rows no
@@ -125,17 +122,11 @@ func (db *UserDB) UpdateDeck(deckID string, edit func(deck *database.Deck) error
 		if len(deck.Items) > database.DeckMaxItems {
 			return false, database.ErrDeckItemLimit
 		}
-		if rotationErr := deck.Rotation.Validate(); rotationErr != nil {
-			return false, fmt.Errorf("update deck: %w", rotationErr)
-		}
 		deck.UpdatedAt = now
-		advanceMs, idleMs, countdownMs := encodeDeckRotation(deck.Rotation)
 		if _, execErr := tx.ExecContext(ctx, `
-			update Decks set Name = ?, Description = ?, Metadata = ?, AdvanceMs = ?, IdleMs = ?,
-				CountdownMs = ?, UpdatedAt = ?
+			update Decks set Name = ?, Description = ?, Metadata = ?, UpdatedAt = ?
 			where DBID = ?;`,
-			deck.Name, deck.Description, string(deck.Metadata), advanceMs, idleMs, countdownMs,
-			now, deck.DBID); execErr != nil {
+			deck.Name, deck.Description, string(deck.Metadata), now, deck.DBID); execErr != nil {
 			return false, fmt.Errorf("failed to update deck: %w", execErr)
 		}
 		if saveErr := sqlSaveDeckItems(ctx, tx, deck.DBID, stored, deck.Items, now); saveErr != nil {
@@ -211,8 +202,7 @@ func refuseLockedDeck(ctx context.Context, tx *sql.Tx, deckID string) error {
 // An arriving item carries no row of its own, so one that matches a stored
 // item exactly adopts that row and the local file it is linked to. Only what
 // really changed is written, and a fetch that brings nothing new records that
-// the deck was checked and nothing else. Rotation is a setting of this
-// device that no source serves, so a replace keeps the stored one. It reports whether the stored deck
+// the deck was checked and nothing else. It reports whether the stored deck
 // changed, so the caller can queue the deck's tags only when it did.
 func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 	if db.sql.Load() == nil {
@@ -541,36 +531,14 @@ func sqlCountOwnedDecks(ctx context.Context, q deckQueryable) (int, error) {
 	return count, nil
 }
 
-// encodeDeckRotation returns the stored columns of a deck's rotation, in
-// milliseconds. An unset countdown is NULL, distinct from an explicit zero.
-func encodeDeckRotation(r database.DeckRotation) (advanceMs, idleMs int64, countdownMs sql.NullInt64) {
-	if r.CountdownSet {
-		countdownMs = sql.NullInt64{Int64: r.Countdown.Milliseconds(), Valid: true}
-	}
-	return r.Advance.Milliseconds(), r.Idle.Milliseconds(), countdownMs
-}
-
-// decodeDeckRotation rebuilds a deck's rotation from its stored columns.
-func decodeDeckRotation(advanceMs, idleMs int64, countdownMs sql.NullInt64) database.DeckRotation {
-	r := database.DeckRotation{
-		Advance: time.Duration(advanceMs) * time.Millisecond,
-		Idle:    time.Duration(idleMs) * time.Millisecond,
-	}
-	if countdownMs.Valid {
-		r.Countdown, r.CountdownSet = time.Duration(countdownMs.Int64)*time.Millisecond, true
-	}
-	return r
-}
-
 func sqlInsertDeck(ctx context.Context, q deckQueryable, deck *database.Deck) error {
-	advanceMs, idleMs, countdownMs := encodeDeckRotation(deck.Rotation)
 	err := q.QueryRowContext(ctx, `
 		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-			PlaylistID, AdvanceMs, IdleMs, CountdownMs)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			PlaylistID)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		returning DBID;`,
 		deck.DeckID, deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID, advanceMs, idleMs, countdownMs,
+		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID,
 	).Scan(&deck.DBID)
 	if err != nil {
 		return fmt.Errorf("failed to insert deck: %w", err)
@@ -681,16 +649,12 @@ func sameDeckItemContent(a, b *database.DeckItem) bool {
 func scanDeck(scan func(dest ...any) error) (*database.Deck, error) {
 	var deck database.Deck
 	var metadata string
-	var advanceMs, idleMs int64
-	var countdownMs sql.NullInt64
 	if err := scan(
 		&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
 		&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
-		&advanceMs, &idleMs, &countdownMs,
 	); err != nil {
 		return nil, err
 	}
-	deck.Rotation = decodeDeckRotation(advanceMs, idleMs, countdownMs)
 	if metadata != "" {
 		deck.Metadata = json.RawMessage(metadata)
 	}
@@ -737,16 +701,12 @@ func sqlListDecks(ctx context.Context, q deckQueryable) ([]database.Deck, error)
 	for rows.Next() {
 		var deck database.Deck
 		var metadata string
-		var advanceMs, idleMs int64
-		var countdownMs sql.NullInt64
 		if scanErr := rows.Scan(
 			&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
-			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
-			&advanceMs, &idleMs, &countdownMs, &deck.ItemCount,
+			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID, &deck.ItemCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan deck: %w", scanErr)
 		}
-		deck.Rotation = decodeDeckRotation(advanceMs, idleMs, countdownMs)
 		if metadata != "" {
 			deck.Metadata = json.RawMessage(metadata)
 		}

@@ -28,7 +28,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -98,42 +97,6 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 	assert.Equal(t, "**launch.system:NES", pls.Items[0].ZapScript)
 	assert.Equal(t, int32(1), refreshed.Load(), "an owned deck asks the sync hook for a background refresh")
 	assert.False(t, pls.Unsafe, "the user's own deck is trusted")
-}
-
-func TestCmdPlaylistLoad_DeckRotation(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		rotation database.DeckRotation
-	}{
-		{name: "none"},
-		{name: "advance", rotation: database.DeckRotation{Advance: 90 * time.Second}},
-		{name: "idle with zero countdown", rotation: database.DeckRotation{
-			Idle: 5 * time.Minute, CountdownSet: true,
-		}},
-		{name: "advance with countdown", rotation: database.DeckRotation{
-			Advance: time.Minute, Countdown: 3 * time.Second, CountdownSet: true,
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			env, db, queue := deckTestEnv(t, "deck://0123456789ab")
-			require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
-				DeckID: "0123456789ab", Name: "Rotating", Owned: true, Rotation: tt.rotation,
-				Items: []database.DeckItem{
-					{Kind: database.DeckItemKindScript, Name: "First", ZapScript: "**launch.system:NES"},
-				},
-			}))
-			_, err := cmdPlaylistLoad(newInputPlatform(platforms.InputAll), env)
-			require.NoError(t, err)
-			pls := <-queue
-			assert.Equal(t, tt.rotation.Advance, pls.Advance)
-			assert.Equal(t, tt.rotation.Idle, pls.Idle)
-			assert.Equal(t, tt.rotation.Countdown, pls.Countdown)
-			assert.Equal(t, tt.rotation.CountdownSet, pls.CountdownSet)
-		})
-	}
 }
 
 func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {

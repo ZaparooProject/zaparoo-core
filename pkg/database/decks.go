@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // A deck is the user's persistent, ordered list of games and cards, and the
@@ -57,12 +56,6 @@ const (
 	DeckNameMaxLen        = 100
 	DeckDescriptionMaxLen = 1000
 	DeckZapScriptMaxLen   = 5000
-
-	// DeckRotationMax caps each rotation duration of a deck. DeckRotationMin
-	// is the shortest advance or idle time: ZapScript refuses less, and a
-	// shorter one would relaunch the next item as soon as it started.
-	DeckRotationMax = 24 * time.Hour
-	DeckRotationMin = time.Second
 )
 
 var (
@@ -76,8 +69,6 @@ var (
 	ErrDeckOwned        = errors.New("deck is owned by this device")
 	ErrDeckReadOnly     = errors.New("deck is read-only")
 	ErrInvalidDeckID    = errors.New("invalid deck id")
-	// ErrInvalidDeckRotation rejects rotation settings that cannot run.
-	ErrInvalidDeckRotation = errors.New("invalid deck rotation")
 )
 
 // DeckCardScript is one script a card item runs.
@@ -117,41 +108,6 @@ func (i *DeckItem) HasAnchor() bool {
 	return i.Anchor.Path != ""
 }
 
-// DeckRotation is how a deck rotates once it is open as a playlist. A zero
-// Advance or Idle means the deck does not rotate that way, and the two are
-// never both set. Countdown is only meaningful when CountdownSet is true: an
-// explicit zero switches with no notice, where unset takes the default.
-type DeckRotation struct {
-	Advance      time.Duration
-	Idle         time.Duration
-	Countdown    time.Duration
-	CountdownSet bool
-}
-
-// IsZero reports whether the deck has no rotation settings at all.
-func (r DeckRotation) IsZero() bool {
-	return r == DeckRotation{}
-}
-
-// Validate checks the settings are runnable: Advance and Idle are not both
-// set, neither is negative, a set Advance or Idle is at least DeckRotationMin,
-// and no duration exceeds DeckRotationMax.
-func (r DeckRotation) Validate() error {
-	switch {
-	case r.Advance < 0 || r.Idle < 0 || r.Countdown < 0:
-		return fmt.Errorf("%w: durations cannot be negative", ErrInvalidDeckRotation)
-	case r.Advance > 0 && r.Idle > 0:
-		return fmt.Errorf("%w: advance and idle cannot both be set", ErrInvalidDeckRotation)
-	case r.Advance > 0 && r.Advance < DeckRotationMin, r.Idle > 0 && r.Idle < DeckRotationMin:
-		return fmt.Errorf("%w: advance and idle must be at least %s", ErrInvalidDeckRotation, DeckRotationMin)
-	case r.Advance > DeckRotationMax || r.Idle > DeckRotationMax || r.Countdown > DeckRotationMax:
-		return fmt.Errorf("%w: durations cannot exceed %s", ErrInvalidDeckRotation, DeckRotationMax)
-	case !r.CountdownSet && r.Countdown != 0:
-		return fmt.Errorf("%w: countdown is set without being marked set", ErrInvalidDeckRotation)
-	}
-	return nil
-}
-
 // Deck is a user's list. Items is populated by GetDeck and left nil by
 // ListDecks, which fills ItemCount instead.
 type Deck struct {
@@ -165,7 +121,6 @@ type Deck struct {
 	PlaylistID string
 	Metadata   json.RawMessage
 	Items      []DeckItem
-	Rotation   DeckRotation
 	DBID       int64
 	CreatedAt  int64
 	UpdatedAt  int64

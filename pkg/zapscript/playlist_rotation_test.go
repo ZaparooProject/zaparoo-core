@@ -221,97 +221,6 @@ func TestCmdPlaylistOpen_IdleArms(t *testing.T) {
 	assert.True(t, (<-queue).Armed)
 }
 
-func TestDeckRotation_CommandArgsOverrideAndClearTheOther(t *testing.T) {
-	t.Parallel()
-
-	full := newInputPlatform(platforms.InputAll)
-	tests := []struct {
-		args   map[string]string
-		name   string
-		stored database.DeckRotation
-		want   database.DeckRotation
-	}{
-		{
-			name:   "deck values apply",
-			stored: database.DeckRotation{Advance: time.Minute, Countdown: 2 * time.Second, CountdownSet: true},
-			want:   database.DeckRotation{Advance: time.Minute, Countdown: 2 * time.Second, CountdownSet: true},
-		},
-		{
-			name:   "advance overrides advance",
-			args:   map[string]string{"advance": "2m"},
-			stored: database.DeckRotation{Advance: time.Minute},
-			want:   database.DeckRotation{Advance: 2 * time.Minute},
-		},
-		{
-			name:   "idle replaces the deck's advance",
-			args:   map[string]string{"idle": "5m"},
-			stored: database.DeckRotation{Advance: time.Minute},
-			want:   database.DeckRotation{Idle: 5 * time.Minute},
-		},
-		{
-			name:   "advance replaces the deck's idle",
-			args:   map[string]string{"advance": "5m"},
-			stored: database.DeckRotation{Idle: time.Hour},
-			want:   database.DeckRotation{Advance: 5 * time.Minute},
-		},
-		{
-			name:   "countdown override keeps the rotation",
-			args:   map[string]string{"countdown": "0"},
-			stored: database.DeckRotation{Advance: time.Minute, Countdown: 5 * time.Second, CountdownSet: true},
-			want:   database.DeckRotation{Advance: time.Minute, CountdownSet: true},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			env, db, queue := deckTestEnv(t, "deck://0123456789ab")
-			env.Cmd.AdvArgs = zapscript.NewAdvArgs(tt.args)
-			require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
-				DeckID: "0123456789ab", Name: "Rotating", Owned: true, Rotation: tt.stored,
-				Items: []database.DeckItem{
-					{Kind: database.DeckItemKindScript, Name: "First", ZapScript: "**launch.system:NES"},
-				},
-			}))
-			_, err := cmdPlaylistLoad(full, env)
-			require.NoError(t, err)
-			pls := <-queue
-			assert.Equal(t, tt.want.Advance, pls.Advance)
-			assert.Equal(t, tt.want.Idle, pls.Idle)
-			assert.Equal(t, tt.want.Countdown, pls.Countdown)
-			assert.Equal(t, tt.want.CountdownSet, pls.CountdownSet)
-		})
-	}
-}
-
-func TestDeckRotation_IdleDeckRefusedWithoutFullCoverage(t *testing.T) {
-	t.Parallel()
-
-	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
-	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
-		DeckID: "0123456789ab", Name: "Idle", Owned: true, Rotation: database.DeckRotation{Idle: time.Minute},
-		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**launch.system:NES"}},
-	}))
-	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
-	require.ErrorIs(t, err, autoadvance.ErrIdleUnsupported)
-	assert.Empty(t, queue)
-}
-
-func TestDeckRotation_BackgroundSlotPlaysADeckPlain(t *testing.T) {
-	t.Parallel()
-
-	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
-	env.Cmd.AdvArgs = zapscript.NewAdvArgs(map[string]string{"slot": "background"})
-	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
-		DeckID: "0123456789ab", Name: "Rotating", Owned: true, Rotation: database.DeckRotation{Advance: time.Minute},
-		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**launch.system:NES"}},
-	}))
-	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
-	require.NoError(t, err)
-	pls := <-queue
-	assert.Zero(t, pls.Advance, "the background slot does not rotate")
-	assert.Equal(t, mediaslot.Background, pls.Slot)
-}
-
 func randomRotationEnv(args map[string]string) (env platforms.CmdEnv, queue chan *playlists.Playlist) {
 	queue = make(chan *playlists.Playlist, 1)
 	cmd := zapscript.Command{
@@ -511,4 +420,57 @@ func TestCmdRandom_RotationUpdateIsStamped(t *testing.T) {
 	got := <-queue
 	assert.True(t, got.StopStamped)
 	assert.Equal(t, uint64(3), got.StopSeq)
+}
+
+func openRotatingDeck(t *testing.T, args map[string]string, pl platforms.Platform) (*playlists.Playlist, error) {
+	t.Helper()
+	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
+	env.Cmd.AdvArgs = zapscript.NewAdvArgs(args)
+	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Rotating", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**launch.system:NES"}},
+	}))
+	if _, err := cmdPlaylistLoad(pl, env); err != nil {
+		assert.Empty(t, queue)
+		return nil, err
+	}
+	return <-queue, nil
+}
+
+func TestDeckPlaylist_RotationComesFromTheCommand(t *testing.T) {
+	t.Parallel()
+
+	full := newInputPlatform(platforms.InputAll)
+	pls, err := openRotatingDeck(t, nil, full)
+	require.NoError(t, err)
+	assert.Zero(t, pls.Advance)
+	assert.Zero(t, pls.Idle)
+	assert.False(t, pls.CountdownSet)
+
+	pls, err = openRotatingDeck(t, map[string]string{"advance": "2m", "countdown": "0"}, full)
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Minute, pls.Advance)
+	assert.Zero(t, pls.Idle)
+	assert.True(t, pls.CountdownSet)
+	assert.Zero(t, pls.Countdown)
+
+	pls, err = openRotatingDeck(t, map[string]string{"idle": "5m"}, full)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Minute, pls.Idle)
+	assert.Zero(t, pls.Advance)
+}
+
+func TestDeckPlaylist_IdleRefusedWithoutFullCoverage(t *testing.T) {
+	t.Parallel()
+
+	_, err := openRotatingDeck(t, map[string]string{"idle": "1m"}, newPlaylistTestPlatform())
+	require.ErrorIs(t, err, autoadvance.ErrIdleUnsupported)
+}
+
+func TestDeckPlaylist_BackgroundSlotRefusesRotation(t *testing.T) {
+	t.Parallel()
+
+	_, err := openRotatingDeck(t, map[string]string{"slot": "background", "advance": "1m"},
+		newInputPlatform(platforms.InputAll))
+	require.ErrorIs(t, err, ErrBackgroundRotation)
 }

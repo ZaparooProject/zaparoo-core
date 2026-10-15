@@ -37,7 +37,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -61,6 +60,9 @@ const (
 func isPlsFile(path string) bool {
 	return filepath.Ext(strings.ToLower(path)) == ".pls"
 }
+
+// maxRotation caps an advance, idle or countdown value.
+const maxRotation = 24 * time.Hour
 
 // ErrNoPlaylistActive is returned by playlist control commands when no playlist
 // is active for the requested slot. This is an expected user condition (firing a
@@ -581,9 +583,9 @@ func parseRotationDuration(name, raw string, allowZero bool) (time.Duration, err
 	if allowZero {
 		lowest = 0
 	}
-	if d < lowest || d > database.DeckRotationMax {
+	if d < lowest || d > maxRotation {
 		return 0, fmt.Errorf("%w: %s must be between %s and %s",
-			ErrInvalidRotation, name, lowest, database.DeckRotationMax)
+			ErrInvalidRotation, name, lowest, maxRotation)
 	}
 	return d, nil
 }
@@ -615,10 +617,8 @@ func parseRotation(r *rotationArgs) (rotation, error) {
 	return out, nil
 }
 
-// applyRotation puts a command's advance, idle and countdown on pls. A value
-// the command names overrides what a deck stored, and naming one of advance
-// and idle drops the other, since a playlist rotates one way or the other.
-// Whatever the playlist ends up with is checked against the device and slot.
+// applyRotation puts a command's advance, idle and countdown on pls, after
+// checking them against the device and slot.
 func applyRotation(pl platforms.Platform, pls *playlists.Playlist, r *rotationArgs) error {
 	rot, err := parseRotation(r)
 	if err != nil {
@@ -627,23 +627,15 @@ func applyRotation(pl platforms.Platform, pls *playlists.Playlist, r *rotationAr
 	if (rot.advanceSet || rot.idleSet) && pls.Slot == mediaslot.Background {
 		return ErrBackgroundRotation
 	}
-	switch {
-	case rot.advanceSet:
+	if rot.advanceSet {
 		pls.Advance = rot.advance
-		pls.Idle = 0
-	case rot.idleSet:
+	}
+	if rot.idleSet {
 		pls.Idle = rot.idle
-		pls.Advance = 0
 	}
 	if rot.countdownSet {
 		pls.Countdown = rot.countdown
 		pls.CountdownSet = true
-	}
-	if pls.Slot == mediaslot.Background && (pls.Advance > 0 || pls.Idle > 0) {
-		// A deck can carry rotation the background slot cannot use; it plays
-		// as a plain playlist.
-		pls.Advance = 0
-		pls.Idle = 0
 	}
 	if pls.Idle > 0 && !autoadvance.IdleSupported(pl) {
 		return autoadvance.ErrIdleUnsupported

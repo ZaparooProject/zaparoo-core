@@ -1023,7 +1023,6 @@ type DeckItemResponse struct {
 // DeckResponse is a deck. Items is present, as [] for an empty deck, on
 // decks.get, decks.new and decks.update, and omitted by the decks list.
 type DeckResponse struct {
-	Rotation    *DeckRotation      `json:"rotation,omitempty"`
 	Metadata    json.RawMessage    `json:"metadata,omitempty"`
 	DeckID      string             `json:"deckId"`
 	Name        string             `json:"name"`

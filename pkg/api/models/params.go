@@ -319,16 +319,6 @@ type DeckCardScriptInput struct {
 	ZapScript string `json:"zapscript" validate:"required,max=5000"`
 }
 
-// DeckRotation is how a deck rotates when it opens as a playlist, with
-// durations in milliseconds. advanceMs and idleMs are mutually exclusive and
-// at least 1; countdownMs may be 0, which switches with no notice. A field
-// left out is unset.
-type DeckRotation struct {
-	AdvanceMs   *int64 `json:"advanceMs,omitempty" validate:"omitempty,min=1000,max=86400000"`
-	IdleMs      *int64 `json:"idleMs,omitempty" validate:"omitempty,min=1000,max=86400000"`
-	CountdownMs *int64 `json:"countdownMs,omitempty" validate:"omitempty,min=0,max=86400000"`
-}
-
 type DecksGetParams struct {
 	DeckID string `json:"deckId" validate:"required,min=1"`
 }
@@ -336,20 +326,16 @@ type DecksGetParams struct {
 type DecksNewParams struct {
 	Name        string          `json:"name" validate:"required,min=1,max=100"`
 	Description string          `json:"description" validate:"max=1000"`
-	Rotation    *DeckRotation   `json:"rotation,omitempty"`
 	Items       []DeckItemInput `json:"items" validate:"max=120,dive"`
 }
 
 // DecksUpdateParams edits a deck. items replaces the whole list and may keep
 // existing items by id; addItems appends; removeItemIds drops members by
-// their item id. They are applied as remove, replace, then append. rotation,
-// when present, replaces the deck's whole rotation, so an empty object clears
-// it.
+// their item id. They are applied as remove, replace, then append.
 type DecksUpdateParams struct {
 	Name          *string          `json:"name" validate:"omitempty,min=1,max=100"`
 	Description   *string          `json:"description" validate:"omitempty,max=1000"`
 	Items         *[]DeckItemInput `json:"items" validate:"omitempty,max=120,dive"`
-	Rotation      *DeckRotation    `json:"rotation,omitempty"`
 	DeckID        string           `json:"deckId" validate:"required,min=1"`
 	AddItems      []DeckItemInput  `json:"addItems" validate:"omitempty,max=120,dive"`
 	RemoveItemIDs []int64          `json:"removeItemIds"`
