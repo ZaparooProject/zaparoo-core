@@ -280,3 +280,35 @@ func TestClearBackgroundMediaIf(t *testing.T) {
 		assert.Empty(t, observer.ends)
 	})
 }
+
+// A natural end reported after Core recorded a stop is the end the media
+// actually had.
+func TestFinishActiveMedia_ReportsFinishedOverARecordedStop(t *testing.T) {
+	t.Parallel()
+	st, observer := newObservedState(t)
+	st.SetActiveMedia(testMedia("a.mkv"))
+	gen, ok := st.ActiveMediaReadyGeneration()
+	require.True(t, ok)
+
+	st.RecordMediaStop(models.MediaStopReasonStopped)
+	require.True(t, st.FinishActiveMedia(gen))
+
+	assert.Equal(t, models.MediaStopReasonFinished, observer.lastEnd(t).Reason)
+}
+
+// A finish that does not apply must leave the recorded stop for the clear it
+// was meant for.
+func TestFinishActiveMedia_StaleFinishKeepsTheRecordedStop(t *testing.T) {
+	t.Parallel()
+	st, observer := newObservedState(t)
+	st.SetActiveMedia(testMedia("a.mkv"))
+	gen, ok := st.ActiveMediaReadyGeneration()
+	require.True(t, ok)
+
+	st.RecordMediaStop(models.MediaStopReasonStopped)
+	assert.False(t, st.FinishActiveMedia(gen+1))
+	assert.False(t, st.FinishActiveMediaIf(func(*models.ActiveMedia) bool { return false }))
+	st.SetActiveMedia(nil)
+
+	assert.Equal(t, models.MediaStopReasonStopped, observer.lastEnd(t).Reason)
+}

@@ -132,22 +132,10 @@ func (s *State) UserStopSeq() uint64 {
 // reached its natural end. It records the end as finished and clears the
 // media, and does nothing when other media has taken its place.
 func (s *State) FinishActiveMedia(gen uint64) bool {
-	s.mu.Lock()
-	if s.activeMedia == nil || s.activeMediaReadyGen != gen {
-		s.mu.Unlock()
-		return false
-	}
-	s.stopIntent = mediaStopIntent{
-		reason: models.MediaStopReasonFinished,
-		gen:    gen,
-		at:     time.Now(),
-	}
-	s.mu.Unlock()
-
 	// The condition runs with s.mu held, so it reads the generation directly.
-	return s.updateActiveMediaState(nil, func(*models.ActiveMedia) bool {
+	return s.updateActiveMediaStateAs(nil, func(*models.ActiveMedia) bool {
 		return s.activeMediaReadyGen == gen
-	})
+	}, models.MediaStopReasonFinished)
 }
 
 // ExitActiveMedia reports that the primary media published under gen ended
