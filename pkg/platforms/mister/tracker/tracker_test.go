@@ -1424,3 +1424,54 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 		})
 	}
 }
+
+// A console launcher's media is not described by ACTIVEGAME. The empty signal
+// Core wrote when it stopped the previous media can reach the tracker after the
+// new launch has published, and must not clear it.
+func TestLoadGameEmptyActiveGameKeepsProcessTrackedMedia(t *testing.T) {
+	t.Parallel()
+
+	for _, launcherID := range []string{VideoLauncherID, ScummVMLauncherID} {
+		t.Run(launcherID, func(t *testing.T) {
+			t.Parallel()
+			current := models.NewActiveMedia(
+				systemdefs.SystemVideo, "Video", "/media/fat/games/Video/a.mp4", "A", launcherID,
+			)
+			cleared := 0
+			tr := &Tracker{
+				ActiveGameID:   "stale/id",
+				readActiveGame: func() (string, error) { return "", nil },
+				activeMedia:    func() *models.ActiveMedia { return current },
+				setActiveMedia: func(m *models.ActiveMedia) {
+					if m == nil {
+						cleared++
+						current = nil
+					}
+				},
+			}
+
+			tr.loadGame()
+
+			assert.Zero(t, cleared)
+			assert.NotNil(t, current)
+			assert.Empty(t, tr.ActiveGameID, "tracker state is still retired")
+		})
+	}
+}
+
+func TestLoadGameEmptyActiveGameClearsCoreMedia(t *testing.T) {
+	t.Parallel()
+
+	current := models.NewActiveMedia(systemdefs.SystemGenesis, "Genesis", "/media/fat/games/Genesis/a.md", "A", "")
+	tr := &Tracker{
+		ActiveGameID:   "Genesis/a.md",
+		readActiveGame: func() (string, error) { return "", nil },
+		activeMedia:    func() *models.ActiveMedia { return current },
+		setActiveMedia: func(m *models.ActiveMedia) { current = m },
+	}
+
+	tr.loadGame()
+
+	assert.Nil(t, current, "a core game quit through the OSD must still clear")
+	assert.Empty(t, tr.ActiveGameID)
+}

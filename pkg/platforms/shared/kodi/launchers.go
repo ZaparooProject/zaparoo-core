@@ -95,9 +95,11 @@ func NewKodiLocalLauncher() platforms.Launcher {
 			".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
 			".m3u", ".m3u8",
 		},
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchFile(path)
+			return nil, launchTracked(client, opts, expectation{}, func(c KodiClient) error {
+				return c.LaunchFile(path)
+			})
 		},
 	}
 }
@@ -114,9 +116,12 @@ func NewKodiMovieLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiMovie},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchMovie(path)
+			exp := libraryExpectation(path, shared.SchemeKodiMovie, "movie")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchMovie(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -142,9 +147,12 @@ func NewKodiTVLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiEpisode},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchTVEpisode(path)
+			exp := libraryExpectation(path, shared.SchemeKodiEpisode, "episode")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchTVEpisode(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -172,9 +180,11 @@ func NewKodiMusicLauncher() platforms.Launcher {
 		Extensions: []string{
 			".mp3", ".flac", ".ogg", ".m4a", ".wav", ".wma", ".aac", ".opus",
 		},
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchFile(path)
+			return nil, launchTracked(client, opts, expectation{}, func(c KodiClient) error {
+				return c.LaunchFile(path)
+			})
 		},
 	}
 }
@@ -191,9 +201,11 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiAlbum},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchAlbum(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchAlbum(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -219,9 +231,11 @@ func NewKodiArtistLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiArtist},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchArtist(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchArtist(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -247,9 +261,11 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiShow},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchTVShow(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchTVShow(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -275,9 +291,12 @@ func NewKodiSongLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiSong},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchSong(path)
+			exp := libraryExpectation(path, shared.SchemeKodiSong, "song")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchSong(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,

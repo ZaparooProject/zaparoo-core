@@ -108,6 +108,17 @@ func createConsoleRestoreFunc(cm platforms.ConsoleManager) func() {
 	}
 }
 
+// trackedExit describes what a console launcher does when its process ends on
+// its own. A process Core stops is never treated as ending on its own.
+type trackedExit struct {
+	// mediaFinished, when set, is called for a clean (status 0) exit that Core
+	// did not cause. It replaces the plain media clear because Core records
+	// the end as finished and clears the media itself.
+	mediaFinished func()
+	// launcherID names the launcher whose active media this process owns.
+	launcherID string
+}
+
 // runTrackedProcess manages the lifecycle of a console-based launcher process.
 // This function handles:
 //   - Starting the process non-blocking
@@ -124,6 +135,7 @@ func createConsoleRestoreFunc(cm platforms.ConsoleManager) func() {
 //   - cmd: Prepared exec.Cmd (not yet started)
 //   - restoreFunc: Cleanup function (from createConsoleRestoreFunc)
 //   - logPrefix: Prefix for log messages (e.g., "fvp", "scummvm")
+//   - exit: how an exit that Core did not cause is reported
 //
 // Returns the process handle for tracking, or error if start fails.
 //
@@ -133,6 +145,7 @@ func runTrackedProcess(
 	cmd *exec.Cmd,
 	restoreFunc func(),
 	logPrefix string,
+	exit trackedExit,
 ) (*os.Process, error) {
 	// Create cleanup completion channel BEFORE starting process
 	done := make(chan struct{})
@@ -205,6 +218,16 @@ func runTrackedProcess(
 		// Console state (VT, cursor, video mode) must be restored regardless
 		// of whether the context was cancelled or the process was preempted
 		restoreFunc()
+
+		cleanExit := waitErr == nil && !pl.processStoppedByCore(cmd.Process)
+		finish := exit.mediaFinished
+		if finish != nil && cleanExit && pl.isTrackedProcess(cmd.Process) {
+			// Run from its own goroutine: finishing may start the next
+			// launch, which waits on this one's completion channel.
+			defer func() { go finish() }()
+		} else {
+			pl.clearMediaAfterProcessExit(cmd.Process, exit.launcherID)
+		}
 
 		// Clear tracked process after cleanup completes
 		pl.clearTrackedProcess(cmd.Process)

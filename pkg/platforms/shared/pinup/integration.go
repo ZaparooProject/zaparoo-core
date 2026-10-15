@@ -128,12 +128,18 @@ type Integration struct {
 	remote     *Remote
 	activePath string
 	activeExes []string
-	deps       Deps
-	active     launchKey
-	wg         sync.WaitGroup
-	nextID     int
-	stopOnce   sync.Once
-	mu         syncutil.Mutex
+	// stopKey is the run Core is asking Popper to close, set before the exit
+	// request so a watcher that sees the emulator go first cannot mistake the
+	// stop for the table ending on its own. stopSkippedPath holds the media
+	// path whose clear the watcher left to the stop.
+	stopSkippedPath string
+	deps            Deps
+	stopKey         launchKey
+	active          launchKey
+	wg              sync.WaitGroup
+	nextID          int
+	stopOnce        sync.Once
+	mu              syncutil.Mutex
 	// Serialize initial launches, retries and exit requests. Shutdown uses the
 	// same lock to drain admission before waiting for registered workers.
 	requestMu syncutil.Mutex
@@ -313,6 +319,9 @@ func (i *Integration) StopTable() error {
 	if tracked {
 		pid = launch.pid
 	}
+	i.beginStop(key)
+	confirmed := false
+	defer func() { i.endStop(key, confirmed) }()
 	exited, err := i.closeTable(context.Background(), remote, func(procs []ProcessInfo) bool {
 		if pid != 0 {
 			return !pidRunning(procs, pid, exes)
@@ -326,10 +335,36 @@ func (i *Integration) StopTable() error {
 		return fmt.Errorf("%w: emulator did not exit within %s of the exit request",
 			ErrTableRunning, i.deps.Timeouts.StopWait)
 	}
+	confirmed = true
 	// Retire pending launches too: no process yet does not mean the watcher
 	// has finished, and a late process must not reclaim media after a stop.
 	i.release(key)
 	return nil
+}
+
+// beginStop marks key as stopped by Core before Popper is asked to close it.
+func (i *Integration) beginStop(key launchKey) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.stopKey = key
+	i.stopSkippedPath = ""
+}
+
+// endStop drops the stop mark. When the stop was not confirmed but the
+// watcher already saw the emulator leave and deferred its media clear to the
+// stop, the table ended on its own after all, so the clear happens here.
+func (i *Integration) endStop(key launchKey, confirmed bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.stopKey != key {
+		return
+	}
+	path := i.stopSkippedPath
+	i.stopKey = launchKey{}
+	i.stopSkippedPath = ""
+	if !confirmed && path != "" {
+		i.clearMediaForPathLocked(path)
+	}
 }
 
 // closeTable asks Popper to close the running table and waits, up to
@@ -703,6 +738,17 @@ func (i *Integration) onExit(key launchKey, pid int, path string) {
 	i.activeExes = nil
 	log.Info().Int("gameID", key.gameID).Int("pid", pid).Msg("PinUP Popper table exited")
 
+	if i.stopKey == key {
+		// Core asked for this exit. The platform clears the media once the
+		// stop is confirmed, labelled as the stop it is.
+		i.stopSkippedPath = path
+		return
+	}
+	i.clearMediaForPathLocked(path)
+}
+
+// clearMediaForPathLocked clears ActiveMedia when it still belongs to path.
+func (i *Integration) clearMediaForPathLocked(path string) {
 	if i.deps.ActiveMedia == nil || i.deps.SetActiveMedia == nil {
 		return
 	}

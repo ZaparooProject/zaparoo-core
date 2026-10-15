@@ -30,11 +30,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -504,4 +508,220 @@ func TestIsRetroBatEmulatorProcess(t *testing.T) {
 			assert.Equal(t, tc.shouldTarget, result)
 		})
 	}
+}
+
+type retroBatWatchRig struct {
+	clock   *clockwork.FakeClock
+	media   *models.ActiveMedia
+	polled  chan struct{}
+	done    chan struct{}
+	current *models.ActiveMedia
+	results []retroBatPollResult
+	cleared int
+	mu      syncutil.Mutex
+}
+
+type retroBatPollResult struct {
+	err     error
+	running bool
+}
+
+// newRetroBatWatchRig starts a watcher whose ES API answers come from results,
+// one per poll; the last answer repeats.
+func newRetroBatWatchRig(t *testing.T, results []retroBatPollResult) *retroBatWatchRig {
+	t.Helper()
+	resetRetroBatKillHooks(t)
+
+	media := models.NewActiveMedia("SNES", "SNES", `C:\RetroBat\roms\snes\game.sfc`, "Game", "RetroBatSNES")
+	rig := &retroBatWatchRig{
+		clock:   clockwork.NewFakeClock(),
+		media:   media,
+		current: media,
+		polled:  make(chan struct{}, 16),
+		done:    make(chan struct{}),
+		results: results,
+	}
+	polls := 0
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		rig.mu.Lock()
+		idx := min(polls, len(rig.results)-1)
+		polls++
+		res := rig.results[idx]
+		rig.mu.Unlock()
+		rig.polled <- struct{}{}
+		return esapi.RunningGameResponse{}, res.running, res.err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		<-rig.done
+	})
+	go func() {
+		defer close(rig.done)
+		runRetroBatMediaWatch(ctx, rig.clock, rig.activeMedia, rig.setActiveMedia, media)
+	}()
+	return rig
+}
+
+func (r *retroBatWatchRig) activeMedia() *models.ActiveMedia {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.current
+}
+
+func (r *retroBatWatchRig) setActiveMedia(m *models.ActiveMedia) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.current = m
+	if m == nil {
+		r.cleared++
+	}
+}
+
+func (r *retroBatWatchRig) clearedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cleared
+}
+
+// poll advances one interval and waits for the watcher's ES API call.
+func (r *retroBatWatchRig) poll(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.clock.BlockUntilContext(ctx, 1))
+	r.clock.Advance(retroBatMediaPollInterval)
+	select {
+	case <-r.polled:
+	case <-r.done:
+	case <-ctx.Done():
+		t.Fatal("watcher did not poll")
+	}
+}
+
+func (r *retroBatWatchRig) waitDone(t *testing.T) {
+	t.Helper()
+	select {
+	case <-r.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop")
+	}
+}
+
+func TestRetroBatMediaWatch_ClearsWhenGameEnds(t *testing.T) {
+	rig := newRetroBatWatchRig(t, []retroBatPollResult{{running: true}, {running: true}, {running: false}})
+	rig.poll(t)
+	rig.poll(t)
+	assert.Zero(t, rig.clearedCount())
+	rig.poll(t)
+	rig.waitDone(t)
+	assert.Equal(t, 1, rig.clearedCount())
+	assert.Nil(t, rig.activeMedia())
+}
+
+func TestRetroBatMediaWatch_WaitsForGameToStart(t *testing.T) {
+	rig := newRetroBatWatchRig(t, []retroBatPollResult{
+		{running: false}, {running: false}, {running: true}, {running: false},
+	})
+	rig.poll(t)
+	rig.poll(t)
+	assert.Zero(t, rig.clearedCount(), "a game never seen running is not treated as ended")
+	rig.poll(t)
+	rig.poll(t)
+	rig.waitDone(t)
+	assert.Equal(t, 1, rig.clearedCount())
+}
+
+func TestRetroBatMediaWatch_ToleratesUnreachableAPI(t *testing.T) {
+	rig := newRetroBatWatchRig(t, []retroBatPollResult{
+		{running: true},
+		{err: errors.New("connection refused")},
+		{err: errors.New("connection refused")},
+		{running: false},
+	})
+	rig.poll(t)
+	rig.poll(t)
+	rig.poll(t)
+	assert.Zero(t, rig.clearedCount(), "an unreachable API says nothing about the game")
+	rig.poll(t)
+	rig.waitDone(t)
+	assert.Equal(t, 1, rig.clearedCount())
+}
+
+func TestRetroBatMediaWatch_StopsWhenMediaReplaced(t *testing.T) {
+	rig := newRetroBatWatchRig(t, []retroBatPollResult{{running: true}, {running: false}})
+	rig.poll(t)
+	newer := models.NewActiveMedia("NES", "NES", `C:\RetroBat\roms\nes\other.nes`, "Other", "RetroBatNES")
+	rig.mu.Lock()
+	rig.current = newer
+	rig.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, rig.clock.BlockUntilContext(ctx, 1))
+	rig.clock.Advance(retroBatMediaPollInterval)
+	rig.waitDone(t)
+	assert.Zero(t, rig.clearedCount(), "newer media must survive the old game ending")
+	assert.Same(t, newer, rig.activeMedia())
+}
+
+func TestRetroBatMediaWatch_StopsWhenMediaCleared(t *testing.T) {
+	rig := newRetroBatWatchRig(t, []retroBatPollResult{{running: true}})
+	rig.poll(t)
+	rig.setActiveMedia(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, rig.clock.BlockUntilContext(ctx, 1))
+	rig.clock.Advance(retroBatMediaPollInterval)
+	rig.waitDone(t)
+	assert.Equal(t, 1, rig.clearedCount(), "only the explicit clear")
+}
+
+func TestStartRetroBatMediaWatch_CancelEndsWatch(t *testing.T) {
+	resetRetroBatKillHooks(t)
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		return esapi.RunningGameResponse{}, false, errors.New("unreachable")
+	}
+	media := models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "RetroBatSNES")
+	clock := clockwork.NewFakeClock()
+	cancelWatch := startRetroBatMediaWatch(
+		clock, func() *models.ActiveMedia { return media }, func(*models.ActiveMedia) {}, media,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	cancelWatch()
+	require.NoError(t, clock.BlockUntilContext(ctx, 0), "ticker released after cancel")
+}
+
+func TestWaitLaunchSettle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("elapses without a stop", func(t *testing.T) {
+		t.Parallel()
+		p := &Platform{launcherManager: state.NewLauncherManager()}
+		require.NoError(t, p.waitLaunchSettle(time.Millisecond))
+	})
+
+	t.Run("a stop cancels the wait", func(t *testing.T) {
+		t.Parallel()
+		manager := state.NewLauncherManager()
+		p := &Platform{launcherManager: manager}
+		result := make(chan error, 1)
+		go func() { result <- p.waitLaunchSettle(time.Hour) }()
+		// NewContext is what StopActiveLauncher does; keep cancelling until the
+		// waiter, which may not have taken its context yet, observes it.
+		require.Eventually(t, func() bool {
+			manager.NewContext()
+			select {
+			case err := <-result:
+				result <- err
+				return true
+			default:
+				return false
+			}
+		}, 5*time.Second, time.Millisecond)
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
 }
