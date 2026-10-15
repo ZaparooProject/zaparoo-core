@@ -61,6 +61,46 @@ type Renderer interface {
 	PresentUI(context.Context, *models.UIEvent) (closeFn func() error, err error)
 }
 
+// KindRenderer is optionally implemented by a Renderer that shows only some
+// kinds of event, so callers can tell whether a kind will reach the screen.
+// A Renderer without it is taken to show every kind.
+type KindRenderer interface {
+	RendersUIKind(models.UIEventKind) bool
+}
+
+// RendersKind reports whether r exists and shows events of kind. A nil
+// renderer shows nothing; one that does not say which kinds it shows is
+// assumed to show them all.
+func RendersKind(r Renderer, kind models.UIEventKind) bool {
+	if r == nil {
+		return false
+	}
+	if kr, ok := r.(KindRenderer); ok {
+		return kr.RendersUIKind(kind)
+	}
+	return true
+}
+
+// OverMediaRenderer is optionally implemented by a Renderer that cannot show
+// an event while media is running without disturbing it, such as one whose
+// display replaces the running program. A Renderer without it is taken to
+// show events over running media without harm.
+type OverMediaRenderer interface {
+	RendersOverMedia() bool
+}
+
+// RendersOverMedia reports whether r can show an event while media is
+// running without disturbing it. A nil renderer shows nothing.
+func RendersOverMedia(r Renderer) bool {
+	if r == nil {
+		return false
+	}
+	if om, ok := r.(OverMediaRenderer); ok {
+		return om.RendersOverMedia()
+	}
+	return true
+}
+
 // UpdatingRenderer optionally applies producer updates to an existing host UI.
 type UpdatingRenderer interface {
 	UpdateUI(context.Context, *models.UIEvent) error

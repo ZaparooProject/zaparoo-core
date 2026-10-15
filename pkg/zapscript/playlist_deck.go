@@ -121,6 +121,11 @@ func loadDeckPlaylist(
 	pls.Slot = slot
 	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
+	if err := applyRotation(pl, pls, &rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); err != nil {
+		return nil, err
+	}
 	return pls, nil
 }
 

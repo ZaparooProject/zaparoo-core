@@ -212,7 +212,7 @@ func TestStop_GateHoldCountsAsInProgressAndCompletesAsAStop(t *testing.T) {
 	release()
 	assert.False(t, st.StopInProgress())
 	assert.Equal(t, startUser+1, st.UserStopSeq(), "an update issued during the stop survives its end")
-	assert.Equal(t, startEpoch+2, st.StopEpoch(), "a move decided during it is")
+	assert.Equal(t, startEpoch+2, st.StopEpoch(), "the engine's moves decided during it are")
 }
 
 func TestStop_UpdateGateIsNotAStop(t *testing.T) {

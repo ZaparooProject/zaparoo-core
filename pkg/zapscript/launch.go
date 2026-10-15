@@ -548,6 +548,14 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
+	// With a rotation this is not a launch but a playlist of one random
+	// launch that repeats; each item runs this same command without it.
+	if rotation := (rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); rotation.any() {
+		return playRandomRotation(pl, env, &rotation)
+	}
+
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 	launch := getLaunchClosure(pl, env, explicitLauncher)
 	tagFilters := args.Tags
@@ -924,6 +932,10 @@ func HasResolvedLaunchTarget(name string) bool {
 }
 
 var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
+
+// ErrMediaLaunchSkipped, returned by AcquireMediaLaunch, calls the launch off
+// as a successful no-op, the way a launch that resolves to nothing new is.
+var ErrMediaLaunchSkipped = errMediaLaunchSkipped
 
 type launchTarget struct {
 	path                  string

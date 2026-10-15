@@ -266,7 +266,10 @@ type CmdEnv struct {
 	// RecordMediaStop notes a Core-initiated stop of the current primary media
 	// before it is issued, so the clear that follows is not reported as the
 	// media quitting by itself. Nil when no state is attached.
-	RecordMediaStop    func(reason string) (cancel func())
+	RecordMediaStop func(reason string) (cancel func())
+	// StopSeq returns the count of stops of the primary media Core has been
+	// asked to make, so a playlist update can be stamped with it when issued.
+	StopSeq            func() uint64
 	SkipMediaLaunch    func(ResolvedLaunch) bool
 	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
 	AcquireLaunch      func() (func(), error)
@@ -458,8 +461,8 @@ type LaunchOptions struct {
 	Slot string
 	// PlaylistItem is set by Core when the launch plays a playlist item. A
 	// launcher that can stop media from looping on its own uses it to do so,
-	// since a playlist never moves on from media that repeats; a launch from a
-	// scan keeps the player's own settings.
+	// since a playlist that waits for the media to finish never moves on from
+	// media that repeats; a launch from a scan keeps the player's own settings.
 	PlaylistItem bool
 }
 

@@ -721,6 +721,8 @@ preprocessing:
 			scanReaderID = proc.ResolveReaderID(scanReaderID)
 			scanProperties = t.Properties
 			writtenTagRemoved = t.WrittenTagRemoved
+			// A scan or a removal is a person at the device.
+			svc.AutoAdvance.NoteUserActivity()
 		case hookResult := <-removalHookResults:
 			if activeRemovalHook == nil || hookResult.generation != activeRemovalHook.generation {
 				continue preprocessing

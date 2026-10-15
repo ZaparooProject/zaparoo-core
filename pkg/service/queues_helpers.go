@@ -21,6 +21,7 @@ package service
 
 import (
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	zscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -204,10 +205,27 @@ func playlistNeedsUpdate(incoming, active *playlists.Playlist) bool {
 	if incoming.ForceRelaunch {
 		return true
 	}
-	// No update needed if current item, playing state, and repeat mode are the same.
+	// No update needed if current item, playing state, repeat mode and rotation
+	// settings are the same.
 	if incoming.Current() == active.Current() && incoming.Playing == active.Playing &&
-		incoming.Loop == active.Loop && incoming.LoopOne == active.LoopOne {
+		incoming.Loop == active.Loop && incoming.LoopOne == active.LoopOne &&
+		incoming.Advance == active.Advance && incoming.Idle == active.Idle &&
+		incoming.Countdown == active.Countdown && incoming.CountdownSet == active.CountdownSet &&
+		incoming.Armed == active.Armed {
 		return false
 	}
 	return true
+}
+
+// launcherPublishesLater reports whether media launched by l may be published
+// by the platform's own tracker after the launch call returns, which Core
+// cannot tie to the launch while it runs. That is so for an external launcher
+// that starts media, and for a launcher that is not known yet because the
+// platform chooses it, as it does for launchbox:// and popper:// paths: media
+// it publishes is then checked against its own launcher when it appears.
+func launcherPublishesLater(l *platforms.Launcher) bool {
+	if l == nil {
+		return true
+	}
+	return l.Lifecycle == platforms.LifecycleExternal && !l.NoActiveMedia
 }
