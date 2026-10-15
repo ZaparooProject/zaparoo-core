@@ -37,14 +37,17 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	servicestate "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -63,6 +66,20 @@ func isPlsFile(path string) bool {
 // is active for the requested slot. This is an expected user condition (firing a
 // playlist command with nothing playing), so callers log it at Warn, not Error.
 var ErrNoPlaylistActive = errors.New("no playlist active")
+
+var (
+	// ErrRotationConflict is returned when advance and idle are both given.
+	ErrRotationConflict = errors.New("advance and idle cannot be used together")
+	// ErrBackgroundRotation is returned when advance or idle is asked of the
+	// background slot, whose tracks already move on when they finish.
+	ErrBackgroundRotation = errors.New("advance and idle are only available on the primary slot")
+	// ErrInvalidRotation is returned for an advance, idle or countdown value
+	// that is not a usable duration.
+	ErrInvalidRotation = errors.New("invalid rotation duration")
+	// ErrCountdownWithoutRotation is returned when countdown is given to a
+	// launch.random that does not rotate.
+	ErrCountdownWithoutRotation = errors.New("countdown needs advance or idle")
+)
 
 var (
 	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
@@ -206,6 +223,12 @@ func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 		return fmt.Errorf("playlist %s: %w", slot, servicestate.ErrLaunchInProgress)
 	}
 	if pls != nil {
+		if env.StopSeq != nil && !pls.StopStamped {
+			// Taken as the command is issued, so a stop that comes before the
+			// queue worker launches the item cancels it.
+			pls.StopSeq = env.StopSeq()
+			pls.StopStamped = true
+		}
 		pls.Slot = slot
 		pls.FromPlaylistItem = env.Source == tokens.SourcePlaylist
 		if slot == mediaslot.Primary && env.Playlist.HoldToken != nil {
@@ -467,6 +490,11 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		pls.Slot = slot
 		pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 		pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
+		if err := applyRotation(pl, pls, &rotationArgs{
+			advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+		}); err != nil {
+			return nil, err
+		}
 		return pls, nil
 	}
 
@@ -513,7 +541,185 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	pls.Slot = slot
 	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
+	if err := applyRotation(pl, pls, &rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); err != nil {
+		return nil, err
+	}
 	return pls, nil
+}
+
+// rotationArgs are the raw advance, idle and countdown values of a command.
+type rotationArgs struct {
+	advance   string
+	idle      string
+	countdown string
+}
+
+func (r *rotationArgs) any() bool {
+	return r.advance != "" || r.idle != "" || r.countdown != ""
+}
+
+// rotation is rotationArgs once parsed.
+type rotation struct {
+	advance      time.Duration
+	idle         time.Duration
+	countdown    time.Duration
+	advanceSet   bool
+	idleSet      bool
+	countdownSet bool
+}
+
+// parseRotationDuration reads one rotation value. Advance and idle must be at
+// least a second; a countdown may be zero, which switches without a notice.
+func parseRotationDuration(name, raw string, allowZero bool) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s %q is not a duration such as 5m", ErrInvalidRotation, name, raw)
+	}
+	lowest := time.Second
+	if allowZero {
+		lowest = 0
+	}
+	if d < lowest || d > database.DeckRotationMax {
+		return 0, fmt.Errorf("%w: %s must be between %s and %s",
+			ErrInvalidRotation, name, lowest, database.DeckRotationMax)
+	}
+	return d, nil
+}
+
+func parseRotation(r *rotationArgs) (rotation, error) {
+	var out rotation
+	var err error
+	if r.advance != "" {
+		out.advanceSet = true
+		if out.advance, err = parseRotationDuration("advance", r.advance, false); err != nil {
+			return rotation{}, err
+		}
+	}
+	if r.idle != "" {
+		out.idleSet = true
+		if out.idle, err = parseRotationDuration("idle", r.idle, false); err != nil {
+			return rotation{}, err
+		}
+	}
+	if out.advanceSet && out.idleSet {
+		return rotation{}, ErrRotationConflict
+	}
+	if r.countdown != "" {
+		out.countdownSet = true
+		if out.countdown, err = parseRotationDuration("countdown", r.countdown, true); err != nil {
+			return rotation{}, err
+		}
+	}
+	return out, nil
+}
+
+// applyRotation puts a command's advance, idle and countdown on pls. A value
+// the command names overrides what a deck stored, and naming one of advance
+// and idle drops the other, since a playlist rotates one way or the other.
+// Whatever the playlist ends up with is checked against the device and slot.
+func applyRotation(pl platforms.Platform, pls *playlists.Playlist, r *rotationArgs) error {
+	rot, err := parseRotation(r)
+	if err != nil {
+		return err
+	}
+	if (rot.advanceSet || rot.idleSet) && pls.Slot == mediaslot.Background {
+		return ErrBackgroundRotation
+	}
+	switch {
+	case rot.advanceSet:
+		pls.Advance = rot.advance
+		pls.Idle = 0
+	case rot.idleSet:
+		pls.Idle = rot.idle
+		pls.Advance = 0
+	}
+	if rot.countdownSet {
+		pls.Countdown = rot.countdown
+		pls.CountdownSet = true
+	}
+	if pls.Slot == mediaslot.Background && (pls.Advance > 0 || pls.Idle > 0) {
+		// A deck can carry rotation the background slot cannot use; it plays
+		// as a plain playlist.
+		pls.Advance = 0
+		pls.Idle = 0
+	}
+	if pls.Idle > 0 && !autoadvance.IdleSupported(pl) {
+		return autoadvance.ErrIdleUnsupported
+	}
+	return nil
+}
+
+// rotationOnlyArgs are the advanced arguments that turn launch.random into a
+// playlist.
+var rotationOnlyArgs = map[string]struct{}{
+	string(zapscript.KeyAdvance):   {},
+	string(zapscript.KeyIdle):      {},
+	string(zapscript.KeyCountdown): {},
+}
+
+// isRandomRotation reports whether cmd is a launch.random that makes a
+// rotating playlist instead of launching.
+func isRandomRotation(cmd *zapscript.Command) bool {
+	return cmd.Name == zapscript.ZapScriptCmdLaunchRandom &&
+		(cmd.AdvArgs.Get(zapscript.KeyAdvance) != "" || cmd.AdvArgs.Get(zapscript.KeyIdle) != "" ||
+			cmd.AdvArgs.Get(zapscript.KeyCountdown) != "")
+}
+
+// randomItemScript is the launch.random command without its rotation, which
+// is what each item of the playlist it makes runs.
+func randomItemScript(cmd *zapscript.Command) string {
+	kept := make(map[string]string, len(cmd.AdvArgs.Raw()))
+	for key, value := range cmd.AdvArgs.Raw() {
+		if _, drop := rotationOnlyArgs[key]; !drop {
+			kept[key] = value
+		}
+	}
+	item := *cmd
+	item.AdvArgs = zapscript.NewAdvArgs(kept)
+	return item.String()
+}
+
+// playRandomRotation runs launch.random with advance, idle or countdown: a
+// one-item playlist that repeats, whose item rolls a new random launch each
+// time it plays. It is queued the way playlist.play queues a playlist, so
+// trust, the command bound and the hold token travel with it identically.
+func playRandomRotation(
+	pl platforms.Platform, env *platforms.CmdEnv, r *rotationArgs,
+) (platforms.CmdResult, error) {
+	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("normalize media slot: %w", err)
+	}
+	if slot != mediaslot.Primary {
+		return platforms.CmdResult{}, ErrBackgroundRotation
+	}
+	if r.advance == "" && r.idle == "" {
+		return platforms.CmdResult{}, ErrCountdownWithoutRotation
+	}
+
+	name := "Random " + env.Cmd.Args[0]
+	pls := playlists.NewPlaylist(uuid.NewString(), name, []playlists.PlaylistItem{{
+		Name:      name,
+		ZapScript: randomItemScript(&env.Cmd),
+	}})
+	pls.Slot = slot
+	pls.Loop = true
+	pls.Unsafe = env.Unsafe
+	pls.AllowedCommands = env.AllowedCommands
+	if err := applyRotation(pl, pls, r); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	// A new roll every time the command runs, even when the playlist it
+	// replaces would open on the same item.
+	pls = playlists.Play(*pls)
+	pls.ForceRelaunch = true
+	if err := queuePlaylistUpdate(env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
+	return platforms.CmdResult{PlaylistChanged: true, Playlist: pls}, nil
 }
 
 // samePlaylistItem reports whether a move landed on the item already playing.
@@ -653,6 +859,8 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
+	// An idle playlist that is loaded waits for the device to go quiet.
+	pls.Armed = pls.Idle > 0
 	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("load playlist: %s", env.Cmd.Args)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
@@ -691,6 +899,8 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}
+
+		pls.Armed = pls.Idle > 0
 
 		// If loaded playlist matches active, preserve current position
 		if isActivePlaylist(active, pls) {

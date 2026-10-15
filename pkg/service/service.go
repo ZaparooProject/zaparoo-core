@@ -291,51 +291,12 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		if !natural {
 			return
 		}
-		advanceBackgroundPlaylist(svc)
-	})
-}
-
-// advanceBackgroundPlaylist is called when a background track ends naturally.
-// It advances to the next track according to the playlist's repeat mode, or clears
-// the background state when the playlist has finished and repeat is off.
-func advanceBackgroundPlaylist(svc *ServiceContext) {
-	pls := svc.State.GetBackgroundPlaylist()
-	if pls == nil {
-		// Single-track background (not a playlist). A drain that arrives after
-		// other media took the slot must not clear that media.
+		// The engine sees this as the end of the bound track and moves the
+		// background playlist on.
+		// A drain that arrives after other media took the slot must not clear
+		// that media, or the engine would move on from a track still playing.
 		svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonFinished)
-		return
-	}
-
-	var next *playlists.Playlist
-	switch {
-	case pls.LoopOne:
-		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
-		next = playlists.Play(*pls)
-		next.ForceRelaunch = true
-	case pls.Index+1 < len(pls.Items):
-		// More tracks remain — advance normally.
-		next = playlists.Next(*pls)
-		next.Playing = true
-	case pls.Loop:
-		// Last track finished and repeat=all — wrap back to the start.
-		next = playlists.Next(*pls) // Next already wraps to 0
-		next.Playing = true
-		if len(pls.Items) <= 1 {
-			// Single-item loop: same index after wrap, need ForceRelaunch.
-			next.ForceRelaunch = true
-		}
-	default:
-		// repeat=off, end of playlist — clear state and stop.
-		svc.State.SetBackgroundPlaylist(nil)
-		svc.State.ClearBackgroundMedia(models.MediaStopReasonFinished)
-		return
-	}
-
-	select {
-	case svc.PlaylistQueue <- next:
-	case <-svc.State.GetContext().Done():
-	}
+	})
 }
 
 // resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
@@ -717,6 +678,7 @@ func startServiceWithOptions(
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
+	svc.AutoAdvance = startAutoAdvance(svc, rendersPickers(pl, opts))
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
@@ -835,6 +797,7 @@ func startServiceWithOptions(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -1106,6 +1069,7 @@ func startServiceWithOptions(
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone

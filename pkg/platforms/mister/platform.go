@@ -1797,6 +1797,21 @@ func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {
 	return 0
 }
 
+// RendersUIKind reports the events PresentUI can show, which is every kind.
+func (*Platform) RendersUIKind(kind models.UIEventKind) bool {
+	switch kind {
+	case models.UIEventKindNotice, models.UIEventKindLoader,
+		models.UIEventKindPicker, models.UIEventKindConfirm:
+		return true
+	default:
+		return false
+	}
+}
+
+// RendersOverMedia is false: the MiSTer menu widget replaces the running core,
+// so an event shown while a game runs ends that game.
+func (*Platform) RendersOverMedia() bool { return false }
+
 func (p *Platform) PresentUI(
 	ctx context.Context,
 	event *models.UIEvent,

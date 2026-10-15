@@ -863,9 +863,9 @@ func (s *State) StopInProgress() bool {
 }
 
 // StopEpoch counts every stop of the primary media at both its start and its
-// completion. A move decided while a stop was running can be stamped with it
-// and cancelled once that stop completes, where an update issued by a person
-// during the stop is not.
+// completion. The auto-advance engine stamps its moves with it, so a move
+// decided while a stop was running is cancelled once that stop completes,
+// where an update issued by a person during the stop is not.
 func (s *State) StopEpoch() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

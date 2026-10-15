@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -105,12 +106,17 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to mint deck id: %w", err)
 	}
+	rotation, err := deckRotationFromParams(params.Rotation)
+	if err != nil {
+		return nil, err
+	}
 	deck := &database.Deck{
 		DeckID:      deckID,
 		Name:        strings.TrimSpace(params.Name),
 		Description: strings.TrimSpace(params.Description),
 		Owned:       true,
 		Items:       items,
+		Rotation:    rotation,
 	}
 	if deck.Name == "" {
 		return nil, models.ClientErrf("invalid params: name is required")
@@ -124,7 +130,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
 
-// HandleDecksUpdate edits an owned deck's name, description or items. The
+// HandleDecksUpdate edits an owned deck's name, description, rotation or items. The
 // edit is applied in one transaction to the deck as stored at that moment, so
 // a failed edit changes nothing and concurrent edits do not overwrite each
 // other. A request that asks for no change returns the deck as it is.
@@ -140,7 +146,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if params.Name == nil && params.Description == nil && params.Items == nil &&
+	if params.Name == nil && params.Description == nil && params.Items == nil && params.Rotation == nil &&
 		len(params.AddItems) == 0 && len(params.RemoveItemIDs) == 0 {
 		return lockedDeckResponse(&env, deck)
 	}
@@ -159,6 +165,14 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if params.Description != nil {
 		trimmed := strings.TrimSpace(*params.Description)
 		description = &trimmed
+	}
+	var rotation *database.DeckRotation
+	if params.Rotation != nil {
+		parsed, rotationErr := deckRotationFromParams(params.Rotation)
+		if rotationErr != nil {
+			return nil, rotationErr
+		}
+		rotation = &parsed
 	}
 	var replaced []database.DeckItem
 	if params.Items != nil {
@@ -180,6 +194,9 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 		}
 		if description != nil {
 			stored.Description = *description
+		}
+		if rotation != nil {
+			stored.Rotation = *rotation
 		}
 		items, editErr := editedDeckItems(stored.Items, &params, replaced, added)
 		if editErr != nil {
@@ -272,6 +289,7 @@ func loadDeck(env *requests.RequestEnv, rawID string) (*database.Deck, error) {
 func deckError(err error) error {
 	switch {
 	case errors.Is(err, database.ErrDeckNotFound),
+		errors.Is(err, database.ErrInvalidDeckRotation),
 		errors.Is(err, database.ErrDeckLimit),
 		errors.Is(err, database.ErrDeckItemLimit),
 		errors.Is(err, database.ErrDeckItemNotFound),
@@ -538,10 +556,55 @@ func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.D
 	return resp, nil
 }
 
+// deckRotationFromParams converts a client's rotation settings, refusing
+// combinations that cannot run.
+func deckRotationFromParams(in *models.DeckRotation) (database.DeckRotation, error) {
+	var out database.DeckRotation
+	if in == nil {
+		return out, nil
+	}
+	if in.AdvanceMs != nil {
+		out.Advance = time.Duration(*in.AdvanceMs) * time.Millisecond
+	}
+	if in.IdleMs != nil {
+		out.Idle = time.Duration(*in.IdleMs) * time.Millisecond
+	}
+	if in.CountdownMs != nil {
+		out.Countdown, out.CountdownSet = time.Duration(*in.CountdownMs)*time.Millisecond, true
+	}
+	if err := out.Validate(); err != nil {
+		return out, models.ClientErrf("invalid params: %w", err)
+	}
+	return out, nil
+}
+
+// deckRotationResponse is a deck's rotation as the API shows it, or nil when
+// the deck has none.
+func deckRotationResponse(r database.DeckRotation) *models.DeckRotation {
+	if r.IsZero() {
+		return nil
+	}
+	out := &models.DeckRotation{}
+	if r.Advance > 0 {
+		ms := r.Advance.Milliseconds()
+		out.AdvanceMs = &ms
+	}
+	if r.Idle > 0 {
+		ms := r.Idle.Milliseconds()
+		out.IdleMs = &ms
+	}
+	if r.CountdownSet {
+		ms := r.Countdown.Milliseconds()
+		out.CountdownMs = &ms
+	}
+	return out
+}
+
 // deckSummary is a deck as the decks list shows it, without items.
 func deckSummary(deck *database.Deck) models.DeckResponse {
 	return models.DeckResponse{
 		Metadata:    deck.Metadata,
+		Rotation:    deckRotationResponse(deck.Rotation),
 		DeckID:      deck.DeckID,
 		Name:        deck.Name,
 		Description: deck.Description,

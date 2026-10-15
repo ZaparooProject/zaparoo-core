@@ -119,8 +119,18 @@ func loadDeckPlaylist(
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 	}
 	pls.Slot = slot
+	pls.Advance = deck.Rotation.Advance
+	pls.Idle = deck.Rotation.Idle
+	pls.Countdown = deck.Rotation.Countdown
+	pls.CountdownSet = deck.Rotation.CountdownSet
 	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
+	// What the command names overrides what the deck stored.
+	if err := applyRotation(pl, pls, &rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); err != nil {
+		return nil, err
+	}
 	return pls, nil
 }
 

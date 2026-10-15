@@ -584,6 +584,10 @@ None.
 | index   | number | Yes      | Zero-based current item index. |
 | total   | number | Yes      | Total item count. |
 | playing | boolean | Yes    | Whether playlist slot is playing. |
+| advanceMs | number | No     | Milliseconds of playing time before the playlist moves to the next item by itself. Omitted when the playlist does not advance on a timer. |
+| idleMs  | number | No       | Milliseconds with no user input before the playlist moves to the next item, or starts when it was loaded waiting. Never present together with `advanceMs`. |
+| countdownMs | number | No   | Milliseconds the notice before an automatic switch stays up. `0` switches with no notice. Omitted when the playlist does not say, which uses the default of 10 seconds. |
+| armed   | boolean | No      | True while an idle playlist is loaded and waiting for the device to go idle before it starts. Omitted when false. |
 | unsafe  | boolean | Yes    | Read-only. True when the playlist's items came from a source this device does not trust, such as a fetched ZapLink or a deck shared by someone else, and also when an untrusted script opened it, which even the user's own deck inherits. Commands in those items that drive input or run programs will not run. Core versions that do not report this field do not restrict playlist items, so treat a missing value as `false`. |
 
 #### Example
@@ -4353,8 +4357,21 @@ Decks work with no account. With Library sync on, the decks this device owns syn
 | itemCount   | number                           | Yes      | Number of items in the deck.                                         |
 | items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order, `[]` when empty. Omitted by `decks`.    |
 | metadata    | object                           | No       | Display metadata as received from the account, verbatim.             |
+| rotation    | [DeckRotation](#deck-rotation-object) | No  | How the deck rotates when it opens as a playlist. Omitted when it has no rotation settings. |
 | createdAt   | number                           | Yes      | Unix timestamp of creation.                                          |
 | updatedAt   | number                           | Yes      | Unix timestamp of the last change.                                   |
+
+### Deck rotation object
+
+Durations are in milliseconds, at most 86400000 (24 hours). A field that is left out is unset. The rotation is stored on this device and is not part of Library sync.
+
+| Key         | Type   | Required | Description |
+| :---------- | :----- | :------- | :---------- |
+| advanceMs   | number | No       | Move to the next item after this much playing time. At least 1. Cannot be combined with `idleMs`. |
+| idleMs      | number | No       | Move to the next item after this long with no user input. At least 1. Cannot be combined with `advanceMs`. |
+| countdownMs | number | No       | How long the notice before an automatic switch stays up. `0` switches with no notice; unset uses the default. |
+
+A deck's rotation becomes the playlist's `advanceMs`, `idleMs` and `countdownMs` when it opens.
 
 ### Deck item object
 
@@ -4432,6 +4449,7 @@ Create a deck owned by this device. Core mints the ID. A deck holds at most 120 
 | name        | string                               | Yes      | Display name, at most 100 characters.  |
 | description | string                               | No       | At most 1000 characters.               |
 | items       | [DeckItemInput](#deck-item-input)[]  | No       | Members in order, at most 120.         |
+| rotation    | [DeckRotation](#deck-rotation-object) | No      | Rotation settings. `advanceMs` and `idleMs` together are an error. |
 
 #### Result
 
@@ -4512,6 +4530,7 @@ Edit an owned deck. A cached copy of somebody else's deck, and a deck the accoun
 | name          | string                               | No       | New display name.                                              |
 | description   | string                               | No       | New description.                                               |
 | items         | [DeckItemInput](#deck-item-input)[]  | No       | Replaces the whole item list, in order. Entries given as `{"id": …}` keep that existing item and its ID, so a reorder is `items` listing the current IDs in the new order; any other entry is a new item. An ID the deck does not hold, or one listed twice, is an error. |
+| rotation      | [DeckRotation](#deck-rotation-object) | No      | Replaces the deck's whole rotation, so `{}` clears it. `advanceMs` and `idleMs` together are an error. |
 | addItems      | [DeckItemInput](#deck-item-input)[]  | No       | Items to append.                                               |
 | removeItemIds | number[]                             | No       | Item IDs to remove. An ID not in the deck is ignored.          |
 
