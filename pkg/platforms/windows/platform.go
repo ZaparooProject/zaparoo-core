@@ -600,7 +600,9 @@ func (p *Platform) LaunchMedia(
 			log.Warn().Err(runningErr).Msg("RetroBat ES API unavailable, assuming no game is running")
 		} else if running {
 			log.Info().Msg("exiting current RetroBat media")
+			cancelStop := opts.RecordStop(models.MediaStopReasonReplaced)
 			if stopErr := p.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+				cancelStop()
 				return fmt.Errorf("failed to stop active RetroBat launcher: %w", stopErr)
 			}
 			time.Sleep(retroBatLaunchSettleDelay)

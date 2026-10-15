@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -70,7 +71,9 @@ func cmdStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	log.Info().Msg("stopping media")
+	cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 	if err := pl.ReturnToMenu(); err != nil {
+		cancelStop()
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to return to menu: %w", err)

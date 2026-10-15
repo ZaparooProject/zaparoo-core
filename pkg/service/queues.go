@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -238,6 +239,16 @@ func executeTokenZapScript(
 		plsc.HoldToken = nil
 	}
 
+	// A stop command holds the media stop gate while it runs. If a command
+	// panics and the caller recovers, the gate still has to open, or every
+	// later launch waits on it forever.
+	var heldStopGate func()
+	defer func() {
+		if heldStopGate != nil {
+			heldStopGate()
+		}
+	}()
+
 	for i := 0; i < len(cmds); i++ {
 		if err := runCtx.Err(); err != nil {
 			return err
@@ -355,6 +366,27 @@ func executeTokenZapScript(
 			return prepareErr
 		}
 
+		releaseStopGate := func() {}
+		if !inHookContext && commandStopsPrimaryNow(cmd) {
+			// A stop waits for a launch in flight, the way the stop API does,
+			// so it ends the media that launch publishes. Hook scripts run
+			// from inside launches and stops, and never take the gate.
+			release, gateErr := svc.State.AcquireMediaStop(runCtx)
+			if gateErr != nil {
+				return &runfailure.CommandError{
+					Name: cmd.Name, Err: fmt.Errorf("wait for in-flight media launch: %w", gateErr),
+				}
+			}
+			released := false
+			releaseStopGate = func() {
+				if !released {
+					released = true
+					release()
+				}
+			}
+			heldStopGate = releaseStopGate
+		}
+
 		result, err := zapscript.RunCommand(
 			runCtx,
 			svc.Platform, svc.Config,
@@ -373,6 +405,7 @@ func executeTokenZapScript(
 			&zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
 				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
+				RecordMediaStop:    svc.State.RecordMediaStop,
 				SkipMediaLaunch:    skipLaunch,
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
@@ -385,6 +418,7 @@ func executeTokenZapScript(
 			},
 			&cmdEnv,
 		)
+		releaseStopGate()
 		if err != nil {
 			return &runfailure.CommandError{Name: cmd.Name, Err: err}
 		}
@@ -629,7 +663,13 @@ func stopNativePlaybackBeforePrimaryCommand(
 	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
 		return nil
 	}
+	reason := models.MediaStopReasonReplaced
+	if stopsPrimaryMedia {
+		reason = models.MediaStopReasonStopped
+	}
+	cancelStop := svc.State.RecordMediaStop(reason)
 	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		cancelStop()
 		return fmt.Errorf("stop native audio before primary command: %w", err)
 	}
 	svc.State.SetActiveMedia(nil)
@@ -817,6 +857,24 @@ func clearPlaylistSlot(svc *ServiceContext, slot string) {
 		return
 	}
 	svc.State.SetActivePlaylist(nil)
+}
+
+// commandStopsPrimaryNow reports whether cmd stops the running primary media
+// itself, as opposed to queueing something that does later. Such a command
+// has to wait for a launch in flight, or it finds nothing to stop and the
+// launch then goes on to start what it was meant to end.
+func commandStopsPrimaryNow(cmd gozapscript.Command) bool {
+	if commandTargetsBackgroundSlot(cmd) {
+		return false
+	}
+	switch cmd.Name {
+	case gozapscript.ZapScriptCmdStop, gozapscript.ZapScriptCmdPlaylistStop, gozapscript.ZapScriptCmdPlaylistPause:
+		return true
+	case gozapscript.ZapScriptCmdLaunchSystem:
+		return len(cmd.Args) == 1 && strings.EqualFold(cmd.Args[0], platforms.SystemMenu)
+	default:
+		return false
+	}
 }
 
 func handlePlaylist(

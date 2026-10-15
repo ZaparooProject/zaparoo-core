@@ -515,6 +515,64 @@ func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_RecordsReplacedBeforePreemptingStop(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		action       string
+		runningInst  string
+		wantRecorded bool
+	}{
+		{name: "preemption", wantRecorded: true},
+		{name: "details leaves media alone", action: "details"},
+		{name: "reused instance is not stopped", runningInst: "kodi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var events []string
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Run(func(mock.Arguments) {
+				events = append(events, "stop")
+			}).Return(nil).Maybe()
+			launcher := &platforms.Launcher{
+				ID:                  "test-launcher",
+				SystemID:            "SNES",
+				Lifecycle:           platforms.LifecycleFireAndForget,
+				SupportsDetails:     true,
+				UsesRunningInstance: tt.runningInst,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				Path:           "game.sfc",
+				Options: &platforms.LaunchOptions{
+					Action: tt.action,
+					RecordMediaStop: func(reason string) func() {
+						events = append(events, "record:"+reason)
+						return func() { events = append(events, "cancel") }
+					},
+				},
+			}
+
+			require.NoError(t, platforms.DoLaunch(params, func(string) string { return "Game" }))
+			if tt.wantRecorded {
+				assert.Equal(t, []string{"record:" + models.MediaStopReasonReplaced, "stop"}, events)
+			} else {
+				assert.Empty(t, events)
+			}
+		})
+	}
+}
+
 // A details request opens an information page and starts nothing, so it must
 // not disturb whatever is already playing. Verified on the Windows test box:
 // scanning steam://1942280/Brotato?action=details while FTL was running killed
@@ -1126,4 +1184,56 @@ func TestDoLaunch_DetailsRefusedWhenLauncherCannotShowThem(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot show details")
 	assert.False(t, launched, "the media must not be launched for a details request")
 	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
+}
+
+func TestDoLaunch_FailedPreemptionWithdrawsReplacedNote(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		stopErr error
+		name    string
+		wantErr bool
+	}{
+		{name: "confirmed stop failure aborts", stopErr: platforms.ErrStopFailed, wantErr: true},
+		{name: "nothing to stop", stopErr: errors.New("no launcher")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var events []string
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(tt.stopErr).Once()
+			launcher := &platforms.Launcher{
+				ID:        "test-launcher",
+				SystemID:  "SNES",
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				Path:           "game.sfc",
+				Options: &platforms.LaunchOptions{
+					RecordMediaStop: func(reason string) func() {
+						events = append(events, "record:"+reason)
+						return func() { events = append(events, "cancel") }
+					},
+				},
+			}
+
+			err := platforms.DoLaunch(params, func(string) string { return "Game" })
+			if tt.wantErr {
+				require.ErrorIs(t, err, platforms.ErrStopFailed)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{"record:" + models.MediaStopReasonReplaced, "cancel"}, events)
+		})
+	}
 }

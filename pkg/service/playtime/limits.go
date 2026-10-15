@@ -111,6 +111,7 @@ type LimitsManager struct {
 	cancel            context.CancelFunc
 	sessionCancel     context.CancelFunc // cancels checkLoop for the current game session; nil between sessions
 	beforeExit        func()
+	recordMediaStop   func(reason string) (cancel func())
 	lastProfileID     string // last-seen active profile ID, for identity-change detection
 	// sessionExtension is the duration granted to the current session, or
 	// nil when none is in force. Cleared whenever the session resets.
@@ -167,6 +168,13 @@ func NewLimitsManager(
 // profile-aware resolver. Must be called before Start.
 func (tm *LimitsManager) SetLimitsProvider(limits LimitsProvider) {
 	tm.limits = limits
+}
+
+// SetMediaStopRecorder registers the callback that notes a limit is about to
+// stop the running game, so the end is not reported as the game quitting.
+// Must be called before Start.
+func (tm *LimitsManager) SetMediaStopRecorder(record func(reason string) (cancel func())) {
+	tm.recordMediaStop = record
 }
 
 // SetBeforeExitHook registers the callback run immediately before a limit stops
@@ -782,8 +790,13 @@ func (tm *LimitsManager) checkLimits() {
 		// let any before_exit script defeat it: this loop runs every 30s, so a
 		// hook that launches media would be re-run and re-skipped forever while
 		// play continued past the limit.
+		cancelStop := func() {}
+		if tm.recordMediaStop != nil {
+			cancelStop = tm.recordMediaStop(models.MediaStopReasonStopped)
+		}
 		if err := tm.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 			log.Error().Err(err).Msg("playtime: failed to stop active launcher")
+			cancelStop()
 			if errors.Is(err, platforms.ErrStopFailed) {
 				// The media is still running, so it must not be recorded as
 				// stopped. This loop runs every 30s and will try again.

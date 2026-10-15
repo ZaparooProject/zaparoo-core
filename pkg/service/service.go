@@ -229,6 +229,10 @@ type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
 }
 
+func ownedByNativeAudio(media *models.ActiveMedia) bool {
+	return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
+}
+
 // clearNativeAudioPrimaryMedia clears active media once native audio has stopped
 // on the primary slot. Another launcher may have taken over active media while the
 // track was still playing (e.g. a game started outside Zaparoo); only clear it if
@@ -236,9 +240,13 @@ type drainCallbackRegistrar interface {
 // step, so a lifecycle tracker publishing another launcher's media in between
 // is left alone.
 func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
-	svc.State.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
-		return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
-	})
+	svc.State.ClearActiveMediaIf(ownedByNativeAudio)
+}
+
+// finishNativeAudioPrimaryMedia reports the natural end of a primary track to
+// state, under the same ownership rule as clearNativeAudioPrimaryMedia.
+func finishNativeAudioPrimaryMedia(svc *ServiceContext) {
+	svc.State.FinishActiveMediaIf(ownedByNativeAudio)
 }
 
 // stopNativeAudioPrimaryMedia runs an explicit stop of native audio on the
@@ -258,11 +266,30 @@ func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop 
 	}
 	defer release()
 
+	// Only native audio's own media is stopped here; recording against a game
+	// that happens to be active would mislabel the game's later exit.
+	cancelStop := func() {}
+	if ownedByNativeAudio(svc.State.ActiveMedia()) {
+		cancelStop = svc.State.RecordMediaStop(models.MediaStopReasonStopped)
+	}
 	if err := stop(); err != nil {
+		cancelStop()
 		return err
 	}
 	clearNativeAudioPrimaryMedia(svc)
 	return nil
+}
+
+// stopAbandonedNativeAudio stops native-audio playback that a launch started
+// before a stop overtook it. The launch published no media, so the stop paths
+// that look for published media never reach the playback.
+func stopAbandonedNativeAudio(svc *ServiceContext, media *models.ActiveMedia) {
+	if media.LauncherID != platforms.NativeAudioLauncherID || svc.PlaybackManager == nil {
+		return
+	}
+	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		log.Warn().Err(err).Msg("failed to stop native audio that a stop overtook")
+	}
 }
 
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
@@ -270,7 +297,7 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		if !natural {
 			return
 		}
-		clearNativeAudioPrimaryMedia(svc)
+		finishNativeAudioPrimaryMedia(svc)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
 		if !natural {
@@ -286,8 +313,9 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 func advanceBackgroundPlaylist(svc *ServiceContext) {
 	pls := svc.State.GetBackgroundPlaylist()
 	if pls == nil {
-		// Single-track background (not a playlist) — just clear media state.
-		svc.State.SetBackgroundMedia(nil)
+		// Single-track background (not a playlist). A drain that arrives after
+		// other media took the slot must not clear that media.
+		svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonFinished)
 		return
 	}
 
@@ -312,7 +340,7 @@ func advanceBackgroundPlaylist(svc *ServiceContext) {
 	default:
 		// repeat=off, end of playlist — clear state and stop.
 		svc.State.SetBackgroundPlaylist(nil)
-		svc.State.SetBackgroundMedia(nil)
+		svc.State.ClearBackgroundMedia(models.MediaStopReasonFinished)
 		return
 	}
 
@@ -651,6 +679,7 @@ func startServiceWithOptions(
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
+	limitsManager.SetMediaStopRecorder(st.RecordMediaStop)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
@@ -716,6 +745,10 @@ func startServiceWithOptions(
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) {
+		stopAbandonedNativeAudio(svc, media)
+	})
+
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
 		select {

@@ -599,8 +599,10 @@ func (p *Platform) LaunchMedia(
 		// Check if we should preserve the running app (e.g., both launchers use same Kodi instance)
 		if !p.shouldKeepRunningInstance(cfg, launcher) {
 			log.Info().Msg("exiting current media")
+			cancelStop := opts.RecordStop(models.MediaStopReasonReplaced)
 			err = p.StopActiveLauncher(platforms.StopForPreemption)
 			if err != nil {
+				cancelStop()
 				return fmt.Errorf("failed to stop active launcher: %w", err)
 			}
 			// Delay to allow EmulationStation to settle
@@ -610,6 +612,7 @@ func (p *Platform) LaunchMedia(
 			// We're keeping the running instance (e.g., switching between Kodi movies)
 			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
 			log.Info().Msg("keeping running instance, clearing old active media before switching")
+			opts.RecordStop(models.MediaStopReasonReplaced)
 			p.setActiveMedia(nil)
 		}
 	}

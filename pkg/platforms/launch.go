@@ -185,7 +185,13 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// starting anything, so it must leave the running media alone.
 	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" &&
 		!IsActionDetails(params.Options.Action) {
+		// Recorded before the stop so a clear that lands late is still
+		// labelled as the replacement it is.
+		cancelStop := params.Options.RecordStop(models.MediaStopReasonReplaced)
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
+			// Nothing was stopped, so media still running must not be
+			// labelled as replaced if it exits by itself later.
+			cancelStop()
 			// A confirmed stop failure means the previous media is still
 			// running. Launching anyway would leave two games going at once
 			// and Core tracking only the second, so abort instead.

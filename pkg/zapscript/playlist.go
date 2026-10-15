@@ -900,7 +900,11 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	// The launcher is stopped before the playlist is cleared. A clear that
 	// was queued first could not be taken back if the stop then reported the
 	// media still running, leaving the game up with no playlist attached.
+	cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 	stopErr := pl.StopActiveLauncher(platforms.StopForMenu)
+	if stopErr != nil {
+		cancelStop()
+	}
 	if errors.Is(stopErr, platforms.ErrStopFailed) {
 		// The media is still playing, so the playlist that belongs to it
 		// stays put rather than being cleared as though it had ended.
@@ -951,7 +955,9 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 			Playlist:        pls,
 		}, nil
 	}
+	cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
+		cancelStop()
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,

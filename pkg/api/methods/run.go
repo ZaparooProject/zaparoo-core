@@ -362,7 +362,9 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 
 	// StopActiveLauncher reports a failure only when the media is known to
 	// still be running; "nothing was active" is still a success.
+	cancelStop := env.State.RecordMediaStop(models.MediaStopReasonStopped)
 	if err := env.Platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
+		cancelStop()
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
 	}
 	return NoContent{}, nil

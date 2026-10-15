@@ -397,8 +397,24 @@ type MediaStoppedParams struct {
 	MediaPath  string `json:"mediaPath"`
 	LauncherID string `json:"launcherId"`
 	Slot       string `json:"slot,omitempty"`
-	Elapsed    int    `json:"elapsed"`
+	// Reason says why the media stopped; see the MediaStopReason constants.
+	// Clients written before it existed ignore the field.
+	Reason  string `json:"reason,omitempty"`
+	Elapsed int    `json:"elapsed"`
 }
+
+// MediaStopReason values for MediaStoppedParams.Reason.
+const (
+	// MediaStopReasonFinished means the media reached its natural end.
+	MediaStopReasonFinished = "finished"
+	// MediaStopReasonExited means the media stopped without Core asking it
+	// to, such as a player quitting a game back to the menu.
+	MediaStopReasonExited = "exited"
+	// MediaStopReasonStopped means Core stopped the media on request.
+	MediaStopReasonStopped = "stopped"
+	// MediaStopReasonReplaced means other media took its place.
+	MediaStopReasonReplaced = "replaced"
+)
 
 type MediaHistoryParams struct {
 	Systems       *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
