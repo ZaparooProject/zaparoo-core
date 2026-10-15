@@ -31,12 +31,14 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/sys/windows"
@@ -48,6 +50,9 @@ const (
 	retroBatKillVerifyDelay    = 500 * time.Millisecond
 	retroBatProcessKillTimeout = 5 * time.Second
 	maxWindowsProcessPath      = uint32(32768)
+	// retroBatMediaPollInterval is how often the ES API is asked whether the
+	// launched game is still running.
+	retroBatMediaPollInterval = 2 * time.Second
 )
 
 var retroBatFrontendProcesses = map[string]struct{}{
@@ -429,4 +434,76 @@ func getRetroBatLaunchers() []platforms.Launcher {
 		launchers = append(launchers, createRetroBatLauncher(folder, info))
 	}
 	return launchers
+}
+
+// startRetroBatMediaWatch follows media, a RetroBat game just published as the
+// active media. EmulationStation starts the game, so Core holds no process to
+// wait on and the ES API is the only signal that it ended. The poller runs only
+// while media stays the active media; the returned cancel ends it earlier.
+func startRetroBatMediaWatch(
+	clock clockwork.Clock,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	media *models.ActiveMedia,
+) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	go runRetroBatMediaWatch(ctx, clock, activeMedia, setActiveMedia, media)
+	return cancel
+}
+
+func sameRetroBatMedia(current, watched *models.ActiveMedia) bool {
+	return current != nil && watched != nil &&
+		current.LauncherID == watched.LauncherID &&
+		current.Path == watched.Path &&
+		current.Started.Equal(watched.Started)
+}
+
+// runRetroBatMediaWatch clears watched once the ES API reports no running game
+// after having reported one. An unreachable ES API says nothing about the game,
+// and a game that was never seen running is left alone, since it may simply not
+// have started yet.
+func runRetroBatMediaWatch(
+	ctx context.Context,
+	clock clockwork.Clock,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	watched *models.ActiveMedia,
+) {
+	ticker := clock.NewTicker(retroBatMediaPollInterval)
+	defer ticker.Stop()
+
+	seenRunning := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.Chan():
+		}
+
+		if !sameRetroBatMedia(activeMedia(), watched) {
+			return
+		}
+
+		_, running, err := retroBatAPIRunningGame()
+		if err != nil {
+			log.Debug().Err(err).Msg("RetroBat ES API unavailable while watching running game")
+			continue
+		}
+		if running {
+			seenRunning = true
+			continue
+		}
+		if !seenRunning {
+			continue
+		}
+
+		// Recheck after the API call so media that was replaced meanwhile is
+		// never cleared.
+		if ctx.Err() != nil || !sameRetroBatMedia(activeMedia(), watched) {
+			return
+		}
+		log.Info().Str("path", watched.Path).Msg("RetroBat game ended, clearing active media")
+		setActiveMedia(nil)
+		return
+	}
 }

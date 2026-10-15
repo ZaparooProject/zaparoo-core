@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -39,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -470,7 +472,9 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// For menu, use ReturnToMenu() instead of LaunchSystem.
 	// This ensures proper handling across all platforms (stops active launcher and returns to main menu).
 	if strings.EqualFold(systemID, platforms.SystemMenu) {
+		cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 		if err := pl.ReturnToMenu(); err != nil {
+			cancelStop()
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to return to menu: %w", err)
@@ -542,6 +546,14 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	var args zapscript.LaunchRandomArgs
 	if err := ParseAdvArgs(pl, env, &args); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
+	}
+
+	// With a rotation this is not a launch but a playlist of one random
+	// launch that repeats; each item runs this same command without it.
+	if rotation := (rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); rotation.any() {
+		return playRandomRotation(pl, env, &rotation)
 	}
 
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
@@ -921,6 +933,10 @@ func HasResolvedLaunchTarget(name string) bool {
 
 var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
 
+// ErrMediaLaunchSkipped, returned by AcquireMediaLaunch, calls the launch off
+// as a successful no-op, the way a launch that resolves to nothing new is.
+var ErrMediaLaunchSkipped = errMediaLaunchSkipped
+
 type launchTarget struct {
 	path                  string
 	systemID              string
@@ -1074,11 +1090,22 @@ func getLaunchClosure(
 			}
 		}
 		defer launchAccess.Release()
+		if env.Source == tokens.SourcePlaylist && normalizedSlot == mediaslot.Primary {
+			if opts == nil {
+				opts = &platforms.LaunchOptions{}
+			}
+			opts.PlaylistItem = true
+		}
 		if launchAccess.SetActiveMedia != nil {
 			if opts == nil {
 				opts = &platforms.LaunchOptions{}
 			}
 			opts.ActiveMediaPublisher = launchAccess.SetActiveMedia
+			opts.RecordMediaStop = launchAccess.RecordMediaStop
+			if normalizedSlot == mediaslot.Primary {
+				opts.MediaFinished = launchAccess.MediaFinished
+				opts.MediaExited = launchAccess.MediaExited
+			}
 		}
 		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 	}

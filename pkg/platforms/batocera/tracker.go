@@ -70,6 +70,10 @@ func (p *Platform) startGameTracker(
 	}, nil
 }
 
+// kodiTracking reports whether a launch-scoped Kodi watcher owns the end of
+// the current Kodi media. Tests replace it.
+var kodiTracking = kodi.Tracking
+
 // checkKodiPlaybackStatus checks if Kodi is running and what's playing.
 // Returns the currently playing item as ActiveMedia, or nil if nothing is playing or Kodi is not running.
 // Updates kodiActive flag based on Kodi availability.
@@ -237,6 +241,13 @@ func (p *Platform) checkAndUpdateRunningGame(
 
 		// Kodi is running - check if playback state changed
 		if kodiMedia == nil && lastKnown != nil {
+			// A watcher still following this Kodi launch reports finished or
+			// exited itself, once it has waited out a possible loop or next
+			// queue item; clearing here would mislabel a natural end.
+			if kodiTracking(kodi.NewClient(p.cfg).GetURL()) {
+				log.Debug().Msg("Kodi playback gone, deferring to the launch watcher")
+				return
+			}
 			// Playback stopped
 			log.Info().Msg("detected Kodi playback stopped")
 			p.trackerMu.Lock()

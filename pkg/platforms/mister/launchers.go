@@ -22,6 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -1013,13 +1014,21 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
 
+		var finished func()
+		if opts != nil {
+			finished = opts.MediaFinished
+		}
+
 		cmd := buildFvpCommand(launcherCtx, path)
 
 		// Build cleanup function that will be called on completion/crash
 		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Start process and manage lifecycle
-		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
+		return runTrackedProcess(pl, cmd, restoreFunc, "fvp", trackedExit{
+			launcherID:    tracker.VideoLauncherID,
+			mediaFinished: finished,
+		})
 	}
 }
 
@@ -1118,7 +1127,9 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 		}
 
 		// Start process and manage lifecycle (wraps with nice/setsid)
-		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm")
+		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm", trackedExit{
+			launcherID: tracker.ScummVMLauncherID,
+		})
 	}
 }
 
@@ -1134,7 +1145,7 @@ func scummVMKill(keyboardPress func(string) error) func(*config.Instance) error 
 // createScummVMLauncher creates a Launcher definition for ScummVM games.
 func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
-		ID:                 "ScummVM",
+		ID:                 tracker.ScummVMLauncherID,
 		SystemID:           systemdefs.SystemScummVM,
 		Schemes:            []string{shared.SchemeScummVM},
 		Test:               shared.SchemeIDTest(shared.SchemeScummVM),
@@ -1151,7 +1162,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 // createVideoLauncher creates a Launcher definition for fvp video playback.
 func createVideoLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
-		ID:         "GenericVideo",
+		ID:         tracker.VideoLauncherID,
 		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi", ".mov", ".webm"},

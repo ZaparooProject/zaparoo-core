@@ -1058,7 +1058,7 @@ func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
 	p := NewPlatform()
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 	restoreDone := make(chan struct{})
-	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test")
+	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test", trackedExit{})
 	require.NoError(t, err)
 
 	require.NoError(t, p.ReturnToMenu())
@@ -1104,7 +1104,7 @@ func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 	p := NewPlatform()
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 	restoreDone := make(chan struct{})
-	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test")
+	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test", trackedExit{})
 	require.NoError(t, err)
 
 	var childPID int

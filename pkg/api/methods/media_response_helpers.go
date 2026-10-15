@@ -145,7 +145,7 @@ func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
 		repeat = "all"
 	}
 
-	return models.PlaylistState{
+	state := models.PlaylistState{
 		ID:      p.ID,
 		Name:    p.Name,
 		Slot:    p.Slot,
@@ -155,7 +155,21 @@ func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
 		Playing: p.Playing,
 		Repeat:  repeat,
 		Unsafe:  p.Unsafe,
+		Armed:   p.Armed,
 	}
+	if p.Advance > 0 {
+		ms := p.Advance.Milliseconds()
+		state.AdvanceMs = &ms
+	}
+	if p.Idle > 0 {
+		ms := p.Idle.Milliseconds()
+		state.IdleMs = &ms
+	}
+	if p.CountdownSet {
+		ms := p.Countdown.Milliseconds()
+		state.CountdownMs = &ms
+	}
+	return state
 }
 
 func resolveMediaPathIDs(

@@ -537,13 +537,28 @@ func (tr *Tracker) arcadeMediaPublished(path string) bool {
 }
 
 func (tr *Tracker) stopGame() {
+	tr.resetGameState()
+	tr.setActiveMedia(nil)
+}
+
+func (tr *Tracker) resetGameState() {
 	tr.ActiveGameID = ""
 	tr.ActiveGamePath = ""
 	tr.ActiveGameName = ""
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
+}
 
-	tr.setActiveMedia(nil)
+// Launcher IDs of the console launchers whose media is a Linux process Core
+// owns. They never write ACTIVEGAME, so an empty ACTIVEGAME says nothing about
+// them; the process exit and Core's own stop are what end their media.
+const (
+	VideoLauncherID   = "GenericVideo"
+	ScummVMLauncherID = "ScummVM"
+)
+
+func isProcessTrackedMedia(media *models.ActiveMedia) bool {
+	return media != nil && (media.LauncherID == VideoLauncherID || media.LauncherID == ScummVMLauncherID)
 }
 
 // Load the current running game and set it as active.
@@ -564,6 +579,14 @@ func (tr *Tracker) loadGameLocked() {
 		tr.stopGame()
 		return
 	case activeGame == "":
+		// The empty signal is often the one Core wrote itself when it stopped
+		// the previous media, noticed only after a console launcher published
+		// its own. Such media is not described by ACTIVEGAME, so leave it.
+		if tr.activeMedia != nil && isProcessTrackedMedia(tr.activeMedia()) {
+			log.Debug().Msg("active game is empty, keeping process-tracked media")
+			tr.resetGameState()
+			return
+		}
 		log.Debug().Msg("active game is empty, stopping game")
 		tr.stopGame()
 		return

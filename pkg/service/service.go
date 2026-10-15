@@ -229,6 +229,10 @@ type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
 }
 
+func ownedByNativeAudio(media *models.ActiveMedia) bool {
+	return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
+}
+
 // clearNativeAudioPrimaryMedia clears active media once native audio has stopped
 // on the primary slot. Another launcher may have taken over active media while the
 // track was still playing (e.g. a game started outside Zaparoo); only clear it if
@@ -236,9 +240,13 @@ type drainCallbackRegistrar interface {
 // step, so a lifecycle tracker publishing another launcher's media in between
 // is left alone.
 func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
-	svc.State.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
-		return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
-	})
+	svc.State.ClearActiveMediaIf(ownedByNativeAudio)
+}
+
+// finishNativeAudioPrimaryMedia reports the natural end of a primary track to
+// state, under the same ownership rule as clearNativeAudioPrimaryMedia.
+func finishNativeAudioPrimaryMedia(svc *ServiceContext) {
+	svc.State.FinishActiveMediaIf(ownedByNativeAudio)
 }
 
 // stopNativeAudioPrimaryMedia runs an explicit stop of native audio on the
@@ -258,11 +266,30 @@ func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop 
 	}
 	defer release()
 
+	// Only native audio's own media is stopped here; recording against a game
+	// that happens to be active would mislabel the game's later exit.
+	cancelStop := func() {}
+	if ownedByNativeAudio(svc.State.ActiveMedia()) {
+		cancelStop = svc.State.RecordMediaStop(models.MediaStopReasonStopped)
+	}
 	if err := stop(); err != nil {
+		cancelStop()
 		return err
 	}
 	clearNativeAudioPrimaryMedia(svc)
 	return nil
+}
+
+// stopAbandonedNativeAudio stops native-audio playback that a launch started
+// before a stop overtook it. The launch published no media, so the stop paths
+// that look for published media never reach the playback.
+func stopAbandonedNativeAudio(svc *ServiceContext, media *models.ActiveMedia) {
+	if media.LauncherID != platforms.NativeAudioLauncherID || svc.PlaybackManager == nil {
+		return
+	}
+	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		log.Warn().Err(err).Msg("failed to stop native audio that a stop overtook")
+	}
 }
 
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
@@ -270,56 +297,18 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		if !natural {
 			return
 		}
-		clearNativeAudioPrimaryMedia(svc)
+		finishNativeAudioPrimaryMedia(svc)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
 		if !natural {
 			return
 		}
-		advanceBackgroundPlaylist(svc)
+		// The engine sees this as the end of the bound track and moves the
+		// background playlist on.
+		// A drain that arrives after other media took the slot must not clear
+		// that media, or the engine would move on from a track still playing.
+		svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonFinished)
 	})
-}
-
-// advanceBackgroundPlaylist is called when a background track ends naturally.
-// It advances to the next track according to the playlist's repeat mode, or clears
-// the background state when the playlist has finished and repeat is off.
-func advanceBackgroundPlaylist(svc *ServiceContext) {
-	pls := svc.State.GetBackgroundPlaylist()
-	if pls == nil {
-		// Single-track background (not a playlist) — just clear media state.
-		svc.State.SetBackgroundMedia(nil)
-		return
-	}
-
-	var next *playlists.Playlist
-	switch {
-	case pls.LoopOne:
-		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
-		next = playlists.Play(*pls)
-		next.ForceRelaunch = true
-	case pls.Index+1 < len(pls.Items):
-		// More tracks remain — advance normally.
-		next = playlists.Next(*pls)
-		next.Playing = true
-	case pls.Loop:
-		// Last track finished and repeat=all — wrap back to the start.
-		next = playlists.Next(*pls) // Next already wraps to 0
-		next.Playing = true
-		if len(pls.Items) <= 1 {
-			// Single-item loop: same index after wrap, need ForceRelaunch.
-			next.ForceRelaunch = true
-		}
-	default:
-		// repeat=off, end of playlist — clear state and stop.
-		svc.State.SetBackgroundPlaylist(nil)
-		svc.State.SetBackgroundMedia(nil)
-		return
-	}
-
-	select {
-	case svc.PlaylistQueue <- next:
-	case <-svc.State.GetContext().Done():
-	}
 }
 
 // resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
@@ -651,6 +640,7 @@ func startServiceWithOptions(
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
+	limitsManager.SetMediaStopRecorder(st.RecordMediaStop)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
@@ -700,6 +690,7 @@ func startServiceWithOptions(
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
+	svc.AutoAdvance = startAutoAdvance(svc, rendersPickers(pl, opts))
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
@@ -716,6 +707,10 @@ func startServiceWithOptions(
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) {
+		stopAbandonedNativeAudio(svc, media)
+	})
+
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
 		select {
@@ -818,6 +813,7 @@ func startServiceWithOptions(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -1089,6 +1085,7 @@ func startServiceWithOptions(
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone

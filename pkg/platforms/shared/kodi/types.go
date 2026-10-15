@@ -104,6 +104,7 @@ const (
 	APIMethodPlayerPlayPause APIMethod = "Player.PlayPause"
 	APIMethodPlayerSetSpeed  APIMethod = "Player.SetSpeed"
 	APIMethodPlayerGoTo      APIMethod = "Player.GoTo"
+	APIMethodPlayerSetRepeat APIMethod = "Player.SetRepeat"
 
 	// Application Control
 	APIMethodApplicationQuit APIMethod = "Application.Quit"
@@ -146,10 +147,15 @@ type Item struct {
 
 // ItemOptions represents options for playing a media item
 type ItemOptions struct {
-	Resume bool `json:"resume"`
+	// Repeat is sent as "off" only when Core is tracking natural completion,
+	// so a repeating Kodi cannot loop the item forever.
+	Repeat string `json:"repeat,omitempty"`
+	Resume bool   `json:"resume"`
 }
 
 // PlayerOpenParams represents parameters for Player.Open API method
+//
+//nolint:govet // field order is the JSON key order sent to Kodi
 type PlayerOpenParams struct {
 	Item    Item        `json:"item"`
 	Options ItemOptions `json:"options,omitempty"`
@@ -163,6 +169,12 @@ type PlayerStopParams struct {
 // PlayerPlayPauseParams represents parameters for Player.PlayPause API method
 type PlayerPlayPauseParams struct {
 	PlayerID int `json:"playerid"`
+}
+
+// PlayerSetRepeatParams represents parameters for Player.SetRepeat API method
+type PlayerSetRepeatParams struct {
+	Repeat   string `json:"repeat"`
+	PlayerID int    `json:"playerid"`
 }
 
 // PlayerSetSpeedParams represents parameters for Player.SetSpeed API method

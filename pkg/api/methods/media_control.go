@@ -82,6 +82,13 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		controlArgs[string(gozapscript.KeySlot)] = slot
 	}
 
+	// A stop control ends the media from Core's side, so it is recorded here
+	// once for every launcher instead of inside each launcher's control.
+	cancelStop := func() {}
+	if params.Action == platforms.ControlStop && slot == mediaslot.Primary {
+		cancelStop = env.State.RecordMediaStop(models.MediaStopReasonStopped)
+	}
+
 	switch {
 	case control.Func != nil:
 		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: controlArgs})
@@ -99,6 +106,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		err = fmt.Errorf("control %q has no implementation", params.Action)
 	}
 	if err != nil {
+		cancelStop()
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
 	// Media state is cleared by the launcher's own stop control, so the ZapScript

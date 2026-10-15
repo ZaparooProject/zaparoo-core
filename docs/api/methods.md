@@ -584,6 +584,10 @@ None.
 | index   | number | Yes      | Zero-based current item index. |
 | total   | number | Yes      | Total item count. |
 | playing | boolean | Yes    | Whether playlist slot is playing. |
+| advanceMs | number | No     | Milliseconds of playing time before the playlist moves to the next item by itself. Omitted when the playlist does not advance on a timer. |
+| idleMs  | number | No       | Milliseconds with no user input before the playlist moves to the next item, or starts when it was loaded waiting. Never present together with `advanceMs`. |
+| countdownMs | number | No   | Milliseconds the notice before an automatic switch stays up. `0` switches with no notice. Omitted when the playlist does not say, which uses the default of 10 seconds. |
+| armed   | boolean | No      | True while an idle playlist is loaded and waiting for the device to go idle before it starts. Omitted when false. |
 | unsafe  | boolean | Yes    | Read-only. True when the playlist's items came from a source this device does not trust, such as a fetched ZapLink or a deck shared by someone else, and also when an untrusted script opened it, which even the user's own deck inherits. Commands in those items that drive input or run programs will not run. Core versions that do not report this field do not restrict playlist items, so treat a missing value as `false`. |
 
 #### Example

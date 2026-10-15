@@ -54,6 +54,8 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	RecordMediaStop    func(reason string) (cancel func())
+	StopSeq            func() uint64
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
@@ -578,6 +580,8 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		RecordMediaStop:    opts.RecordMediaStop,
+		StopSeq:            opts.StopSeq,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
@@ -648,7 +652,11 @@ func RunCommand(
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
-	if IsMediaLaunchingCommand(cmd.Name) {
+	// launch.random with a rotation only queues a playlist, the way
+	// playlist.play does, and each item takes the guard when it launches.
+	// Holding it here would make the command's own playlist update look like a
+	// second launch and be refused.
+	if IsMediaLaunchingCommand(cmd.Name) && !isRandomRotation(&cmd) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}

@@ -144,13 +144,17 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	// so the callback is in place before the source could possibly drain.
 	src.onDrain = func(natural bool) {
 		m.mu.Lock()
-		if m.getSourceLocked(key) == src {
+		// A source that was replaced or stopped can still drain late, and its
+		// reader may have hit EOF just before that. It must not be reported as
+		// the slot's track finishing, or it would end the track that replaced it.
+		current := m.getSourceLocked(key) == src
+		if current {
 			m.setSourceLocked(key, nil)
 		}
 		cb := m.drainCallbacks[key]
 		m.mu.Unlock()
 		if cb != nil {
-			cb(natural)
+			cb(natural && current)
 		}
 	}
 

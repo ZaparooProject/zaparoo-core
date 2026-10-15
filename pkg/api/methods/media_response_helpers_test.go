@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -145,6 +146,43 @@ func TestToPlaylistState_Unsafe(t *testing.T) {
 	assert.True(t, toPlaylistState(untrusted).Unsafe)
 	trusted := &playlists.Playlist{Slot: mediaslot.Primary}
 	assert.False(t, toPlaylistState(trusted).Unsafe)
+}
+
+func TestToPlaylistState_Rotation(t *testing.T) {
+	t.Parallel()
+	none := toPlaylistState(&playlists.Playlist{Slot: mediaslot.Primary})
+	assert.Nil(t, none.AdvanceMs)
+	assert.Nil(t, none.IdleMs)
+	assert.Nil(t, none.CountdownMs)
+	assert.False(t, none.Armed)
+	encoded, err := json.Marshal(none)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "advanceMs")
+	assert.NotContains(t, string(encoded), "countdownMs")
+
+	advancing := toPlaylistState(&playlists.Playlist{
+		Slot: mediaslot.Primary, Advance: 90 * time.Second, Countdown: 0, CountdownSet: true,
+	})
+	require.NotNil(t, advancing.AdvanceMs)
+	assert.Equal(t, int64(90000), *advancing.AdvanceMs)
+	assert.Nil(t, advancing.IdleMs)
+	require.NotNil(t, advancing.CountdownMs, "an explicit zero countdown is reported")
+	assert.Equal(t, int64(0), *advancing.CountdownMs)
+
+	idle := toPlaylistState(&playlists.Playlist{Slot: mediaslot.Primary, Idle: 5 * time.Minute})
+	require.NotNil(t, idle.IdleMs)
+	assert.Equal(t, int64(300000), *idle.IdleMs)
+	assert.Nil(t, idle.AdvanceMs)
+	assert.Nil(t, idle.CountdownMs, "an unset countdown is omitted")
+	assert.False(t, idle.Armed)
+
+	armed := toPlaylistState(&playlists.Playlist{
+		Slot: mediaslot.Primary, Idle: 5 * time.Minute, Armed: true,
+	})
+	assert.True(t, armed.Armed, "a loaded idle playlist reports that it is armed")
+	encoded, err = json.Marshal(armed)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"armed":true`)
 }
 
 func TestToPlaylistState_EmptyItems(t *testing.T) {

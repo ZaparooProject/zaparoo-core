@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -64,4 +65,5 @@ type ServiceContext struct {
 	LaunchGuardCancel   chan struct{}
 	ResolvedLaunchGuard chan *resolvedLaunchConfirmation
 	BackgroundWG        *sync.WaitGroup
+	AutoAdvance         *autoadvance.Engine
 }

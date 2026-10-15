@@ -200,7 +200,17 @@ type Control struct {
 // Release must be called after LaunchMedia returns.
 type MediaLaunchAccess struct {
 	SetActiveMedia func(*models.ActiveMedia)
-	Release        func()
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before it is issued. See state.State.RecordMediaStop. The returned
+	// function withdraws the note when the stop did not take effect.
+	RecordMediaStop func(reason string) (cancel func())
+	// MediaFinished reports the natural end of the media this launch
+	// publishes. It is bound to that publication and idempotent.
+	MediaFinished func()
+	// MediaExited reports the media this launch published ended without a
+	// natural end. Shares one once with MediaFinished.
+	MediaExited func()
+	Release     func()
 }
 
 // LaunchPathNormalizer resolves platform-specific launch aliases before comparing
@@ -253,6 +263,13 @@ type CmdEnv struct {
 	ServiceCtx         context.Context
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (MediaLaunchAccess, error)
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before it is issued, so the clear that follows is not reported as the
+	// media quitting by itself. Nil when no state is attached.
+	RecordMediaStop func(reason string) (cancel func())
+	// StopSeq returns the count of stops of the primary media Core has been
+	// asked to make, so a playlist update can be stamped with it when issued.
+	StopSeq            func() uint64
 	SkipMediaLaunch    func(ResolvedLaunch) bool
 	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
 	AcquireLaunch      func() (func(), error)
@@ -293,6 +310,16 @@ type CmdEnv struct {
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
+}
+
+// RecordStop notes that Core is about to stop the current primary media. It is
+// a no-op when the environment carries no recorder. The returned function
+// withdraws the note when the stop did not take effect.
+func (e *CmdEnv) RecordStop(reason string) (cancel func()) {
+	if e != nil && e.RecordMediaStop != nil {
+		return e.RecordMediaStop(reason)
+	}
+	return func() {}
 }
 
 // ProfileSwitchRequest asks the script runner to change the device's
@@ -392,6 +419,24 @@ type LaunchOptions struct {
 	// ActiveMediaPublisher is the launch-scoped publication callback supplied
 	// by Core. Launchers must not retain or invoke it directly.
 	ActiveMediaPublisher func(*models.ActiveMedia)
+	// MediaFinished is the launch-scoped callback a launcher invokes, at most
+	// once and from any goroutine, when the media it launched reached its
+	// natural end. It is never called for a stop, a quit or a replacement, and
+	// a launcher that cannot tell those apart must not call it. Core ignores
+	// the call when the launched media is no longer the active media.
+	MediaFinished func()
+	// MediaExited is the launch-scoped callback a launcher invokes, at most
+	// once and from any goroutine, when the media it launched ended without
+	// reaching its natural end and the launcher knows it: the user stopped it
+	// from the player's own controls, or the player closed. Core has usually
+	// already cleared the media when it asked for the stop, and then the call
+	// does nothing. Like MediaFinished it may be nil, and it is ignored when
+	// the launched media is no longer the active media.
+	MediaExited func()
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before the launch preempts it. Core-supplied and may be nil; call it
+	// through RecordStop.
+	RecordMediaStop func(reason string) (cancel func())
 	// RenderScale is the preferred internal rendering size as a percentage of
 	// available output dimensions. It does not change physical display mode.
 	RenderScale *int
@@ -414,6 +459,21 @@ type LaunchOptions struct {
 	SetNameSameDir string
 	// Slot selects the media slot for launch routing. Empty means primary.
 	Slot string
+	// PlaylistItem is set by Core when the launch plays a playlist item. A
+	// launcher that can stop media from looping on its own uses it to do so,
+	// since a playlist that waits for the media to finish never moves on from
+	// media that repeats; a launch from a scan keeps the player's own settings.
+	PlaylistItem bool
+}
+
+// RecordStop notes that Core is about to stop the current primary media.
+// It is a no-op when the launch carries no recorder. The returned function
+// withdraws the note when the stop did not take effect.
+func (o *LaunchOptions) RecordStop(reason string) (cancel func()) {
+	if o != nil && o.RecordMediaStop != nil {
+		return o.RecordMediaStop(reason)
+	}
+	return func() {}
 }
 
 // LaunchCommand is an executable and argument vector that can be delegated to
