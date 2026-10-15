@@ -919,6 +919,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return helpers.CombineParsedLaunchers(customLaunchers, launchers)
 }
 
+// RendersUIKind reports the events PresentUI can show: only notices and
+// loaders, which are shown as Batocera notifications.
+func (*Platform) RendersUIKind(kind models.UIEventKind) bool {
+	return kind == models.UIEventKindNotice || kind == models.UIEventKindLoader
+}
+
 func (*Platform) PresentUI(
 	_ context.Context,
 	event *models.UIEvent,

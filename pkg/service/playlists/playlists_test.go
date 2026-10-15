@@ -21,6 +21,7 @@ package playlists_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -253,4 +254,82 @@ func TestCurrent_ClampsWithoutMutating(t *testing.T) {
 		assert.Equal(t, tt.index, p.Index, "Current must not write the index")
 	}
 	assert.Equal(t, playlists.PlaylistItem{}, (&playlists.Playlist{Index: 4}).Current())
+}
+
+func TestRearm(t *testing.T) {
+	t.Parallel()
+
+	token := &tokens.Token{UID: "card"}
+	pls := &playlists.Playlist{
+		ID: "p", Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, Index: 1, Playing: true,
+		Idle: time.Minute, HoldToken: token, Unsafe: true, PausedByFailure: true, EngineStarted: true,
+	}
+	got := playlists.Rearm(*pls)
+	assert.True(t, got.Armed)
+	assert.False(t, got.Playing)
+	assert.False(t, got.PausedByFailure)
+	assert.Nil(t, got.HoldToken, "whatever held the playlist open is gone")
+	assert.Equal(t, 1, got.Index)
+	assert.Len(t, got.Items, 2)
+	assert.True(t, got.Unsafe)
+	assert.False(t, got.EngineStarted)
+	assert.True(t, pls.Playing, "the original is untouched")
+}
+
+func TestPlayAndPauseDisarm(t *testing.T) {
+	t.Parallel()
+
+	armed := playlists.Playlist{Armed: true, Idle: time.Minute, Items: []playlists.PlaylistItem{{Name: "a"}}}
+	assert.False(t, playlists.Play(armed).Armed)
+	assert.True(t, playlists.Play(armed).Playing)
+	assert.False(t, playlists.Pause(armed).Armed)
+	assert.True(t, playlists.Next(armed).Armed, "moving the cursor keeps it waiting")
+}
+
+func TestStopRotating(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.Playlist{
+		ID: "p", Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, Index: 1, Playing: true,
+		Advance: time.Minute, Countdown: time.Second, CountdownSet: true,
+	}
+	got := playlists.StopRotating(pls)
+	assert.True(t, got.Reconfigure)
+	assert.Zero(t, got.Advance)
+	assert.Zero(t, got.Idle)
+	assert.Equal(t, 1, got.Index)
+	assert.True(t, got.Playing)
+	assert.True(t, got.CountdownSet, "the notice setting stays")
+}
+
+func TestTransitionDropsPerUpdateFlags(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.Playlist{
+		Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, EngineStarted: true, Reconfigure: true,
+		Clear: true, Refresh: true, ForceRelaunch: true, FromPlaylistItem: true,
+	}
+	for name, got := range map[string]*playlists.Playlist{
+		"next":     playlists.Next(pls),
+		"previous": playlists.Previous(pls),
+		"goto":     playlists.Goto(pls, 1),
+		"play":     playlists.Play(pls),
+		"pause":    playlists.Pause(pls),
+	} {
+		assert.False(t, got.EngineStarted, name)
+		assert.False(t, got.Reconfigure, name)
+		assert.False(t, got.Clear, name)
+		assert.False(t, got.Refresh, name)
+		assert.False(t, got.ForceRelaunch, name)
+		assert.False(t, got.FromPlaylistItem, name)
+	}
+}
+
+func TestEffectiveCountdown(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, playlists.DefaultCountdown, (&playlists.Playlist{}).EffectiveCountdown())
+	assert.Equal(t, time.Duration(0), (&playlists.Playlist{CountdownSet: true}).EffectiveCountdown())
+	custom := &playlists.Playlist{Countdown: 3 * time.Second, CountdownSet: true}
+	assert.Equal(t, 3*time.Second, custom.EffectiveCountdown())
 }

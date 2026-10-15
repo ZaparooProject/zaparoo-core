@@ -727,15 +727,24 @@ type PlaylistItemInfo struct {
 // and it inherited that. Either way, commands in its items that drive input
 // or run programs will not run. It is read-only.
 type PlaylistState struct {
-	ID      string             `json:"id"`
-	Name    string             `json:"name"`
-	Slot    string             `json:"slot"`
-	Repeat  string             `json:"repeat"`
-	Items   []PlaylistItemInfo `json:"items"`
-	Index   int                `json:"index"`
-	Total   int                `json:"total"`
-	Playing bool               `json:"playing"`
-	Unsafe  bool               `json:"unsafe"`
+	// AdvanceMs, IdleMs and CountdownMs are the playlist's rotation settings in
+	// milliseconds, omitted when unset. A countdown of 0 is set: it switches
+	// with no notice.
+	AdvanceMs   *int64             `json:"advanceMs,omitempty"`
+	IdleMs      *int64             `json:"idleMs,omitempty"`
+	CountdownMs *int64             `json:"countdownMs,omitempty"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Slot        string             `json:"slot"`
+	Repeat      string             `json:"repeat"`
+	Items       []PlaylistItemInfo `json:"items"`
+	Index       int                `json:"index"`
+	Total       int                `json:"total"`
+	Playing     bool               `json:"playing"`
+	Unsafe      bool               `json:"unsafe"`
+	// Armed reports an idle playlist that is loaded and waiting for the
+	// device to go idle before it starts.
+	Armed bool `json:"armed,omitempty"`
 }
 
 type MediaResponse struct {

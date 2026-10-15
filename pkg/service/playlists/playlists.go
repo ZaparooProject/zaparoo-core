@@ -20,6 +20,8 @@
 package playlists
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -43,12 +45,35 @@ type Playlist struct {
 	// is set only by the deck loader, never from a served playlist, so it is
 	// what ties an open playlist to its deck; the ID is whatever its source
 	// chose to call it.
-	DeckID  string
-	Name    string
-	Slot    string
-	Items   []PlaylistItem
-	Index   int
-	Playing bool
+	DeckID string
+	Name   string
+	Slot   string
+	Items  []PlaylistItem
+	Index  int
+	// Advance moves to the next item after this much playing time. Zero
+	// means the playlist does not rotate on a timer.
+	Advance time.Duration
+	// Idle moves to the next item after this long with no user input, and
+	// starts a loaded playlist the same way. Zero means it does not rotate on
+	// idle. It is never set together with Advance.
+	Idle time.Duration
+	// Countdown is how long the notice before an automatic switch stays up.
+	// CountdownSet distinguishes an explicit zero, which switches without a
+	// notice, from no value, which uses DefaultCountdown.
+	Countdown time.Duration
+	// EngineFromIndex is the item the engine moved this update away from, so
+	// the queue handler can drop a move the user has already overtaken.
+	EngineFromIndex int `json:"-"`
+	// StopSeq is the count of stops of the primary media when the update was
+	// issued, valid when StopStamped is set. A stop after that cancels an
+	// update that has not launched yet.
+	StopSeq uint64 `json:"-"`
+	// StopStamped says StopSeq was taken for this update.
+	StopStamped bool `json:"-"`
+	Playing     bool
+	// Armed marks a loaded idle playlist that is waiting for the device to go
+	// idle before it starts. Playing it, pausing it or stopping it disarms it.
+	Armed bool
 	// PausedByFailure marks a playlist that stopped because its current item
 	// failed to launch, not because anyone paused it. Moving to another item
 	// resumes such a playlist, where a paused one only moves its cursor.
@@ -66,6 +91,17 @@ type Playlist struct {
 	// run, such as a card that plays another playlist. It is part of that
 	// item's launch rather than a second one competing with it.
 	FromPlaylistItem bool `json:"-"`
+	// EngineStarted marks an update the auto-advance engine queued on its own,
+	// so the item it launches is known to be one nobody asked for. It is
+	// part of that launch rather than of the playlist.
+	EngineStarted bool `json:"-"`
+	// Reconfigure applies only the rotation settings of this update — Advance,
+	// Idle, Countdown and Armed — to the active playlist with the same ID,
+	// keeping its position and playback and never launching anything.
+	Reconfigure bool `json:"-"`
+	// EngineFromArmed says the move was decided on a loaded playlist waiting
+	// to start rather than a playing one.
+	EngineFromArmed bool `json:"-"`
 	// Refresh replaces the items and name of the active playlist with the
 	// same ID in place, keeping its position and playback state and never
 	// launching anything. It is ignored when no such playlist is active.
@@ -77,7 +113,20 @@ type Playlist struct {
 	// deck inherits. Every item token carries it, so commands that drive
 	// input or run programs refuse, the same as the script that opened the
 	// playlist.
-	Unsafe bool
+	Unsafe       bool
+	CountdownSet bool
+}
+
+// DefaultCountdown is how long an automatic switch is announced when a
+// playlist does not say.
+const DefaultCountdown = 10 * time.Second
+
+// EffectiveCountdown returns the notice length for an automatic switch.
+func (p *Playlist) EffectiveCountdown() time.Duration {
+	if p.CountdownSet {
+		return p.Countdown
+	}
+	return DefaultCountdown
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
@@ -97,13 +146,19 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 // by a copy that forgot to list it. Clear, ForceRelaunch, Refresh and
 // FromPlaylistItem are the exception: they describe the single update that
 // delivered them to the queue handler, not the playlist, so they never
-// outlive it.
+// outlive it, and neither do EngineStarted and Reconfigure.
 func transition(p *Playlist) *Playlist {
 	out := *p
 	out.Clear = false
 	out.ForceRelaunch = false
 	out.Refresh = false
 	out.FromPlaylistItem = false
+	out.EngineStarted = false
+	out.EngineFromIndex = 0
+	out.EngineFromArmed = false
+	out.StopSeq = 0
+	out.StopStamped = false
+	out.Reconfigure = false
 	return &out
 }
 
@@ -152,13 +207,38 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	out := transition(&p)
 	out.Playing = true
+	out.Armed = false
 	out.PausedByFailure = false
+	return out
+}
+
+// Rearm returns p loaded and waiting for the device to go idle: not playing,
+// position kept. The hold token is dropped because whatever held the playlist
+// open is gone.
+func Rearm(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
+	out := transition(&p)
+	out.Playing = false
+	out.Armed = true
+	out.PausedByFailure = false
+	out.HoldToken = nil
+	return out
+}
+
+// StopRotating returns the reconfiguration that turns off p's advance and idle
+// rotation and keeps everything else, including what is playing.
+func StopRotating(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
+	out := transition(&p)
+	out.Advance = 0
+	out.Idle = 0
+	out.Armed = false
+	out.Reconfigure = true
 	return out
 }
 
 func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	out := transition(&p)
 	out.Playing = false
+	out.Armed = false
 	out.PausedByFailure = false
 	return out
 }
@@ -179,4 +259,8 @@ type PlaylistController struct {
 	Current    *Playlist
 	HoldToken  *tokens.Token
 	Queue      chan<- *Playlist
+	// LaunchResolved, when set, is told once the launcher of a launch is
+	// known whether that launcher publishes the media itself later, outside
+	// the launch call. Only the playlist worker sets it.
+	LaunchResolved func(publishesLater bool)
 }
