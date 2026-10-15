@@ -213,7 +213,9 @@ type Desktop struct {
 	cachedAt time.Time
 	cached   *idleProbe
 	evdev    *Evdev
-	mu       syncutil.Mutex
+	// watchControllers watches the controller event nodes; tests replace it.
+	watchControllers func(ctx context.Context, responsive bool, onActivity func()) error
+	mu               syncutil.Mutex
 }
 
 // NewDesktop returns a source for a non-root desktop session.
@@ -271,7 +273,9 @@ func (d *Desktop) Coverage() Class {
 }
 
 // Watch blocks until ctx is cancelled. It fails at once when neither source
-// works.
+// works, and returns the error when the controller watch stops on its own:
+// coverage still claims controllers, so carrying on without them would leave
+// a person using one looking idle.
 func (d *Desktop) Watch(ctx context.Context, responsive bool, onActivity func()) error {
 	probe, haveIdle := d.idle(ctx)
 	haveControllers := d.evdev.Coverage() != 0
@@ -282,16 +286,23 @@ func (d *Desktop) Watch(ctx context.Context, responsive bool, onActivity func())
 	throttle := NewThrottle(d.clock, NotifyInterval, onActivity)
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	idleCtx, stopIdle := context.WithCancel(ctx)
+	defer stopIdle()
 	if haveIdle {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			d.pollIdle(ctx, probe, pollEvery(responsive), throttle.Trigger)
+			d.pollIdle(idleCtx, probe, pollEvery(responsive), throttle.Trigger)
 		}()
 	}
 	if haveControllers {
-		if err := d.evdev.Watch(ctx, responsive, throttle.Trigger); err != nil {
-			log.Warn().Err(err).Msg("input activity: controller watch stopped")
+		watch := d.watchControllers
+		if watch == nil {
+			watch = d.evdev.Watch
+		}
+		if err := watch(ctx, responsive, throttle.Trigger); err != nil && ctx.Err() == nil {
+			stopIdle()
+			return fmt.Errorf("controller watch stopped: %w", err)
 		}
 	}
 	<-ctx.Done()

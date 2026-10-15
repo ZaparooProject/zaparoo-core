@@ -302,3 +302,29 @@ func (b *flakyBus) call(context.Context, string, dbus.ObjectPath, string) (any, 
 	}
 	return uint32(60000), nil
 }
+
+// Coverage claims controllers, so a controller watch that stops on its own
+// must end the whole watch rather than leave a controller player unseen.
+func TestDesktopWatchReturnsWhenTheControllerWatchFails(t *testing.T) {
+	t.Parallel()
+	ssPath := screenSaverName + "/org/freedesktop/ScreenSaver|" + screenSaverName + ".GetSessionIdleTime"
+	ss := &fakeBus{
+		owners: map[string]bool{screenSaverName: true},
+		calls:  map[string]any{ssPath: uint32(60000)},
+	}
+	d := desktopFixture(t, ss, &fakeBus{})
+	d.evdev.readable = func(string) bool { return true }
+	require.NoError(t, afero.WriteFile(d.evdev.fs, "/dev/input/event0", nil, 0o644))
+	failure := errors.New("poll set unavailable")
+	d.watchControllers = func(context.Context, bool, func()) error { return failure }
+
+	done := make(chan error, 1)
+	go func() { done <- d.Watch(t.Context(), false, func() {}) }()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, failure)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch kept running after its controller watch failed")
+	}
+}
