@@ -42,7 +42,18 @@ import (
 
 // Client implements the KodiClient interface
 type Client struct {
-	url string
+	watch    *watchSettings
+	url      string
+	noRepeat bool
+}
+
+// repeatMode is the Player.Open repeat option: "off" while completion is
+// tracked, empty (omitted) otherwise so requests are unchanged.
+func (c *Client) repeatMode() string {
+	if c.noRepeat {
+		return repeatOff
+	}
+	return ""
 }
 
 // Ensure Client implements KodiClient at compile time
@@ -92,6 +103,7 @@ func (c *Client) LaunchFile(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -115,6 +127,7 @@ func (c *Client) LaunchMovie(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -138,6 +151,7 @@ func (c *Client) LaunchTVEpisode(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -417,6 +431,7 @@ func (c *Client) LaunchSong(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -440,6 +455,7 @@ func (c *Client) LaunchAlbum(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -463,6 +479,7 @@ func (c *Client) LaunchArtist(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -521,6 +538,9 @@ func (c *Client) LaunchTVShow(path string) error {
 		Item: Item{
 			PlaylistID: 1,
 		},
+		Options: ItemOptions{
+			Repeat: c.repeatMode(),
+		},
 	})
 	return err
 }
@@ -562,15 +582,8 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	kodiReq.Header.Set("Content-Type", "application/json")
 	kodiReq.Header.Set("Accept", "application/json")
 
-	// Add authentication if configured
-	authCfg := config.GetAuthCfg()
-	if cred := config.LookupAuth(authCfg, c.url); cred != nil {
-		if cred.Bearer != "" {
-			kodiReq.Header.Set("Authorization", "Bearer "+cred.Bearer)
-		} else if cred.Username != "" && cred.Password != "" {
-			auth := base64.StdEncoding.EncodeToString([]byte(cred.Username + ":" + cred.Password))
-			kodiReq.Header.Set("Authorization", "Basic "+auth)
-		}
+	if auth := authorizationHeader(c.url); auth != "" {
+		kodiReq.Header.Set("Authorization", auth)
 	}
 
 	client := &http.Client{Transport: useragent.Transport(nil)}
@@ -611,4 +624,20 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	}
 
 	return apiResp.Result, nil
+}
+
+// authorizationHeader returns the configured Authorization header value for a
+// Kodi URL, or "" when no credentials are configured.
+func authorizationHeader(serverURL string) string {
+	cred := config.LookupAuth(config.GetAuthCfg(), serverURL)
+	if cred == nil {
+		return ""
+	}
+	if cred.Bearer != "" {
+		return "Bearer " + cred.Bearer
+	}
+	if cred.Username != "" && cred.Password != "" {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password))
+	}
+	return ""
 }

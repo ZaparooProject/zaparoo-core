@@ -108,6 +108,7 @@ type Platform struct {
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
 	trackedProcess      *os.Process
+	stopRequestedProc   *os.Process   // process Core itself is stopping; guarded by processMu
 	processDone         chan struct{} // Signals when tracked process cleanup completes
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
@@ -468,6 +469,38 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	p.trackedProcess = nil
 	p.processDone = nil
 	p.trackedProcessGroup = false
+	if p.stopRequestedProc == proc {
+		p.stopRequestedProc = nil
+	}
+}
+
+// clearMediaAfterProcessExit clears the active media once a console launcher
+// process has ended on its own. It does nothing when Core stopped the process
+// (the stop path clears media itself), when a newer process is tracked, or when
+// the active media belongs to a different launcher.
+func (p *Platform) clearMediaAfterProcessExit(proc *os.Process, launcherID string) bool {
+	p.processMu.RLock()
+	current := p.trackedProcess == proc
+	stoppedByCore := p.stopRequestedProc == proc
+	p.processMu.RUnlock()
+	if !current || stoppedByCore || p.setActiveMedia == nil {
+		return false
+	}
+	if p.activeMedia != nil {
+		media := p.activeMedia()
+		if media == nil || media.LauncherID != launcherID {
+			return false
+		}
+	}
+	p.setActiveMedia(nil)
+	return true
+}
+
+// processStoppedByCore reports whether Core asked proc to stop.
+func (p *Platform) processStoppedByCore(proc *os.Process) bool {
+	p.processMu.RLock()
+	defer p.processMu.RUnlock()
+	return p.stopRequestedProc == proc
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
@@ -769,6 +802,9 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	proc := p.trackedProcess
 	done := p.processDone
 	processGroup := p.trackedProcessGroup
+	if proc != nil {
+		p.stopRequestedProc = proc
+	}
 	p.processMu.Unlock()
 
 	if proc == nil && intent == platforms.StopForPreemption && p.launcherManager != nil {
@@ -1969,4 +2005,11 @@ func (p *Platform) CheckAndClearArcadeCardLaunch(setname string) bool {
 		Msg("suppressing duplicate arcade notification")
 	p.arcadeCardLaunch.setname = ""
 	return true
+}
+
+// isTrackedProcess reports whether proc is the currently tracked process.
+func (p *Platform) isTrackedProcess(proc *os.Process) bool {
+	p.processMu.RLock()
+	defer p.processMu.RUnlock()
+	return p.trackedProcess == proc
 }

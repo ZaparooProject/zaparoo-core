@@ -21,6 +21,8 @@ package helpers
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,13 +30,18 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
+	"github.com/gorilla/websocket"
 )
 
 // MockKodiServer provides a mock Kodi JSON-RPC server for integration testing
 type MockKodiServer struct {
 	*httptest.Server
-	players []kodi.Player
-	mu      syncutil.Mutex
+	players  []kodi.Player
+	requests [][]byte
+	failing  map[kodi.APIMethod]bool
+	sockets  []*websocket.Conn
+	mu       syncutil.Mutex
+	wsMu     syncutil.Mutex
 }
 
 // NewMockKodiServer creates a new mock Kodi server for testing
@@ -69,6 +76,10 @@ func (m *MockKodiServer) WithActivePlayers() *MockKodiServer {
 }
 
 func (m *MockKodiServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
+	if websocket.IsWebSocketUpgrade(r) {
+		m.handleWebSocket(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -76,7 +87,11 @@ func (m *MockKodiServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request to get ID for response
 	var payload kodi.APIPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	body, _ := io.ReadAll(r.Body)
+	m.mu.Lock()
+	m.requests = append(m.requests, body)
+	m.mu.Unlock()
+	if err := json.Unmarshal(body, &payload); err != nil {
 		// For now, just use hardcoded ID
 		payload.ID = "test-123"
 	}
@@ -84,7 +99,18 @@ func (m *MockKodiServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	// Return configured players data
 	m.mu.Lock()
 	players := m.players
+	fail := m.failing[payload.Method]
 	m.mu.Unlock()
+
+	if fail {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(kodi.APIResponse{
+			ID:      payload.ID,
+			JSONRPC: "2.0",
+			Error:   &kodi.APIError{Code: -32100, Message: "mock failure"},
+		})
+		return
+	}
 
 	result, _ := json.Marshal(players)
 	response := kodi.APIResponse{
@@ -95,4 +121,93 @@ func (m *MockKodiServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+// FailMethod makes the server answer the given JSON-RPC method with an error.
+func (m *MockKodiServer) FailMethod(method kodi.APIMethod) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failing == nil {
+		m.failing = make(map[kodi.APIMethod]bool)
+	}
+	m.failing[method] = true
+}
+
+// Requests returns the raw JSON-RPC request bodies received over HTTP, in order.
+func (m *MockKodiServer) Requests() [][]byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][]byte, len(m.requests))
+	copy(out, m.requests)
+	return out
+}
+
+func (m *MockKodiServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	m.wsMu.Lock()
+	m.sockets = append(m.sockets, conn)
+	m.wsMu.Unlock()
+	// Drain client frames so close frames are processed.
+	go func() {
+		defer m.dropSocket(conn)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+}
+
+func (m *MockKodiServer) dropSocket(conn *websocket.Conn) {
+	_ = conn.Close()
+	m.wsMu.Lock()
+	defer m.wsMu.Unlock()
+	for i, c := range m.sockets {
+		if c == conn {
+			m.sockets = append(m.sockets[:i], m.sockets[i+1:]...)
+			return
+		}
+	}
+}
+
+// WebSocketClients returns the number of notification sockets accepted so far
+// that are still open.
+func (m *MockKodiServer) WebSocketClients() int {
+	m.wsMu.Lock()
+	defer m.wsMu.Unlock()
+	return len(m.sockets)
+}
+
+// PushNotification sends a JSON-RPC notification to every connected socket.
+func (m *MockKodiServer) PushNotification(method string, data any) error {
+	msg, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  map[string]any{"data": data, "sender": "xbmc"},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal notification: %w", err)
+	}
+	m.wsMu.Lock()
+	defer m.wsMu.Unlock()
+	for _, c := range m.sockets {
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return fmt.Errorf("write notification: %w", err)
+		}
+	}
+	return nil
+}
+
+// CloseWebSockets closes every notification socket from the server side.
+func (m *MockKodiServer) CloseWebSockets() {
+	m.wsMu.Lock()
+	sockets := append([]*websocket.Conn(nil), m.sockets...)
+	m.wsMu.Unlock()
+	for _, c := range sockets {
+		_ = c.Close()
+	}
 }

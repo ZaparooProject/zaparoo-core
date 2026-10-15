@@ -67,6 +67,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/adrg/xdg"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -88,6 +89,7 @@ type Platform struct {
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
 	windowFocusCancel       context.CancelFunc
+	retroBatWatchCancel     context.CancelFunc
 	launchBoxActiveID       string
 	launchBoxActiveAppPath  string
 	lastLauncher            platforms.Launcher
@@ -200,6 +202,12 @@ func (p *Platform) StartPost(
 
 func (p *Platform) Stop() error {
 	p.CloseDevices()
+	p.processMu.Lock()
+	if p.retroBatWatchCancel != nil {
+		p.retroBatWatchCancel()
+		p.retroBatWatchCancel = nil
+	}
+	p.processMu.Unlock()
 
 	if p.launcherManager != nil {
 		p.launcherManager.NewContext()
@@ -605,7 +613,11 @@ func (p *Platform) LaunchMedia(
 				cancelStop()
 				return fmt.Errorf("failed to stop active RetroBat launcher: %w", stopErr)
 			}
-			time.Sleep(retroBatLaunchSettleDelay)
+			// This launch's own stop replaced the launcher context, so take
+			// the context after it: only a later stop may cancel the wait.
+			if settleErr := p.waitLaunchSettle(retroBatLaunchSettleDelay); settleErr != nil {
+				return fmt.Errorf("launch media: stopped while replacing running media: %w", settleErr)
+			}
 		}
 	}
 
@@ -623,8 +635,50 @@ func (p *Platform) LaunchMedia(
 	}
 
 	p.setLastLauncher(launcher)
+	p.watchRetroBatMedia(launcher, path)
 
 	return nil
+}
+
+// waitLaunchSettle waits d, returning early with an error when a stop cancels
+// the launcher context meanwhile, so a stop that finds nothing to act on still
+// prevents the pending launch from starting.
+func (p *Platform) waitLaunchSettle(d time.Duration) error {
+	ctx := context.Background()
+	if p.launcherManager != nil {
+		ctx = p.launcherManager.GetContext()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle interrupted: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+// watchRetroBatMedia follows a RetroBat game that was just published as the
+// active media, so media is cleared when the game ends.
+func (p *Platform) watchRetroBatMedia(launcher *platforms.Launcher, path string) {
+	if !isRetroBatLauncher(launcher) || p.activeMedia == nil {
+		return
+	}
+	media := p.activeMedia()
+	if media == nil || media.LauncherID != launcher.ID || media.Path != path {
+		return
+	}
+	if p.setActiveMedia == nil {
+		return
+	}
+	cancel := startRetroBatMediaWatch(clockwork.NewRealClock(), p.activeMedia, p.setActiveMedia, media)
+	p.processMu.Lock()
+	previous := p.retroBatWatchCancel
+	p.retroBatWatchCancel = cancel
+	p.processMu.Unlock()
+	if previous != nil {
+		previous()
+	}
 }
 
 func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {

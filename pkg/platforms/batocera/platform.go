@@ -56,14 +56,15 @@ const (
 )
 
 type Platform struct {
-	clock          clockwork.Clock
-	lastKnownGame  *models.ActiveMedia
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	stopTracker    func() error
-	cfg            *config.Instance
-	esConfigCache  *ESSystemConfig
+	clock           clockwork.Clock
+	launcherManager platforms.LauncherContextManager
+	lastKnownGame   *models.ActiveMedia
+	activeMedia     func() *models.ActiveMedia
+	setActiveMedia  func(*models.ActiveMedia)
+	trackedProcess  *os.Process
+	stopTracker     func() error
+	cfg             *config.Instance
+	esConfigCache   *ESSystemConfig
 	shared.InputManager
 	maxStartupRetries int
 	processMu         syncutil.RWMutex
@@ -125,13 +126,14 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 func (p *Platform) StartPost(
 	_ context.Context,
 	cfg *config.Instance,
-	_ platforms.LauncherContextManager,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
 	_ *idle.Scheduler,
 ) error {
 	p.cfg = cfg
+	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
@@ -316,6 +318,14 @@ func (*Platform) Settings() platforms.Settings {
 
 func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
+
+	// Any stop that is not a launch replacing its predecessor cancels the
+	// launcher context, even with nothing running: a launch still settling
+	// after its own preemption has nothing for this stop to act on, and must
+	// learn it was stopped instead of starting the next game unattended.
+	if reason != platforms.StopForPreemption && p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
 
 	// Check if Kodi is the active launcher (either launched via Zaparoo or detected externally)
 	activeMedia := p.activeMedia()
@@ -573,6 +583,24 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 	return nil
 }
 
+// esSettleDelay is how long EmulationStation needs to settle around a launch.
+const esSettleDelay = 2 * time.Second
+
+// settle waits d on the platform clock, returning early with the context's
+// error when the launch is stopped meanwhile.
+func (p *Platform) settle(ctx context.Context, d time.Duration) error {
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle interrupted: %w", ctx.Err())
+	case <-clock.After(d):
+		return nil
+	}
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
@@ -585,6 +613,13 @@ func (p *Platform) LaunchMedia(
 			return fmt.Errorf("launch media: error finding launcher: %w", err)
 		}
 		launcher = &foundLauncher
+	}
+
+	// A stop that arrives while this launch is settling cancels this context.
+	// The preemption stop issued below does not.
+	launchCtx := context.Background()
+	if p.launcherManager != nil {
+		launchCtx = p.launcherManager.GetContext()
 	}
 
 	// exit current media if one is running
@@ -607,7 +642,9 @@ func (p *Platform) LaunchMedia(
 			}
 			// Delay to allow EmulationStation to settle
 			// (Kodi stop already includes process verification polling)
-			time.Sleep(2 * time.Second)
+			if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
+				return fmt.Errorf("launch media: stopped while replacing running media: %w", settleErr)
+			}
 		} else {
 			// We're keeping the running instance (e.g., switching between Kodi movies)
 			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
@@ -615,6 +652,10 @@ func (p *Platform) LaunchMedia(
 			opts.RecordStop(models.MediaStopReasonReplaced)
 			p.setActiveMedia(nil)
 		}
+	}
+
+	if ctxErr := launchCtx.Err(); ctxErr != nil {
+		return fmt.Errorf("launch media: stopped before launch: %w", ctxErr)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
@@ -633,7 +674,9 @@ func (p *Platform) LaunchMedia(
 
 	// Delay for non-Kodi launches (ES API needs settling time)
 	if !isKodiLauncher(launcher.ID) {
-		time.Sleep(2 * time.Second)
+		if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
+			log.Debug().Err(settleErr).Msg("stopped while EmulationStation settled after launch")
+		}
 	}
 
 	// Update Kodi tracking state for background tracker
