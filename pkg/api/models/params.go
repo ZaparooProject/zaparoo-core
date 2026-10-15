@@ -324,8 +324,8 @@ type DeckCardScriptInput struct {
 // at least 1; countdownMs may be 0, which switches with no notice. A field
 // left out is unset.
 type DeckRotation struct {
-	AdvanceMs   *int64 `json:"advanceMs,omitempty" validate:"omitempty,min=1,max=86400000"`
-	IdleMs      *int64 `json:"idleMs,omitempty" validate:"omitempty,min=1,max=86400000"`
+	AdvanceMs   *int64 `json:"advanceMs,omitempty" validate:"omitempty,min=1000,max=86400000"`
+	IdleMs      *int64 `json:"idleMs,omitempty" validate:"omitempty,min=1000,max=86400000"`
 	CountdownMs *int64 `json:"countdownMs,omitempty" validate:"omitempty,min=0,max=86400000"`
 }
 

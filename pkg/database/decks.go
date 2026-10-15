@@ -58,8 +58,11 @@ const (
 	DeckDescriptionMaxLen = 1000
 	DeckZapScriptMaxLen   = 5000
 
-	// DeckRotationMax caps each rotation duration of a deck.
+	// DeckRotationMax caps each rotation duration of a deck. DeckRotationMin
+	// is the shortest advance or idle time: ZapScript refuses less, and a
+	// shorter one would relaunch the next item as soon as it started.
 	DeckRotationMax = 24 * time.Hour
+	DeckRotationMin = time.Second
 )
 
 var (
@@ -131,13 +134,16 @@ func (r DeckRotation) IsZero() bool {
 }
 
 // Validate checks the settings are runnable: Advance and Idle are not both
-// set, neither is negative, and no duration exceeds DeckRotationMax.
+// set, neither is negative, a set Advance or Idle is at least DeckRotationMin,
+// and no duration exceeds DeckRotationMax.
 func (r DeckRotation) Validate() error {
 	switch {
 	case r.Advance < 0 || r.Idle < 0 || r.Countdown < 0:
 		return fmt.Errorf("%w: durations cannot be negative", ErrInvalidDeckRotation)
 	case r.Advance > 0 && r.Idle > 0:
 		return fmt.Errorf("%w: advance and idle cannot both be set", ErrInvalidDeckRotation)
+	case r.Advance > 0 && r.Advance < DeckRotationMin, r.Idle > 0 && r.Idle < DeckRotationMin:
+		return fmt.Errorf("%w: advance and idle must be at least %s", ErrInvalidDeckRotation, DeckRotationMin)
 	case r.Advance > DeckRotationMax || r.Idle > DeckRotationMax || r.Countdown > DeckRotationMax:
 		return fmt.Errorf("%w: durations cannot exceed %s", ErrInvalidDeckRotation, DeckRotationMax)
 	case !r.CountdownSet && r.Countdown != 0:

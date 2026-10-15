@@ -4367,8 +4367,8 @@ Durations are in milliseconds, at most 86400000 (24 hours). A field that is left
 
 | Key         | Type   | Required | Description |
 | :---------- | :----- | :------- | :---------- |
-| advanceMs   | number | No       | Move to the next item after this much playing time. At least 1. Cannot be combined with `idleMs`. |
-| idleMs      | number | No       | Move to the next item after this long with no user input. At least 1. Cannot be combined with `advanceMs`. |
+| advanceMs   | number | No       | Move to the next item after this much playing time. At least 1000 (one second). Cannot be combined with `idleMs`. |
+| idleMs      | number | No       | Move to the next item after this long with no user input. At least 1000 (one second). Cannot be combined with `advanceMs`. |
 | countdownMs | number | No       | How long the notice before an automatic switch stays up. `0` switches with no notice; unset uses the default. |
 
 A deck's rotation becomes the playlist's `advanceMs`, `idleMs` and `countdownMs` when it opens.

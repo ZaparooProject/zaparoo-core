@@ -740,6 +740,8 @@ func TestHandleDecksRotation_Validation(t *testing.T) {
 	bad := map[string]string{
 		"both modes":         `{"advanceMs": 1000, "idleMs": 1000}`,
 		"zero advance":       `{"advanceMs": 0}`,
+		"advance too short":  `{"advanceMs": 999}`,
+		"idle too short":     `{"idleMs": 1}`,
 		"negative idle":      `{"idleMs": -5}`,
 		"negative countdown": `{"countdownMs": -1}`,
 		"advance over cap":   `{"advanceMs": 86400001}`,
