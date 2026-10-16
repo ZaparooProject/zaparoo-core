@@ -361,7 +361,7 @@ func TestWatch_LaunchWithoutCallbackCancelsWatcherAndLeavesBodyUnchanged(t *test
 	assert.Contains(t, string(reqs[0]), `"repeat":"off"`)
 	assert.NotContains(t, string(reqs[1]), "repeat")
 	assert.Contains(t, string(reqs[1]), `"options":{"resume":true}`)
-	assert.Zero(t, r.srv.WebSocketClients())
+	require.Eventually(t, func() bool { return r.srv.WebSocketClients() == 0 }, waitFor, tick)
 }
 
 func TestWatch_RepeatOffOnlyForPlaylistItems(t *testing.T) {

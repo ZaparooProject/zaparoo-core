@@ -237,7 +237,9 @@ func (g *Gamepad) Close() error {
 		Size:     uint32(unsafe.Sizeof(vigemUnplugTarget{})),
 		SerialNo: g.serial,
 	}
+	markGamepadInjection()
 	err := ioctl(g, ioctlUnplugTarget, &unplug, unplug.Size)
+	markGamepadInjection()
 	g.closeHandles()
 	if err != nil {
 		return fmt.Errorf("unplug virtual gamepad: %w", err)
@@ -265,7 +267,9 @@ func (g *Gamepad) submit() error {
 	// The driver answers ERROR_NO_MORE_ITEMS when nothing has polled the pad
 	// yet, because it had no pending USB IN request to complete. The report is
 	// still stored and sent on the next poll, so this is not a failure.
+	markGamepadInjection()
 	err := ioctl(g, ioctlXusbSubmitReport, &report, report.Size)
+	markGamepadInjection()
 	if err != nil && !errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
 		return fmt.Errorf("submit gamepad report: %w", err)
 	}
@@ -274,6 +278,8 @@ func (g *Gamepad) submit() error {
 
 // plugIn claims the first free bus slot. The caller must not hold g.mu.
 func (g *Gamepad) plugIn() error {
+	markGamepadInjection()
+	defer markGamepadInjection()
 	var lastErr error
 	for serial := uint32(1); serial <= serialAttempts; serial++ {
 		plugin := vigemPluginTarget{
