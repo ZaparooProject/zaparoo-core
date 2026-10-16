@@ -283,14 +283,23 @@ func fallbackScrapedMediaCount(ctx context.Context, db *database.Database, scrap
 	if cached, ok := scrapingStatusInstance.getAnyCountCache(scraperID); ok {
 		return cached
 	}
-	count, _ := storedScrapedMediaCount(ctx, db, scraperID)
+	// The live query that sent us here may have spent the caller's deadline, so
+	// the stored read gets its own bound instead of an already-expired context.
+	//nolint:gosec // cancel is deferred below.
+	storedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scrapeTotalScrapedStatusTimeout)
+	defer cancel()
+	count, _ := storedScrapedMediaCount(storedCtx, db, scraperID)
 	return count
 }
 
-func refreshStoredScrapedCounts(ctx context.Context, mediaDB database.MediaDBI) {
+// refreshStoredScrapedCounts recomputes the persisted counts and reports
+// whether it succeeded, so callers only trust the stored value after a refresh.
+func refreshStoredScrapedCounts(ctx context.Context, mediaDB database.MediaDBI) bool {
 	if err := mediaDB.RefreshScrapedMediaCounts(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to refresh stored scraped media counts")
+		return false
 	}
+	return true
 }
 
 func populateScrapedMediaCountCached(
@@ -840,7 +849,13 @@ func startMediaScrapeOperation(
 				}
 			}
 			sourceErrs.report(env.State.Inbox())
-			refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB)
+			if refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB) && terminal != nil {
+				// The terminal count was read before this refresh and may have come
+				// from a stale fallback; the refreshed value is the settled one.
+				if stored, ok := storedScrapedMediaCount(env.State.GetContext(), db, terminal.ScraperID); ok {
+					terminal.TotalScraped = stored
+				}
+			}
 			// Scrape writes commit incrementally, so changed artwork must be
 			// invalidated on every terminal outcome, including failure/cancellation.
 			mediaImageNoImages.clear()

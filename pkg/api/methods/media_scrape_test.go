@@ -318,6 +318,68 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount verifies the
+// terminal notification reports the refreshed stored count rather than the
+// value read before the refresh.
+func TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	mockDB.On("RefreshScrapedMediaCounts", assertmock.Anything).Return(nil)
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "test-scraper").Return(9, true, nil)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": doneUpdatePlatformScraper("test-scraper", "Test Scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	_, err := HandleMediaScrape(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	})
+	require.NoError(t, err)
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var payload models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &payload))
+			if !payload.Done {
+				continue
+			}
+			assert.Equal(t, 9, payload.TotalScraped)
+			require.Eventually(t, func() bool {
+				return !IsScrapingRunning()
+			}, 2*time.Second, 10*time.Millisecond)
+			return
+		case <-timeout:
+			t.Fatal("timed out waiting for the terminal media.scraping notification")
+		}
+	}
+}
+
 // TestHandleMediaScrape_PublishesDoneAfterTagRefresh covers clients that
 // re-read media.tags when a scrape reports completion. The terminal status has
 // to wait for the tag cache refresh, or that read returns the pre-scrape tags.
@@ -912,6 +974,23 @@ func TestWithMediaCounts(t *testing.T) {
 		assert.Nil(t, resp.TotalMedia)
 		assert.Nil(t, resp.MissingMedia)
 	})
+}
+
+func TestFallbackScrapedMediaCount_ReadsStoredCountAfterContextExpired(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.MatchedBy(func(ctx context.Context) bool {
+		return ctx.Err() == nil
+	}), "test-scraper").Return(8, true, nil)
+
+	count := fallbackScrapedMediaCount(expired, &database.Database{MediaDB: mockDB}, "test-scraper")
+	assert.Equal(t, 8, count, "the stored read must not inherit the expired caller context")
+	mockDB.AssertExpectations(t)
 }
 
 func TestHandleMediaScrapeStatus_UsesFreshCachedCount(t *testing.T) {
