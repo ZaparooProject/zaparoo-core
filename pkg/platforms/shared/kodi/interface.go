@@ -75,6 +75,12 @@ type KodiClient interface {
 	// GetSongs retrieves all songs from Kodi's library
 	GetSongs(ctx context.Context) ([]Song, error)
 
+	// GetAlbumSongs retrieves the songs of one album from Kodi's library
+	GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error)
+
+	// GetArtistSongs retrieves the songs of one artist from Kodi's library
+	GetArtistSongs(ctx context.Context, artistID int) ([]Song, error)
+
 	// GetAlbums retrieves all albums from Kodi's library
 	GetAlbums(ctx context.Context) ([]Album, error)
 

@@ -223,6 +223,34 @@ func (m *MockKodiClient) LaunchTVShow(path string) error {
 	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
+func (m *MockKodiClient) GetAlbumSongs(ctx context.Context, albumID int) ([]kodi.Song, error) {
+	args := m.Called(ctx, albumID)
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetAlbumSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetAlbumSongs error: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockKodiClient) GetArtistSongs(ctx context.Context, artistID int) ([]kodi.Song, error) {
+	args := m.Called(ctx, artistID)
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetArtistSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetArtistSongs error: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockKodiClient) GetSongs(ctx context.Context) ([]kodi.Song, error) {
 	args := m.Called(ctx)
 	if songs, ok := args.Get(0).([]kodi.Song); ok {
