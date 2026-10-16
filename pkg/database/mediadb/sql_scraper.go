@@ -586,6 +586,26 @@ func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// GetStoredScrapedMediaCount returns the persisted scraped-media count for
+// scraperID, or the total across scrapers when scraperID is empty. ok is false
+// when no count has been stored yet. It reads one DBConfig row, so it cannot
+// time out the way a live count can.
+func (db *MediaDB) GetStoredScrapedMediaCount(ctx context.Context, scraperID string) (count int, ok bool, err error) {
+	if db.sql.Load() == nil {
+		return 0, false, ErrNullSQL
+	}
+	return sqlGetStoredScrapedCount(ctx, db.sql.Load(), scraperID)
+}
+
+// RefreshScrapedMediaCounts recomputes the scraped-media counts and persists
+// them so they stay available across restarts and slow count queries.
+func (db *MediaDB) RefreshScrapedMediaCounts(ctx context.Context) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlRefreshScrapedCounts(ctx, db.conn())
+}
+
 // GetScrapedMediaIDs returns media DBIDs in systemDBID already marked as scraped
 // by scraperID.
 func (db *MediaDB) GetScrapedMediaIDs(
@@ -771,7 +791,7 @@ func clearMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64
 	return nil
 }
 
-func findScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB, scraperType, tagValue string) ([]int64, error) {
+func findScraperSentinelTagDBIDs(ctx context.Context, db sqlQueryable, scraperType, tagValue string) ([]int64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT t.DBID
 		FROM Tags t
@@ -785,7 +805,7 @@ func findScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB, scraperType, t
 	return scanInt64Rows(rows, "scraper sentinel tag DBID")
 }
 
-func findAllScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB) ([]int64, error) {
+func findAllScraperSentinelTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT t.DBID
 		FROM Tags t
@@ -799,7 +819,7 @@ func findAllScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB) ([]int64, e
 	return scanInt64Rows(rows, "scraper sentinel tag DBID")
 }
 
-func countMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64) (int, error) {
+func countMediaTagsForTagDBIDs(ctx context.Context, db sqlQueryable, tagDBIDs []int64) (int, error) {
 	if len(tagDBIDs) == 0 {
 		return 0, nil
 	}

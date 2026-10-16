@@ -2742,6 +2742,9 @@ func (m *MockMediaDBI) GetMissingMediaCount() (int, error) {
 }
 
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
+	if !m.hasExpectedCall("GetTotalMediaCount") {
+		return 0, nil
+	}
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {
 		if err := args.Error(1); err != nil {
@@ -2795,6 +2798,36 @@ func (m *MockMediaDBI) GetTotalScrapedMediaCount(ctx context.Context) (int, erro
 		return 0, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return 0, nil
+}
+
+func (m *MockMediaDBI) GetStoredScrapedMediaCount(
+	ctx context.Context, scraperID string,
+) (count int, ok bool, err error) {
+	if !m.hasExpectedCall("GetStoredScrapedMediaCount") {
+		return 0, false, nil
+	}
+	args := m.Called(ctx, scraperID)
+	if v, isInt := args.Get(0).(int); isInt {
+		count = v
+	}
+	if v, isBool := args.Get(1).(bool); isBool {
+		ok = v
+	}
+	if err := args.Error(2); err != nil {
+		return count, ok, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return count, ok, nil
+}
+
+func (m *MockMediaDBI) RefreshScrapedMediaCounts(ctx context.Context) error {
+	if !m.hasExpectedCall("RefreshScrapedMediaCounts") {
+		return nil
+	}
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) InvalidateCountCache() error {

@@ -547,10 +547,32 @@ func mediaDBHasUsableData(mediaDB database.MediaDBI) bool {
 }
 
 func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.MediaDBI) {
-	notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+	notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 		Exists:   mediaDBHasUsableData(mediaDB),
 		Indexing: false,
-	})
+	}, mediaDB))
+}
+
+// WithMediaCounts adds the library size to a settled (not indexing) status.
+// Clients replace their whole status with each notification, and the counts
+// are otherwise only in the media query, so a notification without them makes
+// a client forget how many titles the library holds. The counts are read from
+// stored values, so this is cheap enough for every notification.
+func WithMediaCounts(resp *models.IndexingStatusResponse, mediaDB database.MediaDBI) *models.IndexingStatusResponse {
+	if resp.Indexing || !resp.Exists || mediaDB == nil {
+		return resp
+	}
+	if total, err := mediaDB.GetTotalMediaCount(); err != nil {
+		log.Warn().Err(err).Msg("failed to get total media count for notification")
+	} else {
+		resp.TotalMedia = &total
+	}
+	if missing, err := mediaDB.GetMissingMediaCount(); err != nil {
+		log.Warn().Err(err).Msg("failed to get missing media count for notification")
+	} else {
+		resp.MissingMedia = &missing
+	}
+	return resp
 }
 
 func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs.System, rebuild bool) {
@@ -911,19 +933,19 @@ func startMediaDBGeneration(
 				})
 			case errors.Is(err, context.Canceled):
 				log.Info().Msg("media indexing was cancelled")
-				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+				notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
-				})
+				}, db.MediaDB))
 			default:
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
-				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+				notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
-				})
+				}, db.MediaDB))
 			}
 			statusInstance.clear()
 			return
@@ -946,11 +968,11 @@ func startMediaDBGeneration(
 		}
 		mediaImageNoImages.clear()
 		invalidateIndexedThumbnails(db.MediaDB, systems, rebuild)
-		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			TotalFiles: &total,
-		})
+		}, db.MediaDB))
 
 		// Release indexing memory. ScanState maps are already nil'd but GC
 		// hasn't collected them yet. Force collection and return pages to
@@ -973,12 +995,12 @@ func startMediaDBGeneration(
 		// Atomically hand indexing ownership to optimization so scraping cannot
 		// enter between completed indexing and post-index maintenance.
 		if handoffErr := startPostIndexOptimization(db.MediaDB, lease, func(optimizing bool) {
-			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
 				TotalFiles: &total,
-			})
+			}, db.MediaDB))
 		}, pauser); handoffErr != nil {
 			log.Error().Err(handoffErr).Msg("failed to hand off indexing to background optimization")
 			statusInstance.clear()

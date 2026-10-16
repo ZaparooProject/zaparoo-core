@@ -573,10 +573,10 @@ func finishMediaDBRecoveryNotification(st *state.State, mediaDB database.MediaDB
 			exists = hasMedia
 		}
 	}
-	notifications.MediaIndexing(st.Notifications, &models.IndexingStatusResponse{
+	notifications.MediaIndexing(st.Notifications, methods.WithMediaCounts(&models.IndexingStatusResponse{
 		Exists:   exists,
 		Indexing: false,
-	})
+	}, mediaDB))
 }
 
 func addMediaDBRecoveryFailureInbox(st *state.State, body, category string) {
@@ -830,18 +830,18 @@ func checkAndHealBrowseCache(
 		// queryable IsOptimizing flag lets a client that connects mid-rebuild see it
 		// too via the media status query. Both cleared on completion or failure below.
 		db.MediaDB.BeginBrowseCacheRebuild()
-		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+		notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			Optimizing: true,
-		})
+		}, db.MediaDB))
 		defer func() {
 			db.MediaDB.EndBrowseCacheRebuild()
-			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: false,
-			})
+			}, db.MediaDB))
 		}()
 		if rebuildErr := db.MediaDB.PopulateBrowseCache(ctx); rebuildErr != nil {
 			log.Error().Err(rebuildErr).Msg("failed to rebuild browse cache during startup self-heal")
@@ -1028,11 +1028,11 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
 		runErr := coordinator.RunBackgroundOptimizationWithLease(func(optimizing bool) {
-			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
-			})
+			}, db.MediaDB))
 		}, pauser, lease)
 		if runErr != nil {
 			if database.IsOptimizationCanceled(runErr) {
