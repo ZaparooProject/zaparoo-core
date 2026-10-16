@@ -28,9 +28,13 @@ import (
 	"github.com/spf13/afero"
 )
 
-// maxMRABytes caps how much of an MRA is parsed. Real MRAs are a few kilobytes;
-// the cap bounds a corrupt or hostile file without rejecting a legitimate one.
+// maxMRABytes caps how much of an MRA is read. Everything that identifies the
+// set sits ahead of the ROM payload, so the cap bounds a corrupt or hostile
+// header without rejecting a patch MRA whose payload runs to megabytes.
 const maxMRABytes = int64(256 * 1024)
+
+// mraPayloadElement opens the embedded ROM data, after which no setname can follow.
+const mraPayloadElement = "rom"
 
 // mraSetNameElement is the element arcade artwork is keyed on. The pack files
 // arcade games under the MAME parent setname, which lives inside the MRA and
@@ -41,14 +45,12 @@ const mraSetNameElement = "setname"
 const mraExt = ".mra"
 
 // readMRASetName extracts <setname> from an MRA. It streams the document and
-// stops at the first match, so a malformed tail costs nothing. ok is false when
-// the file is unreadable, is not XML, or carries no setname.
+// stops at the first match or at the ROM payload, so a malformed tail or a large
+// payload costs nothing. ok is false when the file is unreadable, is not XML, or
+// carries no setname.
 func readMRASetName(fs afero.Fs, path string) (setName string, ok bool) {
 	info, err := lstat(fs, path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", false
-	}
-	if info.Size() > maxMRABytes {
 		return "", false
 	}
 	file, err := fs.Open(path)
@@ -69,7 +71,13 @@ func readMRASetName(fs afero.Fs, path string) (setName string, ok bool) {
 			return "", false
 		}
 		start, isStart := token.(xml.StartElement)
-		if !isStart || !strings.EqualFold(start.Name.Local, mraSetNameElement) {
+		if !isStart {
+			continue
+		}
+		if strings.EqualFold(start.Name.Local, mraPayloadElement) {
+			return "", false
+		}
+		if !strings.EqualFold(start.Name.Local, mraSetNameElement) {
 			continue
 		}
 		var value string
