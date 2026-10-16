@@ -300,8 +300,20 @@ func launchArcade(
 				mra, err := mgls.ReadMRA(path)
 				if err != nil {
 					log.Warn().Err(err).Str("path", path).Msg("failed to parse MRA for setname caching")
-				} else if mra.SetName != "" {
-					arcadePl.SetArcadeCardLaunch(mra.SetName)
+				} else {
+					if mra.SetName != "" {
+						arcadePl.SetArcadeCardLaunch(mra.SetName)
+					}
+					rbf := strings.TrimSpace(mra.Rbf)
+					resolved, resolveErr := resolveArcadeMRAPath(path, rbf, misterconfig.RootDirs(cfg))
+					if resolveErr != nil {
+						return nil, resolveErr
+					}
+					if resolved != path {
+						log.Info().Str("from", path).Str("to", resolved).
+							Msg("arcade core missing beside MRA, using copy with core")
+						path = resolved
+					}
 				}
 			}
 		}
