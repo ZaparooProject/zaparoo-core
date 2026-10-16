@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,10 +121,39 @@ func TestResolveArcadeMRAPath(t *testing.T) {
 		assert.Contains(t, err.Error(), "jtcps2")
 	})
 
+	t.Run("root without a copy is skipped", func(t *testing.T) {
+		t.Parallel()
+		usb, empty, fat := t.TempDir(), t.TempDir(), t.TempDir()
+		mra := filepath.Join(usb, rel)
+		touch(t, mra)
+		touch(t, filepath.Join(fat, rel))
+		touch(t, filepath.Join(fat, "_Arcade", "cores", "jtcps2_1.rbf"))
+		got, err := resolveArcadeMRAPath(mra, "jtcps2", []string{empty, fat})
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(fat, rel), got)
+	})
+
 	t.Run("no rbf in MRA keeps path", func(t *testing.T) {
 		t.Parallel()
 		got, err := resolveArcadeMRAPath("/x/_Arcade/a.mra", "", nil)
 		require.NoError(t, err)
 		assert.Equal(t, "/x/_Arcade/a.mra", got)
 	})
+}
+
+func TestLaunchArcade_MissingCoreFailsLaunch(t *testing.T) {
+	t.Parallel()
+
+	mra := filepath.Join(t.TempDir(), "_Arcade", "game.mra")
+	require.NoError(t, os.MkdirAll(filepath.Dir(mra), 0o750))
+	require.NoError(t, os.WriteFile(mra, []byte(
+		`<misterromdescription><setname>game</setname><rbf>zaparoo_missing_core</rbf></misterromdescription>`,
+	), 0o600))
+
+	launcher := launchArcade(NewPlatform(), "Arcade")
+	proc, err := launcher(&config.Instance{}, mra, nil)
+	require.Error(t, err)
+	assert.Nil(t, proc)
+	assert.Contains(t, err.Error(), "zaparoo_missing_core")
+	assert.Contains(t, err.Error(), filepath.Join(filepath.Dir(mra), "cores"))
 }
