@@ -396,6 +396,7 @@ const (
 	SystemJ2ME                = "J2ME"
 	SystemGroovy              = "Groovy"
 	SystemPlugNPlay           = "PlugNPlay"
+	SystemCustom              = "Custom"
 	SystemDevErr              = "DevErr"
 	SystemAirConsole          = "AirConsole"
 	SystemBlackBerryOS        = "BlackBerryOS"
@@ -1530,6 +1531,9 @@ var Systems = map[string]System{
 	SystemPlugNPlay: {
 		ID:    SystemPlugNPlay,
 		Slugs: []string{"plugandplay", "tvgame", "tvgames"},
+	},
+	SystemCustom: {
+		ID: SystemCustom,
 	},
 	SystemIOS: {
 		ID:    SystemIOS,
