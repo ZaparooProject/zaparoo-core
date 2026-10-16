@@ -358,7 +358,22 @@ func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, erro
 
 // GetSongs retrieves all songs from Kodi's library
 func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
+	return c.fetchSongs(ctx, nil)
+}
+
+// GetAlbumSongs retrieves the songs of one album from Kodi's library
+func (c *Client) GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error) {
+	return c.fetchSongs(ctx, &SongFilter{AlbumID: albumID})
+}
+
+// GetArtistSongs retrieves the songs of one artist from Kodi's library
+func (c *Client) GetArtistSongs(ctx context.Context, artistID int) ([]Song, error) {
+	return c.fetchSongs(ctx, &SongFilter{ArtistID: artistID})
+}
+
+func (c *Client) fetchSongs(ctx context.Context, filter *SongFilter) ([]Song, error) {
 	params := AudioLibraryGetSongsParams{
+		Filter:     filter,
 		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file"},
 	}
 
@@ -485,21 +500,36 @@ func (c *Client) LaunchArtist(path string) error {
 	return err
 }
 
-// LaunchTVShow resolves a durable show identity and launches its episodes as a playlist.
-func (c *Client) LaunchTVShow(path string) error {
+// resolveShow finds the show a kodi-show path names in Kodi's current library.
+func resolveShow(ctx context.Context, client KodiClient, path string) (TVShow, error) {
 	reference, err := parseTVShowReference(path)
 	if err != nil {
-		return err
+		return TVShow{}, err
 	}
 
-	shows, err := c.GetTVShows(context.Background())
+	shows, err := client.GetTVShows(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve current Kodi TV show ID: %w", err)
+		return TVShow{}, fmt.Errorf("failed to resolve current Kodi TV show ID: %w", err)
 	}
 	showID, err := resolveTVShowID(reference, shows)
 	if err != nil {
+		return TVShow{}, err
+	}
+	for _, show := range shows {
+		if show.ID == showID {
+			return show, nil
+		}
+	}
+	return TVShow{ID: showID, Label: reference.Name}, nil
+}
+
+// LaunchTVShow resolves a durable show identity and launches its episodes as a playlist.
+func (c *Client) LaunchTVShow(path string) error {
+	show, err := resolveShow(context.Background(), c, path)
+	if err != nil {
 		return err
 	}
+	showID := show.ID
 
 	// Step 1: Clear video playlist (playlistid=1)
 	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{

@@ -272,16 +272,15 @@ type PlaylistItemEpisodeID struct {
 	EpisodeID int `json:"episodeid"`
 }
 
-// FilterRule represents a Kodi API filter rule
-type FilterRule struct {
-	Value    any    `json:"value"`
-	Field    string `json:"field"`
-	Operator string `json:"operator"`
+// SongFilter narrows AudioLibrary.GetSongs to the songs of one album or artist.
+type SongFilter struct {
+	AlbumID  int `json:"albumid,omitempty"`
+	ArtistID int `json:"artistid,omitempty"`
 }
 
 // AudioLibraryGetSongsParams represents parameters for AudioLibrary.GetSongs API method
 type AudioLibraryGetSongsParams struct {
-	Filter     *FilterRule `json:"filter,omitempty"`
+	Filter     *SongFilter `json:"filter,omitempty"`
 	Properties []string    `json:"properties,omitempty"`
 }
 

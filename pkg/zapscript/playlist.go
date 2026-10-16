@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,7 +42,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	servicestate "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -461,8 +461,12 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
-	if deckID, isDeck := decks.ParseDeckURI(env.Cmd.Args[0]); isDeck {
-		return loadDeckPlaylist(pl, &env, deckID, &args)
+	coll, isCollection, collErr := resolveCollection(pl, &env, env.Cmd.Args[0])
+	if collErr != nil {
+		return nil, collErr
+	}
+	if isCollection {
+		return collectionPlaylist(pl, &env, coll, &args)
 	}
 
 	if helpers.MaybeJSON([]byte(env.Cmd.Args[0])) {
@@ -485,16 +489,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		// playlist's item, stays untrusted.
 		pls.Unsafe = env.Unsafe
 		pls.AllowedCommands = env.AllowedCommands
-		slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
-		if slotErr != nil {
-			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
-		}
-		pls.Slot = slot
-		pls.Loop = zapscript.IsRepeatAll(args.Repeat)
-		pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
-		if err := applyRotation(pl, pls, &rotationArgs{
-			advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
-		}); err != nil {
+		if err := applyPlaylistArgs(pl, &env, pls, &args); err != nil {
 			return nil, err
 		}
 		return pls, nil
@@ -536,19 +531,49 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
 	pls.Unsafe = env.Unsafe
 	pls.AllowedCommands = env.AllowedCommands
-	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
-	if slotErr != nil {
-		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
+	if err := applyPlaylistArgs(pl, &env, pls, &args); err != nil {
+		return nil, err
+	}
+	return pls, nil
+}
+
+// collectionPlaylist makes a playlist from the items of a deck or launcher
+// collection.
+func collectionPlaylist(
+	pl platforms.Platform, env *platforms.CmdEnv, coll *collection, args *zapscript.PlaylistArgs,
+) (*playlists.Playlist, error) {
+	items := coll.items
+	if zapscript.IsModeShuffle(args.Mode) && len(items) > 1 {
+		items = slices.Clone(items)
+		//nolint:gosec // Playlist order is not security sensitive.
+		rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+	}
+
+	pls := playlists.NewPlaylist(coll.id, coll.name, items)
+	pls.DeckID = coll.deckID
+	pls.Unsafe = coll.unsafe
+	pls.AllowedCommands = env.AllowedCommands
+	if err := applyPlaylistArgs(pl, env, pls, args); err != nil {
+		return nil, err
+	}
+	return pls, nil
+}
+
+// applyPlaylistArgs sets the slot, repeat and rotation of a playlist from the
+// arguments of the command that opens it.
+func applyPlaylistArgs(
+	pl platforms.Platform, env *platforms.CmdEnv, pls *playlists.Playlist, args *zapscript.PlaylistArgs,
+) error {
+	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
+	if err != nil {
+		return fmt.Errorf("normalize media slot: %w", err)
 	}
 	pls.Slot = slot
 	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
-	if err := applyRotation(pl, pls, &rotationArgs{
+	return applyRotation(pl, pls, &rotationArgs{
 		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
-	}); err != nil {
-		return nil, err
-	}
-	return pls, nil
+	})
 }
 
 // rotationArgs are the raw advance, idle and countdown values of a command.
@@ -657,6 +682,12 @@ func isRandomRotation(cmd *zapscript.Command) bool {
 	return cmd.Name == zapscript.ZapScriptCmdLaunchRandom &&
 		(cmd.AdvArgs.Get(zapscript.KeyAdvance) != "" || cmd.AdvArgs.Get(zapscript.KeyIdle) != "" ||
 			cmd.AdvArgs.Get(zapscript.KeyCountdown) != "")
+}
+
+// isQueuedRandom reports whether cmd is a launch.random that only queues a
+// playlist, which then launches the item.
+func isQueuedRandom(cmd *zapscript.Command) bool {
+	return isRandomRotation(cmd) || isDeckRandom(cmd)
 }
 
 // randomItemScript is the launch.random command without its rotation, which
