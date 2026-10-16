@@ -570,8 +570,12 @@ func TestWatch_PlaylistItemFinishesImmediatelyOnceRepeatIsOff(t *testing.T) {
 	r.launchMovie(t, kodi.Expectation{})
 
 	r.push(t, "Player.OnPlay", playData(movie(7)))
-	require.Eventually(t, func() bool { return hasRequest(r, "Player.SetRepeat") }, waitFor, tick)
-	// The request is recorded before the reply; let the guard see the reply.
+	// The request is recorded before the reply; wait until the guard has seen it succeed.
+	select {
+	case <-r.repeatSet:
+	case <-time.After(waitFor):
+		t.Fatal("repeat was not turned off")
+	}
 	r.push(t, "Player.OnStop", stopData(movie(7), true))
 
 	r.waitCalls(t, 1)
