@@ -105,7 +105,7 @@ func TestReadMRASetName(t *testing.T) {
 	}
 }
 
-func TestReadMRASetName_RejectsMissingDirectoryAndOversized(t *testing.T) {
+func TestReadMRASetName_RejectsMissingAndDirectory(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
@@ -116,12 +116,26 @@ func TestReadMRASetName_RejectsMissingDirectoryAndOversized(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = readMRASetName(fs, filepath.Join(dir, "Folder.mra"))
 	assert.False(t, ok)
+}
 
-	oversized := append(
-		[]byte("<misterromdescription><setname>big</setname>"),
-		bytes.Repeat([]byte(" "), int(maxMRABytes))...,
-	)
-	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Big.mra"), oversized, 0o600))
-	_, ok = readMRASetName(fs, filepath.Join(dir, "Big.mra"))
+func TestReadMRASetName_LargePayload(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("games", "_Arcade")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+
+	payload := bytes.Repeat([]byte("<patch>10 15</patch>"), int(maxMRABytes))
+	patched := append([]byte("<misterromdescription><setname>sfa3r</setname><rom>"), payload...)
+	patched = append(patched, "</rom></misterromdescription>"...)
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Patched.mra"), patched, 0o600))
+	name, ok := readMRASetName(fs, filepath.Join(dir, "Patched.mra"))
+	assert.True(t, ok)
+	assert.Equal(t, "sfa3r", name)
+
+	late := append([]byte("<misterromdescription><rom>"), payload...)
+	late = append(late, "</rom><setname>late</setname></misterromdescription>"...)
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Late.mra"), late, 0o600))
+	_, ok = readMRASetName(fs, filepath.Join(dir, "Late.mra"))
 	assert.False(t, ok)
 }
