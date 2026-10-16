@@ -652,11 +652,11 @@ func RunCommand(
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
-	// launch.random with a rotation only queues a playlist, the way
-	// playlist.play does, and each item takes the guard when it launches.
+	// launch.random with a rotation, or on a deck, only queues a playlist, the
+	// way playlist.play does, and each item takes the guard when it launches.
 	// Holding it here would make the command's own playlist update look like a
 	// second launch and be refused.
-	if IsMediaLaunchingCommand(cmd.Name) && !isRandomRotation(&cmd) {
+	if IsMediaLaunchingCommand(cmd.Name) && !isQueuedRandom(&cmd) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}

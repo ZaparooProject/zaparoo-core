@@ -560,6 +560,17 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	launch := getLaunchClosure(pl, env, explicitLauncher)
 	tagFilters := args.Tags
 
+	coll, isCollection, collErr := resolveCollection(pl, env, query)
+	if collErr != nil {
+		return platforms.CmdResult{}, collErr
+	}
+	if isCollection {
+		if len(tagFilters) > 0 {
+			return platforms.CmdResult{}, fmt.Errorf("%w: tags do not apply to a collection", ErrInvalidArguments)
+		}
+		return randomFromCollection(env, coll, launch)
+	}
+
 	gamesdb := env.Database.MediaDB
 	ctx, cancel := randomMediaDBLookupContext(env)
 	defer cancel()
