@@ -62,6 +62,8 @@ type Song struct {
 	ID       int    `json:"songid"`
 	AlbumID  int    `json:"albumid"`
 	Duration int    `json:"duration"`
+	Track    int    `json:"track"`
+	Disc     int    `json:"disc"`
 }
 
 // Album represents an album in Kodi's library

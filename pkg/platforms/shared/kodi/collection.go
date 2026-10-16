@@ -20,8 +20,10 @@
 package kodi
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
@@ -49,6 +51,11 @@ func CollectTVShow(ctx context.Context, client KodiClient, path string) ([]platf
 	if err != nil {
 		return nil, fmt.Errorf("failed to get episodes for show %d: %w", show.ID, err)
 	}
+	// Kodi does not promise an order, and a playlist plays in the order given.
+	episodes = slices.Clone(episodes)
+	slices.SortStableFunc(episodes, func(a, b Episode) int {
+		return cmp.Or(cmp.Compare(a.Season, b.Season), cmp.Compare(a.Episode, b.Episode))
+	})
 	items := make([]platforms.CollectionItem, 0, len(episodes))
 	for _, episode := range episodes {
 		name := episodeName(show, episode)
@@ -98,7 +105,17 @@ func collectionID(path, scheme, kind string) (int, error) {
 	return id, nil
 }
 
+// songItems lists songs album by album, each album in disc and track order.
 func songItems(songs []Song) []platforms.CollectionItem {
+	songs = slices.Clone(songs)
+	slices.SortStableFunc(songs, func(a, b Song) int {
+		return cmp.Or(
+			cmp.Compare(a.Album, b.Album),
+			cmp.Compare(a.AlbumID, b.AlbumID),
+			cmp.Compare(a.Disc, b.Disc),
+			cmp.Compare(a.Track, b.Track),
+		)
+	})
 	items := make([]platforms.CollectionItem, 0, len(songs))
 	for i := range songs {
 		song := &songs[i]

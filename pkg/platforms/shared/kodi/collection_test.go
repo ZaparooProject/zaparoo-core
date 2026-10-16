@@ -22,6 +22,7 @@ package kodi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -169,4 +170,68 @@ func TestLaunchers_ExposeCollections(t *testing.T) {
 	assert.NotNil(t, NewKodiArtistLauncher().Collection)
 	assert.Nil(t, NewKodiTVLauncher().Collection)
 	assert.Nil(t, NewKodiSongLauncher().Collection)
+}
+
+func TestCollectTVShow_OrdersEpisodesBySeasonAndEpisode(t *testing.T) {
+	t.Parallel()
+
+	client := &MockKodiClient{}
+	client.On("GetTVShows", mock.Anything).Return([]TVShow{{ID: 42, Label: "Purpley"}}, nil)
+	returned := []Episode{
+		{ID: 5, Label: "S2E1", Season: 2, Episode: 1},
+		{ID: 3, Label: "S1E2", Season: 1, Episode: 2},
+		{ID: 9, Label: "Special", Season: 0, Episode: 1},
+		{ID: 4, Label: "S1E1", Season: 1, Episode: 1},
+	}
+	client.On("GetEpisodes", mock.Anything, 42).Return(returned, nil)
+
+	items, err := CollectTVShow(context.Background(), client, "kodi-show://42/Purpley")
+
+	require.NoError(t, err)
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, item.Name)
+	}
+	assert.Equal(t, []string{
+		"Purpley - Special", "Purpley - S1E1", "Purpley - S1E2", "Purpley - S2E1",
+	}, names)
+	assert.Equal(t, 5, returned[0].ID, "the list Kodi returned is left as it was")
+}
+
+func TestCollectSongs_OrderByAlbumDiscAndTrack(t *testing.T) {
+	t.Parallel()
+
+	songs := []Song{
+		{ID: 1, Label: "B2", Album: "Beta", AlbumID: 2, Track: 2},
+		{ID: 2, Label: "A-d2t1", Album: "Alpha", AlbumID: 1, Disc: 2, Track: 1},
+		{ID: 3, Label: "B1", Album: "Beta", AlbumID: 2, Track: 1},
+		{ID: 4, Label: "A-d1t2", Album: "Alpha", AlbumID: 1, Disc: 1, Track: 2},
+		{ID: 5, Label: "A-d1t1", Album: "Alpha", AlbumID: 1, Disc: 1, Track: 1},
+	}
+	check := func(t *testing.T, items []platforms.CollectionItem, want []string) {
+		t.Helper()
+		labels := make([]string, 0, len(items))
+		for _, item := range items {
+			labels = append(labels, item.Name[strings.LastIndex(item.Name, " - ")+3:])
+		}
+		assert.Equal(t, want, labels)
+	}
+
+	t.Run("artist", func(t *testing.T) {
+		t.Parallel()
+		client := &MockKodiClient{}
+		client.On("GetArtistSongs", mock.Anything, 9).Return(songs, nil)
+		items, err := CollectArtist(context.Background(), client, "kodi-artist://9/Band")
+		require.NoError(t, err)
+		check(t, items, []string{"A-d1t1", "A-d1t2", "A-d2t1", "B1", "B2"})
+	})
+
+	t.Run("album", func(t *testing.T) {
+		t.Parallel()
+		client := &MockKodiClient{}
+		client.On("GetAlbumSongs", mock.Anything, 1).Return([]Song{songs[1], songs[3], songs[4]}, nil)
+		items, err := CollectAlbum(context.Background(), client, "kodi-album://1/Alpha")
+		require.NoError(t, err)
+		check(t, items, []string{"A-d1t1", "A-d1t2", "A-d2t1"})
+	})
 }

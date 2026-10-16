@@ -374,7 +374,7 @@ func (c *Client) GetArtistSongs(ctx context.Context, artistID int) ([]Song, erro
 func (c *Client) fetchSongs(ctx context.Context, filter *SongFilter) ([]Song, error) {
 	params := AudioLibraryGetSongsParams{
 		Filter:     filter,
-		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file"},
+		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file", "track", "disc"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, params)
