@@ -133,8 +133,9 @@ func TestReadMRASetName_LargePayload(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "sfa3r", name)
 
-	late := append([]byte("<misterromdescription><rom>"), payload...)
-	late = append(late, "</rom><setname>late</setname></misterromdescription>"...)
+	late := []byte(
+		"<misterromdescription><rom><patch>10 15</patch></rom><setname>late</setname></misterromdescription>",
+	)
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Late.mra"), late, 0o600))
 	_, ok = readMRASetName(fs, filepath.Join(dir, "Late.mra"))
 	assert.False(t, ok)
