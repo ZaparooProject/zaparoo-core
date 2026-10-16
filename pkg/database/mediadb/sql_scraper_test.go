@@ -796,6 +796,87 @@ func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+func TestRefreshScrapedMediaCounts_StoresPerScraperAndDistinctTotal(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.False(t, ok, "nothing is stored before the first refresh")
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+
+	total, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 2, total, "total counts each media once across scrapers")
+
+	test, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "test")
+	require.NoError(t, err)
+	assert.Equal(t, 2, test)
+
+	other, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "other")
+	require.NoError(t, err)
+	assert.Equal(t, 1, other)
+
+	unknown, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "unknown")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 0, unknown)
+}
+
+func TestRefreshScrapedMediaCounts_SingleScraperAndNone(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+	total, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 0, total)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+	total, _, err = mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+}
+
+func TestRefreshScrapedMediaCounts_FollowsMediaDeletion(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM MediaTags WHERE MediaDBID = 1")
+	require.NoError(t, err)
+	stale, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, stale, "stored value only changes on refresh")
+
+	require.NoError(t, mediaDB.UpdateLastGenerated())
+	fresh, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, fresh, "finishing an index refreshes the stored count")
+}
+
 func TestGetScrapedMediaIDs(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

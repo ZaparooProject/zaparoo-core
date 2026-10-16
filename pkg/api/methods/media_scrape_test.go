@@ -831,6 +831,89 @@ func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrapeStatus_IdleUsesStoredCountWithoutQuery(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "").Return(9, true, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, 9, status.TotalScraped)
+	mockDB.AssertNotCalled(t, "GetTotalScrapedMediaCount", assertmock.Anything)
+}
+
+func TestHandleMediaScrapeStatus_QueryTimeoutFallsBackToStoredCount(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		Scraping:  true,
+	})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, context.DeadlineExceeded)
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "test-scraper").Return(12, true, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, 12, status.TotalScraped, "a timed-out count must not report zero")
+}
+
+func TestWithMediaCounts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("settled status gets the library size", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetTotalMediaCount").Return(1234, nil)
+		mockDB.On("GetMissingMediaCount").Return(5, nil)
+
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, mockDB)
+		require.NotNil(t, resp.TotalMedia)
+		require.NotNil(t, resp.MissingMedia)
+		assert.Equal(t, 1234, *resp.TotalMedia)
+		assert.Equal(t, 5, *resp.MissingMedia)
+	})
+
+	t.Run("indexing status is left alone", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true, Indexing: true}, mockDB)
+		assert.Nil(t, resp.TotalMedia)
+		mockDB.AssertNotCalled(t, "GetTotalMediaCount")
+	})
+
+	t.Run("no database leaves counts unset", func(t *testing.T) {
+		t.Parallel()
+		missing := WithMediaCounts(&models.IndexingStatusResponse{Exists: false}, testhelpers.NewMockMediaDBI())
+		assert.Nil(t, missing.TotalMedia)
+		assert.Nil(t, WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, nil).TotalMedia)
+	})
+
+	t.Run("count errors leave the field unset", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetTotalMediaCount").Return(0, errors.New("boom"))
+		mockDB.On("GetMissingMediaCount").Return(0, errors.New("boom"))
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, mockDB)
+		assert.Nil(t, resp.TotalMedia)
+		assert.Nil(t, resp.MissingMedia)
+	})
+}
+
 func TestHandleMediaScrapeStatus_UsesFreshCachedCount(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()

@@ -1553,6 +1553,8 @@ type MediaDBI interface {
 	GetMissingMediaCount() (int, error)
 	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
 	GetTotalScrapedMediaCount(ctx context.Context) (int, error)
+	GetStoredScrapedMediaCount(ctx context.Context, scraperID string) (count int, ok bool, err error)
+	RefreshScrapedMediaCounts(ctx context.Context) error
 
 	FindSystem(row System) (System, error)
 	FindSystemBySystemID(systemID string) (System, error)

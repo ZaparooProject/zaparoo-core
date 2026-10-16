@@ -1380,6 +1380,9 @@ func (db *MediaDB) UpdateLastGenerated() error {
 		if countErr := sqlRefreshMediaCounts(db.ctx, db.conn()); countErr != nil {
 			log.Warn().Err(countErr).Msg("failed to refresh cached media counts")
 		}
+		if countErr := sqlRefreshScrapedCounts(db.ctx, db.conn()); countErr != nil {
+			log.Warn().Err(countErr).Msg("failed to refresh stored scraped counts")
+		}
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2183,6 +2186,9 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	}
 
 	if deleted > 0 {
+		if countErr := sqlRefreshScrapedCounts(ctx, db.sql.Load()); countErr != nil {
+			log.Warn().Err(countErr).Msg("failed to refresh stored scraped counts after orphan cleanup")
+		}
 		if countErr := sqlRefreshMediaCounts(ctx, db.sql.Load()); countErr != nil {
 			log.Warn().Err(countErr).Msg("failed to refresh cached media counts after orphan cleanup")
 			if cacheErr := sqlInvalidateMediaCountCache(

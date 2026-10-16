@@ -274,7 +274,7 @@ func TestRetryDurableMediaWriteOperationsResumesBrowseCacheHealAfterConflict(t *
 	populateCalled := make(chan struct{})
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Times(4)
-	mockDB.On("GetTotalMediaCount").Return(1000, nil).Twice()
+	mockDB.On("GetTotalMediaCount").Return(1000, nil)
 	mockDB.On("BrowseCacheNeedsRebuild", mock.Anything).Return(true, nil).Twice()
 	mockDB.On("TrackBackgroundOperation").Return().Twice()
 	mockDB.On("BackgroundOperationDone").Run(func(mock.Arguments) {

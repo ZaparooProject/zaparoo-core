@@ -26,9 +26,12 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -50,6 +53,7 @@ const (
 	DBConfigBrowseIndexComplete             = "BrowseIndexComplete"
 	DBConfigMediaTotalCount                 = "MediaTotalCount"
 	DBConfigMediaMissingCount               = "MediaMissingCount"
+	DBConfigScrapedMediaCounts              = "ScrapedMediaCounts"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
@@ -108,6 +112,112 @@ func sqlRefreshMediaCounts(ctx context.Context, db sqlQueryable) error {
 		}
 	}
 	return nil
+}
+
+// storedScrapedCounts is the persisted form of the scraped-media counts. Total
+// is distinct media across every scraper; Scrapers is distinct media per scraper.
+type storedScrapedCounts struct {
+	Scrapers map[string]int `json:"scrapers"`
+	Total    int            `json:"total"`
+}
+
+type scraperSentinel struct {
+	scraperID string
+	dbID      int64
+}
+
+func listScraperSentinels(ctx context.Context, db sqlQueryable) ([]scraperSentinel, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT t.DBID, tt.Type
+		FROM Tags t
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type LIKE 'scraper.%' AND t.Tag = ?
+		ORDER BY t.DBID
+	`, string(tags.TagScraperScraped))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scraper sentinel tags: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close scraper sentinel rows")
+		}
+	}()
+
+	var sentinels []scraperSentinel
+	for rows.Next() {
+		var (
+			dbID    int64
+			tagType string
+		)
+		if scanErr := rows.Scan(&dbID, &tagType); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan scraper sentinel tag: %w", scanErr)
+		}
+		sentinels = append(sentinels, scraperSentinel{
+			dbID:      dbID,
+			scraperID: strings.TrimPrefix(tagType, tags.ScraperTypePrefix),
+		})
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("failed to iterate scraper sentinel tags: %w", rowsErr)
+	}
+	return sentinels, nil
+}
+
+func sqlRefreshScrapedCounts(ctx context.Context, db sqlQueryable) error {
+	sentinels, err := listScraperSentinels(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	counts := storedScrapedCounts{Scrapers: make(map[string]int, len(sentinels))}
+	allIDs := make([]int64, 0, len(sentinels))
+	for _, sn := range sentinels {
+		n, countErr := countMediaTagsForTagDBIDs(ctx, db, []int64{sn.dbID})
+		if countErr != nil {
+			return countErr
+		}
+		counts.Scrapers[sn.scraperID] = n
+		allIDs = append(allIDs, sn.dbID)
+	}
+	if len(allIDs) == 1 {
+		counts.Total = counts.Scrapers[sentinels[0].scraperID]
+	} else if counts.Total, err = countMediaTagsForTagDBIDs(ctx, db, allIDs); err != nil {
+		return err
+	}
+
+	raw, err := json.Marshal(counts)
+	if err != nil {
+		return fmt.Errorf("failed to encode scraped counts: %w", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigScrapedMediaCounts, string(raw),
+	); err != nil {
+		return fmt.Errorf("failed to store scraped counts: %w", err)
+	}
+	return nil
+}
+
+// sqlGetStoredScrapedCount reads the persisted count for scraperID, or the
+// total across scrapers when scraperID is empty. ok is false when nothing has
+// been stored yet.
+func sqlGetStoredScrapedCount(ctx context.Context, db sqlQueryable, scraperID string) (count int, ok bool, err error) {
+	var raw string
+	err = db.QueryRowContext(ctx, "SELECT Value FROM DBConfig WHERE Name = ?", DBConfigScrapedMediaCounts).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to get stored scraped counts: %w", err)
+	}
+	var counts storedScrapedCounts
+	if err := json.Unmarshal([]byte(raw), &counts); err != nil {
+		return 0, false, fmt.Errorf("failed to parse stored scraped counts: %w", err)
+	}
+	if scraperID == "" {
+		return counts.Total, true, nil
+	}
+	return counts.Scrapers[scraperID], true, nil
 }
 
 func sqlInvalidateMediaCountCache(ctx context.Context, db sqlQueryable, names ...string) error {
