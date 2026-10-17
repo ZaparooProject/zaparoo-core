@@ -261,6 +261,36 @@ func (m *MockKodiClient) GetArtists(ctx context.Context) ([]kodi.Artist, error) 
 	return nil, nil
 }
 
+// GetAlbumSongs mocks retrieving the songs of one album
+func (m *MockKodiClient) GetAlbumSongs(ctx context.Context, albumID int) ([]kodi.Song, error) {
+	args := m.Called(ctx, albumID)
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetAlbumSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetAlbumSongs error: %w", err)
+	}
+	return nil, nil
+}
+
+// GetArtistSongs mocks retrieving the songs of one artist
+func (m *MockKodiClient) GetArtistSongs(ctx context.Context, artistID int) ([]kodi.Song, error) {
+	args := m.Called(ctx, artistID)
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetArtistSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetArtistSongs error: %w", err)
+	}
+	return nil, nil
+}
+
 // GetSongs mocks retrieving all songs from Kodi's library
 func (m *MockKodiClient) GetSongs(ctx context.Context) ([]kodi.Song, error) {
 	args := m.Called(ctx)
