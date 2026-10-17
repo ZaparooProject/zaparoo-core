@@ -495,6 +495,7 @@ type Launcher struct {
 	Preflight                func(*config.Instance, string, *LaunchOptions) error
 	Kill                     func(*config.Instance) error
 	Launch                   func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	Collection               func(context.Context, *config.Instance, string) ([]CollectionItem, error)
 	BuildLaunchCommand       func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
 	WaitForReady             func(context.Context, *config.Instance, *models.ActiveMedia) error
 	ID                       string
@@ -518,6 +519,15 @@ type Launcher struct {
 	// NoActiveMedia marks a launcher that runs an action instead of starting
 	// media, so Core publishes no active media for its launches.
 	NoActiveMedia bool
+}
+
+// CollectionItem is one piece of media inside a launcher's collection. A
+// launcher whose paths name a group of media instead of one item lists it
+// through Launcher.Collection, and each item's path is an ordinary launchable
+// path.
+type CollectionItem struct {
+	Name string
+	Path string
 }
 
 type BackupPattern struct {

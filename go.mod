@@ -27,21 +27,21 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/gen2brain/malgo v0.11.26
-	github.com/getsentry/sentry-go v0.49.0
-	github.com/getsentry/sentry-go/zerolog v0.49.0
-	github.com/go-chi/chi/v5 v5.3.2
+	github.com/getsentry/sentry-go v0.50.0
+	github.com/getsentry/sentry-go/zerolog v0.50.0
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/uuid v1.6.0
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/jonboulle/clockwork v0.5.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.3
 	github.com/mackerelio/go-osstat v0.2.8
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/miekg/dns v1.1.73
@@ -63,7 +63,7 @@ require (
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.42.0
 	golang.org/x/time v0.16.0
 	gopkg.in/ini.v1 v1.67.3
