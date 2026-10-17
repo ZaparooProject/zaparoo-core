@@ -241,6 +241,22 @@ func (m *MockKodiClient) GetSongs(ctx context.Context) ([]Song, error) {
 	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
+func (m *MockKodiClient) GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error) {
+	args := m.Called(ctx, albumID)
+	if songs, ok := args.Get(0).([]Song); ok {
+		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+}
+
+func (m *MockKodiClient) GetArtistSongs(ctx context.Context, artistID int) ([]Song, error) {
+	args := m.Called(ctx, artistID)
+	if songs, ok := args.Get(0).([]Song); ok {
+		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+}
+
 func (m *MockKodiClient) GetAlbums(ctx context.Context) ([]Album, error) {
 	args := m.Called(ctx)
 	if albums, ok := args.Get(0).([]Album); ok {

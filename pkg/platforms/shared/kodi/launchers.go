@@ -216,6 +216,11 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanAlbums(ctx, client, cfg, path, results)
 		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectAlbum(ctx, NewClientWithLauncherID(cfg, id, groups), path)
+		},
 	}
 }
 
@@ -246,6 +251,11 @@ func NewKodiArtistLauncher() platforms.Launcher {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanArtists(ctx, client, cfg, path, results)
 		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectArtist(ctx, NewClientWithLauncherID(cfg, id, groups), path)
+		},
 	}
 }
 
@@ -275,6 +285,11 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 		) ([]platforms.ScanResult, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanTVShows(ctx, client, cfg, path, results)
+		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectTVShow(ctx, NewClientWithLauncherID(cfg, id, groups), path)
 		},
 	}
 }
