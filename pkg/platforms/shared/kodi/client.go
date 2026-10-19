@@ -181,6 +181,20 @@ func (c *Client) PlayPause(ctx context.Context) error {
 	return err
 }
 
+// SetPaused pauses or resumes the first active player. Unlike PlayPause it is
+// idempotent: pausing a paused player or resuming a playing one changes nothing.
+func (c *Client) SetPaused(ctx context.Context, paused bool) error {
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerPlayPause, PlayerSetPlayingParams{
+		PlayerID: player.ID,
+		Play:     !paused,
+	})
+	return err
+}
+
 // FastForward increases playback speed of the first active player
 func (c *Client) FastForward(ctx context.Context) error {
 	player, err := c.getFirstActivePlayer(ctx)

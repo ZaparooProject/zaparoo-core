@@ -65,7 +65,7 @@ func TestNewLauncher(t *testing.T) {
 	assert.Equal(t, c.Folders, launcher.Folders)
 	assert.Equal(t, c.Extensions, launcher.Extensions)
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
-	assert.Len(t, launcher.Controls, 11)
+	assert.Len(t, launcher.Controls, 13)
 	assert.Contains(t, launcher.Controls, platforms.ControlToggleTray)
 	assert.Contains(t, launcher.Controls, platforms.ControlNext)
 	assert.Contains(t, launcher.Controls, platforms.ControlPrevious)

@@ -110,6 +110,15 @@ func (m *MockKodiClient) PlayPause(ctx context.Context) error {
 	return nil
 }
 
+// SetPaused mocks pausing or resuming the first active player
+func (m *MockKodiClient) SetPaused(ctx context.Context, paused bool) error {
+	args := m.Called(ctx, paused)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock SetPaused error: %w", err)
+	}
+	return nil
+}
+
 // FastForward mocks increasing playback speed of the first active player
 func (m *MockKodiClient) FastForward(ctx context.Context) error {
 	args := m.Called(ctx)
@@ -341,6 +350,7 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("LaunchTVEpisode", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("Stop", mock.Anything).Return(nil).Maybe()
 	m.On("PlayPause", mock.Anything).Return(nil).Maybe()
+	m.On("SetPaused", mock.Anything, mock.AnythingOfType("bool")).Return(nil).Maybe()
 	m.On("FastForward", mock.Anything).Return(nil).Maybe()
 	m.On("Rewind", mock.Anything).Return(nil).Maybe()
 	m.On("GoTo", mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()

@@ -30,6 +30,8 @@ import (
 
 var expectedControls = []string{
 	platforms.ControlTogglePause,
+	platforms.ControlPause,
+	platforms.ControlResume,
 	platforms.ControlStop,
 	platforms.ControlFastForward,
 	platforms.ControlRewind,
@@ -55,7 +57,7 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 	}
 	assert.Equal(t, expectedExtensions, launcher.Extensions)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -72,7 +74,7 @@ func TestNewKodiMovieLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiMovie}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -89,7 +91,7 @@ func TestNewKodiTVLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiEpisode}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -107,7 +109,7 @@ func TestNewKodiSongLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	// Scanner will be tested when scanners are implemented
 	// assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -128,7 +130,7 @@ func TestNewKodiMusicLauncher(t *testing.T) {
 	assert.Contains(t, launcher.Extensions, ".m4a")
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.Nil(t, launcher.Scanner, "Scanner function should not be set for local files")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -145,7 +147,7 @@ func TestNewKodiAlbumLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiAlbum}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -162,7 +164,7 @@ func TestNewKodiArtistLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiArtist}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}
@@ -179,7 +181,7 @@ func TestNewKodiTVShowLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiShow}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
-	assert.Len(t, launcher.Controls, 6)
+	assert.Len(t, launcher.Controls, len(expectedControls))
 	for _, action := range expectedControls {
 		assert.Contains(t, launcher.Controls, action)
 	}

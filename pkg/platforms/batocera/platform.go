@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -761,6 +762,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID:   info.SystemID,
 			Extensions: info.Extensions,
 			Folders:    []string{folder},
+			Controls: hotkeyControls(afero.NewOsFs(), sendHotkey, func() error {
+				return p.StopActiveLauncher(platforms.StopForMenu)
+			}),
 			// SkipFilesystemScan defaults to false - built-in scanner will find all ROM files
 			// Scanner function adds metadata from gamelist.xml
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {

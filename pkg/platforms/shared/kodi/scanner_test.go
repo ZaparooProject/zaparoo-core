@@ -180,6 +180,14 @@ func (m *MockKodiClient) PlayPause(ctx context.Context) error {
 	return nil
 }
 
+func (m *MockKodiClient) SetPaused(ctx context.Context, paused bool) error {
+	args := m.Called(ctx, paused)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock SetPaused error: %w", err)
+	}
+	return nil
+}
+
 func (m *MockKodiClient) FastForward(ctx context.Context) error {
 	args := m.Called(ctx)
 	if err := args.Error(0); err != nil {

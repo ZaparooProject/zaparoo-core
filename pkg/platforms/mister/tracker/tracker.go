@@ -399,12 +399,12 @@ func (tr *Tracker) LoadCore() {
 			return
 		}
 
-		tr.setActiveMedia(models.NewActiveMedia(
+		tr.setActiveMedia(trackedMedia(
 			tr.ActiveSystem,
 			tr.ActiveSystemName,
 			activeGamePath,
 			tr.ActiveGameName,
-			"", // LauncherID unknown when tracking MiSTer core changes
+			tr.arcadeLauncher(),
 		))
 		return
 	}
@@ -571,6 +571,31 @@ func (tr *Tracker) loadGame() {
 // loadGameLocked resolves the current ACTIVEGAME value to a game and publishes
 // it as the active media, skipping the publish when it names the game already
 // active. Callers hold tr.mu.
+// trackedMedia builds the ActiveMedia for a game the tracker saw start outside
+// a Zaparoo launch. The launcher that would run it is recorded so its controls
+// apply to games started from the MiSTer menu too.
+func trackedMedia(systemID, systemName, path, name string, launcher *platforms.Launcher) *models.ActiveMedia {
+	launcherID := ""
+	if launcher != nil {
+		launcherID = launcher.ID
+	}
+	media := models.NewActiveMedia(systemID, systemName, path, name, launcherID)
+	media.LauncherControls = platforms.ControlNames(launcher)
+	return media
+}
+
+// arcadeLauncher returns the launcher for the Arcade core, or nil when the
+// platform does not list one.
+func (tr *Tracker) arcadeLauncher() *platforms.Launcher {
+	launchers := tr.pl.Launchers(tr.cfg)
+	for i := range launchers {
+		if launchers[i].ID == ArcadeSystem {
+			return &launchers[i]
+		}
+	}
+	return nil
+}
+
 func (tr *Tracker) loadGameLocked() {
 	activeGame, err := tr.activeGame()
 	switch {
@@ -689,13 +714,7 @@ func (tr *Tracker) loadGameLocked() {
 		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
-		tr.setActiveMedia(models.NewActiveMedia(
-			system.ID,
-			meta.Name,
-			path,
-			name,
-			"", // LauncherID unknown when tracking MiSTer core changes
-		))
+		tr.setActiveMedia(trackedMedia(system.ID, meta.Name, path, name, &launcher))
 	}
 }
 

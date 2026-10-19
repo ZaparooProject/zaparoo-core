@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -344,8 +345,16 @@ func (p *Platform) checkAndUpdateRunningGame(
 		systemMeta.Name,
 		gameResp.Path,
 		gameResp.Name,
-		"", // LauncherID unknown for externally launched games
+		"",
 	)
+	// Name the launcher that would run this game so games started from
+	// EmulationStation can be controlled too. The emulator's hotkeys are not
+	// known yet, because configgen writes them after ES reports the game, so
+	// each control checks them when it runs.
+	if info, ok := esde.SystemMap[gameResp.SystemName]; ok {
+		newGame.LauncherID = info.GetLauncherID()
+		newGame.LauncherControls = hotkeyControlNames()
+	}
 
 	// Check if this is actually a new game (compare by path)
 	if lastKnown != nil && lastKnown.Path == newGame.Path {

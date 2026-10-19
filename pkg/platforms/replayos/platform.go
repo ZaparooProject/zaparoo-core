@@ -300,6 +300,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions: info.Extensions,
 			Folders:    []string{folder},
 			Launch:     p.launchGame,
+			Controls:   p.controls(),
 		})
 	}
 

@@ -173,6 +173,13 @@ type PlayerPlayPauseParams struct {
 	PlayerID int `json:"playerid"`
 }
 
+// PlayerSetPlayingParams represents parameters for Player.PlayPause with an
+// explicit play state: true resumes playback, false pauses it.
+type PlayerSetPlayingParams struct {
+	PlayerID int  `json:"playerid"`
+	Play     bool `json:"play"`
+}
+
 // PlayerSetRepeatParams represents parameters for Player.SetRepeat API method
 type PlayerSetRepeatParams struct {
 	Repeat   string `json:"repeat"`

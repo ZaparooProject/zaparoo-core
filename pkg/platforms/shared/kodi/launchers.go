@@ -51,6 +51,16 @@ func kodiControls(
 				return c.PlayPause(ctx)
 			}),
 		},
+		platforms.ControlPause: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.SetPaused(ctx, true)
+			}),
+		},
+		platforms.ControlResume: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.SetPaused(ctx, false)
+			}),
+		},
 		platforms.ControlStop: {
 			Func: cf(func(ctx context.Context, c KodiClient) error {
 				return c.Stop(ctx)

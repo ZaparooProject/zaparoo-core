@@ -1542,6 +1542,65 @@ func TestClient_PlayPause_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, 1, int(params["playerid"].(float64)))
 }
 
+func TestClient_SetPaused_SendsExplicitPlayState(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		paused   bool
+		wantPlay bool
+	}{
+		{"pause sends play false", true, false},
+		{"resume sends play true", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var receivedPayloads []map[string]any
+			server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+				receivedPayloads = append(receivedPayloads, payload)
+				if payload["method"] == "Player.GetActivePlayers" {
+					return map[string]any{
+						"jsonrpc": "2.0",
+						"id":      payload["id"],
+						"result":  []any{map[string]any{"playerid": 1, "type": "video"}},
+					}
+				}
+				return map[string]any{"jsonrpc": "2.0", "id": payload["id"], "result": map[string]any{"speed": 0}}
+			})
+			defer server.Close()
+
+			client := kodi.NewClient(nil)
+			client.SetURL(server.URL)
+
+			require.NoError(t, client.SetPaused(context.Background(), tt.paused))
+
+			require.Len(t, receivedPayloads, 2)
+			assert.Equal(t, "Player.PlayPause", receivedPayloads[1]["method"])
+			params, ok := receivedPayloads[1]["params"].(map[string]any)
+			require.True(t, ok)
+			assert.InDelta(t, 1, params["playerid"], 0)
+			assert.Equal(t, tt.wantPlay, params["play"])
+		})
+	}
+}
+
+func TestClient_SetPaused_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{"jsonrpc": "2.0", "id": payload["id"], "result": []any{}}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.SetPaused(context.Background(), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
 func TestClient_PlayPause_NoActivePlayers(t *testing.T) {
 	t.Parallel()
 
