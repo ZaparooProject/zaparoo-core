@@ -2866,6 +2866,24 @@ This request targets the background slot and supplies an action argument. Discov
 }
 ```
 
+##### Save state slot example
+
+`save_state` and `load_state` take an optional `slot` argument naming the state slot. The default is slot 1. MiSTer cores accept slots 1-4 and RePlayOS accepts 1-18. Batocera chooses the slot itself and rejects the argument, and RetroArch ignores it. An action that a launcher defines but the running core or emulator cannot perform, such as `save_state` on a MiSTer core without save states, fails with an error.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.control",
+  "params": {
+    "action": "save_state",
+    "args": {
+      "slot": "2"
+    }
+  }
+}
+```
+
 ### media.title.parse
 
 **Access:** All clients.

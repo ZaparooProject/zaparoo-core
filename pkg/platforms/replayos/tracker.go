@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 )
@@ -263,22 +264,26 @@ func parseRecFile(storagePath, filePath string) (string, error) {
 }
 
 func systemIDFromROMPath(romPath, storagePath string) string {
+	info, _ := systemInfoFromROMPath(romPath, storagePath)
+	return info.SystemID
+}
+
+// systemInfoFromROMPath resolves the ROM's folder under the storage roms
+// directory to its system entry.
+func systemInfoFromROMPath(romPath, storagePath string) (SystemInfo, bool) {
 	if romPath == "" || storagePath == "" {
-		return ""
+		return SystemInfo{}, false
 	}
 
 	romsDir := filepath.Join(storagePath, "roms")
 	rel, err := filepath.Rel(romsDir, romPath)
 	if err != nil {
-		return ""
+		return SystemInfo{}, false
 	}
 
 	folder := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-	if info, ok := SystemMap[folder]; ok {
-		return info.SystemID
-	}
-
-	return ""
+	info, ok := SystemMap[folder]
+	return info, ok
 }
 
 // startRecentWatcher watches _recent/ for .rec files written when a game is
@@ -451,6 +456,12 @@ func (p *Platform) checkAndUpdateRunningGame(
 	}
 
 	media := models.NewActiveMedia(systemID, systemName, romPath, romName, "")
+	// Name the launcher that would run this ROM so games started from the
+	// ReplayOS menu can be controlled too.
+	if info, ok := systemInfoFromROMPath(romPath, p.activeStorage); ok {
+		media.LauncherID = info.GetLauncherID()
+		media.LauncherControls = platforms.ControlNames(&platforms.Launcher{Controls: p.controls()})
+	}
 
 	if lastCore == "" {
 		log.Info().

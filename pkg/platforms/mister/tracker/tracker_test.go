@@ -778,6 +778,9 @@ func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
 		ID:         "Genesis",
 		SystemID:   systemdefs.SystemGenesis,
 		Extensions: []string{".md"},
+		Controls: map[string]platforms.Control{
+			platforms.ControlToggleMenu: {}, platforms.ControlReset: {},
+		},
 	}})
 	helpers.GlobalLauncherCache = testCache
 	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
@@ -807,6 +810,8 @@ func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
 	assert.Equal(t, gamePath, published.Path)
 	assert.Equal(t, gamePath, tr.ActiveGamePath)
 	assert.Equal(t, systemdefs.SystemGenesis+"/"+filepath.Base(gamePath), tr.ActiveGameID)
+	assert.Equal(t, "Genesis", published.LauncherID, "games started outside Zaparoo name their launcher")
+	assert.Equal(t, []string{platforms.ControlReset, platforms.ControlToggleMenu}, published.LauncherControls)
 
 	// What DoLaunch published for the same launch, by the game's own path.
 	launched := models.NewActiveMedia(
@@ -1344,8 +1349,15 @@ func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
 
 			published := tt.existing
 			var publishCalled bool
+			mockPl := mocks.NewMockPlatform()
+			mockPl.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+				{ID: "Other"},
+				{ID: ArcadeSystem, Controls: map[string]platforms.Control{
+					platforms.ControlReset: {}, platforms.ControlToggleMenu: {},
+				}},
+			}).Maybe()
 			tr := &Tracker{
-				pl:           &arcadeCachePlatform{MockPlatform: mocks.NewMockPlatform(), setname: "esprade"},
+				pl:           &arcadeCachePlatform{MockPlatform: mockPl, setname: "esprade"},
 				coreNameFile: coreFile,
 				NameMap: []NameMapping{
 					{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
@@ -1365,6 +1377,9 @@ func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
 				require.NotNil(t, published)
 				assert.Equal(t, ArcadeSystem, published.SystemID)
 				assert.Equal(t, "ESP Ra.De.", published.Name)
+				assert.Equal(t, ArcadeSystem, published.LauncherID)
+				assert.Equal(t,
+					[]string{platforms.ControlReset, platforms.ControlToggleMenu}, published.LauncherControls)
 			}
 		})
 	}

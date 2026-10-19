@@ -43,6 +43,9 @@ const (
 	commandToggleDiscTray = "DISK_EJECT_TOGGLE"
 	commandNextDisc       = "DISK_NEXT"
 	commandPreviousDisc   = "DISK_PREV"
+
+	statusPlayingPrefix = "GET_STATUS PLAYING "
+	statusPausedPrefix  = "GET_STATUS PAUSED "
 )
 
 // Controls returns RetroArch network-command controls for addr.
@@ -67,11 +70,21 @@ func Controls(addr string) map[string]platforms.Control {
 		}
 	}
 
+	pauseControl := func(pause bool) platforms.Control {
+		return platforms.Control{
+			Func: func(ctx context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+				return sendPauseState(ctx, addr, pause)
+			},
+		}
+	}
+
 	return map[string]platforms.Control{
 		platforms.ControlSaveState:   control(commandSaveState),
 		platforms.ControlLoadState:   control(commandLoadState),
 		platforms.ControlToggleMenu:  control(commandToggleMenu),
 		platforms.ControlTogglePause: control(commandTogglePause),
+		platforms.ControlPause:       pauseControl(true),
+		platforms.ControlResume:      pauseControl(false),
 		platforms.ControlReset:       control(commandReset),
 		platforms.ControlStop:        control(commandQuit),
 		platforms.ControlFastForward: control(commandFastForward),
@@ -87,6 +100,22 @@ func Controls(addr string) map[string]platforms.Control {
 // so a successful send cannot confirm that the core changed discs. Never retry
 // these non-idempotent commands after an ambiguous network failure.
 func sendDiscCommand(ctx context.Context, addr, command string) error {
+	return sendGated(ctx, addr, func(string) (string, bool) { return command, true })
+}
+
+// sendPauseState pauses or resumes RetroArch. PAUSE_TOGGLE is not idempotent,
+// so the current state is read first and nothing is sent when it already matches.
+func sendPauseState(ctx context.Context, addr string, pause bool) error {
+	return sendGated(ctx, addr, func(status string) (string, bool) {
+		paused := strings.HasPrefix(status, statusPausedPrefix)
+		return commandTogglePause, paused != pause
+	})
+}
+
+// sendGated reads GET_STATUS and sends the command choose returns for it, or
+// nothing when choose reports false. Status is only readable while content is
+// loaded, so this also proves the NCI is enabled and reachable.
+func sendGated(ctx context.Context, addr string, choose func(status string) (string, bool)) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
@@ -111,11 +140,15 @@ func sendDiscCommand(ctx context.Context, addr, command string) error {
 		return fmt.Errorf("retroarch network command interface unavailable: %w", err)
 	}
 	status := strings.TrimSpace(string(buf[:n]))
-	if !strings.HasPrefix(status, "GET_STATUS PLAYING ") && !strings.HasPrefix(status, "GET_STATUS PAUSED ") {
+	if !strings.HasPrefix(status, statusPlayingPrefix) && !strings.HasPrefix(status, statusPausedPrefix) {
 		return errors.New("retroarch has no active content or returned an invalid status")
 	}
+	command, send := choose(status)
+	if !send {
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("retroarch disc control canceled: %w", err)
+		return fmt.Errorf("retroarch control canceled: %w", err)
 	}
 	if _, err := conn.Write([]byte(command)); err != nil {
 		return fmt.Errorf("send retroarch command %s: %w", command, err)

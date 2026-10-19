@@ -90,7 +90,7 @@ func TestNativeRetroArchLaunchers(t *testing.T) {
 	assert.Len(t, nativeLaunchers, len(sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop)))
 	require.NotEmpty(t, nativeLaunchers)
 	assert.Equal(t, platforms.LifecycleBlocking, nativeLaunchers[0].Lifecycle)
-	assert.Len(t, nativeLaunchers[0].Controls, 11)
+	assert.Len(t, nativeLaunchers[0].Controls, 13)
 	assert.Contains(t, nativeLaunchers[0].Controls, platforms.ControlToggleTray)
 	assert.Contains(t, nativeLaunchers[0].Controls, platforms.ControlNext)
 	assert.Contains(t, nativeLaunchers[0].Controls, platforms.ControlPrevious)

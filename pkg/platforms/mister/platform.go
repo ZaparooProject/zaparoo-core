@@ -1815,9 +1815,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	neogeo, neogeoMVS := addNeoGeoMVSLauncher(p, &neogeo)
-	ls := addArcadeSystemLaunchers(p, CreateLaunchers(p))
+	ls := withCoreControls(p, addArcadeSystemLaunchers(p, CreateLaunchers(p)))
+	ls = append(ls, withCoreControls(p, []platforms.Launcher{amiga, neogeo, neogeoMVS})...)
 	ls = append(
-		ls, amiga, neogeo, neogeoMVS,
+		ls,
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
 		createScriptsLauncher(p),
 	)
