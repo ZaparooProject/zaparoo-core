@@ -839,6 +839,8 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
 		if err := p.ReturnToMenu(); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
+			// The core is still running, so callers must not treat it as stopped.
+			return fmt.Errorf("%w: %w", platforms.ErrStopFailed, err)
 		}
 	}
 

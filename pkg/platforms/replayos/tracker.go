@@ -413,6 +413,7 @@ func (p *Platform) checkAndUpdateRunningGame(
 	lastCore := p.lastKnownCore
 	if core == lastCore {
 		p.trackerMu.Unlock()
+		p.refreshMediaWithROMPath(core, setActiveMedia)
 		return
 	}
 	p.lastKnownCore = core
@@ -432,10 +433,64 @@ func (p *Platform) checkAndUpdateRunningGame(
 	p.pendingROMPath = ""
 	p.trackerMu.Unlock()
 
-	// Determine system ID: prefer the ROM path folder (more precise than
-	// core mapping, since cores like gambatte/mgba handle multiple systems),
-	// fall back to the core-to-system mapping.
-	systemID := systemIDFromROMPath(romPath, p.activeStorage)
+	media := p.trackedMedia(core, romPath)
+
+	if lastCore == "" {
+		log.Info().
+			Str("core", core).
+			Str("system", media.SystemID).
+			Str("rom", romPath).
+			Msg("tracker: game started")
+	} else {
+		log.Info().
+			Str("core", core).
+			Str("system", media.SystemID).
+			Str("rom", romPath).
+			Msg("tracker: game changed")
+	}
+
+	setActiveMedia(media)
+}
+
+// refreshMediaWithROMPath completes media published before the ROM path was
+// known. The recent watcher can see a menu launch's .rec file after the core has
+// loaded, so the first publication has no path, launcher or controls. It only
+// acts while the published media has no path, so a pending path for a relaunch
+// of the same core is left for the new launch to consume.
+func (p *Platform) refreshMediaWithROMPath(core string, setActiveMedia func(*models.ActiveMedia)) {
+	if core == "" || p.activeMedia == nil {
+		return
+	}
+	current := p.activeMedia()
+	if current == nil || current.Path != "" {
+		return
+	}
+
+	p.trackerMu.Lock()
+	romPath := p.pendingROMPath
+	if romPath == "" {
+		p.trackerMu.Unlock()
+		return
+	}
+	p.pendingROMPath = ""
+	p.trackerMu.Unlock()
+
+	media := p.trackedMedia(core, romPath)
+	log.Info().
+		Str("core", core).
+		Str("system", media.SystemID).
+		Str("rom", romPath).
+		Msg("tracker: ROM path arrived after the core loaded")
+	setActiveMedia(media)
+}
+
+// trackedMedia builds the ActiveMedia for a loaded core and ROM path. The ROM
+// path folder decides the system and launcher (it is more precise than the core
+// mapping, since cores like gambatte/mgba handle multiple systems), falling back
+// to the core-to-system mapping.
+func (p *Platform) trackedMedia(core, romPath string) *models.ActiveMedia {
+	info, hasLauncher := systemInfoFromROMPath(romPath, p.activeStorage)
+	systemID := info.SystemID
 	if systemID == "" {
 		var ok bool
 		systemID, ok = coreSystemMap[core]
@@ -458,26 +513,11 @@ func (p *Platform) checkAndUpdateRunningGame(
 	media := models.NewActiveMedia(systemID, systemName, romPath, romName, "")
 	// Name the launcher that would run this ROM so games started from the
 	// ReplayOS menu can be controlled too.
-	if info, ok := systemInfoFromROMPath(romPath, p.activeStorage); ok {
+	if hasLauncher {
 		media.LauncherID = info.GetLauncherID()
 		media.LauncherControls = platforms.ControlNames(&platforms.Launcher{Controls: p.controls()})
 	}
-
-	if lastCore == "" {
-		log.Info().
-			Str("core", core).
-			Str("system", systemID).
-			Str("rom", romPath).
-			Msg("tracker: game started")
-	} else {
-		log.Info().
-			Str("core", core).
-			Str("system", systemID).
-			Str("rom", romPath).
-			Msg("tracker: game changed")
-	}
-
-	setActiveMedia(media)
+	return media
 }
 
 // healthCheck logs a warning if no core is loaded after a game launch. Does not

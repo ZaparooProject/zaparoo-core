@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -41,6 +42,16 @@ import (
 const hotkeygenContextFile = "/var/run/hotkeygen.context"
 
 const hotkeygenSendTimeout = 5 * time.Second
+
+const (
+	// Batocera's RetroArch binds fast forward as a held key, so hotkeygen's
+	// default 0.3 s press only blips it. fast_forward holds the key instead.
+	// Other emulators that bind a toggle see one long press, which toggles once.
+	defaultFastForwardHold = 5
+	maxFastForwardHold     = 30
+
+	controlArgSeconds = "seconds"
+)
 
 // hotkeyActions maps controls to the hotkeygen action that triggers them.
 // hotkeygen translates an action into whatever key combination or command the
@@ -93,15 +104,37 @@ func hotkeyControlNames() []string {
 	return names
 }
 
-// sendHotkey asks hotkeygen to fire action.
-func sendHotkey(ctx context.Context, action string) error {
-	ctx, cancel := context.WithTimeout(ctx, hotkeygenSendTimeout)
+// sendHotkey asks hotkeygen to fire action. A positive hold keeps the key down
+// for that long; zero uses hotkeygen's default short press.
+func sendHotkey(ctx context.Context, action string, hold time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, hotkeygenSendTimeout+hold)
 	defer cancel()
+	args := []string{"--send", action}
+	if hold > 0 {
+		args = append(args, "--send-delay", strconv.Itoa(int(hold/time.Second)))
+	}
 	//nolint:gosec // action is always a value from the fixed hotkeyActions table
-	if err := exec.CommandContext(ctx, "hotkeygen", "--send", action).Run(); err != nil {
+	if err := exec.CommandContext(ctx, "hotkeygen", args...).Run(); err != nil {
 		return fmt.Errorf("hotkeygen send %s: %w", action, err)
 	}
 	return nil
+}
+
+// holdFor returns how long control keeps its hotkey down: only fast_forward is
+// held, for the "seconds" argument.
+func holdFor(control string, params platforms.ControlParams) (time.Duration, error) {
+	if control != platforms.ControlFastForward {
+		return 0, nil
+	}
+	raw := params.Args[controlArgSeconds]
+	if raw == "" {
+		return defaultFastForwardHold * time.Second, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds < 1 || seconds > maxFastForwardHold {
+		return 0, fmt.Errorf("invalid seconds %q: must be a whole number from 1 to %d", raw, maxFastForwardHold)
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 // hotkeyControls builds the controls shared by every EmulationStation system
@@ -109,7 +142,7 @@ func sendHotkey(ctx context.Context, action string) error {
 // because hotkeygen would otherwise accept the action and do nothing.
 func hotkeyControls(
 	fs afero.Fs,
-	send func(context.Context, string) error,
+	send func(context.Context, string, time.Duration) error,
 	stop func() error,
 ) map[string]platforms.Control {
 	controls := make(map[string]platforms.Control, len(hotkeyActions)+1)
@@ -119,6 +152,10 @@ func hotkeyControls(
 				if params.Args[platforms.ControlArgSlot] != "" {
 					return errSlotUnsupported
 				}
+				hold, err := holdFor(control, params)
+				if err != nil {
+					return err
+				}
 				hk, err := readHotkeyContext(fs)
 				if err != nil {
 					return err
@@ -126,7 +163,7 @@ func hotkeyControls(
 				if _, ok := hk.Keys[action]; !ok {
 					return fmt.Errorf("%w: %s has no %s hotkey", platforms.ErrControlUnavailable, hk.Name, control)
 				}
-				return send(ctx, action)
+				return send(ctx, action, hold)
 			},
 		}
 	}

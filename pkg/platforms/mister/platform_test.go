@@ -987,6 +987,22 @@ func TestStopActiveLauncher_DoesNotReuseStaleKillForScript(t *testing.T) {
 	assert.Equal(t, 1, killCalls, "script stop reused stale launcher Kill hook")
 }
 
+func TestStopActiveLauncher_ReportsMenuFailureWhenNothingTracked(t *testing.T) {
+	t.Parallel()
+
+	// With no tracked process the stop is a load_core menu.rbf write to
+	// /dev/MiSTer_cmd, which does not exist on a test host. The core is still
+	// running, so the failure must reach the caller instead of reading as a stop.
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; cannot force a menu launch failure")
+	}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	err := p.StopActiveLauncher(platforms.StopForMenu)
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+}
+
 func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	t.Parallel()
 

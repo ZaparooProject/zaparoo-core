@@ -14,6 +14,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -513,4 +514,109 @@ func TestStartRecentWatcher(t *testing.T) {
 
 	require.NoError(t, watcher.Close())
 	<-done
+}
+
+// trackerFixture is a Platform whose replay process has loaded a core, with the
+// media it has published recorded.
+type trackerFixture struct {
+	p         *Platform
+	current   *models.ActiveMedia
+	published []*models.ActiveMedia
+	pid       int
+}
+
+func newTrackerFixture(t *testing.T, core string) *trackerFixture {
+	t.Helper()
+	procDir := t.TempDir()
+	f := &trackerFixture{pid: 555}
+	writeProcExe(t, procDir, f.pid, replayBinaryPath)
+	writeProcMaps(t, procDir, f.pid, "7f00 r-xp 0 00:00 0 "+filepath.Join(coresDir, core)+"\n")
+
+	cmd := helpers.NewMockCommandExecutor()
+	cmd.ExpectedCalls = nil
+	cmd.On("Output", mock.Anything, "systemctl",
+		[]string{"show", "-p", "MainPID", "--value", "replay.service"}).Return([]byte("555\n"), nil)
+	f.p = &Platform{
+		cmd:           cmd,
+		procPath:      procDir,
+		activeStorage: "/media/sd",
+		activeMedia:   func() *models.ActiveMedia { return f.current },
+	}
+	return f
+}
+
+func (f *trackerFixture) set(media *models.ActiveMedia) {
+	f.current = media
+	if media != nil {
+		f.published = append(f.published, media)
+	}
+}
+
+func TestCheckAndUpdateRunningGame_PublishesLauncherControls(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+	f.p.pendingROMPath = "/media/sd/roms/nintendo_nes/Game.nes"
+
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	require.Len(t, f.published, 1)
+	media := f.published[0]
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/Game.nes", media.Path)
+	assert.Equal(t, SystemMap["nintendo_nes"].GetLauncherID(), media.LauncherID)
+	assert.Equal(t,
+		[]string{
+			platforms.ControlLoadState, platforms.ControlReset,
+			platforms.ControlSaveState, platforms.ControlStop,
+		},
+		media.LauncherControls,
+	)
+}
+
+func TestCheckAndUpdateRunningGame_ROMPathArrivesAfterCore(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+
+	// The core loads before the recent watcher has seen the .rec file.
+	f.p.checkAndUpdateRunningGame(f.set)
+	require.Len(t, f.published, 1)
+	assert.Empty(t, f.published[0].Path)
+	assert.Empty(t, f.published[0].LauncherID)
+
+	f.p.trackerMu.Lock()
+	f.p.pendingROMPath = "/media/sd/roms/nintendo_nes/Game.nes"
+	f.p.trackerMu.Unlock()
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	require.Len(t, f.published, 2, "the late ROM path must complete the media")
+	media := f.published[1]
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/Game.nes", media.Path)
+	assert.Equal(t, "Game", media.Name)
+	assert.NotEmpty(t, media.LauncherID)
+	assert.NotEmpty(t, media.LauncherControls)
+	assert.Empty(t, f.p.pendingROMPath, "the path is consumed once applied")
+
+	f.p.checkAndUpdateRunningGame(f.set)
+	assert.Len(t, f.published, 2, "nothing left to refresh")
+}
+
+func TestCheckAndUpdateRunningGame_RelaunchOfSameCoreKeepsPendingPath(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+	f.p.pendingROMPath = "/media/sd/roms/nintendo_nes/First.nes"
+	f.p.checkAndUpdateRunningGame(f.set)
+	require.Len(t, f.published, 1)
+
+	// launchGame records the next ROM, then restarts the service. The old
+	// process is still running the same core when the tracker next ticks.
+	f.p.trackerMu.Lock()
+	f.p.pendingROMPath = "/media/sd/roms/nintendo_nes/Second.nes"
+	f.p.trackerMu.Unlock()
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	assert.Len(t, f.published, 1, "media that already has a path is not replaced early")
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/Second.nes", f.p.pendingROMPath,
+		"the new launch still has its path to consume")
 }
