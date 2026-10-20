@@ -436,6 +436,92 @@ func getRetroBatLaunchers() []platforms.Launcher {
 	return launchers
 }
 
+const (
+	// retroBatReadyPoll is how often a readiness probe asks EmulationStation
+	// and the process list.
+	retroBatReadyPoll = 250 * time.Millisecond
+	// retroBatReadySettle is how long after the emulator's window appears the
+	// game is given to start running. EmulationStation reports a game several
+	// seconds before its emulator exists, and RetroArch opens its window once
+	// it has loaded the content.
+	retroBatReadySettle = 500 * time.Millisecond
+)
+
+// retroBatLaunchers returns the RetroBat launchers with their readiness probe.
+func (p *Platform) retroBatLaunchers() []platforms.Launcher {
+	launchers := getRetroBatLaunchers()
+	for i := range launchers {
+		launchers[i].WaitForReady = p.waitForRetroBatGame
+	}
+	return launchers
+}
+
+// waitForRetroBatGame is the readiness probe for RetroBat games: EmulationStation
+// must report the launched game running and the emulator it started must have a
+// window. Neither alone is enough: ES announces the game before the emulator
+// exists, and a window left over from the previous game must not count.
+func (p *Platform) waitForRetroBatGame(ctx context.Context, cfg *config.Instance, media *models.ActiveMedia) error {
+	dir, err := retroBatFindDir(cfg)
+	if err != nil {
+		return fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+	}
+	emulatorsDir := filepath.Join(dir, "emulators")
+	clock := p.clockForReadiness()
+
+	err = platforms.PollReady(ctx, clock, retroBatReadyPoll, func(context.Context) (bool, error) {
+		game, running, apiErr := retroBatAPIRunningGame()
+		if apiErr != nil {
+			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, apiErr)
+		}
+		if !running || !sameRetroBatPath(game.Path, media.Path) {
+			return false, nil
+		}
+		procs, listErr := retroBatListProcesses()
+		if listErr != nil {
+			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, listErr)
+		}
+		for i := range procs {
+			if isRetroBatEmulatorProcess(emulatorsDir, procs[i]) && p.processHasWindow(int(procs[i].PID)) {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("wait for RetroBat game: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle after the RetroBat game window: %w", ctx.Err())
+	case <-clock.After(retroBatReadySettle):
+		return nil
+	}
+}
+
+// sameRetroBatPath compares the path EmulationStation reports with the path
+// Core launched, which may differ in slash direction and case. A path that
+// differs further, such as a relative path or another root, still counts when
+// the file name is the same: the probe would otherwise wait out its timeout
+// on a game that is running.
+func sameRetroBatPath(a, b string) bool {
+	if strings.EqualFold(filepath.ToSlash(filepath.Clean(a)), filepath.ToSlash(filepath.Clean(b))) {
+		return true
+	}
+	nameA, nameB := retroBatFileName(a), retroBatFileName(b)
+	if nameA == "" || !strings.EqualFold(nameA, nameB) {
+		return false
+	}
+	log.Debug().Str("reported", a).Str("launched", b).Msg("RetroBat game matched by file name")
+	return true
+}
+
+// retroBatFileName returns the last element of a path written with either
+// slash direction.
+func retroBatFileName(path string) string {
+	return path[strings.LastIndexAny(path, `/\`)+1:]
+}
+
 // startRetroBatMediaWatch follows media, a RetroBat game just published as the
 // active media. EmulationStation starts the game, so Core holds no process to
 // wait on and the ES API is the only signal that it ended. The poller runs only

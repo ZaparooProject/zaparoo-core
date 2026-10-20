@@ -94,12 +94,13 @@ func DefaultTimeouts() Timeouts {
 // the platform: it is followed by PID, and stopped only through Popper, so
 // the platform's process-tree kill cannot leave Popper stuck mid-launch.
 type Deps struct {
-	ActiveMedia    func() *models.ActiveMedia
-	SetActiveMedia func(*models.ActiveMedia)
 	Frontend       Frontend
 	Processes      ProcessLister
 	Clock          clockwork.Clock
 	HTTP           HTTPDoer
+	ActiveMedia    func() *models.ActiveMedia
+	SetActiveMedia func(*models.ActiveMedia)
+	HasWindow      func(pid int) bool
 	Locator        Locator
 	Timeouts       Timeouts
 }
@@ -805,4 +806,34 @@ func libraryExecutables(lib Library) []string {
 		}
 	}
 	return exes
+}
+
+// readyPoll is how often WaitForReady looks for the table's window.
+const readyPoll = 250 * time.Millisecond
+
+// WaitForReady is the launcher readiness probe: a table is ready once its
+// emulator has opened its player window. Popper publishes the table when the
+// emulator process appears, which is before the table has loaded.
+func (i *Integration) WaitForReady(ctx context.Context, _ *config.Instance, media *models.ActiveMedia) error {
+	gameID, err := ParseTablePath(media.Path)
+	if err != nil {
+		return nil //nolint:nilerr // a path that is not a table has nothing to wait for
+	}
+	if i.deps.HasWindow == nil {
+		return nil
+	}
+
+	err = platforms.PollReady(ctx, i.deps.Clock, readyPoll, func(context.Context) (bool, error) {
+		i.mu.Lock()
+		launch, tracked := i.tracked[gameID]
+		i.mu.Unlock()
+		if !tracked {
+			return false, nil
+		}
+		return i.deps.HasWindow(launch.pid), nil
+	})
+	if err != nil {
+		return fmt.Errorf("wait for table window: %w", err)
+	}
+	return nil
 }

@@ -89,6 +89,9 @@ type Platform struct {
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
 	windowFocusCancel       context.CancelFunc
+	windowFocus             windowfocus.Tracker
+	readyClock              clockwork.Clock
+	windowCheck             func(pid int) bool
 	retroBatWatchCancel     context.CancelFunc
 	launchBoxActiveID       string
 	launchBoxActiveAppPath  string
@@ -279,6 +282,7 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 
 	p.trackedProcess = proc
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	focuser := p.windowFocuser
 	if proc == nil || focuser == nil {
 		p.processMu.Unlock()
@@ -293,15 +297,58 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 		}
 	}
 	focusCtx, p.windowFocusCancel = context.WithCancel(focusCtx)
+	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
+	pending := p.windowFocus.Track(focusCtx, focuser, pid)
 	p.processMu.Unlock()
 
 	log.Debug().Msgf("set tracked process: %v", proc)
-	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
 	go func() {
-		if err := focuser.Focus(focusCtx, pid); err != nil && !errors.Is(err, context.Canceled) {
+		if err := pending.Err(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Debug().Err(err).Int("pid", proc.Pid).Msg("launched process window was not focused")
 		}
 	}()
+}
+
+// waitForTrackedWindow is the readiness probe for launchers whose media is
+// published before the game process exists: it waits for the process to be
+// tracked and then for its window to take focus.
+func (p *Platform) waitForTrackedWindow(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) error {
+	if p.windowFocuser == nil {
+		// No process is ever tracked without a focuser, so waiting for one
+		// would only run out the timeout.
+		return fmt.Errorf("%w: no window focuser", platforms.ErrReadinessUnavailable)
+	}
+	if err := p.windowFocus.Wait(ctx, p.clockForReadiness(), true); err != nil {
+		return fmt.Errorf("wait for tracked process window: %w", err)
+	}
+	return nil
+}
+
+// WaitForMediaReady is the platform fallback for launchers with no probe of
+// their own: a process Core tracks is ready once its window takes focus, and
+// media with no tracked process is ready as soon as it is published.
+func (p *Platform) WaitForMediaReady(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) error {
+	if err := p.windowFocus.Wait(ctx, p.clockForReadiness(), false); err != nil {
+		return fmt.Errorf("wait for tracked process window: %w", err)
+	}
+	return nil
+}
+
+// clockForReadiness is the clock the readiness probes wait on.
+func (p *Platform) clockForReadiness() clockwork.Clock {
+	if p.readyClock != nil {
+		return p.readyClock
+	}
+	return clockwork.NewRealClock()
+}
+
+// processHasWindow reports whether pid owns a visible window.
+func (p *Platform) processHasWindow(pid int) bool {
+	if p.windowCheck != nil {
+		return p.windowCheck(pid)
+	}
+	manager, ok := p.windowFocuser.(*windowfocus.Manager)
+	return ok && pid > 0 && manager.HasWindow(uint32(pid)) //nolint:gosec // Windows process IDs are 32-bit values
 }
 
 func isProcessFinishedError(err error) bool {
@@ -316,6 +363,7 @@ func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
 	if p.trackedProcess == proc {
 		p.trackedProcess = nil
 		p.completedTrackedProcess = proc
+		p.windowFocus.Forget()
 	}
 	p.processMu.Unlock()
 
@@ -360,6 +408,7 @@ func (p *Platform) ClearTrackedProcessPID(pid int) bool {
 
 	p.trackedProcess = nil
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	return true
 }
 
@@ -440,6 +489,7 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	defer p.processMu.Unlock()
 	if p.trackedProcess == proc {
 		p.trackedProcess = nil
+		p.windowFocus.Forget()
 	}
 }
 
@@ -524,6 +574,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	proc := p.trackedProcess
 	lastLauncher := p.lastLauncher
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	if p.windowFocusCancel != nil {
 		p.windowFocusCancel()
 		p.windowFocusCancel = nil
@@ -693,6 +744,23 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
+// steamLauncher is the Steam launcher with its readiness probe. Steam's media
+// is published when Steam reports the game running, before the game process
+// exists, so the probe waits for the process and then its window.
+func (p *Platform) steamLauncher() platforms.Launcher {
+	l := newWindowsSteamLauncher()
+	l.WaitForReady = p.waitForTrackedWindow
+	return l
+}
+
+// launchBoxLauncher is the LaunchBox launcher with its readiness probe. The
+// plugin reports a game started before the game's window exists.
+func (p *Platform) launchBoxLauncher() platforms.Launcher {
+	l := p.NewLaunchBoxLauncher()
+	l.WaitForReady = p.waitForTrackedWindow
+	return l
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	const staticLauncherCount = 15
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
@@ -706,7 +774,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		newWindowsSteamLauncher(),
+		p.steamLauncher(),
 		platforms.Launcher{
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
@@ -797,11 +865,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Script launches don't return a process handle
 			},
 		},
-		p.NewLaunchBoxLauncher(),
+		p.launchBoxLauncher(),
 		pinup.NewLauncher(p.popperIntegration()),
 	)
 
-	launchers = append(launchers, getRetroBatLaunchers()...)
+	launchers = append(launchers, p.retroBatLaunchers()...)
 
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
