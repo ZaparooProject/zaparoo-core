@@ -505,6 +505,9 @@ func (p *Platform) waitForRetroBatGame(ctx context.Context, cfg *config.Instance
 // the file name is the same: the probe would otherwise wait out its timeout
 // on a game that is running.
 func sameRetroBatPath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
 	if strings.EqualFold(filepath.ToSlash(filepath.Clean(a)), filepath.ToSlash(filepath.Clean(b))) {
 		return true
 	}

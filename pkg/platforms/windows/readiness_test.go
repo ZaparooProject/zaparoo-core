@@ -55,7 +55,7 @@ func TestLaunchers_ReadinessProbes(t *testing.T) {
 	assert.True(t, probed["PinUPPopper"], "Popper publishes when the emulator process appears")
 	assert.True(t, probed["KodiLocalVideo"], "Kodi polls for an active player")
 	assert.True(t, probed["RetroBatNES"], "RetroBat games are ready once the emulator has a window")
-	assert.False(t, probed["Flashpoint"], "Flashpoint gives no process or window to follow")
+	assert.True(t, probed["Flashpoint"], "Flashpoint starts its player some seconds after the link is handed over")
 	assert.False(t, probed["GenericExecutable"], "a bare executable publishes no media")
 }
 
@@ -113,7 +113,6 @@ func (r *retroBatReadyRig) advanceUntil(t *testing.T, done <-chan error) error {
 }
 
 func TestWaitForRetroBatGame_ReadyOnceTheEmulatorHasAWindow(t *testing.T) {
-	t.Parallel()
 	rig := newRetroBatReadyRig(t)
 	rig.isUp = true
 	rig.running = esapi.RunningGameResponse{Path: "C:/RetroBat/roms/ports/2048.libretro"}
@@ -124,7 +123,6 @@ func TestWaitForRetroBatGame_ReadyOnceTheEmulatorHasAWindow(t *testing.T) {
 }
 
 func TestWaitForRetroBatGame_GameReportedButNoEmulatorWindowIsNotReady(t *testing.T) {
-	t.Parallel()
 	rig := newRetroBatReadyRig(t)
 	rig.isUp = true
 	rig.running = esapi.RunningGameResponse{Path: "C:/RetroBat/roms/ports/2048.libretro"}
@@ -146,7 +144,6 @@ func TestWaitForRetroBatGame_GameReportedButNoEmulatorWindowIsNotReady(t *testin
 }
 
 func TestWaitForRetroBatGame_OtherGameRunningIsNotReady(t *testing.T) {
-	t.Parallel()
 	rig := newRetroBatReadyRig(t)
 	rig.isUp = true
 	rig.running = esapi.RunningGameResponse{Path: "C:/RetroBat/roms/ports/other.libretro"}
@@ -165,7 +162,6 @@ func TestWaitForRetroBatGame_OtherGameRunningIsNotReady(t *testing.T) {
 }
 
 func TestWaitForRetroBatGame_APIFailureIsUnavailable(t *testing.T) {
-	t.Parallel()
 	rig := newRetroBatReadyRig(t)
 	rig.apiErr = errors.New("connection refused")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -216,4 +212,95 @@ func TestClearTrackedProcess_ForgetsTheWindowAttempt(t *testing.T) {
 
 	// With the attempt forgotten nothing is tracked, so the wait is over at once.
 	require.NoError(t, p.WaitForMediaReady(t.Context(), nil, nil))
+}
+
+func TestFlashpointDirFromCommand(t *testing.T) {
+	t.Parallel()
+
+	dir, err := flashpointDirFromCommand(`"C:\Flashpoint\Launcher\Flashpoint.exe" "%1"`)
+	require.NoError(t, err)
+	assert.Equal(t, `C:\Flashpoint`, dir)
+
+	dir, err = flashpointDirFromCommand(`D:\fp\launcher\Flashpoint.exe %1`)
+	require.NoError(t, err)
+	assert.Equal(t, `D:\fp`, dir)
+
+	_, err = flashpointDirFromCommand(`"C:\Tools\Other.exe" "%1"`)
+	require.ErrorIs(t, err, errFlashpointBadLayout)
+}
+
+// flashpointRig stands in for the process list while a game starts.
+type flashpointRig struct {
+	clock   *clockwork.FakeClock
+	windows map[int]bool
+	procs   []windowsProcessInfo
+}
+
+func (r *flashpointRig) wait(ctx context.Context, findDir func() (string, error)) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForFlashpointPlayer(ctx, r.clock, findDir,
+			func() ([]windowsProcessInfo, error) { return r.procs, nil },
+			func(pid int) bool { return r.windows[pid] })
+	}()
+	return done
+}
+
+func flashpointRoot() (string, error) { return `C:\Flashpoint`, nil }
+
+func TestWaitForFlashpointPlayer_ReadyOnceANewPlayerHasAWindow(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{}}
+	rig.procs = []windowsProcessInfo{
+		{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`},
+		{PID: 2, ExePath: `C:\Flashpoint\FPSoftware\Flash\flashplayer_32_sa.exe`}, // the previous game
+	}
+	rig.windows[1], rig.windows[2] = true, true
+	done := rig.wait(t.Context(), flashpointRoot)
+
+	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 1))
+	rig.procs = append(rig.procs,
+		windowsProcessInfo{PID: 3, ExePath: `C:\Flashpoint\FPSoftware\Flash\flashplayer_32_sa.exe`})
+	rig.clock.Advance(flashpointReadyPoll)
+	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 1))
+	select {
+	case err := <-done:
+		t.Fatalf("ready before the new player had a window: %v", err)
+	default:
+	}
+	rig.windows[3] = true
+	for {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return
+		case <-time.After(time.Millisecond):
+			rig.clock.Advance(flashpointReadyPoll)
+		}
+	}
+}
+
+func TestWaitForFlashpointPlayer_LauncherOnlyIsNotReady(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{1: true}}
+	rig.procs = []windowsProcessInfo{{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`}}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := rig.wait(ctx, flashpointRoot)
+
+	for range 20 {
+		rig.clock.Advance(flashpointReadyPoll)
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestWaitForFlashpointPlayer_NotInstalledIsUnavailable(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{}}
+
+	err := <-rig.wait(t.Context(), func() (string, error) { return "", errFlashpointNotFound })
+
+	require.ErrorIs(t, err, platforms.ErrReadinessUnavailable)
 }
