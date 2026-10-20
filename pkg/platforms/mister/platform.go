@@ -796,6 +796,20 @@ func (p *Platform) clearTrackedActiveGame() {
 	}
 }
 
+// KeyboardPressSequence primes Main's virtual keyboard when a core has loaded
+// since the last sequence, so the first typed keys are not lost.
+func (p *Platform) KeyboardPressSequence(args []string, interKeyDelay time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), readyPrimeSettle*5)
+	defer cancel()
+	if err := launchReadiness.primeForInput(ctx); err != nil {
+		log.Debug().Err(err).Msg("keyboard priming cut short; continuing")
+	}
+	if err := p.InputManager.KeyboardPressSequence(args, interKeyDelay); err != nil {
+		return fmt.Errorf("keyboard sequence: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.processMu.Lock()
 	p.stopIntent = intent
@@ -1817,8 +1831,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	neogeo, neogeoMVS := addNeoGeoMVSLauncher(p, &neogeo)
-	ls := withCoreControls(p, addArcadeSystemLaunchers(p, CreateLaunchers(p)))
-	ls = append(ls, withCoreControls(p, []platforms.Launcher{amiga, neogeo, neogeoMVS})...)
+	ls := withCoreReadiness(p, withCoreControls(p, addArcadeSystemLaunchers(p, CreateLaunchers(p))))
+	ls = append(ls, withCoreReadiness(p, withCoreControls(p, []platforms.Launcher{amiga, neogeo, neogeoMVS}))...)
 	ls = append(
 		ls,
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),

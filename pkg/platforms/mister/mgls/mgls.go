@@ -67,6 +67,13 @@ type MRA struct {
 	SetName string   `xml:"setname"`
 	Name    string   `xml:"name"`
 	Rbf     string   `xml:"rbf"`
+	Roms    []MRARom `xml:"rom"`
+}
+
+// MRARom is a <rom> element of an MRA. Zip names the archives the ROM data
+// comes from, separated by | when there are alternatives.
+type MRARom struct {
+	Zip string `xml:"zip,attr"`
 }
 
 func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
