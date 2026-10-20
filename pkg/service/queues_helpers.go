@@ -67,6 +67,21 @@ func commandStopsPrimaryMedia(cmd zapscript.Command) bool {
 		cmd.Name == zapscript.ZapScriptCmdPlaylistStop
 }
 
+// launchedEarlier reports whether the commands a script has already run
+// launched media that a later stop has not ended.
+func launchedEarlier(cmds []zapscript.Command) bool {
+	launched := false
+	for i := range cmds {
+		switch {
+		case zscript.IsMediaLaunchingCommand(cmds[i].Name):
+			launched = true
+		case commandStopsPrimaryMedia(cmds[i]):
+			launched = false
+		}
+	}
+	return launched
+}
+
 // shouldRunBeforeMediaStartHook determines if the before_media_start hook should run.
 // Returns true only when:
 // - Not already in a hook context (prevents infinite recursion)

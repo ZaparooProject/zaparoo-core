@@ -308,7 +308,8 @@ func executeTokenZapScript(
 			}
 		}
 
-		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
+		mediaReadyGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+		awaitMedia := !hadMedia && launchedEarlier(cmds[:i])
 
 		var cmdEnv gozapscript.ArgExprEnv
 		if exprEnv != nil {
@@ -455,7 +456,7 @@ func executeTokenZapScript(
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
-					return waitForMediaReady(ctx, svc, mediaReadyGen)
+					return waitForMediaReady(ctx, svc, mediaReadyGen, awaitMedia)
 				},
 				PlaybackManager:  svc.PlaybackManager,
 				UI:               svc.UI,

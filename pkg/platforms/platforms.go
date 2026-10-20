@@ -498,6 +498,7 @@ type Launcher struct {
 	Collection               func(context.Context, *config.Instance, string) ([]CollectionItem, error)
 	BuildLaunchCommand       func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
 	WaitForReady             func(context.Context, *config.Instance, *models.ActiveMedia) error
+	ReadyTimeout             func(*models.ActiveMedia) time.Duration
 	ID                       string
 	SystemID                 string
 	UsesRunningInstance      string
