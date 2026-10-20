@@ -292,15 +292,17 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0, len(SystemMap)+1)
+	waitForGame := newNetControl().waitForGame(clockwork.NewRealClock())
 
 	for folder, info := range SystemMap {
 		launchers = append(launchers, platforms.Launcher{
-			ID:         info.GetLauncherID(),
-			SystemID:   info.SystemID,
-			Extensions: info.Extensions,
-			Folders:    []string{folder},
-			Launch:     p.launchGame,
-			Controls:   p.controls(),
+			ID:           info.GetLauncherID(),
+			SystemID:     info.SystemID,
+			Extensions:   info.Extensions,
+			Folders:      []string{folder},
+			Launch:       p.launchGame,
+			Controls:     p.controls(),
+			WaitForReady: waitForGame,
 		})
 	}
 

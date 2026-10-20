@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 )
 
@@ -102,6 +103,7 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 	}
 
 	if opts.NetworkCmdAddr != "" {
+		launcher.WaitForReady = waitForContent(opts.NetworkCmdAddr, clockwork.NewRealClock())
 		launcher.Kill = func(_ *config.Instance) error {
 			return sendCommand(context.Background(), opts.NetworkCmdAddr, commandQuit)
 		}
