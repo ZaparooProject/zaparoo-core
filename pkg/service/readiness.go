@@ -84,6 +84,11 @@ func readyLauncher(svc *ServiceContext, media *models.ActiveMedia) *platforms.La
 	if media == nil || media.LauncherID == "" {
 		return nil
 	}
+	if svc.LauncherCache != nil {
+		if launcher := svc.LauncherCache.GetLauncherByID(media.LauncherID); launcher != nil {
+			return launcher
+		}
+	}
 	launchers := svc.Platform.Launchers(svc.Config)
 	for i := range launchers {
 		if launchers[i].ID == media.LauncherID {

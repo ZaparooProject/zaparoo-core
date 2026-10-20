@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -79,6 +80,10 @@ func waitForPlayer(
 				return true, nil //nolint:nilerr // see above
 			}
 			if media.Name != "" && (item.Label == media.Name || item.Title == media.Name) {
+				return true, nil
+			}
+			if media.Path != "" && item.File != "" &&
+				filepath.Clean(media.Path) == filepath.Clean(item.File) {
 				return true, nil
 			}
 			if first && before == nil {

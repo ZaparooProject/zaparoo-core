@@ -60,7 +60,7 @@ func TestWatch_ReportsOpenAndClose(t *testing.T) {
 	assert.Equal(t, Close, nextEvent(t, events))
 }
 
-func TestWatch_IgnoresWritesAndCountsEachOpen(t *testing.T) {
+func TestWatch_CountsEachOpenAndItsClose(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "game.md")
@@ -68,11 +68,13 @@ func TestWatch_IgnoresWritesAndCountsEachOpen(t *testing.T) {
 	events, err := Watch(t.Context(), path)
 	require.NoError(t, err)
 
-	// A write open is not a read of the game.
+	// A write open is still an open: its close must be reported too, or the
+	// open would never be matched.
 	w, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // test path
 	require.NoError(t, err)
 	assert.Equal(t, Open, nextEvent(t, events))
 	require.NoError(t, w.Close())
+	assert.Equal(t, Close, nextEvent(t, events))
 
 	for range 2 {
 		r, err := os.Open(path) //nolint:gosec // test path
@@ -99,6 +101,24 @@ func TestWatch_ClosesChannelWhenContextEnds(t *testing.T) {
 		assert.False(t, ok)
 	case <-time.After(5 * time.Second):
 		t.Fatal("channel was not closed")
+	}
+}
+
+func TestWatch_ClosesChannelWhenFileIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "game.md")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
+	events, err := Watch(t.Context(), path)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(path))
+
+	select {
+	case _, ok := <-events:
+		assert.False(t, ok)
+	case <-time.After(5 * time.Second):
+		t.Fatal("channel was not closed after the file was removed")
 	}
 }
 

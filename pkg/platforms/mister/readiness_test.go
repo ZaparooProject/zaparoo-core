@@ -325,7 +325,8 @@ func TestWithCoreReadiness(t *testing.T) {
 	assert.NotNil(t, ls[1].WaitForReady, "alternate cores load the same media")
 	assert.Nil(t, ls[2].WaitForReady, "a launcher with no core has nothing to wait for")
 	assert.Nil(t, ls[3].WaitForReady, "a launcher that launches nothing")
-	assert.Nil(t, ls[3].WaitForReady, "a launcher that launches nothing")
+	require.NotNil(t, ls[4].WaitForReady, "an existing probe is kept")
+	assert.Nil(t, ls[4].ReadyTimeout, "an existing probe keeps its own timeout")
 }
 
 func TestCoreReadiness_GameCoreDidNotLaunchIsReadyImmediately(t *testing.T) {

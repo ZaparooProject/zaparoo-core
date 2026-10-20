@@ -500,3 +500,20 @@ func TestWaitForMediaReadyUsesTheLauncherTimeout(t *testing.T) {
 		t.Fatal("wait did not return once the media was ready")
 	}
 }
+
+type launcherResolverStub struct {
+	launcher *platforms.Launcher
+}
+
+func (s launcherResolverStub) GetLauncherByID(string) *platforms.Launcher { return s.launcher }
+
+func TestReadyLauncherPrefersTheLauncherCache(t *testing.T) {
+	t.Parallel()
+
+	cached := &platforms.Launcher{ID: "native"}
+	svc := newReadinessService(&readinessPlatform{MockPlatform: mocks.NewMockPlatform()})
+	svc.LauncherCache = launcherResolverStub{launcher: cached}
+	media := models.NewActiveMedia("audio", "Audio", "song.mp3", "Song", "native")
+
+	assert.Same(t, cached, readyLauncher(svc, media), "a launcher the platform cannot build is found")
+}

@@ -197,3 +197,17 @@ func TestKodiLaunchersHaveReadinessProbe(t *testing.T) {
 		assert.NotNil(t, launchers[i].WaitForReady, launchers[i].ID)
 	}
 }
+
+func TestWaitForPlayer_LaunchedItemByPathIsReadyAtOnce(t *testing.T) {
+	t.Parallel()
+
+	c := &itemClient{
+		playersClient: playersClient{results: []playersResult{{players: []Player{{ID: 1}}}}},
+		items:         []*PlayerItem{{Label: "Other label", File: "/media/movies/m.mkv", Type: "movie"}},
+	}
+	probe := waitForPlayer(func(*config.Instance) KodiClient { return c }, clockwork.NewFakeClock())
+
+	require.NoError(t, probe(t.Context(), nil,
+		models.NewActiveMedia("Movies", "Movies", "/media/movies/m.mkv", "Movie", "KodiLocalVideo")))
+	assert.Equal(t, int32(1), c.asked.Load())
+}

@@ -42,14 +42,14 @@ type Kind int
 const (
 	// Open means a process opened the file.
 	Open Kind = iota
-	// Close means a process closed a read-only open of the file.
+	// Close means a process closed an open of the file.
 	Close
 	// Access means a process read from the file.
 	Access
 )
 
 const (
-	watchMask = unix.IN_OPEN | unix.IN_CLOSE_NOWRITE | unix.IN_ACCESS
+	watchMask = unix.IN_OPEN | unix.IN_CLOSE_NOWRITE | unix.IN_CLOSE_WRITE | unix.IN_ACCESS
 	// eventHeaderSize is the size of struct inotify_event without its name,
 	// which a watch on a file never carries.
 	eventHeaderSize = unix.SizeofInotifyEvent
@@ -86,8 +86,7 @@ func Watch(ctx context.Context, path string) (<-chan Kind, error) {
 		for {
 			n, err := file.Read(buf)
 			if err != nil {
-				// Closed by the context, or the watch is gone because the file
-				// was removed or unmounted: nothing more will arrive.
+				// Closed by the context: nothing more will arrive.
 				return
 			}
 			for off := 0; off+eventHeaderSize <= n; {
@@ -97,9 +96,14 @@ func Watch(ctx context.Context, path string) (<-chan Kind, error) {
 
 				var kind Kind
 				switch {
+				case mask&(unix.IN_IGNORED|unix.IN_UNMOUNT) != 0:
+					// The kernel dropped the watch, as when the file was
+					// removed or its filesystem unmounted. The descriptor
+					// stays open and reads would block forever.
+					return
 				case mask&unix.IN_OPEN != 0:
 					kind = Open
-				case mask&unix.IN_CLOSE_NOWRITE != 0:
+				case mask&(unix.IN_CLOSE_NOWRITE|unix.IN_CLOSE_WRITE) != 0:
 					kind = Close
 				case mask&unix.IN_ACCESS != 0:
 					kind = Access
