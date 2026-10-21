@@ -26,7 +26,16 @@ import (
 	standalone "github.com/ZaparooProject/zaparoo-core/mister/mgl"
 )
 
-func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, error) {
+// Option sets one OSD option on the launched core.
+type Option = standalone.Option
+
+// Reset holds the core's reset button after the media is loaded.
+type Reset = standalone.Reset
+
+// Setting is an element added to a generated MGL after the media.
+type Setting = standalone.Setting
+
+func Generate(core *catalog.Core, rbfPath, mediaPath, override string, settings ...Setting) (string, error) {
 	//nolint:wrapcheck // Compatibility wrapper preserves the standalone error.
-	return standalone.Generate(core, rbfPath, mediaPath, override)
+	return standalone.Generate(core, rbfPath, mediaPath, override, settings...)
 }

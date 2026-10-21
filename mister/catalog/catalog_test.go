@@ -312,6 +312,18 @@ func TestAddedCoreSlots(t *testing.T) {
 		{"PC110", "disk.vhd", "s", 2},
 		{"Raster", "film.mpg", "s", 0},
 		{"Phosphor", "song.flac", "s", 0},
+		{"ZX81", "game.p", "f", 0},
+		{"ZX81", "game.o", "f", 0},
+		{"Aquarius", "tape.caq", "f", 0},
+		{"TRS80", "disk.dsk", "s", 1},
+		{"TRS80", "disk.jv1", "s", 1},
+		{"Vector06C", "game.rom", "f", 0},
+		{"BK0011M", "game.bin", "f", 0},
+		{"Oric", "tape.tap", "f", 1},
+		{"Oric", "snap.sna", "f", 4},
+		{"PC88", "tape.cmt", "s", 4},
+		{"AcornElectron", "tape.uef", "f", 2},
+		{"ZXSpectrum", "tape.pzx", "f", 2},
 	}
 
 	for i := range tests {
@@ -331,5 +343,17 @@ func TestAddedCoreSlots(t *testing.T) {
 				t.Fatalf("want %s/%d, got %s/%d", tt.method, tt.index, params.Method, params.Index)
 			}
 		})
+	}
+}
+
+func TestAquariusCartridgeHasNoSlot(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Aquarius")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.PathToMGLDef(core, "cart.bin"); err == nil {
+		t.Fatal("both Aquarius file entries are unnumbered, so MGL can only reach the tape")
 	}
 }

@@ -57,6 +57,7 @@
       ],
       "extensions": [
         ".vhd",
+        ".uef",
         ".mgl"
       ],
       "slots": [
@@ -67,6 +68,17 @@
           },
           "extensions": [
             ".vhd"
+          ]
+        },
+        {
+          "mgl": {
+            "method": "f",
+            "delay": 1,
+            "index": 2
+          },
+          "label": "Cassette",
+          "extensions": [
+            ".uef"
           ]
         }
       ]
@@ -551,7 +563,6 @@
         "AQUARIUS"
       ],
       "extensions": [
-        ".bin",
         ".caq",
         ".mgl"
       ],
@@ -559,19 +570,7 @@
         {
           "mgl": {
             "method": "f",
-            "delay": 1,
-            "index": 1
-          },
-          "label": "Cartridge",
-          "extensions": [
-            ".bin"
-          ]
-        },
-        {
-          "mgl": {
-            "method": "f",
-            "delay": 1,
-            "index": 2
+            "delay": 1
           },
           "label": "Tape",
           "extensions": [
@@ -970,8 +969,7 @@
         {
           "mgl": {
             "method": "f",
-            "delay": 1,
-            "index": 1
+            "delay": 1
           },
           "extensions": [
             ".bin"
@@ -3473,6 +3471,8 @@
       ],
       "extensions": [
         ".dsk",
+        ".tap",
+        ".sna",
         ".mgl"
       ],
       "slots": [
@@ -3484,6 +3484,28 @@
           "label": "Drive A:",
           "extensions": [
             ".dsk"
+          ]
+        },
+        {
+          "mgl": {
+            "method": "f",
+            "delay": 1,
+            "index": 1
+          },
+          "label": "Tape",
+          "extensions": [
+            ".tap"
+          ]
+        },
+        {
+          "mgl": {
+            "method": "f",
+            "delay": 1,
+            "index": 4
+          },
+          "label": "Snapshot",
+          "extensions": [
+            ".sna"
           ]
         }
       ]
@@ -3551,6 +3573,8 @@
       ],
       "extensions": [
         ".d88",
+        ".cmt",
+        ".t88",
         ".mgl"
       ],
       "slots": [
@@ -3561,6 +3585,18 @@
           },
           "extensions": [
             ".d88"
+          ]
+        },
+        {
+          "mgl": {
+            "method": "s",
+            "delay": 1,
+            "index": 4
+          },
+          "label": "Tape",
+          "extensions": [
+            ".cmt",
+            ".t88"
           ]
         }
       ]
@@ -4935,30 +4971,34 @@
         ".jvi",
         ".cmd",
         ".cas",
+        ".jv1",
         ".mgl"
       ],
       "slots": [
         {
           "mgl": {
             "method": "s",
-            "delay": 1
+            "delay": 1,
+            "index": 1
           },
           "label": "Disk 0",
           "extensions": [
             ".dsk",
-            ".jvi"
+            ".jvi",
+            ".jv1"
           ]
         },
         {
           "mgl": {
             "method": "s",
             "delay": 1,
-            "index": 1
+            "index": 2
           },
           "label": "Disk 1",
           "extensions": [
             ".dsk",
-            ".jvi"
+            ".jvi",
+            ".jv1"
           ]
         },
         {
@@ -5394,8 +5434,7 @@
         {
           "mgl": {
             "method": "f",
-            "delay": 1,
-            "index": 1
+            "delay": 1
           },
           "extensions": [
             ".rom",
@@ -5668,19 +5707,20 @@
       "extensions": [
         ".p",
         ".0",
+        ".o",
         ".mgl"
       ],
       "slots": [
         {
           "mgl": {
             "method": "f",
-            "delay": 1,
-            "index": 1
+            "delay": 1
           },
           "label": "Tape",
           "extensions": [
             ".0",
-            ".p"
+            ".p",
+            ".o"
           ]
         }
       ]
@@ -5750,6 +5790,7 @@
         ".dsk",
         ".mgt",
         ".vhd",
+        ".pzx",
         ".mgl"
       ],
       "slots": [
@@ -5776,7 +5817,8 @@
           "extensions": [
             ".tap",
             ".csw",
-            ".tzx"
+            ".tzx",
+            ".pzx"
           ]
         },
         {

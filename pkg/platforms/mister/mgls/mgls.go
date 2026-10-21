@@ -43,6 +43,15 @@ import (
 	"github.com/spf13/afero"
 )
 
+// Option sets one OSD option on a launched core.
+type Option = mglgen.Option
+
+// Reset holds the core's reset button after the media is loaded.
+type Reset = mglgen.Reset
+
+// Setting is an element added to a generated MGL after the media.
+type Setting = mglgen.Setting
+
 // missingRequestedFileError preserves the diagnostic and filesystem cause while
 // marking a missing user-selected file as an expected launch failure.
 type missingRequestedFileError struct {
@@ -128,9 +137,9 @@ func ReadMRA(path string) (MRA, error) {
 
 // GenerateMgl is retained for compatibility. New dependency-light callers
 // should use mgl.Generate directly.
-func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
+func GenerateMgl(core *cores.Core, rbfPath, path, override string, options ...Setting) (string, error) {
 	//nolint:wrapcheck // Compatibility wrapper preserves the dependency-light package error.
-	return mglgen.Generate(core, rbfPath, path, override)
+	return mglgen.Generate(core, rbfPath, path, override, options...)
 }
 
 func writeTempFile(content string) (string, error) {
@@ -200,7 +209,7 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 	return nil
 }
 
-func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error {
+func launchTempMgl(cfg *config.Instance, system *cores.Core, path string, options []Setting) error {
 	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
 	if err != nil {
 		return fmt.Errorf("resolving core RBF: %w", err)
@@ -214,7 +223,7 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
 	}
 
-	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override)
+	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override, options...)
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
@@ -284,6 +293,13 @@ func writeCurrentPathTo(
 }
 
 func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
+	return LaunchGameWithOptions(cfg, system, path, nil)
+}
+
+// LaunchGameWithOptions launches a game and asks Main to set OSD options on the
+// core first. Options only travel in a generated MGL, so media that launches as
+// an .mra or .mgl file ignores them.
+func LaunchGameWithOptions(cfg *config.Instance, system *cores.Core, path string, options []Setting) error {
 	ext := s.ToLower(filepath.Ext(path))
 	log.Info().Str("system", system.ID).Str("path", path).Str("type", ext).Msg("launching game")
 
@@ -308,7 +324,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 			}
 		}
 	default:
-		err := launchTempMgl(cfg, system, path)
+		err := launchTempMgl(cfg, system, path, options)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}

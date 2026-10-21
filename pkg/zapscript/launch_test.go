@@ -1968,6 +1968,30 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestFindFile_ResolvesGameInsideDiskImage(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := launchTestAbsPath("games")
+	imagePath := filepath.Join(rootDir, "AcornElectron", "boot.vhd")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(imagePath), 0o700))
+	require.NoError(t, afero.WriteFile(fs, imagePath, []byte("test"), 0o600))
+
+	inside := filepath.Join(rootDir, "acornelectron", "BOOT.VHD", "Elite")
+	result, err := findFile(fs, mockPlatform, cfg, inside)
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(imagePath, "Elite"), result)
+
+	bare, err := findFile(fs, mockPlatform, cfg, imagePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, imagePath, bare)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestFindFile_ReturnsAmbiguousCaseInsensitivePathError(t *testing.T) {
 	t.Parallel()
 

@@ -234,6 +234,13 @@ func launchAmiga(pl platforms.Platform) func(*config.Instance, string, *platform
 func launch(
 	pl platforms.Platform, coreID string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchWithOptions(pl, coreID, nil)
+}
+
+// launchWithOptions is launch for media that needs OSD options set on the core.
+func launchWithOptions(
+	pl platforms.Platform, coreID string, options []mgls.Setting,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		// Close console if needed - FPGA cores take over display
 		if err := pl.ConsoleManager().Close(); err != nil {
@@ -268,7 +275,7 @@ func launch(
 			s = &sn
 		}
 
-		err = mgls.LaunchGame(cfg, s, path)
+		err = mgls.LaunchGameWithOptions(cfg, s, path, options)
 		if err != nil {
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -3063,6 +3070,6 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 	all = append(all, unstable...)
 
 	return prioritizeNGPCCore(nil, applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
-		applyAltCoreLauncherGroups(withCoreReadiness(pl, withCoreControls(pl, all))),
+		applyAltCoreLauncherGroups(withCoreReadiness(pl, withLoadPlans(pl, withCoreControls(pl, all)))),
 	))))
 }

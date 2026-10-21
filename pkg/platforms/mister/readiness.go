@@ -124,8 +124,12 @@ type coreReadiness struct {
 	stat     func(path string) (os.FileInfo, error)
 	coreName func() (string, time.Time, error)
 	pressKey func(string) error
-	primedAt time.Time // core load time the keyboard was last primed for
-	keyMu    syncutil.Mutex
+	// pressSequence types a plan's input. It is the platform's own sequence
+	// method, which primes the virtual keyboard first.
+	pressSequence func([]string, time.Duration) error
+	primedAt      time.Time // core load time the keyboard was last primed for
+	plans         loadPlans
+	keyMu         syncutil.Mutex
 }
 
 // launchReadiness is shared by every launcher list. Launchers are rebuilt on
@@ -192,6 +196,7 @@ func (r *coreReadiness) usePlatform(pl platforms.Platform) {
 	r.keyMu.Lock()
 	defer r.keyMu.Unlock()
 	r.pressKey = pl.KeyboardPress
+	r.pressSequence = pressSequenceFor(pl)
 }
 
 // primeForInput taps the priming key and gives Main time to finish setting up
@@ -258,6 +263,9 @@ func (r *coreReadiness) gameFile(path string) (string, error) {
 // readyTimeout extends the service's default bound for an arcade set by the
 // size of its ROM archives. Other media keeps the default.
 func (r *coreReadiness) readyTimeout(media *models.ActiveMedia) time.Duration {
+	if plan, ok := r.plans.peek(media.Path, r.clock.Now()); ok {
+		return plan.readyTimeout()
+	}
 	if !strings.EqualFold(filepath.Ext(media.Path), ".mra") {
 		return 0
 	}
@@ -297,6 +305,11 @@ func (r *coreReadiness) readyTimeout(media *models.ActiveMedia) time.Duration {
 func (r *coreReadiness) target(core *cores.Core, launcherID, path string) (file string, streamed bool, err error) {
 	if strings.EqualFold(filepath.Ext(path), ".mgl") {
 		return r.mglTarget(core, path)
+	}
+
+	// A game inside an image is not a file of its own: Main mounts the image.
+	if plan, ok := r.plans.peek(path, r.clock.Now()); ok && plan.target != path {
+		return plan.target, false, nil
 	}
 
 	file, err = r.gameFile(path)
@@ -369,7 +382,10 @@ func (r *coreReadiness) waitForReady(
 		}
 		log.Debug().Str("file", file).Bool("streamed", streamed).Dur("settle", settle).
 			Msg("waiting for the core to take its game")
-		return r.waitForGameFile(ctx, file, streamed, settle)
+		if err := r.waitForGameFile(ctx, file, streamed, settle); err != nil {
+			return err
+		}
+		return r.runPlan(ctx, media.Path)
 	}
 }
 

@@ -38,9 +38,66 @@ func escapeAttribute(value string) string {
 	return replacer.Replace(value)
 }
 
+// Option sets one OSD option by the labels the core shows for it. Main applies
+// it after the core's settings load, so an older Main that predates the tag
+// skips it and the launch carries on without the option.
+type Option struct {
+	Name  string
+	Value string
+	// Page names the OSD sub-page holding the option, for a label that is not
+	// unique across pages.
+	Page string
+	// Default applies the option only when the core has no saved settings yet,
+	// so a choice the user already made wins.
+	Default bool
+}
+
+// Setting is an element added to a generated MGL after the media: an OSD option
+// or a reset.
+type Setting interface {
+	element() string
+}
+
+// Reset holds the core's reset button after the media is loaded, for a machine
+// that must start the media from a fresh boot.
+type Reset struct {
+	// Delay is the seconds to wait before the reset, Hold how long it is held.
+	Delay int
+	Hold  int
+}
+
+func (r Reset) element() string {
+	return fmt.Sprintf("\t<reset delay=\"%d\" hold=\"%d\"/>\n", r.Delay, r.Hold)
+}
+
+func (o Option) element() string {
+	var b strings.Builder
+	b.WriteString("\t<option")
+	fmt.Fprintf(&b, " name=\"%s\" value=\"%s\"", escapeAttribute(o.Name), escapeAttribute(o.Value))
+	if o.Page != "" {
+		fmt.Fprintf(&b, " page=\"%s\"", escapeAttribute(o.Page))
+	}
+	if o.Default {
+		b.WriteString(` default="1"`)
+	}
+	b.WriteString("/>\n")
+	return b.String()
+}
+
+func optionElements(settings []Setting) string {
+	var b strings.Builder
+	for _, setting := range settings {
+		if o, ok := setting.(Option); ok && (o.Name == "" || o.Value == "") {
+			continue
+		}
+		b.WriteString(setting.element())
+	}
+	return b.String()
+}
+
 // Generate creates an MGL document for a core and optional media path.
 // Override is trusted MGL fragment content produced by a platform hook.
-func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, error) {
+func Generate(core *catalog.Core, rbfPath, mediaPath, override string, settings ...Setting) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")
 	}
@@ -57,10 +114,12 @@ func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, 
 
 	switch {
 	case mediaPath == "":
+		result += optionElements(settings)
 		result += "</mistergamedescription>"
 		return result, nil
 	case override != "":
 		result += override
+		result += optionElements(settings)
 		result += "</mistergamedescription>"
 		return result, nil
 	}
@@ -85,6 +144,7 @@ func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, 
 		)
 	}
 
+	result += optionElements(settings)
 	result += "</mistergamedescription>"
 	return result, nil
 }
