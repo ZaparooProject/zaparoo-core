@@ -47,7 +47,8 @@ func (p *Platform) popperIntegration() *pinup.Integration {
 					p.setActiveMedia(media)
 				}
 			},
-			Frontend: pinup.NewFrontend(&command.RealExecutor{}),
+			Frontend:  pinup.NewFrontend(&command.RealExecutor{}),
+			HasWindow: p.processHasWindow,
 			Locator: pinup.Locator{
 				FS:         afero.NewOsFs(),
 				Registry:   pinup.LocateFromRegistry,

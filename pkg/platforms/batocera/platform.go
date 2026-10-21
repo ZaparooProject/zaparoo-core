@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -66,11 +67,14 @@ type Platform struct {
 	stopTracker     func() error
 	cfg             *config.Instance
 	esConfigCache   *ESSystemConfig
+	launchLog       *gamehandoff.LaunchLog
+	watchGame       func(ctx context.Context, path string) (<-chan gamehandoff.Kind, error)
 	shared.InputManager
 	maxStartupRetries int
 	processMu         syncutil.RWMutex
 	trackerMu         syncutil.RWMutex
 	esConfigMu        syncutil.RWMutex
+	launchLogMu       syncutil.Mutex
 	kodiActive        bool
 }
 
@@ -743,6 +747,15 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
+// esAPILaunch launches path through EmulationStation's API, which returns no
+// process handle.
+func esAPILaunch(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	if err := esapi.APILaunch(path); err != nil {
+		return nil, fmt.Errorf("failed to launch via API: %w", err)
+	}
+	return nil, nil //nolint:nilnil // API launches don't return a process handle
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
 	launchers = append(launchers,
@@ -767,13 +780,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}),
 			// SkipFilesystemScan defaults to false - built-in scanner will find all ROM files
 			// Scanner function adds metadata from gamelist.xml
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := esapi.APILaunch(path)
-				if err != nil {
-					return nil, fmt.Errorf("failed to launch via API: %w", err)
-				}
-				return nil, nil //nolint:nilnil // API launches don't return a process handle
-			},
+			Launch:       p.noteLaunches(esAPILaunch),
+			WaitForReady: p.waitForGame,
 			Scanner: func(
 				ctx context.Context,
 				cfg *config.Instance,

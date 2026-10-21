@@ -39,6 +39,7 @@ func NewLauncher(i *Integration) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleExternal,
 		SkipFilesystemScan: true,
 		Availability:       i.Available,
+		WaitForReady:       i.WaitForReady,
 		// A scheme match alone would select this launcher for any popper://
 		// path, and DoLaunch stops the running table before handing the path
 		// over. Rejecting an unlaunchable ID here keeps selection from

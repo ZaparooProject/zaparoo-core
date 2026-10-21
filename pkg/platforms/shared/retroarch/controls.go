@@ -24,11 +24,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/jonboulle/clockwork"
 )
 
 const (
@@ -46,6 +49,13 @@ const (
 
 	statusPlayingPrefix = "GET_STATUS PLAYING "
 	statusPausedPrefix  = "GET_STATUS PAUSED "
+
+	// readyPollInterval is how often a readiness probe asks GET_STATUS, and
+	// readyQueryTimeout how long one ask waits. RetroArch does not answer
+	// until its network command interface is up, so an ask that gets no reply
+	// reads as unavailable rather than not ready.
+	readyPollInterval = 200 * time.Millisecond
+	readyQueryTimeout = 500 * time.Millisecond
 )
 
 // Controls returns RetroArch network-command controls for addr.
@@ -170,4 +180,87 @@ func sendCommand(ctx context.Context, addr, command string) error {
 		return fmt.Errorf("send retroarch command %s: %w", command, err)
 	}
 	return nil
+}
+
+// waitForContent returns a launcher readiness probe that polls GET_STATUS
+// until RetroArch reports the launched content, which is when its input and
+// network commands act on the game. Before that RetroArch either refuses the
+// datagram (not started yet) or reports no content.
+//
+// Content already loaded when the probe starts is the previous game. Its
+// status is remembered, and the probe is ready once the status changes or
+// names the launched file.
+func waitForContent(
+	addr string,
+	clock clockwork.Clock,
+) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return func(ctx context.Context, _ *config.Instance, media *models.ActiveMedia) error {
+		var before string
+		first := true
+		return platforms.PollReady(ctx, clock, readyPollInterval, func(ctx context.Context) (bool, error) {
+			status, err := readStatus(ctx, addr)
+			if err != nil {
+				return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+			}
+			loaded := strings.HasPrefix(status, statusPlayingPrefix) ||
+				strings.HasPrefix(status, statusPausedPrefix)
+			wasFirst := first
+			first = false
+			if !loaded {
+				return false, nil
+			}
+			if media == nil || statusNamesContent(status, media.Path) {
+				return true, nil
+			}
+			if wasFirst {
+				before = status
+				return false, nil
+			}
+			return status != before, nil
+		})
+	}
+}
+
+// statusNamesContent reports whether a GET_STATUS reply, shaped
+// "GET_STATUS PLAYING <system>,<content name>,crc32=<hex>", names the file at
+// path. RetroArch reports the file name without its extension.
+func statusNamesContent(status, path string) bool {
+	if path == "" {
+		return false
+	}
+	fields := strings.Split(status, ",")
+	if len(fields) < 2 {
+		return false
+	}
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	return name != "" && strings.EqualFold(strings.TrimSpace(fields[1]), name)
+}
+
+// readStatus asks the network command interface for GET_STATUS.
+func readStatus(ctx context.Context, addr string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, readyQueryTimeout)
+	defer cancel()
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "udp", addr)
+	if err != nil {
+		return "", fmt.Errorf("dial retroarch network command interface: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	if err = conn.SetDeadline(deadline); err != nil {
+		return "", fmt.Errorf("set retroarch status deadline: %w", err)
+	}
+	if _, err = conn.Write([]byte("GET_STATUS")); err != nil {
+		return "", fmt.Errorf("query retroarch network command interface: %w", err)
+	}
+	var buf [4096]byte
+	n, err := conn.Read(buf[:])
+	if err != nil {
+		return "", fmt.Errorf("retroarch network command interface unavailable: %w", err)
+	}
+	return strings.TrimSpace(string(buf[:n])), nil
 }

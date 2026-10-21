@@ -30,13 +30,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/jonboulle/clockwork"
 )
 
 const (
@@ -52,6 +55,11 @@ const (
 	// replayGameView is the get_status view while a game is running.
 	replayGameView = "game_play"
 
+	// readyPollInterval is how often a readiness probe asks get_status. The
+	// API is down for about a second while replay.service restarts into the
+	// launched game, so this sets how soon after that the game is noticed.
+	readyPollInterval = 250 * time.Millisecond
+
 	minStateSlot = 1
 	maxStateSlot = 18
 
@@ -64,6 +72,8 @@ var (
 	)
 	errNetControlToken = errors.New("RePlayOS rejected the net control code in replay.cfg")
 	errNoGameRunning   = errors.New("no game is running")
+
+	errNetControlRateLimited = errors.New("RePlayOS net control is rate limiting requests")
 )
 
 // netControl talks to RePlayOS's net control REST API. The code it
@@ -138,7 +148,7 @@ func (n *netControl) get(ctx context.Context, endpoint string, query url.Values)
 	case resp.StatusCode == http.StatusUnauthorized:
 		return nil, errNetControlToken
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, errors.New("RePlayOS net control is rate limiting requests")
+		return nil, errNetControlRateLimited
 	case resp.StatusCode != http.StatusOK:
 		var apiErr struct {
 			Error  string `json:"error"`
@@ -152,23 +162,77 @@ func (n *netControl) get(ctx context.Context, endpoint string, query url.Values)
 	return body, nil
 }
 
+// netStatus is the part of get_status the controls and readiness probe use.
+type netStatus struct {
+	View     string `json:"view"`
+	GameFile string `json:"game_file"` //nolint:tagliatelle // RePlayOS names the field
+}
+
+func (n *netControl) status(ctx context.Context) (netStatus, error) {
+	body, err := n.get(ctx, "get_status", nil)
+	if err != nil {
+		return netStatus{}, err
+	}
+	var status netStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return netStatus{}, fmt.Errorf("parse RePlayOS status: %w", err)
+	}
+	return status, nil
+}
+
 // requireGame checks that a game is running, because RePlayOS queues state
 // and reset commands without a game and silently drops them.
 func (n *netControl) requireGame(ctx context.Context) error {
-	body, err := n.get(ctx, "get_status", nil)
+	status, err := n.status(ctx)
 	if err != nil {
 		return err
-	}
-	var status struct {
-		View string `json:"view"`
-	}
-	if err := json.Unmarshal(body, &status); err != nil {
-		return fmt.Errorf("parse RePlayOS status: %w", err)
 	}
 	if status.View != replayGameView {
 		return fmt.Errorf("%w: %w", errNoGameRunning, platforms.ErrControlUnavailable)
 	}
 	return nil
+}
+
+// waitForGame returns a launcher readiness probe that polls get_status until
+// RePlayOS reports the launched game running. The API is unreachable while
+// replay.service restarts into the game, so connection failures and rate
+// limiting are retried; a rejected net control code ends the wait.
+func (n *netControl) waitForGame(
+	clock clockwork.Clock,
+) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return func(ctx context.Context, _ *config.Instance, media *models.ActiveMedia) error {
+		return platforms.PollReady(ctx, clock, readyPollInterval, func(ctx context.Context) (bool, error) {
+			status, err := n.status(ctx)
+			switch {
+			case errors.Is(err, errNetControlUnavailable), errors.Is(err, errNetControlRateLimited):
+				return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+			case err != nil:
+				return false, err
+			}
+			return status.View == replayGameView && sameGame(status.GameFile, media.Path), nil
+		})
+	}
+}
+
+// sameGame reports whether the game RePlayOS is running is the launched one.
+// RePlayOS reports the path it was started with, which may spell a mount
+// differently, so the file name and the folder holding it (the system's
+// folder) are accepted in place of the full path. A bare file name matches on
+// the name alone.
+func sameGame(running, launched string) bool {
+	if running == "" || launched == "" {
+		return false
+	}
+	running, launched = filepath.Clean(running), filepath.Clean(launched)
+	if running == launched {
+		return true
+	}
+	if filepath.Base(running) != filepath.Base(launched) {
+		return false
+	}
+	runningDir := filepath.Base(filepath.Dir(running))
+	return runningDir == "." || runningDir == string(filepath.Separator) ||
+		runningDir == filepath.Base(filepath.Dir(launched))
 }
 
 func (n *netControl) stateControl(endpoint string) platforms.ControlFunc {

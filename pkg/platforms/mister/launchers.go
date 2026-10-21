@@ -3063,6 +3063,6 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 	all = append(all, unstable...)
 
 	return prioritizeNGPCCore(nil, applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
-		applyAltCoreLauncherGroups(withCoreControls(pl, all)),
+		applyAltCoreLauncherGroups(withCoreReadiness(pl, withCoreControls(pl, all))),
 	))))
 }

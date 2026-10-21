@@ -21,13 +21,86 @@ package kodi
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/jonboulle/clockwork"
 )
+
+// readyPollInterval is how often a readiness probe asks Kodi for its players.
+const readyPollInterval = 250 * time.Millisecond
+
+// kodiReady builds the WaitForReady probe shared by the Kodi launchers.
+func kodiReady(id string, groups []string) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return waitForPlayer(func(cfg *config.Instance) KodiClient {
+		return NewClientWithLauncherID(cfg, id, groups)
+	}, clockwork.NewRealClock())
+}
+
+// waitForPlayer returns a launcher readiness probe that polls Kodi until the
+// launched media is playing, which is when playback controls act on it.
+// Player.Open returns before playback starts, and Kodi may not be reachable
+// at all yet, so a failed query is retried and reported as unavailable if it
+// is still failing when the wait ends.
+//
+// A player that is already running when the probe starts is playing something
+// else. Its item is remembered, and the probe is ready once the item changes
+// or is the launched media by name.
+func waitForPlayer(
+	newClient func(*config.Instance) KodiClient,
+	clock clockwork.Clock,
+) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return func(ctx context.Context, cfg *config.Instance, media *models.ActiveMedia) error {
+		client := newClient(cfg)
+		var before *PlayerItem
+		first := true
+		return platforms.PollReady(ctx, clock, readyPollInterval, func(ctx context.Context) (bool, error) {
+			players, err := client.GetActivePlayers(ctx)
+			if err != nil {
+				return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+			}
+			if len(players) == 0 {
+				first = false
+				return false, nil
+			}
+			if media == nil {
+				return true, nil
+			}
+			item, itemErr := client.GetPlayerItem(ctx, players[0].ID)
+			if itemErr != nil || item == nil {
+				// An item that cannot be read cannot be told apart from the
+				// last one; an active player is the best signal left.
+				return true, nil //nolint:nilerr // see above
+			}
+			if media.Name != "" && (item.Label == media.Name || item.Title == media.Name) {
+				return true, nil
+			}
+			if media.Path != "" && item.File != "" &&
+				filepath.Clean(media.Path) == filepath.Clean(item.File) {
+				return true, nil
+			}
+			if first && before == nil {
+				before = item
+				first = false
+				return false, nil
+			}
+			first = false
+			return before == nil || !sameKodiItem(before, item), nil
+		})
+	}
+}
+
+// sameKodiItem reports whether two player items are the same media.
+func sameKodiItem(a, b *PlayerItem) bool {
+	return a.File == b.File && a.Label == b.Label && a.Type == b.Type
+}
 
 // kodiControls builds a Controls map for Kodi launchers with standard
 // playback controls. The launcherID and groups are captured by closures
@@ -95,6 +168,7 @@ func NewKodiLocalLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemVideo,
@@ -120,6 +194,7 @@ func NewKodiMovieLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMovie,
@@ -151,6 +226,7 @@ func NewKodiTVLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVEpisode,
@@ -182,6 +258,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,
@@ -205,6 +282,7 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicAlbum,
@@ -240,6 +318,7 @@ func NewKodiArtistLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicArtist,
@@ -275,6 +354,7 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVShow,
@@ -310,6 +390,7 @@ func NewKodiSongLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,

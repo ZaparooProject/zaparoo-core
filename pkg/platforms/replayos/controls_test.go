@@ -46,8 +46,12 @@ type recordedRequest struct {
 type fakeReplay struct {
 	view     string
 	token    string
-	requests []recordedRequest
-	failWith int
+	gameFile string
+	// views are returned by successive get_status calls ahead of view.
+	views     []string
+	requests  []recordedRequest
+	failWith  int
+	rateLimit int
 }
 
 func (f *fakeReplay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +60,11 @@ func (f *fakeReplay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		endpoint: filepath.Base(r.URL.Path),
 		query:    r.URL.RawQuery,
 	})
+	if f.rateLimit > 0 {
+		f.rateLimit--
+		w.WriteHeader(http.StatusTooManyRequests)
+		return
+	}
 	if f.failWith != 0 {
 		w.WriteHeader(f.failWith)
 		_, _ = w.Write([]byte(`{"error":"Invalid Slot"}`))
@@ -68,7 +77,13 @@ func (f *fakeReplay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if filepath.Base(r.URL.Path) == "get_status" {
-		_, _ = w.Write([]byte(`{"system":"snes","view":"` + f.view + `","paused":false}`))
+		view := f.view
+		if len(f.views) > 0 {
+			view, f.views = f.views[0], f.views[1:]
+		}
+		_, _ = w.Write([]byte(
+			`{"system":"snes","game_file":"` + f.gameFile + `","view":"` + view + `","paused":false}`,
+		))
 		return
 	}
 	_, _ = w.Write([]byte(`{"command":"ok"}`))
