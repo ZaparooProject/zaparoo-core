@@ -261,14 +261,17 @@ func (l *loadPlans) peek(path string, now time.Time) (loadPlan, bool) {
 	return pending.plan, true
 }
 
+// take removes and returns the plan for path. The check and the removal share
+// one lock, so a plan recorded in between by a newer launch is never dropped.
 func (l *loadPlans) take(path string, now time.Time) (loadPlan, bool) {
-	plan, ok := l.peek(path, now)
-	if ok {
-		l.mu.Lock()
-		delete(l.byPath, path)
-		l.mu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	pending, ok := l.byPath[path]
+	if !ok || now.Sub(pending.recorded) > loadPlanFreshness {
+		return loadPlan{}, false
 	}
-	return plan, ok
+	delete(l.byPath, path)
+	return pending.plan, true
 }
 
 // launchPlanned launches a path that has a load plan. The core loads the plan's

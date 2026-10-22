@@ -478,7 +478,7 @@ func TestGarbageBPB(t *testing.T) {
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			img := clone(good[:4096])
+			img := clone(good)
 			mutate(img)
 			_, err := openBytes(t, img)
 			require.Error(t, err)
