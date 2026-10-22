@@ -72,3 +72,16 @@ func TestLookupCoreNameAlternateCores(t *testing.T) {
 		})
 	}
 }
+
+func TestCoreNameAliases_MapToKnownSystems(t *testing.T) {
+	t.Parallel()
+
+	for coreName, systemID := range coreNameAliases() {
+		_, err := systemdefs.LookupSystem(systemID)
+		require.NoError(t, err, coreName)
+		assert.True(t, coreMatchesSystem(coreName, systemID, []NameMapping{
+			{CoreName: coreName, System: systemID, Name: systemID},
+		}), coreName)
+	}
+	assert.Equal(t, "ZXSpectrum", coreNameAliases()["Spectrum"])
+}

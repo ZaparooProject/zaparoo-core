@@ -81,6 +81,17 @@ type Tracker struct {
 	mu               syncutil.Mutex
 }
 
+// coreNameAliases maps the CORENAME a stock core reports to its system ID, for
+// the cores whose name is neither the system ID nor the catalog setname.
+func coreNameAliases() map[string]string {
+	return map[string]string{
+		"Spectrum": "ZXSpectrum",
+		"TRS-80":   "TRS80",
+		"VECTOR06": "Vector06C",
+		"PC8801":   "PC88",
+	}
+}
+
 func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
@@ -100,6 +111,13 @@ func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping 
 				Name:     system.ID,
 			})
 		}
+	}
+
+	// Some cores name themselves differently from their system, for example the
+	// Spectrum core reports Spectrum. Without these a launch is retired as
+	// belonging to a different core as soon as the core loads.
+	for coreName, systemID := range coreNameAliases() {
+		nameMap = append(nameMap, NameMapping{CoreName: coreName, System: systemID, Name: systemID})
 	}
 
 	// Installed alternate cores can report a different CORENAME from their
