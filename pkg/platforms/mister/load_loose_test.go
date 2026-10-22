@@ -59,7 +59,7 @@ func TestLoosePlanners_TypeTheCommandForTheMedia(t *testing.T) {
 			systemdefs.SystemAcornElectron, "/g/a.uef",
 			[]string{chord("capslock", "0"), "*TAPE{enter}", "PAGE=&E00{enter}", chord("capslock", "k") + `""{enter}`},
 		},
-		{systemdefs.SystemAmstrad, "/g/a.cdt", []string{`|TAPE{enter}RUN"{enter}`, "{enter}"}},
+		{systemdefs.SystemAmstrad, "/g/a.cdt", []string{`|tape{enter}run"{enter}`, "{enter}"}},
 		{systemdefs.SystemQL, "/g/a.mdv", []string{"{hold:f1:200ms}"}},
 		{systemdefs.SystemTatungEinstein, "/g/a.dsk", []string{chord("ctrl", "tab")}},
 		{systemdefs.SystemVector06C, "/g/a.fdd", []string{chord("alt", "f11")}},
@@ -141,9 +141,9 @@ func TestLoosePlanners_CoCo2DiskRunsTheProgramOnTheDisk(t *testing.T) {
 	assert.Equal(t, "Cart Slot", plan.options[0].(mgls.Option).Name)
 }
 
-// einsteinImage is an extended DSK with ten 512-byte sectors a track and the
-// directory on track 2, as Einstein disks are laid out.
-func einsteinImage(files ...string) []byte {
+// dskImage is an extended DSK with ten 512-byte sectors a track, numbered from
+// firstID, and the directory on dirTrack.
+func dskImage(firstID byte, dirTrack int, files ...string) []byte {
 	const tracks, secs, secSize = 3, 10, 512
 	info := make([]byte, 0x100)
 	copy(info, "EXTENDED CPC DSK File\r\nDisk-Info\r\n")
@@ -159,13 +159,13 @@ func einsteinImage(files ...string) []byte {
 		hdr[0x10], hdr[0x14], hdr[0x15] = byte(t), 2, secs
 		for s := range secs {
 			e := hdr[0x18+s*8:]
-			e[0], e[2], e[3], e[7] = byte(t), byte(s), 2, secSize>>8
+			e[0], e[2], e[3], e[7] = byte(t), firstID+byte(s), 2, secSize>>8
 		}
 		data := make([]byte, secs*secSize)
 		for i := range data {
 			data[i] = 0xE5
 		}
-		if t == 2 {
+		if t == dirTrack {
 			for i, f := range files {
 				e := data[i*32 : i*32+32]
 				for j := range e {
@@ -182,11 +182,25 @@ func einsteinImage(files ...string) []byte {
 	return img
 }
 
+func TestLoosePlanners_CPCDiskTypesItsProgramInLowercase(t *testing.T) {
+	t.Parallel()
+	fs := memFS(t, map[string][]byte{"/g/a.dsk": dskImage(0xC1, 0, "2DISC.BAS")})
+
+	plan, ok, err := loosePlanners(fs)[systemdefs.SystemAmstrad](nil, "/g/a.dsk")
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{`run"2disc{enter}`}, stepTexts(plan.steps))
+	tokens, err := keyTokens(plan.steps[0].text, plan.layout)
+	require.NoError(t, err)
+	assert.Contains(t, tokens, "{press:shift}", "the quote is a held chord")
+}
+
 func TestLoosePlanners_EinsteinDiskRunsItsOnlyProgram(t *testing.T) {
 	t.Parallel()
 	fs := memFS(t, map[string][]byte{
-		"/g/one.dsk":  einsteinImage("ALICE.COM", "ALICE.DAT"),
-		"/g/many.dsk": einsteinImage("HUST.COM", "LAZY.COM"),
+		"/g/one.dsk":  dskImage(0, 2, "ALICE.COM", "ALICE.DAT"),
+		"/g/many.dsk": dskImage(0, 2, "HUST.COM", "LAZY.COM"),
 	})
 	planner := loosePlanners(fs)[systemdefs.SystemTatungEinstein]
 

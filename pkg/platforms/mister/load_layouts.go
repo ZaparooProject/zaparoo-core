@@ -75,8 +75,16 @@ func zx81Layout() keyLayout {
 
 // amstradLayout is the CPC core: the quote is shift-2, the bar shift on the key
 // the PC labels with a bracket, and the colon and star sit on the semicolon key.
+// The core can miss a quick shift, so shifted symbols are held chords and the
+// plans type their commands in lowercase, which BASIC and AMSDOS accept.
 func amstradLayout() keyLayout {
-	return keyLayout{symbols: map[rune]string{'"': "{shift+2}", '|': "{shift+[}", ':': ";", '*': "{shift+;}", ';': "'"}}
+	return keyLayout{symbols: map[rune]string{
+		'"': chord("shift", "2"),
+		'|': chord("shift", "["),
+		':': ";",
+		'*': chord("shift", ";"),
+		';': "'",
+	}}
 }
 
 // nextLayout is the ZX Spectrum Next core: the quote is the unshifted quote key,

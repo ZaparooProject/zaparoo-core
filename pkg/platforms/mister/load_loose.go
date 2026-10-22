@@ -96,6 +96,11 @@ func chord(modifier, key string, more ...string) string {
 // second processor that misses the input's usual short taps.
 const qlKeyHold = 200 * time.Millisecond
 
+// qlMDVSettle is how long the QL waits before F1. Main is still sending the
+// cartridge well after the core reports it, and the ROM boots from it at F1:
+// pressed earlier, the boot finds no cartridge.
+const qlMDVSettle = 25 * time.Second
+
 // looseRule is the plan for media of certain extensions that the core loads as
 // a file of its own. The steps are built per file for formats whose command
 // depends on what the media holds.
@@ -423,10 +428,10 @@ func buildCPCDisk(fs afero.Fs, path string) ([]loadStep, bool, error) {
 	}
 	if name, ok := listing.Runnable(); ok {
 		name = strings.TrimSuffix(strings.TrimSuffix(name, ".BAS"), ".BIN")
-		return []loadStep{typeText(fmt.Sprintf(`RUN"%s{enter}`, name))}, true, nil
+		return []loadStep{typeText(fmt.Sprintf(`run"%s{enter}`, strings.ToLower(name)))}, true, nil
 	}
 	if listing.CPM {
-		return []loadStep{typeText("|CPM{enter}")}, true, nil
+		return []loadStep{typeText("|cpm{enter}")}, true, nil
 	}
 	return nil, false, nil
 }
@@ -540,7 +545,7 @@ func loosePlanners(fs afero.Fs) map[string]loadPlanner {
 			looseRule{exts: []string{".dsk"}, settle: looseSettle, layout: amstradLayout(), build: buildCPCDisk},
 			looseRule{
 				exts: []string{".cdt"}, settle: looseSettle, layout: amstradLayout(),
-				build: fixedSteps(typeText(`|TAPE{enter}RUN"{enter}`), typeAfter(time.Second, "{enter}")),
+				build: fixedSteps(typeText(`|tape{enter}run"{enter}`), typeAfter(time.Second, "{enter}")),
 			},
 		),
 		systemdefs.SystemZXSpectrum: looseRules(fs,
@@ -605,7 +610,7 @@ func loosePlanners(fs afero.Fs) map[string]loadPlanner {
 		),
 		systemdefs.SystemQL: looseRules(fs,
 			looseRule{
-				exts: []string{".mdv"}, settle: looseSettle,
+				exts: []string{".mdv"}, settle: qlMDVSettle,
 				// The ROM waits for F1 (monitor) or F2 (TV), then boots mdv1_boot
 				// itself. Nothing else is typed: keys sent while it loads reach
 				// the program it starts.
