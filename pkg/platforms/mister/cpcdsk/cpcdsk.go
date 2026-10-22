@@ -141,6 +141,31 @@ func Programs(fs afero.Fs, path string) (Listing, error) {
 	return Listing{Files: parseDirectory(dir), CPM: format == formatSystem}, nil
 }
 
+// Directory reads the CP/M directory of a DSK image whose directory follows
+// the given number of reserved tracks, for machines other than the CPC that
+// share its image format, such as the Tatung Einstein.
+func Directory(fs afero.Fs, path string, reserved int) ([]File, error) {
+	f, err := fs.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open disk image: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat disk image: %w", err)
+	}
+	img, err := openImage(f, info.Size())
+	if err != nil {
+		return nil, err
+	}
+	dir, err := img.directory(reserved)
+	if err != nil {
+		return nil, err
+	}
+	return parseDirectory(dir), nil
+}
+
 func openImage(f afero.File, size int64) (*image, error) {
 	hdr := make([]byte, infoSize)
 	if n, err := f.ReadAt(hdr, 0); err != nil && !errors.Is(err, io.EOF) {

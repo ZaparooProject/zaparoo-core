@@ -120,6 +120,32 @@ func TestFilesKilledAndMissing(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestFilesRejectsOtherFormats(t *testing.T) {
+	t.Parallel()
+	entryAt := func(img []byte) []byte {
+		off := dirTrack*trackSize + (dirFirstSector-1)*sectorSize
+		return img[off : off+entrySize]
+	}
+	tests := []struct {
+		corrupt func(e []byte)
+		name    string
+	}{
+		{name: "unprintable name", corrupt: func(e []byte) { e[2] = 0x8F }},
+		{name: "unknown type", corrupt: func(e []byte) { e[11] = 7 }},
+		{name: "bad ascii flag", corrupt: func(e []byte) { e[12] = 0x42 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			img := buildDisk(35, 1, []entry{{"GAME", "BIN", 2}}, true)
+			tt.corrupt(entryAt(img))
+			fs, p := write(t, img)
+			_, err := Files(fs, p)
+			require.ErrorIs(t, err, ErrBadImage)
+		})
+	}
+}
+
 func TestRunCommand(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

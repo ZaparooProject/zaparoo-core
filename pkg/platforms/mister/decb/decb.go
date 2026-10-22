@@ -106,6 +106,11 @@ func Files(fs afero.Fs, path string) ([]File, error) {
 		if e[0] == killedEntry {
 			continue
 		}
+		// Disks of other formats, such as OS-9, land arbitrary bytes here.
+		// One entry that is not a DECB file means the directory is not DECB.
+		if !validEntry(e) {
+			return nil, ErrBadImage
+		}
 		base := cleanName(e[0:8])
 		ext := cleanName(e[8:11])
 		if base == "" {
@@ -118,6 +123,17 @@ func Files(fs afero.Fs, path string) ([]File, error) {
 		files = append(files, File{Name: name, Base: base, Ext: ext, Type: FileType(e[11])})
 	}
 	return files, nil
+}
+
+// validEntry reports whether a directory entry is a DECB file: a printable
+// name, a known file type, and an ASCII flag of 0x00 or 0xFF.
+func validEntry(e []byte) bool {
+	for _, c := range e[0:11] {
+		if c < 0x20 || c > 0x7E {
+			return false
+		}
+	}
+	return FileType(e[11]) <= TypeText && (e[12] == 0x00 || e[12] == 0xFF)
 }
 
 func cleanName(b []byte) string {

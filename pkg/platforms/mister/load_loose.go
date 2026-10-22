@@ -55,6 +55,9 @@ const (
 	// petTapeSettle is how long the PET takes to boot to BASIC; its tape is
 	// already playing, and the leader lasts about ten seconds.
 	petTapeSettle = 2500 * time.Millisecond
+	// c64Settle is how long the C64 can take after the core has its media to
+	// reach BASIC; keys typed sooner are lost.
+	c64Settle = 10 * time.Second
 	// c128Settle is how long the C128 takes to boot before it takes keys.
 	c128Settle = 9 * time.Second
 	// zx81LoadWait is how long the ZX81 core takes to load a program before RUN.
@@ -89,27 +92,9 @@ func chord(modifier, key string, more ...string) string {
 	return b.String()
 }
 
-// qlKeyHold is how long the QL's keys are held. Its keyboard is read by a slow
+// qlKeyHold is how long the QL's F1 is held. Its keyboard is read by a slow
 // second processor that misses the input's usual short taps.
-const qlKeyHold = 150 * time.Millisecond
-
-// heldKeys types text with every key held down for hold, then Enter. Letters
-// go lowercase and an underscore is shift and minus.
-func heldKeys(text string, hold time.Duration) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(text) {
-		switch r {
-		case ' ':
-			fmt.Fprintf(&b, "{hold:space:%s}", hold)
-		case '_':
-			fmt.Fprintf(&b, "{press:shift}{hold:-:%s}{release:shift}", hold)
-		default:
-			fmt.Fprintf(&b, "{hold:%c:%s}", r, hold)
-		}
-	}
-	fmt.Fprintf(&b, "{hold:enter:%s}", hold)
-	return b.String()
-}
+const qlKeyHold = 200 * time.Millisecond
 
 // looseRule is the plan for media of certain extensions that the core loads as
 // a file of its own. The steps are built per file for formats whose command
@@ -390,6 +375,43 @@ func buildBK0010Bin(fs afero.Fs, path string) ([]loadStep, bool, error) {
 	return []loadStep{typeText(fmt.Sprintf("%oG", start))}, true, nil
 }
 
+const (
+	// einsteinReservedTracks are the system tracks before an Einstein disk's
+	// directory.
+	einsteinReservedTracks = 2
+	// einsteinBootWait is how long XtalDOS takes to boot from the disk.
+	einsteinBootWait = 6 * time.Second
+)
+
+// buildEinsteinDisk boots the disk with Ctrl+Break, then runs its program when
+// the disk has exactly one. A disk with several is left at the DOS prompt.
+func buildEinsteinDisk(fs afero.Fs, path string) ([]loadStep, bool, error) {
+	steps := []loadStep{typeText(chord("ctrl", "tab"))}
+	readFS, readPath, err := readableMedia(fs, path)
+	if err != nil {
+		return steps, true, nil //nolint:nilerr // a disk this reader cannot reach is still booted
+	}
+	files, err := cpcdsk.Directory(readFS, readPath, einsteinReservedTracks)
+	if err != nil {
+		return steps, true, nil //nolint:nilerr // a disk this reader cannot read is still booted
+	}
+	var program string
+	for _, f := range files {
+		name, ext, _ := strings.Cut(f.Name, ".")
+		if !strings.EqualFold(ext, "COM") {
+			continue
+		}
+		if program != "" {
+			return steps, true, nil
+		}
+		program = name
+	}
+	if program != "" {
+		steps = append(steps, typeAfter(einsteinBootWait, program+"{enter}"))
+	}
+	return steps, true, nil
+}
+
 func buildCPCDisk(fs afero.Fs, path string) ([]loadStep, bool, error) {
 	fs, path, err := readableMedia(fs, path)
 	if err != nil {
@@ -447,11 +469,11 @@ func loosePlanners(fs afero.Fs) map[string]loadPlanner {
 	return map[string]loadPlanner{
 		systemdefs.SystemC64: looseRules(fs,
 			looseRule{
-				layout: commodoreLayout(), exts: disk, settle: looseSettle,
+				layout: commodoreLayout(), exts: disk, settle: c64Settle,
 				build: commodoreDisk(`LOAD"*",8,1`),
 			},
 			looseRule{
-				layout: commodoreLayout(), exts: []string{".tap"}, settle: looseSettle,
+				layout: commodoreLayout(), exts: []string{".tap"}, settle: c64Settle,
 				build:   commodoreTape(clockC64),
 				options: []mgls.Setting{mgls.Option{Name: "System ROM", Value: "Standard C64"}},
 			},
@@ -544,10 +566,13 @@ func loosePlanners(fs afero.Fs) map[string]loadPlanner {
 		),
 		systemdefs.SystemBBCMicro: looseRules(fs,
 			looseRule{
+				// The machine can start booting before the disk is mounted and
+				// stop at a disc fault, so it is reset once the disk is in.
 				exts: []string{".ssd", ".dsd"}, build: fixedSteps(),
 				options: []mgls.Setting{
 					mgls.Option{Name: "Model", Value: "Master(R65SC12)"},
 					mgls.Option{Name: "Dflt Boot", Value: "Floppy (SSD/DSD)"},
+					mgls.Reset{Delay: 1, Hold: 1},
 				},
 			},
 		),
@@ -581,15 +606,14 @@ func loosePlanners(fs afero.Fs) map[string]loadPlanner {
 		systemdefs.SystemQL: looseRules(fs,
 			looseRule{
 				exts: []string{".mdv"}, settle: looseSettle,
-				// Minerva waits for F1 (monitor) or F2 (TV) before BASIC starts.
-				build: fixedSteps(
-					typeText(fmt.Sprintf("{hold:f1:%s}", qlKeyHold)),
-					typeAfter(3*time.Second, heldKeys("LRUN mdv1_boot", qlKeyHold)),
-				),
+				// The ROM waits for F1 (monitor) or F2 (TV), then boots mdv1_boot
+				// itself. Nothing else is typed: keys sent while it loads reach
+				// the program it starts.
+				build: fixedSteps(typeText(fmt.Sprintf("{hold:f1:%s}", qlKeyHold))),
 			},
 		),
 		systemdefs.SystemTatungEinstein: looseRules(fs,
-			looseRule{exts: []string{".dsk"}, settle: looseSettle, build: fixedSteps(typeText(chord("ctrl", "tab")))},
+			looseRule{exts: []string{".dsk"}, settle: looseSettle, build: buildEinsteinDisk},
 		),
 		systemdefs.SystemVector06C: looseRules(fs,
 			looseRule{

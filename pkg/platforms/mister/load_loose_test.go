@@ -24,7 +24,9 @@ package mister
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,7 +60,7 @@ func TestLoosePlanners_TypeTheCommandForTheMedia(t *testing.T) {
 			[]string{chord("capslock", "0"), "*TAPE{enter}", "PAGE=&E00{enter}", chord("capslock", "k") + `""{enter}`},
 		},
 		{systemdefs.SystemAmstrad, "/g/a.cdt", []string{`|TAPE{enter}RUN"{enter}`, "{enter}"}},
-		{systemdefs.SystemQL, "/g/a.mdv", []string{"{hold:f1:150ms}", heldKeys("LRUN mdv1_boot", qlKeyHold)}},
+		{systemdefs.SystemQL, "/g/a.mdv", []string{"{hold:f1:200ms}"}},
 		{systemdefs.SystemTatungEinstein, "/g/a.dsk", []string{chord("ctrl", "tab")}},
 		{systemdefs.SystemVector06C, "/g/a.fdd", []string{chord("alt", "f11")}},
 	}
@@ -102,7 +104,8 @@ func TestLoosePlanners_FloppyCoresAskForTheOptionsThatShowTheirDrive(t *testing.
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Empty(t, bbc.steps, "the core autostarts the floppy itself")
-	require.Len(t, bbc.options, 2)
+	require.Len(t, bbc.options, 3)
+	assert.Equal(t, mgls.Reset{Delay: 1, Hold: 1}, bbc.options[2], "the disk boots from a reset once it is in")
 	assert.Equal(t, "Model", bbc.options[0].(mgls.Option).Name)
 	assert.Equal(t, "Master(R65SC12)", bbc.options[0].(mgls.Option).Value)
 
@@ -136,6 +139,67 @@ func TestLoosePlanners_CoCo2DiskRunsTheProgramOnTheDisk(t *testing.T) {
 	assert.Equal(t, []string{`RUN"AUTO"{enter}`}, stepTexts(plan.steps))
 	require.Len(t, plan.options, 1)
 	assert.Equal(t, "Cart Slot", plan.options[0].(mgls.Option).Name)
+}
+
+// einsteinImage is an extended DSK with ten 512-byte sectors a track and the
+// directory on track 2, as Einstein disks are laid out.
+func einsteinImage(files ...string) []byte {
+	const tracks, secs, secSize = 3, 10, 512
+	info := make([]byte, 0x100)
+	copy(info, "EXTENDED CPC DSK File\r\nDisk-Info\r\n")
+	info[0x30], info[0x31] = tracks, 1
+	for i := range tracks {
+		info[0x34+i] = byte((0x100 + secs*secSize) >> 8)
+	}
+	img := make([]byte, 0, len(info)+tracks*(0x100+secs*secSize))
+	img = append(img, info...)
+	for t := range tracks {
+		hdr := make([]byte, 0x100)
+		copy(hdr, "Track-Info\r\n")
+		hdr[0x10], hdr[0x14], hdr[0x15] = byte(t), 2, secs
+		for s := range secs {
+			e := hdr[0x18+s*8:]
+			e[0], e[2], e[3], e[7] = byte(t), byte(s), 2, secSize>>8
+		}
+		data := make([]byte, secs*secSize)
+		for i := range data {
+			data[i] = 0xE5
+		}
+		if t == 2 {
+			for i, f := range files {
+				e := data[i*32 : i*32+32]
+				for j := range e {
+					e[j] = 0
+				}
+				name, ext, _ := strings.Cut(f, ".")
+				copy(e[1:12], fmt.Sprintf("%-8s%-3s", name, ext))
+				e[15] = 1
+			}
+		}
+		img = append(img, hdr...)
+		img = append(img, data...)
+	}
+	return img
+}
+
+func TestLoosePlanners_EinsteinDiskRunsItsOnlyProgram(t *testing.T) {
+	t.Parallel()
+	fs := memFS(t, map[string][]byte{
+		"/g/one.dsk":  einsteinImage("ALICE.COM", "ALICE.DAT"),
+		"/g/many.dsk": einsteinImage("HUST.COM", "LAZY.COM"),
+	})
+	planner := loosePlanners(fs)[systemdefs.SystemTatungEinstein]
+
+	plan, ok, err := planner(nil, "/g/one.dsk")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{chord("ctrl", "tab"), "ALICE{enter}"}, stepTexts(plan.steps))
+
+	plan, ok, err = planner(nil, "/g/many.dsk")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{chord("ctrl", "tab")}, stepTexts(plan.steps),
+		"a disk of several programs stays at the prompt")
 }
 
 func TestLoosePlanners_UnreadableDisksLaunchPlain(t *testing.T) {
@@ -192,19 +256,6 @@ func TestLoosePlanners_TRS80BasicTapeLoadsThenRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, []string{"{enter}", "CLOAD{enter}", "RUN{enter}"}, stepTexts(plan.steps))
-}
-
-func TestHeldKeys_HoldsEveryKey(t *testing.T) {
-	t.Parallel()
-
-	text := heldKeys("LRUN a_1", 150*time.Millisecond)
-
-	assert.Equal(t,
-		"{hold:l:150ms}{hold:r:150ms}{hold:u:150ms}{hold:n:150ms}{hold:space:150ms}{hold:a:150ms}"+
-			"{press:shift}{hold:-:150ms}{release:shift}{hold:1:150ms}{hold:enter:150ms}",
-		text)
-	_, err := keyTokens(text, keyLayout{})
-	require.NoError(t, err)
 }
 
 func TestTapeWait(t *testing.T) {

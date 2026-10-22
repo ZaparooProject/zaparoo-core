@@ -175,6 +175,17 @@ func TestPrograms(t *testing.T) {
 	}
 }
 
+func TestDirectoryAfterReservedTracks(t *testing.T) {
+	t.Parallel()
+	entries := []dirEnt{{name: "ALICE", ext: "COM", count: 8}, {name: "ALICE", ext: "DAT", count: 2}}
+	fs, p := write(t, buildDSK(spec{entries: entries, firstID: 0x41, tracks: 4, sides: 1, extended: true}))
+
+	files, err := Directory(fs, p, 2)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ALICE.COM", "ALICE.DAT"}, names(Listing{Files: files}))
+}
+
 func TestProgramsMasksHighBits(t *testing.T) {
 	t.Parallel()
 	img := buildDSK(spec{entries: []dirEnt{{name: "AB", ext: "BAS", count: 1}}, firstID: 0xC1, tracks: 1, sides: 1})
