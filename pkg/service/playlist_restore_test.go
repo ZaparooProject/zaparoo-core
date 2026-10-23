@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -166,4 +167,29 @@ func TestPlaylistMemory_FailurePauseIsRecorded(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, mediaslot.Primary, rows[0].Slot)
+}
+
+// deckErrorUserDB fails every deck lookup, as a busy or damaged database would.
+type deckErrorUserDB struct {
+	*userdb.UserDB
+}
+
+func (deckErrorUserDB) GetDeck(string) (*database.Deck, error) {
+	return nil, errors.New("database is locked")
+}
+
+func TestRestoreOpenPlaylists_UncheckableDeckIsUntrusted(t *testing.T) {
+	t.Parallel()
+	svc, db := setupPlaylistMemoryEnv(t)
+	svc.DB = &database.Database{UserDB: deckErrorUserDB{UserDB: db}}
+
+	pls := makeServicePlaylist()
+	pls.DeckID = "aaaaaaaaaaaa"
+	recordOpenPlaylist(t, db, mediaslot.Primary, pls)
+
+	restoreOpenPlaylists(svc, nil)
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got, "a deck that cannot be checked is still restored")
+	assert.True(t, got.Unsafe, "but untrusted, since its ownership was not confirmed")
 }

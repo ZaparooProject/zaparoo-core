@@ -41,7 +41,10 @@ func restoreOpenPlaylists(svc *ServiceContext, player audio.Player) {
 				log.Info().Str("deck", pls.DeckID).Msg("open playlist not restored, its deck was deleted")
 				continue
 			case err != nil:
+				// Ownership cannot be confirmed, so the playlist comes back
+				// untrusted rather than with trust nobody checked.
 				log.Warn().Err(err).Str("deck", pls.DeckID).Msg("could not check the deck of a restored playlist")
+				pls.Unsafe = true
 			case !deck.Owned:
 				// Trust is only ever narrowed on the way back in.
 				pls.Unsafe = true

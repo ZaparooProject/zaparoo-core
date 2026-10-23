@@ -32,6 +32,13 @@ import (
 
 var _ database.PlaylistMemoryStore = (*UserDB)(nil)
 
+// playlistMemoryWriteCtx is the context playlist memory writes run under. The
+// last positions and playlists are written while the service shuts down, after
+// db.ctx is already canceled, so the writes must outlive it.
+func (db *UserDB) playlistMemoryWriteCtx() context.Context {
+	return context.WithoutCancel(db.ctx)
+}
+
 // GetPlaylistMemory returns where a playlist was left for a profile, if it
 // has been played before.
 func (db *UserDB) GetPlaylistMemory(profileID, playlistKey string) (database.PlaylistMemory, bool, error) {
@@ -94,7 +101,8 @@ func (db *UserDB) DeletePlaylistMemory(profileID, playlistKey string) error {
 	if conn == nil {
 		return ErrNullSQL
 	}
-	if _, err := conn.ExecContext(db.ctx, `delete from PlaylistMemory where ProfileID = ? and PlaylistKey = ?`,
+	if _, err := conn.ExecContext(db.playlistMemoryWriteCtx(),
+		`delete from PlaylistMemory where ProfileID = ? and PlaylistKey = ?`,
 		profileID, playlistKey); err != nil {
 		return fmt.Errorf("delete playlist memory: %w", err)
 	}
@@ -132,7 +140,7 @@ func (db *UserDB) UpsertOpenPlaylist(row *database.OpenPlaylist) error {
 	if conn == nil {
 		return ErrNullSQL
 	}
-	if _, err := conn.ExecContext(db.ctx, `insert or replace into OpenPlaylists
+	if _, err := conn.ExecContext(db.playlistMemoryWriteCtx(), `insert or replace into OpenPlaylists
 		(Slot, ProfileID, Snapshot, UpdatedAt) values (?, ?, ?, ?)`,
 		row.Slot, row.ProfileID, row.Snapshot, time.Now().UnixMilli(),
 	); err != nil {
@@ -147,7 +155,8 @@ func (db *UserDB) DeleteOpenPlaylist(slot string) error {
 	if conn == nil {
 		return ErrNullSQL
 	}
-	if _, err := conn.ExecContext(db.ctx, `delete from OpenPlaylists where Slot = ?`, slot); err != nil {
+	if _, err := conn.ExecContext(db.playlistMemoryWriteCtx(), `delete from OpenPlaylists where Slot = ?`,
+		slot); err != nil {
 		return fmt.Errorf("delete open playlist: %w", err)
 	}
 	return nil
@@ -198,7 +207,7 @@ func (db *UserDB) DeleteMediaPosition(profileID, systemID, path string) error {
 	if conn == nil {
 		return ErrNullSQL
 	}
-	if _, err := conn.ExecContext(db.ctx, `delete from MediaPositions
+	if _, err := conn.ExecContext(db.playlistMemoryWriteCtx(), `delete from MediaPositions
 		where ProfileID = ? and SystemID = ? and Path = ?`, profileID, systemID, path); err != nil {
 		return fmt.Errorf("delete media position: %w", err)
 	}
@@ -228,11 +237,12 @@ func (db *UserDB) playlistMemoryTx(fn func(ctx context.Context, tx *sql.Tx) erro
 	if conn == nil {
 		return ErrNullSQL
 	}
-	tx, err := conn.BeginTx(db.ctx, nil)
+	ctx := db.playlistMemoryWriteCtx()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin playlist memory transaction: %w", err)
 	}
-	if err := fn(db.ctx, tx); err != nil {
+	if err := fn(ctx, tx); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
