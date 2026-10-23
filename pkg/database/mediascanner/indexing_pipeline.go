@@ -126,6 +126,44 @@ func StageMediaPath(params *StageMediaPathParams) error {
 	return nil
 }
 
+// FallbackMediaIdentity builds the identity the indexer would give a played
+// file that is not in the index, such as a cartridge dumped by the Operator
+// bridge, so its play history can still be matched to a title. The title,
+// slug and filename tags come from the same derivation StageMediaPath uses,
+// so indexing that file later yields the same fingerprint. Only absolute
+// filesystem paths qualify: virtual paths and bare names such as arcade set
+// names are not files the indexer would have parsed.
+func FallbackMediaIdentity(cfg *config.Instance, systemID, path string) (database.MediaIdentity, bool) {
+	if !filepath.IsAbs(path) {
+		return database.MediaIdentity{}, false
+	}
+	system, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return database.MediaIdentity{}, false
+	}
+	mediaType := system.GetMediaType()
+	pf := GetPathFragments(&PathFragmentParams{
+		Config:    cfg,
+		Path:      path,
+		SystemID:  system.ID,
+		MediaType: mediaType,
+	})
+	if pf.Title == "" || pf.Slug == "" {
+		return database.MediaIdentity{}, false
+	}
+	staged := stagedTagsFromFragments(&pf, cfg)
+	tagInfos := make([]database.TagInfo, 0, len(staged))
+	for i := range staged {
+		tagInfos = append(tagInfos, database.TagInfo{Type: staged[i].Type, Tag: staged[i].Value})
+	}
+	identity, err := database.BuildMediaIdentity(mediaType, system.ID, pf.Title, pf.Slug, tagInfos)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("fallback media identity cannot be constructed")
+		return database.MediaIdentity{}, false
+	}
+	return identity, true
+}
+
 // maxSourceGroupLength bounds a scanner-supplied source group, which comes from
 // launcher configuration such as a ScummVM game ID.
 const maxSourceGroupLength = 256

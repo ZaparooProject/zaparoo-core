@@ -27,8 +27,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/rs/zerolog/log"
@@ -56,12 +58,13 @@ const (
 func watchMediaHistoryBackfill(
 	ctx context.Context,
 	b *broker.Broker,
+	cfg *config.Instance,
 	db *database.Database,
 	pauser *syncutil.Pauser,
 	requestPlaySync func(),
 ) {
 	watchMediaHistoryBackfillAtInterval(
-		ctx, b, db, pauser, requestPlaySync,
+		ctx, b, cfg, db, pauser, requestPlaySync,
 		mediaHistoryBackfillStartupDelay,
 		mediaHistoryBackfillPollInterval,
 		mediaHistoryBackfillBatchDelay,
@@ -71,6 +74,7 @@ func watchMediaHistoryBackfill(
 func watchMediaHistoryBackfillAtInterval(
 	ctx context.Context,
 	b *broker.Broker,
+	cfg *config.Instance,
 	db *database.Database,
 	pauser *syncutil.Pauser,
 	requestPlaySync func(),
@@ -125,15 +129,21 @@ func watchMediaHistoryBackfillAtInterval(
 		case <-ticker.C:
 		}
 		ensureUUIDBackfill()
-		runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
+		runMediaHistoryIdentitySweep(ctx, cfg, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 	}
 }
 
+// mediaHistoryIdentitySweepRevision changes when the sweep learns to resolve
+// rows it used to skip (revision 2: files played from outside the index), so
+// installs that already completed a sweep revisit those rows once.
+const mediaHistoryIdentitySweepRevision = "2"
+
 // mediaHistoryIdentitySweepMarker is the DeviceState value recorded after a
-// completed sweep. It changes when the identity policy version bumps or when
-// a media index completes (LastGeneratedAt moves), which are exactly the two
-// events that can let previously unresolvable rows resolve — so a matching
-// marker means a sweep would find nothing new and the table walk is skipped.
+// completed sweep. It changes when the identity policy version bumps, when
+// a media index completes (LastGeneratedAt moves), or when the sweep revision
+// changes, which are exactly the events that can let previously unresolvable
+// rows resolve — so a matching marker means a sweep would find nothing new
+// and the table walk is skipped.
 func mediaHistoryIdentitySweepMarker(mediaDB database.MediaDBI) string {
 	var generatedAt int64
 	lastGenerated, err := mediaDB.GetLastGenerated()
@@ -144,7 +154,7 @@ func mediaHistoryIdentitySweepMarker(mediaDB database.MediaDBI) string {
 		generatedAt = lastGenerated.Unix()
 	}
 	return strconv.Itoa(database.CurrentMediaIdentityPolicyVersion) + ":" +
-		strconv.FormatInt(generatedAt, 10)
+		strconv.FormatInt(generatedAt, 10) + ":" + mediaHistoryIdentitySweepRevision
 }
 
 // mediaDBSettledForIdentitySweep reports whether the media database is idle
@@ -175,10 +185,13 @@ func mediaDBSettledForIdentitySweep(mediaDB database.MediaDBI) bool {
 // identity policy version with the scanner's complete identity observation.
 // Interruptible at any point: the sweep's completion marker is only written
 // after a full pass, so an aborted sweep is simply retried on the next
-// trigger. Unresolvable rows (media not in the index, identity that cannot
-// be built) are skipped and only revisited once the marker goes stale.
+// trigger. A file that is not in the index gets the identity the indexer
+// would give it. Unresolvable rows (virtual paths, unknown systems, identity
+// that cannot be built) are skipped and only revisited once the marker goes
+// stale.
 func runMediaHistoryIdentitySweep(
 	ctx context.Context,
+	cfg *config.Instance,
 	db *database.Database,
 	pauser *syncutil.Pauser,
 	requestPlaySync func(),
@@ -260,6 +273,12 @@ func runMediaHistoryIdentitySweep(
 						Msg("pausing media history identity sweep after transient lookup failure")
 				}
 				return
+			}
+			if !resolved {
+				// The batch only runs against a settled MediaDB, so a miss
+				// means the file is not in the index: record the identity the
+				// indexer would give it.
+				identity, resolved = mediascanner.FallbackMediaIdentity(cfg, batch[i].SystemID, batch[i].MediaPath)
 			}
 			if !resolved {
 				skippedRows++
