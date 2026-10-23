@@ -60,6 +60,12 @@ const (
 type PlaybackOptions struct {
 	// Volume is the playback gain (0.0–2.0); 0 defaults to 1.0.
 	Volume float64
+	// StartAt is how far into the track playback starts; 0 is the start.
+	StartAt time.Duration
+	// StartAtDuration is how long the track was when StartAt was recorded.
+	// A track of another length is a different recording at the same path,
+	// so it plays from the start. 0 skips the check.
+	StartAtDuration time.Duration
 }
 
 // PlaybackState describes the current state of a slot.
@@ -157,6 +163,8 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 			cb(natural && current)
 		}
 	}
+
+	src.startAt(opts.StartAt, opts.StartAtDuration)
 
 	// Start decoding before touching the current source or opening ALSA. Device
 	// startup and previous-source cleanup then provide time to build a cushion,
@@ -670,6 +678,29 @@ func (s *streamingSource) seek(offset time.Duration) {
 	s.eof.Store(false)
 	s.wakePrefetch()
 }
+
+// startAt positions a source that has not started playing offset into the
+// track. An offset outside the track, or a track that is not the expected
+// length, starts from the beginning.
+func (s *streamingSource) startAt(offset, expected time.Duration) {
+	if offset <= 0 {
+		return
+	}
+	if s.totalFrames > 0 {
+		length := sampleDuration(int(s.totalFrames))
+		if offset >= length {
+			return
+		}
+		if expected > 0 && (length-expected > startAtLengthTolerance || expected-length > startAtLengthTolerance) {
+			return
+		}
+	}
+	s.seek(offset)
+}
+
+// startAtLengthTolerance absorbs the rounding between how a track's length
+// was measured when its position was saved and now.
+const startAtLengthTolerance = time.Second
 
 // stopAndDeregister cancels the prefetch goroutine and removes this source from
 // the shared device. Blocks until the prefetch goroutine exits.

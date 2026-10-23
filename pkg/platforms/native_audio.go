@@ -45,10 +45,13 @@ const NativeAudioLauncherID = "native-audio"
 // of the primary slot: native audio has no OS process, so no platform tracker notices
 // the stop and the drain callback only fires for tracks that end on their own, which
 // leaves the service to run the stop it is handed and clear the active media around it.
+// resumeAt, when not nil, returns how far into a primary track playback got last time
+// and how long the track was then.
 func NativeAudioLauncher(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
 	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
+	resumeAt func(path string) (position, length time.Duration),
 ) Launcher {
 	return Launcher{
 		ID:       NativeAudioLauncherID,
@@ -61,7 +64,7 @@ func NativeAudioLauncher(
 			".flac",
 		},
 		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
-			return launchNativeAudio(playback, setBackgroundMedia, cfg, path, opts)
+			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, cfg, path, opts)
 		},
 		Controls: map[string]Control{
 			ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
@@ -77,6 +80,7 @@ func NativeAudioLauncher(
 func launchNativeAudio(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
+	resumeAt func(path string) (position, length time.Duration),
 	cfg *config.Instance,
 	path string,
 	opts *LaunchOptions,
@@ -102,7 +106,11 @@ func launchNativeAudio(
 		}
 	}
 
-	if err := playback.Play(slot, path, audio.PlaybackOptions{Volume: volume}); err != nil {
+	playOpts := audio.PlaybackOptions{Volume: volume}
+	if slot == mediaslot.Primary && resumeAt != nil {
+		playOpts.StartAt, playOpts.StartAtDuration = resumeAt(path)
+	}
+	if err := playback.Play(slot, path, playOpts); err != nil {
 		return nil, fmt.Errorf("play native audio: %w", err)
 	}
 

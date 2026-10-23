@@ -57,9 +57,19 @@ func (e *Engine) send(from, next *playlists.Playlist) {
 // clearPlaylist closes the playlist from is, the way a stop would, unless it
 // is no longer the open one by the time the queue gets to it.
 func (e *Engine) clearPlaylist(slot string, from *playlists.Playlist) {
+	e.queueClear(slot, from, false)
+}
+
+// finishPlaylist closes a playlist that has nowhere left to go, so it starts
+// over the next time it loads.
+func (e *Engine) finishPlaylist(slot string, from *playlists.Playlist) {
+	e.queueClear(slot, from, true)
+}
+
+func (e *Engine) queueClear(slot string, from *playlists.Playlist, completed bool) {
 	e.queueMove(&playlists.Playlist{
-		ID: from.ID, Slot: slot, Clear: true, EngineStarted: true, EngineFromIndex: from.Index,
-		EngineFromArmed: from.Armed, StopSeq: e.host.StopSeq(), StopStamped: true,
+		ID: from.ID, Slot: slot, Clear: true, Completed: completed, EngineStarted: true,
+		EngineFromIndex: from.Index, EngineFromArmed: from.Armed, StopSeq: e.host.StopSeq(), StopStamped: true,
 	}, from.Armed)
 }
 
@@ -265,7 +275,7 @@ func (e *Engine) onAdvanceExpired(pls *playlists.Playlist, b *bound, now time.Ti
 	if !ok {
 		// The last item of a playlist that does not repeat has nowhere to go:
 		// the playlist ends and the game carries on.
-		e.clearPlaylist(mediaslot.Primary, pls)
+		e.finishPlaylist(mediaslot.Primary, pls)
 		return
 	}
 	if e.canAnnounce(pls) {
@@ -354,7 +364,7 @@ func (e *Engine) onIdleExpired(pls *playlists.Playlist, now time.Time) {
 	case idleAdvance:
 		next, ok := nextAfterCompletion(pls)
 		if !ok {
-			e.clearPlaylist(mediaslot.Primary, pls)
+			e.finishPlaylist(mediaslot.Primary, pls)
 			return
 		}
 		log.Info().Str("playlist", pls.ID).Msg("auto-advance: idle, moving to the next item")
@@ -362,7 +372,7 @@ func (e *Engine) onIdleExpired(pls *playlists.Playlist, now time.Time) {
 	case idleRotate:
 		next, ok := nextAfterCompletion(pls)
 		if !ok {
-			e.clearPlaylist(mediaslot.Primary, pls)
+			e.finishPlaylist(mediaslot.Primary, pls)
 			return
 		}
 		if e.canAnnounce(pls) {
@@ -526,7 +536,7 @@ func (e *Engine) resolveExit(pls *playlists.Playlist, choice string) {
 	case choicePlay, choiceExpire:
 		next, ok := nextAfterCompletion(pls)
 		if !ok {
-			e.clearPlaylist(mediaslot.Primary, pls)
+			e.finishPlaylist(mediaslot.Primary, pls)
 			return
 		}
 		e.send(pls, next)

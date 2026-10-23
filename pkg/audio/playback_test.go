@@ -738,3 +738,46 @@ func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	assert.True(t, primaryCalled)
 	assert.True(t, backgroundCalled)
 }
+
+func TestStreamingSource_StartAtPositionsBeforePlayback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(2*targetSampleRate, targetSampleRate), 0o600))
+
+	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.decoder.Close())
+	}()
+
+	s.startAt(time.Second, 2*time.Second)
+	assert.Equal(t, time.Second, s.state().Position)
+	assert.Equal(t, int64(targetSampleRate), s.seekSrcFrame.Load())
+	assert.True(t, s.seekPending.Load())
+}
+
+func TestStreamingSource_StartAtOutsideTrackStartsFromBeginning(t *testing.T) {
+	t.Parallel()
+
+	for _, offset := range []time.Duration{-time.Second, 0, 2 * time.Second, time.Hour} {
+		s := newTestSource()
+		s.totalFrames = 2 * targetSampleRate
+		s.startAt(offset, 0)
+		assert.Equal(t, int64(0), s.played.Load(), offset)
+		assert.False(t, s.seekPending.Load(), offset)
+	}
+}
+
+func TestStreamingSource_StartAtSkipsTrackOfAnotherLength(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	s.totalFrames = 120 * targetSampleRate
+	s.startAt(time.Minute, 90*time.Second)
+	assert.Equal(t, int64(0), s.played.Load())
+	assert.False(t, s.seekPending.Load())
+
+	s.startAt(time.Minute, 120*time.Second+500*time.Millisecond)
+	assert.Equal(t, int64(60*targetSampleRate), s.played.Load())
+}

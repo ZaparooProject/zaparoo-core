@@ -579,6 +579,14 @@ func isProcessTrackedMedia(media *models.ActiveMedia) bool {
 	return media != nil && (media.LauncherID == VideoLauncherID || media.LauncherID == ScummVMLauncherID)
 }
 
+// notDescribedByActiveGame reports whether media is something ACTIVEGAME never
+// names: a console launcher's process, or native audio, which Core plays in its
+// own process. An empty ACTIVEGAME says nothing about either; their own end and
+// Core's stop are what clear them.
+func notDescribedByActiveGame(media *models.ActiveMedia) bool {
+	return isProcessTrackedMedia(media) || (media != nil && media.LauncherID == platforms.NativeAudioLauncherID)
+}
+
 // Load the current running game and set it as active.
 func (tr *Tracker) loadGame() {
 	tr.mu.Lock()
@@ -623,10 +631,11 @@ func (tr *Tracker) loadGameLocked() {
 		return
 	case activeGame == "":
 		// The empty signal is often the one Core wrote itself when it stopped
-		// the previous media, noticed only after a console launcher published
-		// its own. Such media is not described by ACTIVEGAME, so leave it.
-		if tr.activeMedia != nil && isProcessTrackedMedia(tr.activeMedia()) {
-			log.Debug().Msg("active game is empty, keeping process-tracked media")
+		// the previous media, noticed only after a console launcher or native
+		// audio published its own. Such media is not described by ACTIVEGAME,
+		// so leave it.
+		if tr.activeMedia != nil && notDescribedByActiveGame(tr.activeMedia()) {
+			log.Debug().Msg("active game is empty, keeping media it does not describe")
 			tr.resetGameState()
 			return
 		}

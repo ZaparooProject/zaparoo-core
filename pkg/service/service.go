@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -53,6 +54,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlistmemory"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -296,6 +298,9 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
 		if !natural {
 			return
+		}
+		if media := svc.State.ActiveMedia(); ownedByNativeAudio(media) {
+			svc.Positions.Finished(media.Path)
 		}
 		finishNativeAudioPrimaryMedia(svc)
 	})
@@ -689,6 +694,18 @@ func startServiceWithOptions(
 		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
+	if store, ok := db.UserDB.(database.PlaylistMemoryStore); ok {
+		svc.PlaylistMemory = playlistmemory.New(store, func() string {
+			if profile := st.ActiveProfile(); profile != nil {
+				return profile.ProfileID
+			}
+			return ""
+		})
+		svc.PlaylistMemory.Start()
+		st.SetPlaylistObserver(svc.PlaylistMemory.PlaylistChanged)
+		svc.Positions = playlistmemory.NewPositionTracker(svc.PlaylistMemory, playbackManager, st.ActiveMedia, nil)
+		svc.Positions.Start()
+	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
 	svc.AutoAdvance = startAutoAdvance(svc, rendersPickers(pl, opts))
 
@@ -750,6 +767,9 @@ func startServiceWithOptions(
 		st.SetBackgroundMedia,
 		func(ctx context.Context, stop func() error) error {
 			return stopNativeAudioPrimaryMedia(ctx, svc, stop)
+		},
+		func(path string) (time.Duration, time.Duration) {
+			return svc.PlaylistMemory.ResumeAt(systemdefs.SystemAudio, path)
 		},
 	)
 	launcherCacheDone := make(chan struct{})
@@ -814,6 +834,8 @@ func startServiceWithOptions(
 		}
 		limitsManager.Stop()
 		svc.AutoAdvance.Stop()
+		svc.Positions.Stop()
+		svc.PlaylistMemory.Stop()
 		dataSwap.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -1034,6 +1056,8 @@ func startServiceWithOptions(
 		readerManager(svc, itq, make(chan readers.Scan), player, nil)
 	}()
 
+	restoreOpenPlaylists(svc, player)
+
 	log.Info().Msg("starting input token queue manager")
 	processTokenQueueDone := make(chan struct{})
 	go func() {
@@ -1063,6 +1087,8 @@ func startServiceWithOptions(
 		indexPauser.Resume()
 		scrapePauser.Resume()
 
+		// Where a long track got is saved before its playback goes away.
+		svc.Positions.Stop()
 		if stopErr := playbackManager.Stop(mediaslot.Primary); stopErr != nil {
 			log.Warn().Err(stopErr).Msg("error stopping primary playback during cleanup")
 		}
@@ -1094,6 +1120,7 @@ func startServiceWithOptions(
 		<-processTokenQueueDone
 		<-readerManagerDone
 		backgroundWG.Wait()
+		svc.PlaylistMemory.Stop()
 		// Wait for idle-scheduled tasks (history retention, zaplink prune,
 		// etc.) before closing the database so an in-flight task can't
 		// race with closeDatabase.

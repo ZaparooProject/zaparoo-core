@@ -67,9 +67,11 @@ func TestFinished_Advances(t *testing.T) {
 			require.Len(t, r.host.queued(), 1)
 			if tt.wantClear {
 				assert.True(t, got.Clear)
+				assert.True(t, got.Completed, "a playlist that played to its end starts over next time")
 				assert.Equal(t, mediaslot.Primary, got.Slot)
 				return
 			}
+			assert.False(t, got.Completed)
 			assert.Equal(t, tt.wantIndex, got.Index)
 			assert.True(t, got.Playing)
 			assert.Equal(t, tt.wantForce, got.ForceRelaunch)

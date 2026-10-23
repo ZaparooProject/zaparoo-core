@@ -782,7 +782,7 @@ func (e *Engine) onFinished(slot string, b *bound) {
 	}
 	next, ok := nextAfterCompletion(pls)
 	if !ok {
-		e.clearPlaylist(slot, pls)
+		e.finishPlaylist(slot, pls)
 		return
 	}
 	e.send(pls, next)
@@ -798,7 +798,7 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 	}
 	next, ok := nextAfterCompletion(pls)
 	if !ok {
-		e.clearPlaylist(mediaslot.Primary, pls)
+		e.finishPlaylist(mediaslot.Primary, pls)
 		return
 	}
 	if b.engineStarted && at.Sub(b.started) < quickQuitWindow {

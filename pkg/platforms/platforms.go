@@ -296,6 +296,9 @@ type CmdEnv struct {
 	Launchers *LauncherSnapshot
 	UI        *uievents.Service
 	Playlist  playlists.PlaylistController
+	// PlaylistMemory opens a loaded playlist where it was left last time.
+	// Nil remembers nothing.
+	PlaylistMemory PlaylistMemory
 	// AllowedCommands is the bound the running token carries. It is forwarded
 	// so a playlist opened by this command keeps the same bound, the way
 	// Unsafe does.
@@ -310,6 +313,13 @@ type CmdEnv struct {
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
+}
+
+// PlaylistMemory readies a playlist that was just loaded: it belongs to the
+// active profile, and opens on start, counted from 1, or where that profile
+// left it when start is 0.
+type PlaylistMemory interface {
+	Prepare(pls *playlists.Playlist, start int)
 }
 
 // RecordStop notes that Core is about to stop the current primary media. It is
