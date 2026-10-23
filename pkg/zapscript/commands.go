@@ -60,6 +60,7 @@ type RunCommandOptions struct {
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
+	PlaylistMemory     platforms.PlaylistMemory
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager
@@ -587,6 +588,7 @@ func RunCommand(
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
+		PlaylistMemory:     opts.PlaylistMemory,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
 		Launchers:          &platforms.LauncherSnapshot{},

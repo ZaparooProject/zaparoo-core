@@ -46,10 +46,14 @@ type Playlist struct {
 	// what ties an open playlist to its deck; the ID is whatever its source
 	// chose to call it.
 	DeckID string
-	Name   string
-	Slot   string
-	Items  []PlaylistItem
-	Index  int
+	// ProfileID is the profile that loaded the playlist, "" for none. Its
+	// memory of where the playlist is belongs to that profile until the
+	// playlist closes, whoever is active by then.
+	ProfileID string
+	Name      string
+	Slot      string
+	Items     []PlaylistItem
+	Index     int
 	// Advance moves to the next item after this much playing time. Zero
 	// means the playlist does not rotate on a timer.
 	Advance time.Duration
@@ -115,6 +119,15 @@ type Playlist struct {
 	// playlist.
 	Unsafe       bool
 	CountdownSet bool
+	// Shuffled says the items were put in a random order when the playlist
+	// loaded, so that order is part of where the playlist is.
+	Shuffled bool
+	// Ephemeral marks a playlist made up on the spot, such as a random
+	// rotation, that has no identity to be remembered by.
+	Ephemeral bool
+	// Completed marks the Clear of a playlist that played to its natural
+	// end, which starts it over the next time it loads.
+	Completed bool `json:"-"`
 }
 
 // DefaultCountdown is how long an automatic switch is announced when a
@@ -146,7 +159,7 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 // by a copy that forgot to list it. Clear, ForceRelaunch, Refresh and
 // FromPlaylistItem are the exception: they describe the single update that
 // delivered them to the queue handler, not the playlist, so they never
-// outlive it, and neither do EngineStarted and Reconfigure.
+// outlive it, and neither do EngineStarted, Reconfigure and Completed.
 func transition(p *Playlist) *Playlist {
 	out := *p
 	out.Clear = false
@@ -159,6 +172,7 @@ func transition(p *Playlist) *Playlist {
 	out.StopSeq = 0
 	out.StopStamped = false
 	out.Reconfigure = false
+	out.Completed = false
 	return &out
 }
 

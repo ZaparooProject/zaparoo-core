@@ -89,6 +89,7 @@ type State struct {
 	onMediaStopHook       func()
 	onLaunchAbandoned     func(*models.ActiveMedia)
 	mediaObservers        []MediaObserver
+	playlistObserver      func(slot string, pls *playlists.Playlist)
 	beforeExitHook        func()
 	pendingLaunchOverride *PendingLaunchOverride
 	pendingWrite          *PendingWrite
@@ -690,8 +691,25 @@ func (s *State) GetActivePlaylist() *playlists.Playlist {
 
 func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.activePlaylist = playlist
-	s.mu.Unlock()
+	s.notifyPlaylistLocked(mediaslot.Primary, playlist)
+}
+
+// SetPlaylistObserver registers fn to hear every playlist stored in either
+// slot, nil when a slot is closed. fn runs under the state lock, so changes
+// reach it in the order they were made; it must return at once and must not
+// call back into State.
+func (s *State) SetPlaylistObserver(fn func(slot string, pls *playlists.Playlist)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playlistObserver = fn
+}
+
+func (s *State) notifyPlaylistLocked(slot string, pls *playlists.Playlist) {
+	if s.playlistObserver != nil {
+		s.playlistObserver(slot, pls)
+	}
 }
 
 func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
@@ -702,8 +720,9 @@ func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
 
 func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.backgroundPlaylist = playlist
-	s.mu.Unlock()
+	s.notifyPlaylistLocked(mediaslot.Background, playlist)
 }
 
 // PausePlaylistIfCurrent stores the playlist in slot as paused, but only while
@@ -720,6 +739,8 @@ func (s *State) PausePlaylistIfCurrent(slot string, launched *playlists.Playlist
 	target := &s.activePlaylist
 	if slot == mediaslot.Background {
 		target = &s.backgroundPlaylist
+	} else {
+		slot = mediaslot.Primary
 	}
 	current := *target
 	if current == nil || current != launched || !current.Playing {
@@ -728,6 +749,7 @@ func (s *State) PausePlaylistIfCurrent(slot string, launched *playlists.Playlist
 	paused := playlists.Pause(*current)
 	paused.PausedByFailure = true
 	*target = paused
+	s.notifyPlaylistLocked(slot, paused)
 	return true
 }
 

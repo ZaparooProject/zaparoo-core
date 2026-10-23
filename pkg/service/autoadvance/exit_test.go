@@ -142,6 +142,7 @@ func TestExited_UIChoices(t *testing.T) {
 		r.ui.respond(0, selected(choiceStop))
 		eventually(t, func() bool { return len(r.host.queued()) == 1 })
 		assert.True(t, r.host.last(t).Clear)
+		assert.False(t, r.host.last(t).Completed, "stopping keeps the playlist's place")
 		r.tick(time.Minute)
 		assert.Len(t, r.host.queued(), 1)
 	})
@@ -322,6 +323,7 @@ func TestExited_LastItemClearsWithoutCountdown(t *testing.T) {
 	r.end(gen, exited)
 
 	assert.True(t, r.host.last(t).Clear)
+	assert.True(t, r.host.last(t).Completed)
 	assert.Zero(t, r.ui.opened())
 	assert.Zero(t, r.host.pausedCount(), "nothing is left to pause")
 }

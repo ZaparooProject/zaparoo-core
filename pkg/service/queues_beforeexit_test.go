@@ -458,7 +458,7 @@ func TestRunTokenZapScript_BeforeExitControlStopOnNativeAudio(t *testing.T) {
 		platforms.NativeAudioLauncher(pm, env.svc.State.SetBackgroundMedia,
 			func(ctx context.Context, stop func() error) error {
 				return stopNativeAudioPrimaryMedia(ctx, env.svc, stop)
-			}),
+			}, nil),
 	})
 	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
 

@@ -78,6 +78,9 @@ var (
 	// ErrInvalidRotation is returned for an advance, idle or countdown value
 	// that is not a usable duration.
 	ErrInvalidRotation = errors.New("invalid rotation duration")
+	// ErrInvalidPlaylistStart is returned for a start that is not an item
+	// number.
+	ErrInvalidPlaylistStart = errors.New("invalid playlist start")
 	// ErrCountdownWithoutRotation is returned when countdown is given to a
 	// launch.random that does not rotate.
 	ErrCountdownWithoutRotation = errors.New("countdown needs advance or idle")
@@ -529,6 +532,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
+	pls.Shuffled = zapscript.IsModeShuffle(args.Mode)
 	pls.Unsafe = env.Unsafe
 	pls.AllowedCommands = env.AllowedCommands
 	if err := applyPlaylistArgs(pl, &env, pls, &args); err != nil {
@@ -550,6 +554,7 @@ func collectionPlaylist(
 	}
 
 	pls := playlists.NewPlaylist(coll.id, coll.name, items)
+	pls.Shuffled = zapscript.IsModeShuffle(args.Mode)
 	pls.DeckID = coll.deckID
 	pls.Unsafe = coll.unsafe
 	pls.AllowedCommands = env.AllowedCommands
@@ -560,7 +565,8 @@ func collectionPlaylist(
 }
 
 // applyPlaylistArgs sets the slot, repeat and rotation of a playlist from the
-// arguments of the command that opens it.
+// arguments of the command that opens it, and the item it opens on: the one
+// start names, else where the active profile left it.
 func applyPlaylistArgs(
 	pl platforms.Platform, env *platforms.CmdEnv, pls *playlists.Playlist, args *zapscript.PlaylistArgs,
 ) error {
@@ -568,12 +574,55 @@ func applyPlaylistArgs(
 	if err != nil {
 		return fmt.Errorf("normalize media slot: %w", err)
 	}
+	start, err := parsePlaylistStart(args.Start)
+	if err != nil {
+		return err
+	}
 	pls.Slot = slot
 	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
 	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
-	return applyRotation(pl, pls, &rotationArgs{
+	if err := applyRotation(pl, pls, &rotationArgs{
 		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
-	})
+	}); err != nil {
+		return err
+	}
+	preparePlaylist(env, pls, start)
+	return nil
+}
+
+// parsePlaylistStart reads the start argument: the item to open on, counted
+// from 1, or 0 when it is not given.
+func parsePlaylistStart(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	start, err := strconv.Atoi(raw)
+	if err != nil || start < 1 {
+		return 0, fmt.Errorf("%w: start must be an item number from 1", ErrInvalidPlaylistStart)
+	}
+	return start, nil
+}
+
+// commandPlaylistStart is the start argument of the running command, already
+// checked by applyPlaylistArgs when the playlist loaded.
+func commandPlaylistStart(env *platforms.CmdEnv) int {
+	start, err := parsePlaylistStart(env.Cmd.AdvArgs.Get(zapscript.KeyStart))
+	if err != nil {
+		return 0
+	}
+	return start
+}
+
+// preparePlaylist opens a loaded playlist on its start item, or where it was
+// left last time.
+func preparePlaylist(env *platforms.CmdEnv, pls *playlists.Playlist, start int) {
+	if env.PlaylistMemory != nil {
+		env.PlaylistMemory.Prepare(pls, start)
+		return
+	}
+	if start > 0 {
+		pls.Index = min(start-1, max(len(pls.Items)-1, 0))
+	}
 }
 
 // rotationArgs are the raw advance, idle and countdown values of a command.
@@ -729,6 +778,7 @@ func playRandomRotation(
 	}})
 	pls.Slot = slot
 	pls.Loop = true
+	pls.Ephemeral = true
 	pls.Unsafe = env.Unsafe
 	pls.AllowedCommands = env.AllowedCommands
 	if err := applyRotation(pl, pls, r); err != nil {
@@ -827,6 +877,24 @@ func resumeOrAdvanceActivePlaylist(
 	}, nil
 }
 
+// playActivePlaylistFrom runs playlist.play with start against the playlist
+// it already names: it plays from that item rather than resuming or moving on,
+// so a card that always starts from the top does so even while it is open.
+func playActivePlaylistFrom(
+	env *platforms.CmdEnv, active *playlists.Playlist, start int,
+) (platforms.CmdResult, error) {
+	pls := playlists.Play(*playlists.Goto(*active, start-1))
+	narrowToCaller(env, pls)
+	log.Info().Str("playlist", active.ID).Int("index", pls.Index).Msg("playing active playlist from start item")
+	if err := queuePlaylistUpdate(env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	hasPlaylistArg := len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != ""
@@ -860,6 +928,9 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	// it over. Scanning a token again is how you move through its playlist,
 	// and it must not throw away the position the playlist is at.
 	if isActivePlaylist(active, pls) {
+		if start := commandPlaylistStart(&env); start > 0 {
+			return playActivePlaylistFrom(&env, active, start)
+		}
 		return resumeOrAdvanceActivePlaylist(&env, active)
 	}
 
@@ -926,7 +997,8 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Armed = pls.Idle > 0
 
 		// If loaded playlist matches active, preserve current position
-		if isActivePlaylist(active, pls) {
+		// unless the command names the item to open on.
+		if isActivePlaylist(active, pls) && commandPlaylistStart(&env) == 0 {
 			log.Debug().Msg("opening active playlist")
 			pls.Index = active.Index
 			// Validate index bounds

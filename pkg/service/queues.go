@@ -461,6 +461,7 @@ func executeTokenZapScript(
 				PlaybackManager:  svc.PlaybackManager,
 				UI:               svc.UI,
 				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
+				PlaylistMemory:   playlistMemoryFor(svc),
 			},
 			&cmdEnv,
 		)
@@ -979,6 +980,15 @@ func engineMoveStillWanted(svc *ServiceContext, move, active *playlists.Playlist
 	return svc.State.StopEpoch() <= move.StopSeq
 }
 
+// playlistMemoryFor returns the playlist memory commands use, nil when
+// nothing is remembered, so a missing memory never reaches them as a typed nil.
+func playlistMemoryFor(svc *ServiceContext) platforms.PlaylistMemory {
+	if svc.PlaylistMemory == nil {
+		return nil
+	}
+	return svc.PlaylistMemory
+}
+
 // storePlaylist makes pls the playlist of its slot and tells the auto-advance
 // engine, which drops any countdown that belonged to the one it replaced.
 func storePlaylist(svc *ServiceContext, slot string, pls *playlists.Playlist) {
@@ -1040,6 +1050,10 @@ func handlePlaylist(
 		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Str("slot", slot).Msg("clearing playlist")
+			if pls != nil && pls.Completed {
+				// It played to its end, so it starts over next time.
+				svc.PlaylistMemory.Forget(activePlaylist)
+			}
 		}
 		clearPlaylistSlot(svc, slot)
 		return

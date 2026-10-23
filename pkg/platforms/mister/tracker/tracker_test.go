@@ -1440,13 +1440,14 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 	}
 }
 
-// A console launcher's media is not described by ACTIVEGAME. The empty signal
-// Core wrote when it stopped the previous media can reach the tracker after the
-// new launch has published, and must not clear it.
-func TestLoadGameEmptyActiveGameKeepsProcessTrackedMedia(t *testing.T) {
+// A console launcher's media, and native audio, are not described by
+// ACTIVEGAME. The empty signal Core wrote when it stopped the previous media
+// can reach the tracker after the new launch has published, and must not clear
+// it.
+func TestLoadGameEmptyActiveGameKeepsMediaItDoesNotDescribe(t *testing.T) {
 	t.Parallel()
 
-	for _, launcherID := range []string{VideoLauncherID, ScummVMLauncherID} {
+	for _, launcherID := range []string{VideoLauncherID, ScummVMLauncherID, platforms.NativeAudioLauncherID} {
 		t.Run(launcherID, func(t *testing.T) {
 			t.Parallel()
 			current := models.NewActiveMedia(

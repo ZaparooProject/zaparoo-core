@@ -73,6 +73,9 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from Mappings;
 	delete from Clients;
 	delete from RemoteCommands;
+	delete from PlaylistMemory;
+	delete from OpenPlaylists;
+	delete from MediaPositions;
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
