@@ -130,7 +130,10 @@ func StageMediaPath(params *StageMediaPathParams) error {
 // file that is not in the index, such as a cartridge dumped by the Operator
 // bridge, so its play history can still be matched to a title. The title,
 // slug and filename tags come from the same derivation StageMediaPath uses,
-// so indexing that file later yields the same fingerprint. Only absolute
+// so a later plain folder walk of that file yields the same fingerprint. A
+// later index that supplies scanner inputs this path cannot know (a
+// directory prefix policy, a scanner-provided name, NoExt) can differ, and
+// the server reconciles the two observations. Only absolute
 // filesystem paths qualify: virtual paths and bare names such as arcade set
 // names are not files the indexer would have parsed.
 func FallbackMediaIdentity(cfg *config.Instance, systemID, path string) (database.MediaIdentity, bool) {
