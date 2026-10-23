@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -74,6 +76,7 @@ type mediaHistoryTracker struct {
 	currentMediaStartTimeMono time.Time
 	lastPlaySyncRequestAt     time.Time
 	st                        *state.State
+	cfg                       *config.Instance
 	db                        *database.Database
 	requestPlaySync           func()
 	currentHistoryDBID        int64
@@ -291,12 +294,15 @@ func lookupMediaIdentityWithRetry(
 }
 
 // lookupMediaIdentity snapshots scanner-derived identity for launched media.
-// A launch outside the index has no snapshot; transient failures retry within
-// a small bound without blocking notifications.
+// A file launched from outside the index gets the identity the indexer would
+// give it, but only while MediaDB is settled: mid-index, a library game may
+// just not be indexed yet, so it is left for the sweep to resolve from its
+// indexed row. Transient failures retry within a small bound without
+// blocking notifications.
 func (t *mediaHistoryTracker) lookupMediaIdentity(
 	ctx context.Context, systemID, path string,
 ) (database.MediaIdentity, bool, error) {
-	return lookupMediaIdentityWithRetry(
+	identity, found, err := lookupMediaIdentityWithRetry(
 		ctx,
 		t.db.MediaDB,
 		systemID,
@@ -305,6 +311,14 @@ func (t *mediaHistoryTracker) lookupMediaIdentity(
 		mediaIdentityRetryDelays,
 		database.LookupMediaIdentity,
 	)
+	if err != nil || found || t.db.MediaDB == nil {
+		return identity, found, err
+	}
+	identity, found = mediascanner.FallbackMediaIdentity(t.cfg, systemID, path)
+	if !found || !mediaDBSettledForIdentitySweep(t.db.MediaDB) {
+		return database.MediaIdentity{}, false, nil
+	}
+	return identity, true, nil
 }
 
 // snapshotMediaHistoryIdentity enriches a persisted entry without blocking notifications.
