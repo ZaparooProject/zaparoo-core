@@ -37,7 +37,7 @@ func TestFallbackMediaIdentity_MatchesIndexedIdentity(t *testing.T) {
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	root := filepath.Join(string(filepath.Separator), "tmp", "operator")
+	root := t.TempDir()
 	paths := []string{
 		filepath.Join(root, "SECRET OF MANA.sfc"),
 		filepath.Join(root, "MEGAMAN X.sfc"),
@@ -60,7 +60,7 @@ func TestFallbackMediaIdentity_MatchesIndexedIdentity(t *testing.T) {
 func TestFallbackMediaIdentity_UsesCanonicalSystemID(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(string(filepath.Separator), "tmp", "operator", "SECRET OF MANA.sfc")
+	path := filepath.Join(t.TempDir(), "SECRET OF MANA.sfc")
 	identity, ok := FallbackMediaIdentity(nil, "snes", path)
 	require.True(t, ok)
 	assert.Equal(t, "SNES", identity.CanonicalSystemID)
@@ -72,7 +72,7 @@ func TestFallbackMediaIdentity_UsesCanonicalSystemID(t *testing.T) {
 func TestFallbackMediaIdentity_RejectsUnbuildableObservations(t *testing.T) {
 	t.Parallel()
 
-	abs := filepath.Join(string(filepath.Separator), "tmp", "operator", "SECRET OF MANA.sfc")
+	abs := filepath.Join(t.TempDir(), "SECRET OF MANA.sfc")
 	tests := []struct {
 		name     string
 		systemID string
