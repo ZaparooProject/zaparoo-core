@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -99,6 +100,47 @@ func TestCmdTitlePassesSlotToLaunchOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
 	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestCmdTitleLaunchableIgnoresSystemLauncherPreference pins that a title
+// resolving to a platform launchable (MiSTer's Paprium under Genesis) is left
+// to the launchable's own launcher. launch.title applies the system's
+// preferred launcher before it knows the path, and RAMegaDrive cannot start a
+// zaparoo:// URI, so carrying it on failed the launch (#1683).
+func TestCmdTitleLaunchableIgnoresSystemLauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	paprium := launchables.VirtualMedia{ID: launchables.MisterGenesisPaprium, Name: "Paprium"}
+	papriumPath := paprium.ZapScript()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{{
+		ID: "RAMegaDrive", SystemID: "Genesis", Groups: []string{"RetroAchievements"},
+	}}).Maybe()
+	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil)).
+		Return(database.SlugResolution{}, false)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil)).
+		Return([]database.SearchResultWithCursor{{SystemID: "Genesis", Name: "Paprium", Path: papriumPath}}, nil)
+	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil),
+		mock.AnythingOfType("database.SlugResolution")).Return(nil).Maybe()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, mock.Anything).
+		Return([]database.MediaProperty{}, nil).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, papriumPath, (*platforms.Launcher)(nil), mock.Anything,
+		mock.Anything).Return(nil)
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherPreference([]string{"RetroAchievements"})
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"Genesis/Paprium"}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
 	mockPlatform.AssertExpectations(t)
 }
 

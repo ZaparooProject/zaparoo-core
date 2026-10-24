@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
@@ -962,7 +963,15 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
-		if !explicitLauncher {
+		switch {
+		case explicitLauncher:
+		case launchables.IsURI(target.path):
+			// Only the launchable's own launcher can start a zaparoo:// URI,
+			// so a launcher chosen for the system's files (a default, the
+			// global preference, or one launch.title applied before it knew
+			// the path) would only fail it.
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+		default:
 			if target.mediaID != 0 && target.systemID != "" {
 				applyMediaLauncherOverrideWithReplace(pl, env, target.mediaID, target.systemID, true)
 			} else if target.resolveMediaByPath {
