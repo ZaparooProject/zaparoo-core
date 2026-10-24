@@ -1741,6 +1741,81 @@ func nesSystemForTest(t *testing.T) []systemdefs.System {
 // 66,011 rows for C64 on the #1279 device database, twice per page because
 // BrowseDirCount reruns the same statement. BrowseDirCounts already holds the
 // same names and counts, built from the same IsMissing = 0 rows.
+// TestBrowseOverlayFiles_LaunchableMediaMergesIntoSystemFiles pins the
+// MediaDB side of a system's merged contents listing its zaparoo:// virtual
+// media inline (#1683): every such row's ParentDir is the bare scheme, so a
+// scheme route without directories yields exactly those rows, ordered and
+// paged together with the system's real files.
+func TestBrowseOverlayFiles_LaunchableMediaMergesIntoSystemFiles(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "Genesis", Name: "Genesis"})
+	require.NoError(t, err)
+	genesis, err := systemdefs.GetSystem("Genesis")
+	require.NoError(t, err)
+	root := browseTestDir("games", "Genesis")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insert := func(name, path string) database.Media {
+		t.Helper()
+		title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(genesis.GetMediaType(), name+path),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		row, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           path,
+			ParentDir:      ParentDirForMediaPath(path),
+			SortName:       name,
+		})
+		require.NoError(t, mediaErr)
+		return row
+	}
+	comix := insert("Comix Zone", root+"Comix Zone.md")
+	paprium := insert("Paprium", "zaparoo://aaaaaaaaaaaaaaaaaaaaaaaaaa/Paprium")
+	sonic := insert("Sonic", root+"Sonic.md")
+	insert("Paprium Data", root+"Paprium/Paprium Data.bin")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: root, IncludeDirs: true},
+		{PathPrefix: "zaparoo://", IncludeDirs: false},
+	}}
+	systems := []systemdefs.System{*genesis}
+
+	firstPage, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: overlay, Systems: systems, Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, firstPage, 2)
+	assert.Equal(t, []int64{comix.DBID, paprium.DBID}, []int64{firstPage[0].MediaID, firstPage[1].MediaID})
+
+	secondPage, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: overlay,
+		Systems: systems,
+		Cursor:  &database.BrowseCursor{SortValue: firstPage[1].SortValue, LastID: firstPage[1].MediaID},
+		Limit:   2,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondPage, 1)
+	assert.Equal(t, sonic.DBID, secondPage[0].MediaID)
+
+	count, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{Overlay: overlay, Systems: systems})
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{Overlay: overlay, Systems: systems})
+	require.NoError(t, err)
+	require.Len(t, dirs, 1)
+	assert.Equal(t, "Paprium", dirs[0].Name)
+}
+
 func TestBrowseOverlayDirectories_CacheMatchesMedia(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
