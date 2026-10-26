@@ -1237,3 +1237,37 @@ func TestDoLaunch_FailedPreemptionWithdrawsReplacedNote(t *testing.T) {
 		})
 	}
 }
+
+// MiSTer, 2026-10-26: an MRA on a USB drive with no core beside it was run from
+// the SD card's copy, but the USB path was published, so history and resume
+// named a file that was not what ran. A launcher that started another file
+// says so, and that file is published.
+func TestDoLaunch_PublishesThePathTheLauncherRan(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	requested := "/media/usb0/_Arcade/1942 (Revision B).mra"
+	ran := "/media/fat/_Arcade/1942 (Revision B).mra"
+	launcher := &platforms.Launcher{
+		ID:       "Arcade",
+		SystemID: systemdefs.SystemArcade,
+		Launch: func(_ *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			opts.LaunchedPath = ran
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           requested,
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, filepath.Base))
+	require.NotNil(t, activeMedia)
+	assert.Equal(t, ran, activeMedia.Path)
+}

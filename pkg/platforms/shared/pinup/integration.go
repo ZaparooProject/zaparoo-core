@@ -101,8 +101,11 @@ type Deps struct {
 	ActiveMedia    func() *models.ActiveMedia
 	SetActiveMedia func(*models.ActiveMedia)
 	HasWindow      func(pid int) bool
-	Locator        Locator
-	Timeouts       Timeouts
+	// HasWindowOfClass reports whether the process tree has a visible window
+	// of one of the classes. Optional; without it any window counts.
+	HasWindowOfClass func(pid int, classes []string) bool
+	Locator          Locator
+	Timeouts         Timeouts
 }
 
 var (
@@ -808,6 +811,25 @@ func libraryExecutables(lib Library) []string {
 	return exes
 }
 
+// playerWindowClassesOf returns the player window classes of the program
+// running as pid, or nil when it is unknown or any window will do.
+func (i *Integration) playerWindowClassesOf(pid int) []string {
+	if i.deps.Processes == nil {
+		return nil
+	}
+	procs, err := i.deps.Processes.List()
+	if err != nil {
+		log.Debug().Err(err).Msg("listing processes to find the table's emulator")
+		return nil
+	}
+	for _, p := range procs {
+		if p.PID == pid {
+			return playerWindowsFor(p.Exe)
+		}
+	}
+	return nil
+}
+
 // readyPoll is how often WaitForReady looks for the table's window.
 const readyPoll = 250 * time.Millisecond
 
@@ -823,12 +845,21 @@ func (i *Integration) WaitForReady(ctx context.Context, _ *config.Instance, medi
 		return nil
 	}
 
+	classesFor := -1
+	var classes []string
 	err = platforms.PollReady(ctx, i.deps.Clock, readyPoll, func(context.Context) (bool, error) {
 		i.mu.Lock()
 		launch, tracked := i.tracked[gameID]
 		i.mu.Unlock()
 		if !tracked {
 			return false, nil
+		}
+		if classesFor != launch.pid {
+			classesFor = launch.pid
+			classes = i.playerWindowClassesOf(launch.pid)
+		}
+		if len(classes) > 0 && i.deps.HasWindowOfClass != nil {
+			return i.deps.HasWindowOfClass(launch.pid, classes), nil
 		}
 		return i.deps.HasWindow(launch.pid), nil
 	})

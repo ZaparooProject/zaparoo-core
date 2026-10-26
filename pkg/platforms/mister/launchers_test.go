@@ -431,16 +431,15 @@ func TestBuildFvpCommand(t *testing.T) {
 	require.NotNil(t, cmd.SysProcAttr)
 	assert.True(t, cmd.SysProcAttr.Setsid, "should set Setsid for new session")
 
-	// Verify environment
-	hasLDPath := false
+	// Verify environment. os/exec passes the last value of a repeated key, so
+	// the launcher's own entry wins over one Core inherited.
+	ldPath := ""
 	for _, env := range cmd.Env {
-		if strings.HasPrefix(env, "LD_LIBRARY_PATH=") {
-			hasLDPath = true
-			assert.Contains(t, env, misterconfig.LinuxDir)
-			break
+		if value, ok := strings.CutPrefix(env, "LD_LIBRARY_PATH="); ok {
+			ldPath = value
 		}
 	}
-	assert.True(t, hasLDPath, "should set LD_LIBRARY_PATH")
+	assert.Contains(t, ldPath, misterconfig.LinuxDir, "should set LD_LIBRARY_PATH")
 }
 
 func TestBuildFvpCommand_DifferentPaths(t *testing.T) {

@@ -509,6 +509,72 @@ func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing
 	mockPlatform.AssertExpectations(t)
 }
 
+// Windows, 2026-10-26: preferring LaunchBox for PC sent every steam:// link to
+// LaunchBox, which failed it with "scheme mismatch". The preference is for the
+// system's files; a link goes to the launcher that owns its scheme.
+func TestCmdLaunch_GlobalPreferenceDoesNotTakeAnotherLaunchersLink(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	cfg.SetLauncherPreference([]string{"LaunchBox", "Steam"})
+	uri := "steam://212680/FTL"
+	launchers := []platforms.Launcher{
+		{ID: "LaunchBox", SystemID: "PC", Schemes: []string{"launchbox"}},
+		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+	}
+
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{uri}).
+		Return([]database.MediaPathID{}, nil).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "PC").
+		Return(database.System{DBID: 10, SystemID: "PC"}, nil).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), uri).
+		Return((*database.Media)(nil), nil).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, uri, (*platforms.Launcher)(nil), db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
+// The preferred launcher stays when it is the one that owns the link.
+func TestDropLauncherForOtherScheme_KeepsTheLinksOwnLauncher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "LaunchBox", SystemID: "PC", Schemes: []string{"launchbox"}},
+		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+	})
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{
+		AdvArgs: zapscript.NewAdvArgs(map[string]string{string(zapscript.KeyLauncher): "Steam"}),
+	}}
+
+	dropLauncherForOtherScheme(mockPlatform, &env, "steam://212680/FTL")
+	assert.Equal(t, "Steam", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+
+	env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "LaunchBox")
+	dropLauncherForOtherScheme(mockPlatform, &env, "/games/pc/ftl.exe")
+	assert.Equal(t, "LaunchBox", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), "a file is not a link")
+}
+
 func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing.T) {
 	t.Parallel()
 

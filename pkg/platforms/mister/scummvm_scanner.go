@@ -34,30 +34,35 @@ type ScummVMGame struct {
 
 // findScummVMBinary searches for ScummVM executable in the ScummVM directory
 func findScummVMBinary() (string, error) {
-	pattern := filepath.Join(scummvmBaseDir, "scummvm*")
-	matches, err := filepath.Glob(pattern)
+	return findScummVMBinaryIn(scummvmBaseDir)
+}
+
+// findScummVMBinaryIn returns the ScummVM executable in dir: the first file
+// named scummvm* with no extension. exFAT reports every file as executable, so
+// the extension is what tells scummvm.ini, which sorts ahead of scummvm270,
+// from the binary.
+func findScummVMBinaryIn(dir string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "scummvm*"))
 	if err != nil {
 		return "", fmt.Errorf("failed to search for ScummVM binary: %w", err)
 	}
 
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no ScummVM binary found in %s", scummvmBaseDir)
+	for _, candidate := range matches {
+		if filepath.Ext(candidate) != "" {
+			continue
+		}
+		info, err := os.Stat(candidate)
+		if err != nil {
+			log.Debug().Err(err).Str("path", candidate).Msg("failed to stat ScummVM binary candidate")
+			continue
+		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate, nil
 	}
 
-	// Return the first match
-	binary := matches[0]
-
-	// Verify it's executable
-	info, err := os.Stat(binary)
-	if err != nil {
-		return "", fmt.Errorf("failed to stat ScummVM binary %s: %w", binary, err)
-	}
-
-	if info.IsDir() || info.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("ScummVM binary %s is not executable", binary)
-	}
-
-	return binary, nil
+	return "", fmt.Errorf("no ScummVM binary found in %s", dir)
 }
 
 // parseScummVMIni parses the scummvm.ini file and extracts game configurations

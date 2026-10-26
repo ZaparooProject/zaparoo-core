@@ -304,3 +304,145 @@ func TestWaitForFlashpointPlayer_NotInstalledIsUnavailable(t *testing.T) {
 
 	require.ErrorIs(t, err, platforms.ErrReadinessUnavailable)
 }
+
+func (r *flashpointRig) start(ctx context.Context) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForFlashpointStart(ctx, r.clock, `C:\Flashpoint`,
+			func() ([]windowsProcessInfo, error) { return r.procs, nil },
+			func(pid int) bool { return r.windows[pid] })
+	}()
+	return done
+}
+
+// Windows, 2026-10-26: a cold Flashpoint was handed the game's link 5 s after
+// its window opened, while its backend was still starting. The backend
+// stalled, no game started and the launcher exited a minute later.
+func TestWaitForFlashpointStart_WindowAloneIsNotEnough(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{1: true}}
+	rig.procs = []windowsProcessInfo{{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`}}
+	done := rig.start(t.Context())
+
+	for range 40 { // 10 s of polls, twice the old settle
+		blockCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+		blockErr := rig.clock.BlockUntilContext(blockCtx, 1)
+		cancel()
+		select {
+		case err := <-done:
+			t.Fatalf("handed over before the game server started: %v", err)
+		default:
+		}
+		require.NoError(t, blockErr)
+		rig.clock.Advance(flashpointReadyPoll)
+	}
+
+	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 1))
+	rig.procs = append(rig.procs,
+		windowsProcessInfo{PID: 2, ExePath: `C:\Flashpoint\Server\Flashpoint Game Server.exe`})
+	for {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return
+		case <-time.After(time.Millisecond):
+			rig.clock.Advance(flashpointReadyPoll)
+		}
+	}
+}
+
+func TestWaitForFlashpointStart_ServerWithoutWindowIsNotReady(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{}}
+	rig.procs = []windowsProcessInfo{
+		{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`},
+		{PID: 2, ExePath: `C:\Flashpoint\Server\Flashpoint Game Server.exe`},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := rig.start(ctx)
+
+	for range 20 {
+		rig.clock.Advance(flashpointReadyPoll)
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+// A Flashpoint without the game server is still handed the game once the wait
+// runs out with its window up, rather than the launch failing.
+func TestWaitForFlashpointStart_NoServerHandsOverAfterTimeout(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{1: true}}
+	rig.procs = []windowsProcessInfo{{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`}}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	done := rig.start(ctx)
+
+	for {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return
+		case <-time.After(time.Millisecond):
+			rig.clock.Advance(flashpointReadyPoll)
+		}
+	}
+}
+
+// Flashpoint that never opens its window fails the launch.
+func TestWaitForFlashpointStart_NoWindowFails(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{}}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	done := rig.start(ctx)
+
+	for {
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			return
+		case <-time.After(time.Millisecond):
+			rig.clock.Advance(flashpointReadyPoll)
+		}
+	}
+}
+
+// Windows, 2026-10-26: stopping a Flashpoint game cleared the media and left
+// the game's player running, since Core holds no handle to it.
+func TestKillFlashpointPlayers(t *testing.T) {
+	t.Parallel()
+
+	players := `C:\Flashpoint\FPSoftware`
+	procs := []windowsProcessInfo{
+		{PID: 10, ExePath: `C:\Flashpoint\FPSoftware\Flash\flashplayer_32_sa.exe`},
+		{PID: 11, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`},
+		{PID: 12, ExePath: `C:\Windows\explorer.exe`},
+		{PID: 13, ExePath: `C:\Flashpoint\FPSoftware\Basilisk-Portable\Basilisk-Portable.exe`},
+	}
+	var killed []uint32
+	n, err := killFlashpointPlayers(players,
+		func() ([]windowsProcessInfo, error) { return procs, nil },
+		func(pid uint32) (string, error) {
+			for i := range procs {
+				if procs[i].PID == pid {
+					if pid == 13 {
+						return `C:\Other\reused.exe`, nil // PID reused since the listing
+					}
+					return procs[i].ExePath, nil
+				}
+			}
+			return "", errors.New("gone")
+		},
+		func(_ context.Context, pid uint32) error {
+			killed = append(killed, pid)
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []uint32{10}, killed, "only a player still under FPSoftware is ended")
+}

@@ -433,6 +433,12 @@ func (p *Platform) checkAndUpdateRunningGame(
 	p.pendingROMPath = ""
 	p.trackerMu.Unlock()
 
+	// A game already running when Core started, or after a Core update
+	// restart, left no recent record to read; RePlayOS can say what it is.
+	if romPath == "" {
+		romPath = p.askRunningGameFile()
+	}
+
 	media := p.trackedMedia(core, romPath)
 
 	if lastCore == "" {
@@ -450,6 +456,23 @@ func (p *Platform) checkAndUpdateRunningGame(
 	}
 
 	setActiveMedia(media)
+}
+
+// askRunningGameFile returns the file RePlayOS reports it is playing, or "" when
+// it is not playing one or cannot be asked.
+func (p *Platform) askRunningGameFile() string {
+	ask := p.runningGameFile
+	if ask == nil {
+		ask = newNetControl().runningGameFile
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), netControlTimeout)
+	defer cancel()
+	file, ok := ask(ctx)
+	if !ok {
+		return ""
+	}
+	log.Debug().Str("rom", file).Msg("tracker: RePlayOS reports the running game")
+	return file
 }
 
 // refreshMediaWithROMPath completes media published before the ROM path was

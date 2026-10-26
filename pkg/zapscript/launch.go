@@ -282,6 +282,38 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 	return applyGlobalLauncherPreference(pl, env, systemID)
 }
 
+// dropLauncherForOtherScheme clears a launcher picked for a system's files, by
+// a default or the global preference, when the path is a link that a different
+// launcher owns: preferring LaunchBox for PC must not send a steam:// link to
+// LaunchBox, which cannot start it. The link's own launcher is then found from
+// the path. A launcher named in the script is never applied here.
+func dropLauncherForOtherScheme(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	chosen := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+	if chosen == "" || !strings.Contains(path, "://") {
+		return
+	}
+	lp := strings.ToLower(path)
+	owned := false
+	launchers := env.Launchers.Get(pl, env.Cfg)
+	for i := range launchers {
+		for _, scheme := range launchers[i].Schemes {
+			if !strings.HasPrefix(lp, scheme+":") {
+				continue
+			}
+			if strings.EqualFold(launchers[i].ID, chosen) {
+				return
+			}
+			owned = true
+		}
+	}
+	if !owned {
+		return
+	}
+	log.Info().Str("launcher", chosen).Str("path", path).
+		Msg("preferred launcher cannot start this link, using the link's own launcher")
+	env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+}
+
 func applyGlobalLauncherPreference(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
 	launchers := env.Launchers.Get(pl, env.Cfg)
 	for _, ref := range env.Cfg.LauncherPreference() {
@@ -982,6 +1014,7 @@ func getLaunchClosure(
 			} else {
 				applySystemDefaultLauncherForPath(pl, env, target.path)
 			}
+			dropLauncherForOtherScheme(pl, env, target.path)
 		}
 
 		// Per-media overrides belong to the requested/indexed path. Normalize

@@ -24,8 +24,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -91,6 +93,208 @@ func flashpointDirFromCommand(command string) (string, error) {
 		return "", fmt.Errorf("%w: %s", errFlashpointBadLayout, exe)
 	}
 	return filepath.Dir(launcherDir), nil
+}
+
+const (
+	// flashpointStartTimeout bounds the wait for a cold Flashpoint to be able
+	// to take the game's link. Its first start of the day took 20 s while it
+	// downloaded updates.
+	flashpointStartTimeout = 60 * time.Second
+	// flashpointStartSettle is how long after its game server appears
+	// Flashpoint is given before the link is handed over.
+	flashpointStartSettle = time.Second
+)
+
+// launchFlashpointGame starts game id. Flashpoint only acts on a
+// flashpoint:// link handed to an instance that is already running: started
+// cold with the link it ignores it, and started from another working
+// directory it cannot load its data at all. So a cold Flashpoint is started
+// from its Launcher folder first, and the link handed over once it is up.
+func (p *Platform) launchFlashpointGame(id string) error {
+	link := "flashpoint://run/" + id
+	dir, dirErr := findFlashpointDir()
+	launcherDir := ""
+	if dirErr == nil {
+		launcherDir = filepath.Join(dir, "Launcher")
+		if err := p.ensureFlashpointRunning(dir); err != nil {
+			return err
+		}
+	} else {
+		log.Debug().Err(dirErr).Msg("Flashpoint install not found; handing the link to Windows")
+	}
+
+	//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
+	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", "start", link)
+	cmd.Dir = launcherDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start flashpoint: %w", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// ensureFlashpointRunning starts the Flashpoint installed in dir when it is not
+// running and waits until it can take a game. A stop during the wait ends it.
+func (p *Platform) ensureFlashpointRunning(dir string) error {
+	launcherDir := filepath.Join(dir, "Launcher")
+	exe := filepath.Join(launcherDir, "Flashpoint.exe")
+	if pid, running := findProcessByPath(exe); running {
+		log.Debug().Uint32("pid", pid).Msg("Flashpoint is running")
+		return nil
+	}
+
+	log.Info().Str("exe", exe).Msg("starting Flashpoint before handing it the game")
+	cmd := exec.CommandContext(context.Background(), exe) //nolint:gosec // registered Flashpoint install
+	cmd.Dir = launcherDir
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start Flashpoint: %w", err)
+	}
+	go func() { _ = cmd.Wait() }()
+
+	ctx := context.Background()
+	if p.launcherManager != nil {
+		ctx = p.launcherManager.GetContext()
+	}
+	if err := waitForFlashpointStart(
+		ctx, p.clockForReadiness(), dir, listWindowsProcesses, p.processHasWindow,
+	); err != nil {
+		return err
+	}
+	log.Info().Msg("Flashpoint is up")
+	return nil
+}
+
+// waitForFlashpointStart waits for a cold Flashpoint in dir to be able to take
+// a game's link. Its window opens seconds before its backend is up, and a link
+// arriving in between is lost: the backend stops part way through starting and
+// the whole launcher exits a minute later. The backend starts its game server
+// once its services are up, so that process marks it ready. A Flashpoint
+// without the game server is handed the link once the wait runs out.
+func waitForFlashpointStart(
+	ctx context.Context,
+	clock clockwork.Clock,
+	dir string,
+	listProcesses func() ([]windowsProcessInfo, error),
+	hasWindow func(pid int) bool,
+) error {
+	launcher := filepath.Join(dir, "Launcher", "Flashpoint.exe")
+	server := filepath.Join(dir, "Server", "Flashpoint Game Server.exe")
+
+	ctx, cancel := context.WithTimeout(ctx, flashpointStartTimeout)
+	defer cancel()
+	windowUp := false
+	err := platforms.PollReady(ctx, clock, flashpointReadyPoll, func(context.Context) (bool, error) {
+		procs, listErr := listProcesses()
+		if listErr != nil {
+			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, listErr)
+		}
+		serverUp := false
+		for i := range procs {
+			switch {
+			case sameExePath(procs[i].ExePath, launcher):
+				windowUp = windowUp || hasWindow(int(procs[i].PID))
+			case sameExePath(procs[i].ExePath, server):
+				serverUp = true
+			}
+		}
+		return windowUp && serverUp, nil
+	})
+	switch {
+	case err == nil:
+	case windowUp && errors.Is(err, context.DeadlineExceeded):
+		log.Warn().Msg("Flashpoint game server did not start; handing over the game anyway")
+		return nil
+	default:
+		return fmt.Errorf("wait for Flashpoint to start: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for Flashpoint to start: %w", ctx.Err())
+	case <-clock.After(flashpointStartSettle):
+		return nil
+	}
+}
+
+func sameExePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+// findProcessByPath returns a running process whose image is exe.
+func findProcessByPath(exe string) (uint32, bool) {
+	procs, err := listWindowsProcesses()
+	if err != nil {
+		return 0, false
+	}
+	for i := range procs {
+		if sameExePath(procs[i].ExePath, exe) {
+			return procs[i].PID, true
+		}
+	}
+	return 0, false
+}
+
+// killFlashpointGame stops a Flashpoint game. Flashpoint starts the game's
+// player from its FPSoftware folder and Core holds no handle to it, so a stop
+// cleared the media and left the game playing. Every player under that folder
+// belongs to Flashpoint, so all of them are ended.
+func killFlashpointGame(*config.Instance) error {
+	dir, err := findFlashpointDir()
+	if err != nil {
+		return err
+	}
+	killed, err := killFlashpointPlayers(
+		filepath.Join(dir, "FPSoftware"), listWindowsProcesses, retroBatProcessPath, retroBatRunTaskKill,
+	)
+	if err != nil {
+		return err
+	}
+	// No player means the game has already been closed, which is what a stop
+	// asks for. Reporting it as a failure kept the media active and refused
+	// every launch after it.
+	if killed == 0 {
+		log.Debug().Msg("no Flashpoint game was running")
+		return nil
+	}
+	log.Info().Int("players", killed).Msg("stopped Flashpoint game")
+	return nil
+}
+
+func killFlashpointPlayers(
+	playersDir string,
+	listProcesses func() ([]windowsProcessInfo, error),
+	processPath func(pid uint32) (string, error),
+	killTree func(ctx context.Context, pid uint32) error,
+) (int, error) {
+	procs, err := listProcesses()
+	if err != nil {
+		return 0, fmt.Errorf("list processes: %w", err)
+	}
+	killed := 0
+	var errs []error
+	for i := range procs {
+		if procs[i].PID == 0 || !helpers.PathHasPrefix(procs[i].ExePath, playersDir) {
+			continue
+		}
+		// The PID may have been reused since the listing.
+		if current, pathErr := processPath(procs[i].PID); pathErr != nil ||
+			!helpers.PathHasPrefix(current, playersDir) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), retroBatProcessKillTimeout)
+		killErr := killTree(ctx, procs[i].PID)
+		cancel()
+		if killErr != nil {
+			errs = append(errs, fmt.Errorf("kill pid %d: %w", procs[i].PID, killErr))
+			continue
+		}
+		killed++
+	}
+	if killed == 0 && len(errs) > 0 {
+		return 0, errors.Join(errs...)
+	}
+	return killed, nil
 }
 
 // waitForFlashpointGame is the readiness probe for Flashpoint games. The

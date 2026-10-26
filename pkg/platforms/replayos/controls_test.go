@@ -281,3 +281,64 @@ func TestSystemInfoFromROMPath(t *testing.T) {
 	_, ok = systemInfoFromROMPath("", "/media/sd")
 	assert.False(t, ok)
 }
+
+func TestStateFile(t *testing.T) {
+	t.Parallel()
+
+	path, ok := stateFile("/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", 7)
+	require.True(t, ok)
+	assert.Equal(t, "/media/sd/saves/nintendo_nes/720 Degrees (USA).sst7", path)
+
+	_, ok = stateFile("/tmp/game.nes", 1)
+	assert.False(t, ok, "no roms folder to mirror")
+}
+
+// ReplayOS, 2026-10-26: load_state from an empty slot reported success; RePlayOS
+// accepts it and does nothing.
+func TestNetControl_LoadFromEmptySlotFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	game := filepath.Join(root, "roms", "nintendo_nes", "Game (USA).nes")
+	saves := filepath.Join(root, "saves", "nintendo_nes")
+	require.NoError(t, os.MkdirAll(saves, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(saves, "Game (USA).sst2"), []byte("s"), 0o600))
+
+	f := &fakeReplay{view: "game_play", token: "604318", gameFile: game}
+	n := newTestNetControl(t, f, testCfg)
+	load := n.stateControl("load_state")
+
+	err := load(context.Background(), nil, platforms.ControlParams{Args: map[string]string{"slot": "3"}})
+	require.ErrorIs(t, err, errNoSavedState)
+	require.ErrorIs(t, err, platforms.ErrControlUnavailable)
+	require.Len(t, f.requests, 1, "an empty slot must not reach RePlayOS")
+
+	require.NoError(t, load(context.Background(), nil, platforms.ControlParams{Args: map[string]string{"slot": "2"}}))
+}
+
+// Saves kept where Core does not look are left to RePlayOS.
+func TestNetControl_LoadWithoutSavesFolderGoesAhead(t *testing.T) {
+	t.Parallel()
+
+	game := filepath.Join(t.TempDir(), "roms", "nintendo_nes", "Game (USA).nes")
+	f := &fakeReplay{view: "game_play", token: "604318", gameFile: game}
+	n := newTestNetControl(t, f, testCfg)
+
+	require.NoError(t, n.stateControl("load_state")(context.Background(), nil, platforms.ControlParams{}))
+	require.Len(t, f.requests, 2)
+}
+
+// ReplayOS, 2026-10-26: a probe cancelled by a newer launch was logged as "net
+// control is not reachable", which reads as net control being off.
+func TestNetControl_CancelledRequestIsNotUnavailable(t *testing.T) {
+	t.Parallel()
+
+	n := newTestNetControl(t, &fakeReplay{view: "game_play", token: "604318"}, testCfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := n.status(ctx)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, errNetControlUnavailable)
+}

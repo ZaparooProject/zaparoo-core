@@ -541,6 +541,8 @@ func newTrackerFixture(t *testing.T, core string) *trackerFixture {
 		procPath:      procDir,
 		activeStorage: "/media/sd",
 		activeMedia:   func() *models.ActiveMedia { return f.current },
+		// RePlayOS is not asked unless a test says what it answers.
+		runningGameFile: func(context.Context) (string, bool) { return "", false },
 	}
 	return f
 }
@@ -619,4 +621,41 @@ func TestCheckAndUpdateRunningGame_RelaunchOfSameCoreKeepsPendingPath(t *testing
 	assert.Len(t, f.published, 1, "media that already has a path is not replaced early")
 	assert.Equal(t, "/media/sd/roms/nintendo_nes/Second.nes", f.p.pendingROMPath,
 		"the new launch still has its path to consume")
+}
+
+// ReplayOS, 2026-10-26: a game already running when Core started (as after an
+// update restart) left no recent record, and was published with no path,
+// launcher or controls, so media.control answered "no launcher associated".
+func TestCheckAndUpdateRunningGame_AsksRePlayOSForAGameAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+	f.p.runningGameFile = func(context.Context) (string, bool) {
+		return "/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", true
+	}
+
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	require.Len(t, f.published, 1)
+	media := f.published[0]
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", media.Path)
+	assert.Equal(t, SystemMap["nintendo_nes"].GetLauncherID(), media.LauncherID)
+	assert.NotEmpty(t, media.LauncherControls)
+}
+
+// A path the launch already recorded wins; RePlayOS is not asked.
+func TestCheckAndUpdateRunningGame_PendingPathIsNotReplaced(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+	f.p.pendingROMPath = "/media/sd/roms/nintendo_nes/Game.nes"
+	f.p.runningGameFile = func(context.Context) (string, bool) {
+		t.Error("RePlayOS asked though the launch knew its path")
+		return "", false
+	}
+
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	require.Len(t, f.published, 1)
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/Game.nes", f.published[0].Path)
 }

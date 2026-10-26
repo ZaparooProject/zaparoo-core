@@ -2067,3 +2067,78 @@ func TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder(t *testing.T) {
 	mockPlatform.AssertNotCalled(t, "LaunchMedia",
 		mock.Anything, trackPath, mock.Anything, mock.Anything, mock.Anything)
 }
+
+// fallbackTitleDB answers title searches for one system and finds nothing in
+// any other.
+func fallbackTitleDB(system, path string) *helpers.MockMediaDBI {
+	db := helpers.NewMockMediaDBI()
+	db.On("GetCachedSlugResolution", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(database.SlugResolution{}, false).Maybe()
+	db.On("SetCachedSlugResolution", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	db.On("SearchMediaBySlug", mock.Anything, system, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{{SystemID: system, Name: "doom1_shareware", Path: path}}, nil).Maybe()
+	db.On("SearchMediaBySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySlugPrefix", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySecondarySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySlugIn", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("GetTitlesWithPreFilter", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything).Return([]database.MediaTitle{}, nil).Maybe()
+	db.On("GetMediaPropertyMetadata", mock.Anything, mock.Anything).
+		Return([]database.MediaProperty{}, nil).Maybe()
+	return db
+}
+
+// Batocera, 2026-10-26: Doom WADs moved from DOS to the new Doom system on the
+// first reindex, and every @DOS/... card written for them found nothing. A
+// title missing from its system is looked for in the system's fallbacks.
+func TestCmdTitleFindsTitleInFallbackSystem(t *testing.T) {
+	t.Parallel()
+
+	wad := "/userdata/roms/prboom/doom1_shareware.wad"
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "DOSBox", SystemID: "DOS"},
+		{ID: "PRBoom", SystemID: "Doom"},
+	}).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, wad, mock.MatchedBy(func(l *platforms.Launcher) bool {
+		return l == nil || l.ID != "DOSBox"
+	}), mock.Anything, mock.Anything).Return(nil)
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherPreference([]string{"DOSBox"})
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: fallbackTitleDB("Doom", wad)},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"DOS/doom1_shareware"}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A title the named system does have is never swapped for a fallback's.
+func TestCmdTitlePrefersItsOwnSystem(t *testing.T) {
+	t.Parallel()
+
+	exe := "/games/dos/doom.exe"
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, exe, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	_, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      &config.Instance{},
+		Database: &database.Database{MediaDB: fallbackTitleDB("DOS", exe)},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"DOS/doom1_shareware"}},
+	})
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
