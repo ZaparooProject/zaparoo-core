@@ -64,6 +64,14 @@ type readyHarness struct {
 	writtenMu syncutil.Mutex
 }
 
+// setCore has Main report core, written at at.
+func (h *readyHarness) setCore(core string, at time.Time) {
+	h.writtenMu.Lock()
+	defer h.writtenMu.Unlock()
+	h.names = []string{core}
+	h.written = at
+}
+
 func (h *readyHarness) setWritten(at time.Time) {
 	h.writtenMu.Lock()
 	defer h.writtenMu.Unlock()
@@ -88,13 +96,19 @@ func newReadyHarness(t *testing.T) *readyHarness {
 			}
 			return fakeFileInfo{size: size, mode: 0}, nil
 		},
+		// The core is up at once unless a test says otherwise.
+		coreUp: func(context.Context, time.Time) <-chan struct{} {
+			up := make(chan struct{})
+			close(up)
+			return up
+		},
 		coreName: func() (string, time.Time, error) {
+			h.writtenMu.Lock()
+			defer h.writtenMu.Unlock()
 			name := h.names[0]
 			if len(h.names) > 1 {
 				h.names = h.names[1:]
 			}
-			h.writtenMu.Lock()
-			defer h.writtenMu.Unlock()
 			return name, h.written, nil
 		},
 	}
@@ -640,12 +654,14 @@ func TestCoreReadiness_ArcadeReadyTimeoutScalesWithTheRomArchives(t *testing.T) 
 	}
 }
 
-func TestCoreReadiness_ReadyTimeoutIsOnlyForArcadeSets(t *testing.T) {
+// A game file's wait has room for Main to load the core before the open window
+// starts, so it outlasts the service default.
+func TestCoreReadiness_ReadyTimeoutCoversTheCoreLoad(t *testing.T) {
 	t.Parallel()
 	h := newReadyHarness(t)
 	h.files[genesisGame] = 64 << 20
 
-	assert.Zero(t, h.r.readyTimeout(probeMedia(genesisGame)))
+	assert.Greater(t, h.r.readyTimeout(probeMedia(genesisGame)), readyCoreWait+readyOpenWindow)
 	absent := probeMedia(filepath.Join(t.TempDir(), "absent.mra"))
 	assert.Zero(t, h.r.readyTimeout(absent), "an unreadable MRA keeps the default")
 }
@@ -748,4 +764,85 @@ func TestUsePlatform_SetsTheKeyboardToPrime(t *testing.T) {
 	r.keyMu.Lock()
 	assert.Nil(t, r.pressKey, "a nil platform changes nothing")
 	r.keyMu.Unlock()
+}
+
+// MiSTer, 2026-10-26: with the card busy, Main took 7 to 14 s to load a core
+// and only then opened the game; the open window, counted from the launch,
+// ran out first and released media_ready before the game had loaded.
+func TestCoreReadiness_WaitCoreUpFollowsTheCoreName(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	launchedAt := h.clock.Now()
+	h.names = []string{misterconfig.MenuCore}
+	h.setWritten(launchedAt.Add(-time.Minute))
+
+	up := h.r.waitCoreUp(t.Context(), launchedAt)
+	for range 3 {
+		require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
+		h.clock.Advance(readyCorePoll)
+	}
+	// Waiting again means the last check has run and found the menu.
+	require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
+	select {
+	case <-up:
+		t.Fatal("up before Main loaded a core")
+	default:
+	}
+
+	h.setCore("NES", h.clock.Now())
+	h.clock.Advance(readyCorePoll)
+	select {
+	case <-up:
+	case <-time.After(time.Second):
+		t.Fatal("not up after Main reported the core")
+	}
+}
+
+// A core that never reports in releases the window after readyCoreWait, so the
+// wait stays bounded.
+func TestCoreReadiness_WaitCoreUpGivesUpAfterTheBound(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	launchedAt := h.clock.Now()
+	h.names = []string{misterconfig.MenuCore}
+	h.setWritten(launchedAt.Add(-time.Minute))
+
+	up := h.r.waitCoreUp(t.Context(), launchedAt)
+	require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
+	h.clock.Advance(readyCoreWait)
+
+	select {
+	case <-up:
+	case <-time.After(time.Second):
+		t.Fatal("still held after readyCoreWait")
+	}
+}
+
+// The game is not given up on as never opened while Main is still loading the
+// core: the open window only starts once the core is up.
+func TestCoreReadiness_OpenWindowWaitsForTheCore(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.files[genesisGame] = 4 << 20
+	coreUp := make(chan struct{})
+	h.r.coreUp = func(context.Context, time.Time) <-chan struct{} { return coreUp }
+	done := h.start(t.Context(), mustCore(t, "Genesis"), genesisGame)
+
+	// A window counted from the launch would be waiting on the clock now; let
+	// it run out if it is.
+	waitCtx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if h.clock.BlockUntilContext(waitCtx, 1) == nil {
+		h.clock.Advance(3 * readyOpenWindow)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("probe gave up while the core was loading: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(coreUp)
+	h.events <- gamehandoff.Open
+	h.events <- gamehandoff.Close
+	require.NoError(t, h.advanceUntilDone(t, done))
 }

@@ -1491,3 +1491,44 @@ func TestLoadGameEmptyActiveGameClearsCoreMedia(t *testing.T) {
 	assert.Nil(t, current, "a core game quit through the OSD must still clear")
 	assert.Empty(t, tr.ActiveGameID)
 }
+
+// coreLoadStopPlatform implements the optional platformWithCoreLoadStops
+// interface and records the cores it was told about.
+type coreLoadStopPlatform struct {
+	*mocks.MockPlatform
+	stop  string
+	cores []string
+}
+
+func (p *coreLoadStopPlatform) StopCoreLoadedAfterStop(core string) bool {
+	p.cores = append(p.cores, core)
+	return core == p.stop
+}
+
+// A core that comes up after a stop meant for it is sent back to the menu by
+// the platform, and the tracker must not publish the game it is running.
+func TestLoadCoreLeavesCoreStoppedAfterStopUnpublished(t *testing.T) {
+	t.Parallel()
+
+	coreFile := filepath.Join(t.TempDir(), "CORENAME")
+	require.NoError(t, os.WriteFile(coreFile, []byte("esprade"), 0o600))
+
+	pl := &coreLoadStopPlatform{MockPlatform: mocks.NewMockPlatform(), stop: "esprade"}
+	var published *models.ActiveMedia
+	tr := &Tracker{
+		pl:           pl,
+		coreNameFile: coreFile,
+		ActiveCore:   misterconfig.MenuCore,
+		NameMap: []NameMapping{
+			{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
+		},
+		activeMedia:    func() *models.ActiveMedia { return published },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+		setActiveGame:  func(string) error { return nil },
+	}
+
+	tr.LoadCore()
+
+	assert.Equal(t, []string{"esprade"}, pl.cores)
+	assert.Nil(t, published, "a core stopped on arrival is not published")
+}

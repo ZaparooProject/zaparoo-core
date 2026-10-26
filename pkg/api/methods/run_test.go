@@ -40,7 +40,10 @@ type stopResult struct {
 	err   error
 }
 
-func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
+// A stop waits for a launch in flight, but not for the media to be ready: a
+// load can run for minutes, and a caller that gives up first would lose the
+// stop. A game that turns up after the stop is state's to stop.
+func TestHandleStopWaitsForLaunchButNotForMediaReadiness(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -51,8 +54,9 @@ func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
 	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
 	launchAccess.SetActiveMedia(models.NewActiveMedia("snes", "SNES", "game.sfc", "Game", "RASNES"))
-	readyGen, active := st.ActiveMediaReadyGeneration()
+	_, active := st.ActiveMediaReadyGeneration()
 	require.True(t, active)
+	require.False(t, st.ActiveMediaReady())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -78,18 +82,9 @@ func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
 	select {
 	case result := <-resultCh:
 		require.NoError(t, result.err)
-		t.Fatal("stop completed before active media became ready")
-	case <-time.After(50 * time.Millisecond):
-	}
-	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForMenu)
-
-	st.MarkActiveMediaReady(readyGen)
-	select {
-	case result := <-resultCh:
-		require.NoError(t, result.err)
 		assert.Equal(t, NoContent{}, result.value)
-	case <-time.After(time.Second):
-		t.Fatal("stop did not complete after media became ready")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("stop waited for media readiness after the launch released")
 	}
 	mockPlatform.AssertExpectations(t)
 }
@@ -272,4 +267,44 @@ func TestNoContentResponseObjectCarriesNullResult(t *testing.T) {
 	require.True(t, ok, "result must be present on success, not omitted")
 	assert.JSONEq(t, "null", string(result))
 	assert.NotContains(t, fields, "error")
+}
+
+// Windows, 2026-10-26: a stop during a RetroBat game swap waited for the swap
+// to finish, so the new game started and was killed six seconds later. The
+// swap waits on the launcher context, which the stop now cancels before it
+// waits for the launch.
+func TestHandleStopCallsOffALaunchStillSettling(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Maybe()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+
+	launchAccess, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	settling := st.LauncherManager().GetContext()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultCh := make(chan stopResult, 1)
+	go func() {
+		value, stopErr := HandleStop(requests.RequestEnv{Context: ctx, Platform: mockPlatform, State: st})
+		resultCh <- stopResult{value: value, err: stopErr}
+	}()
+
+	select {
+	case <-settling.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("the settling launch was not called off")
+	}
+	select {
+	case <-resultCh:
+		t.Fatal("stop completed while the launch was in flight")
+	default:
+	}
+
+	launchAccess.Release()
+	result := <-resultCh
+	require.NoError(t, result.err)
 }

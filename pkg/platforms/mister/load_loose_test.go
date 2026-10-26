@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,25 @@ func TestLoosePlanners_CPCDiskTypesItsProgramInLowercase(t *testing.T) {
 	tokens, err := keyTokens(plan.steps[0].text, plan.layout)
 	require.NoError(t, err)
 	assert.Contains(t, tokens, "{press:shift}", "the quote is a held chord")
+}
+
+// Hardware, 2026-10-26: the CPC read the digit typed straight after the quote's
+// shift came up as shifted, so RUN"1943 arrived as RUN"!943 and found nothing.
+func TestLoosePlanners_CPCDigitAfterQuoteIsNotShifted(t *testing.T) {
+	t.Parallel()
+	fs := memFS(t, map[string][]byte{"/g/a.dsk": dskImage(0xC1, 0, "1943")})
+
+	plan, ok, err := loosePlanners(fs)[systemdefs.SystemAmstrad](nil, "/g/a.dsk")
+	require.NoError(t, err)
+	require.True(t, ok)
+	tokens, err := keyTokens(plan.steps[0].text, plan.layout)
+	require.NoError(t, err)
+
+	digit := slices.Index(tokens, "1")
+	require.Positive(t, digit)
+	assert.Equal(t, "{delay:"+chordHold.String()+"}", tokens[digit-1],
+		"the shift is released well before the digit")
+	assert.Equal(t, "{release:shift}", tokens[digit-2])
 }
 
 func TestLoosePlanners_EinsteinDiskRunsItsOnlyProgram(t *testing.T) {

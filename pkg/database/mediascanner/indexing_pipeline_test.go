@@ -795,3 +795,30 @@ func TestGetPathFragments_PrefixStripNeverEmptiesTitle(t *testing.T) {
 	assert.Equal(t, "Bomberman", datedRelease.Title,
 		"a real date prefix must still be stripped")
 }
+
+// ReplayOS, 2026-10-26: a NES folder whose few games mostly opened with a
+// number was taken for a numbered list, and "10-Yard Fight", "3-D WorldRunner"
+// and "720 Degrees" were indexed as "Yard Fight", "D WorldRunner" and
+// "Degrees". A number that is part of the title stays.
+func TestGetPathFragments_TitleNumbersAreNotListNumbers(t *testing.T) {
+	t.Parallel()
+
+	nes := string(filepath.Separator) + filepath.Join("media", "sd", "roms", "nintendo_nes")
+	folder := []string{
+		filepath.Join(nes, "10-Yard Fight (USA, Europe).nes"),
+		filepath.Join(nes, "3-D WorldRunner (USA).nes"),
+		filepath.Join(nes, "720 Degrees (USA).nes"),
+		filepath.Join(nes, "1942 (Japan, USA) (En).nes"),
+		filepath.Join(nes, "Balloon Fight (USA).nes"),
+	}
+	policy := browseprefix.DetectPolicyForPaths(folder, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles)
+
+	for path, want := range map[string]string{
+		folder[0]: "10-Yard Fight",
+		folder[1]: "3-D WorldRunner",
+		folder[2]: "720 Degrees",
+	} {
+		got := GetPathFragments(&PathFragmentParams{Path: path, SystemID: "NES", PrefixPolicy: policy})
+		assert.Equal(t, want, got.Title, path)
+	}
+}

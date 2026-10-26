@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"errors"
 	"fmt"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -107,6 +108,9 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 	if err != nil {
 		cancelStop()
+		if errors.Is(err, platforms.ErrInvalidControlArg) {
+			return nil, models.ClientErrf("control action %q failed: %w", params.Action, err)
+		}
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
 	// Media state is cleared by the launcher's own stop control, so the ZapScript
