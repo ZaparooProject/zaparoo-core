@@ -68,12 +68,25 @@ func applyMediaLauncherOverrideWithReplace(
 	systemID string,
 	replaceCurrent bool,
 ) string {
+	launcherID, _ := mediaLauncherOverride(pl, env, mediaDBID, systemID, replaceCurrent)
+	return launcherID
+}
+
+// mediaLauncherOverride applies the media's launcher override and reports
+// whether it set one.
+func mediaLauncherOverride(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	mediaDBID int64,
+	systemID string,
+	replaceCurrent bool,
+) (string, bool) {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if (current != "" && !replaceCurrent) || mediaDBID == 0 {
-		return current
+		return current, false
 	}
 	if env.Database == nil || env.Database.MediaDB == nil {
-		return ""
+		return "", false
 	}
 
 	ctx, cancel := mediaDBLookupContext(env)
@@ -81,7 +94,7 @@ func applyMediaLauncherOverrideWithReplace(
 	props, err := env.Database.MediaDB.GetMediaPropertyMetadata(ctx, mediaDBID)
 	if err != nil {
 		log.Warn().Err(err).Int64("mediaDBID", mediaDBID).Msg("failed to read media launcher override")
-		return ""
+		return "", false
 	}
 	for _, prop := range props {
 		if prop.TypeTag != launcherOverridePropertyTypeTag() {
@@ -89,7 +102,7 @@ func applyMediaLauncherOverrideWithReplace(
 		}
 		launcherRef := strings.TrimSpace(prop.Text)
 		if launcherRef == "" {
-			return ""
+			return "", false
 		}
 		launcherID, found := resolveLauncherRefForSystem(pl, env, launcherRef, systemID)
 		if !found {
@@ -98,7 +111,7 @@ func applyMediaLauncherOverrideWithReplace(
 				Str("launcher", launcherRef).
 				Int64("mediaDBID", mediaDBID).
 				Msg("media launcher override not found")
-			return ""
+			return "", false
 		}
 		log.Info().
 			Str("system", systemID).
@@ -106,9 +119,9 @@ func applyMediaLauncherOverrideWithReplace(
 			Int64("mediaDBID", mediaDBID).
 			Msg("using media launcher override")
 		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
-		return launcherID
+		return launcherID, true
 	}
-	return ""
+	return "", false
 }
 
 func applyMediaLauncherOverrideForPath(
@@ -117,12 +130,24 @@ func applyMediaLauncherOverrideForPath(
 	path string,
 	replaceCurrent bool,
 ) string {
+	launcherID, _ := mediaLauncherOverrideForPath(pl, env, path, replaceCurrent)
+	return launcherID
+}
+
+// mediaLauncherOverrideForPath applies the launcher override of the media
+// indexed at path and reports whether it set one.
+func mediaLauncherOverrideForPath(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	replaceCurrent bool,
+) (string, bool) {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if current != "" && !replaceCurrent {
-		return current
+		return current, false
 	}
 	if env.Database == nil || env.Database.MediaDB == nil {
-		return current
+		return current, false
 	}
 	launcher, found := inferLauncherForPath(pl, env, path)
 	if !found {
@@ -139,7 +164,7 @@ func applyMediaLauncherOverrideForPath(
 	defer cancel()
 	if found && launcher.SystemID != "" {
 		if mediaDBID, ok := findMediaInSystem(ctx, env, launcher.SystemID, path); ok {
-			return applyMediaLauncherOverrideWithReplace(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
+			return mediaLauncherOverride(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
 		}
 	}
 	// The launcher inferred from the path can belong to another system than
@@ -147,9 +172,9 @@ func applyMediaLauncherOverrideForPath(
 	// Look the path up across systems, and use it only when one row has it.
 	row, ok := findUniqueMediaByPath(ctx, env, path)
 	if !ok {
-		return current
+		return current, false
 	}
-	return applyMediaLauncherOverrideWithReplace(pl, env, row.DBID, row.SystemID, replaceCurrent)
+	return mediaLauncherOverride(pl, env, row.DBID, row.SystemID, replaceCurrent)
 }
 
 // findMediaInSystem returns the DBID of the media row for path in systemID.
@@ -286,7 +311,8 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 // a default or the global preference, when the path is a link that a different
 // launcher owns: preferring LaunchBox for PC must not send a steam:// link to
 // LaunchBox, which cannot start it. The link's own launcher is then found from
-// the path. A launcher named in the script is never applied here.
+// the path. A launcher named in the script or in the media's own override is
+// never dropped.
 func dropLauncherForOtherScheme(pl platforms.Platform, env *platforms.CmdEnv, path string) {
 	chosen := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if chosen == "" || !strings.Contains(path, "://") {
@@ -1004,17 +1030,20 @@ func getLaunchClosure(
 			// the path) would only fail it.
 			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
 		default:
+			overridden := false
 			if target.mediaID != 0 && target.systemID != "" {
-				applyMediaLauncherOverrideWithReplace(pl, env, target.mediaID, target.systemID, true)
+				_, overridden = mediaLauncherOverride(pl, env, target.mediaID, target.systemID, true)
 			} else if target.resolveMediaByPath {
-				applyMediaLauncherOverrideForPath(pl, env, target.path, true)
+				_, overridden = mediaLauncherOverrideForPath(pl, env, target.path, true)
 			}
 			if target.systemID != "" {
 				applySystemDefaultLauncher(pl, env, target.systemID)
 			} else {
 				applySystemDefaultLauncherForPath(pl, env, target.path)
 			}
-			dropLauncherForOtherScheme(pl, env, target.path)
+			if !overridden {
+				dropLauncherForOtherScheme(pl, env, target.path)
+			}
 		}
 
 		// Per-media overrides belong to the requested/indexed path. Normalize

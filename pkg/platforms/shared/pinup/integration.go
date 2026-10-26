@@ -812,22 +812,23 @@ func libraryExecutables(lib Library) []string {
 }
 
 // playerWindowClassesOf returns the player window classes of the program
-// running as pid, or nil when it is unknown or any window will do.
-func (i *Integration) playerWindowClassesOf(pid int) []string {
+// running as pid, nil when any window will do, and false when the program
+// could not be looked up.
+func (i *Integration) playerWindowClassesOf(pid int) ([]string, bool) {
 	if i.deps.Processes == nil {
-		return nil
+		return nil, true
 	}
 	procs, err := i.deps.Processes.List()
 	if err != nil {
 		log.Debug().Err(err).Msg("listing processes to find the table's emulator")
-		return nil
+		return nil, false
 	}
 	for _, p := range procs {
 		if p.PID == pid {
-			return playerWindowsFor(p.Exe)
+			return playerWindowsFor(p.Exe), true
 		}
 	}
-	return nil
+	return nil, false
 }
 
 // readyPoll is how often WaitForReady looks for the table's window.
@@ -855,8 +856,14 @@ func (i *Integration) WaitForReady(ctx context.Context, _ *config.Instance, medi
 			return false, nil
 		}
 		if classesFor != launch.pid {
-			classesFor = launch.pid
-			classes = i.playerWindowClassesOf(launch.pid)
+			// A lookup that failed is tried again on the next poll: taking it
+			// as "any window" would report a table loading in the editor
+			// window as ready.
+			found, ok := i.playerWindowClassesOf(launch.pid)
+			if !ok {
+				return false, nil
+			}
+			classesFor, classes = launch.pid, found
 		}
 		if len(classes) > 0 && i.deps.HasWindowOfClass != nil {
 			return i.deps.HasWindowOfClass(launch.pid, classes), nil

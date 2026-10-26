@@ -659,3 +659,24 @@ func TestCheckAndUpdateRunningGame_PendingPathIsNotReplaced(t *testing.T) {
 	require.Len(t, f.published, 1)
 	assert.Equal(t, "/media/sd/roms/nintendo_nes/Game.nes", f.published[0].Path)
 }
+
+// Net control is down while replay.service restarts into a game, so the first
+// tick can publish the core with no path. RePlayOS is asked again on later
+// ticks until it says what is running.
+func TestCheckAndUpdateRunningGame_AsksAgainWhileThePathIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	f := newTrackerFixture(t, "fceumm_libretro.so")
+	f.p.checkAndUpdateRunningGame(f.set)
+	require.Len(t, f.published, 1)
+	require.Empty(t, f.published[0].Path)
+
+	f.p.runningGameFile = func(context.Context) (string, bool) {
+		return "/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", true
+	}
+	f.p.checkAndUpdateRunningGame(f.set)
+
+	require.Len(t, f.published, 2, "the path RePlayOS reports completes the media")
+	assert.Equal(t, "/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", f.published[1].Path)
+	assert.NotEmpty(t, f.published[1].LauncherID)
+}

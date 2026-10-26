@@ -553,6 +553,52 @@ func TestCmdLaunch_GlobalPreferenceDoesNotTakeAnotherLaunchersLink(t *testing.T)
 	mockPlatform.AssertExpectations(t)
 }
 
+// A launcher the user set on the media itself is their choice for that link,
+// and is not dropped for not owning its scheme.
+func TestCmdLaunch_MediaOverrideKeepsLauncherForAnotherScheme(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+
+	uri := "steam://212680/FTL"
+	scantest.IndexMediaPaths(t, mediaDB, "PC", uri)
+	rows, err := mediaDB.GetMediaBySystemID("PC")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		context.Background(), db, "PC", uri, rows[0].DBID, "LaunchBox"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "LaunchBox", SystemID: "PC", Schemes: []string{"launchbox"}},
+		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+	})
+	mockPlatform.On("LaunchMedia", cfg, uri,
+		mock.MatchedBy(func(l *platforms.Launcher) bool { return l != nil && l.ID == "LaunchBox" }),
+		db, (*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err = cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
 // The preferred launcher stays when it is the one that owns the link.
 func TestDropLauncherForOtherScheme_KeepsTheLinksOwnLauncher(t *testing.T) {
 	t.Parallel()

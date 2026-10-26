@@ -21,6 +21,8 @@ package pinup
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +40,11 @@ func readyMedia() *models.ActiveMedia {
 }
 
 func newReadyIntegration(clock clockwork.Clock, hasWindow func(int) bool) *Integration {
-	return NewIntegration(&Deps{Clock: clock, HasWindow: hasWindow})
+	return NewIntegration(&Deps{
+		Clock:     clock,
+		HasWindow: hasWindow,
+		Processes: listedProcesses{{Exe: "Future Pinball.exe", PID: 4242}},
+	})
 }
 
 func (i *Integration) trackForTest(gameID, pid int) {
@@ -181,4 +187,62 @@ func TestWaitForReady_OtherEmulatorsReadyOnAnyWindow(t *testing.T) {
 	i.trackForTest(7, 4242)
 
 	require.NoError(t, i.WaitForReady(t.Context(), nil, readyMedia()))
+}
+
+// flakyProcesses fails to list until it is told to work, then lists procs.
+type flakyProcesses struct {
+	working *atomic.Bool
+	procs   []ProcessInfo
+}
+
+func (f flakyProcesses) List() ([]ProcessInfo, error) {
+	if !f.working.Load() {
+		return nil, errors.New("process list unavailable")
+	}
+	return f.procs, nil
+}
+
+// A process lookup that fails is not taken as "any window will do": VPX would
+// be reported ready on its editor window.
+func TestWaitForReady_FailedLookupIsRetried(t *testing.T) {
+	t.Parallel()
+	var listing, player atomic.Bool
+	clock := clockwork.NewFakeClock()
+	i := NewIntegration(&Deps{
+		Clock:     clock,
+		Processes: flakyProcesses{working: &listing, procs: []ProcessInfo{{Exe: "VPinballX64.exe", PID: 4242}}},
+		HasWindow: func(int) bool { return true }, // the editor window is up
+		HasWindowOfClass: func(pid int, classes []string) bool {
+			return pid == 4242 && player.Load() && slices.Equal(classes, []string{"VPPlayer"})
+		},
+	})
+	i.trackForTest(7, 4242)
+	done := make(chan error, 1)
+	go func() { done <- i.WaitForReady(t.Context(), nil, readyMedia()) }()
+
+	for range 3 {
+		waitCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+		blockErr := clock.BlockUntilContext(waitCtx, 1)
+		cancel()
+		select {
+		case err := <-done:
+			t.Fatalf("ready before the emulator was looked up: %v", err)
+		default:
+		}
+		require.NoError(t, blockErr)
+		clock.Advance(readyPoll)
+	}
+	listing.Store(true)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	clock.Advance(readyPoll)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	select {
+	case err := <-done:
+		t.Fatalf("ready on the editor window: %v", err)
+	default:
+	}
+	player.Store(true)
+	clock.Advance(readyPoll)
+
+	require.NoError(t, <-done)
 }

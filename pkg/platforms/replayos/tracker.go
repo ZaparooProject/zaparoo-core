@@ -477,9 +477,10 @@ func (p *Platform) askRunningGameFile() string {
 
 // refreshMediaWithROMPath completes media published before the ROM path was
 // known. The recent watcher can see a menu launch's .rec file after the core has
-// loaded, so the first publication has no path, launcher or controls. It only
-// acts while the published media has no path, so a pending path for a relaunch
-// of the same core is left for the new launch to consume.
+// loaded, and net control is down while replay.service restarts into a game, so
+// the first publication can have no path, launcher or controls. It only acts
+// while the published media has no path, so a pending path for a relaunch of
+// the same core is left for the new launch to consume.
 func (p *Platform) refreshMediaWithROMPath(core string, setActiveMedia func(*models.ActiveMedia)) {
 	if core == "" || p.activeMedia == nil {
 		return
@@ -491,12 +492,15 @@ func (p *Platform) refreshMediaWithROMPath(core string, setActiveMedia func(*mod
 
 	p.trackerMu.Lock()
 	romPath := p.pendingROMPath
-	if romPath == "" {
-		p.trackerMu.Unlock()
-		return
+	if romPath != "" {
+		p.pendingROMPath = ""
 	}
-	p.pendingROMPath = ""
 	p.trackerMu.Unlock()
+	if romPath == "" {
+		if romPath = p.askRunningGameFile(); romPath == "" {
+			return
+		}
+	}
 
 	media := p.trackedMedia(core, romPath)
 	log.Info().

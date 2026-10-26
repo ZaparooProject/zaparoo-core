@@ -52,6 +52,12 @@ const (
 	// that RePlayOS shows under SYSTEM > INFORMATION > NET CONTROL CODE.
 	netControlTokenKey = "replay_http_token" //nolint:gosec // config key name, not a credential
 
+	// dataLocationKey is the replay.cfg key for SYSTEM > DATA LOCATION. Set to
+	// dataLocationLocalSD, saves live on the SD card whatever storage holds
+	// the ROMs.
+	dataLocationKey     = "system_data_location"
+	dataLocationLocalSD = "local_sd"
+
 	// replayGameView is the get_status view while a game is running.
 	replayGameView = "game_play"
 
@@ -83,12 +89,16 @@ type netControl struct {
 	client  *http.Client
 	baseURL string
 	cfgPath string
+	// localSD is the SD card mount saves move to with DATA LOCATION set to
+	// LOCAL SD.
+	localSD string
 }
 
 func newNetControl() *netControl {
 	return &netControl{
 		baseURL: netControlBaseURL,
 		cfgPath: replayCfgPath,
+		localSD: "/media/sd",
 		client:  &http.Client{Timeout: netControlTimeout, Transport: useragent.Transport(nil)},
 	}
 }
@@ -204,10 +214,11 @@ func (n *netControl) runningGame(ctx context.Context) (netStatus, error) {
 	return status, nil
 }
 
-// stateFile returns where RePlayOS keeps slot's save state for the game file,
-// beside the game's own path with roms swapped for saves, and false when the
-// path has no roms folder to swap.
-func stateFile(gameFile string, slot int) (string, bool) {
+// stateFile returns where RePlayOS keeps slot's save state for the game file:
+// the game's own path with roms swapped for saves, on dataRoot instead of the
+// game's storage when dataRoot is set. It is false when the path has no roms
+// folder to swap.
+func stateFile(gameFile string, slot int, dataRoot string) (string, bool) {
 	dir, base := filepath.Split(filepath.Clean(gameFile))
 	parts := strings.Split(filepath.Clean(dir), string(filepath.Separator))
 	for i := len(parts) - 1; i >= 0; i-- {
@@ -215,10 +226,22 @@ func stateFile(gameFile string, slot int) (string, bool) {
 			continue
 		}
 		parts[i] = "saves"
+		root := string(filepath.Separator)
+		if dataRoot != "" {
+			root, parts = dataRoot, parts[i:]
+		}
 		name := strings.TrimSuffix(base, filepath.Ext(base)) + ".sst" + strconv.Itoa(slot)
-		return filepath.Join(string(filepath.Separator), filepath.Join(parts...), name), true
+		return filepath.Join(root, filepath.Join(parts...), name), true
 	}
 	return "", false
+}
+
+// dataRoot returns where RePlayOS keeps saves when it is not beside the ROMs.
+func (n *netControl) dataRoot() string {
+	if location, _ := readCfgValue(n.cfgPath, dataLocationKey); location == dataLocationLocalSD {
+		return n.localSD
+	}
+	return ""
 }
 
 // errNoSavedState reports a load from a slot nothing was saved to. RePlayOS
@@ -228,8 +251,8 @@ var errNoSavedState = errors.New("no save state in that slot")
 // checkStateSaved fails a load from an empty slot. It only refuses when the
 // game's saves folder exists, so an install keeping saves elsewhere still
 // loads.
-func checkStateSaved(gameFile string, slot int) error {
-	path, ok := stateFile(gameFile, slot)
+func checkStateSaved(gameFile string, slot int, dataRoot string) error {
+	path, ok := stateFile(gameFile, slot, dataRoot)
 	if !ok {
 		return nil
 	}
@@ -315,7 +338,7 @@ func (n *netControl) stateControl(endpoint string) platforms.ControlFunc {
 			return err
 		}
 		if endpoint == "load_state" {
-			if savedErr := checkStateSaved(status.GameFile, slot); savedErr != nil {
+			if savedErr := checkStateSaved(status.GameFile, slot, n.dataRoot()); savedErr != nil {
 				return savedErr
 			}
 		}

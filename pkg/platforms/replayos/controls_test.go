@@ -285,11 +285,15 @@ func TestSystemInfoFromROMPath(t *testing.T) {
 func TestStateFile(t *testing.T) {
 	t.Parallel()
 
-	path, ok := stateFile("/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", 7)
+	path, ok := stateFile("/media/sd/roms/nintendo_nes/720 Degrees (USA).nes", 7, "")
 	require.True(t, ok)
 	assert.Equal(t, "/media/sd/saves/nintendo_nes/720 Degrees (USA).sst7", path)
 
-	_, ok = stateFile("/tmp/game.nes", 1)
+	path, ok = stateFile("/media/usb/roms/nintendo_nes/720 Degrees (USA).nes", 7, "/media/sd")
+	require.True(t, ok)
+	assert.Equal(t, "/media/sd/saves/nintendo_nes/720 Degrees (USA).sst7", path)
+
+	_, ok = stateFile("/tmp/game.nes", 1, "")
 	assert.False(t, ok, "no roms folder to mirror")
 }
 
@@ -314,6 +318,28 @@ func TestNetControl_LoadFromEmptySlotFails(t *testing.T) {
 	require.Len(t, f.requests, 1, "an empty slot must not reach RePlayOS")
 
 	require.NoError(t, load(context.Background(), nil, platforms.ControlParams{Args: map[string]string{"slot": "2"}}))
+}
+
+// With DATA LOCATION set to LOCAL SD, saves are on the SD card even for a ROM
+// on USB or NFS, and a saves folder left beside the ROM is not where to look.
+func TestNetControl_LoadFindsSavesOnLocalSD(t *testing.T) {
+	t.Parallel()
+
+	usb, sd := t.TempDir(), t.TempDir()
+	game := filepath.Join(usb, "roms", "nintendo_nes", "Game (USA).nes")
+	require.NoError(t, os.MkdirAll(filepath.Join(usb, "saves", "nintendo_nes"), 0o750))
+	sdSaves := filepath.Join(sd, "saves", "nintendo_nes")
+	require.NoError(t, os.MkdirAll(sdSaves, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(sdSaves, "Game (USA).sst4"), []byte("s"), 0o600))
+
+	f := &fakeReplay{view: "game_play", token: "604318", gameFile: game}
+	n := newTestNetControl(t, f, testCfg+"system_data_location = \"local_sd\"\n")
+	n.localSD = sd
+	load := n.stateControl("load_state")
+
+	require.NoError(t, load(context.Background(), nil, platforms.ControlParams{Args: map[string]string{"slot": "4"}}))
+	err := load(context.Background(), nil, platforms.ControlParams{Args: map[string]string{"slot": "5"}})
+	require.ErrorIs(t, err, errNoSavedState)
 }
 
 // Saves kept where Core does not look are left to RePlayOS.

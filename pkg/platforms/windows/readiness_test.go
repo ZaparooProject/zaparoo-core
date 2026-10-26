@@ -308,7 +308,7 @@ func TestWaitForFlashpointPlayer_NotInstalledIsUnavailable(t *testing.T) {
 func (r *flashpointRig) start(ctx context.Context) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		done <- waitForFlashpointStart(ctx, r.clock, `C:\Flashpoint`,
+		done <- waitForFlashpointStart(ctx, r.clock, `C:\Flashpoint`, flashpointStartTimeout,
 			func() ([]windowsProcessInfo, error) { return r.procs, nil },
 			func(pid int) bool { return r.windows[pid] })
 	}()
@@ -408,6 +408,60 @@ func TestWaitForFlashpointStart_NoWindowFails(t *testing.T) {
 			rig.clock.Advance(flashpointReadyPoll)
 		}
 	}
+}
+
+// A Flashpoint that comes up just before the start timeout still gets its
+// settle; the timeout bounds the wait for it, not the settle after.
+func TestWaitForFlashpointStart_ReadyAtTheTimeoutStillSettles(t *testing.T) {
+	t.Parallel()
+	rig := &flashpointRig{clock: clockwork.NewFakeClock(), windows: map[int]bool{1: true}}
+	rig.procs = []windowsProcessInfo{
+		{PID: 1, ExePath: `C:\Flashpoint\Launcher\Flashpoint.exe`},
+		{PID: 2, ExePath: `C:\Flashpoint\Server\Flashpoint Game Server.exe`},
+	}
+	const timeout = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForFlashpointStart(t.Context(), rig.clock, `C:\Flashpoint`, timeout,
+			func() ([]windowsProcessInfo, error) { return rig.procs, nil },
+			func(pid int) bool { return rig.windows[pid] })
+	}()
+	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 1))
+	time.Sleep(5 * timeout) // the start timeout runs out during the settle
+	rig.clock.Advance(flashpointStartSettle)
+
+	require.NoError(t, <-done)
+}
+
+// One player that will not die is a failed stop, even when another was ended.
+func TestKillFlashpointPlayers_PartialFailureIsAnError(t *testing.T) {
+	t.Parallel()
+
+	players := `C:\Flashpoint\FPSoftware`
+	procs := []windowsProcessInfo{
+		{PID: 10, ExePath: `C:\Flashpoint\FPSoftware\Flash\flashplayer_32_sa.exe`},
+		{PID: 11, ExePath: `C:\Flashpoint\FPSoftware\Basilisk-Portable\Basilisk-Portable.exe`},
+	}
+	n, err := killFlashpointPlayers(players,
+		func() ([]windowsProcessInfo, error) { return procs, nil },
+		func(pid uint32) (string, error) {
+			for i := range procs {
+				if procs[i].PID == pid {
+					return procs[i].ExePath, nil
+				}
+			}
+			return "", errors.New("gone")
+		},
+		func(_ context.Context, pid uint32) error {
+			if pid == 11 {
+				return errors.New("access denied")
+			}
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, n, "the player that was ended is still counted")
 }
 
 // Windows, 2026-10-26: stopping a Flashpoint game cleared the media and left

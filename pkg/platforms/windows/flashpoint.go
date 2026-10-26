@@ -157,7 +157,7 @@ func (p *Platform) ensureFlashpointRunning(dir string) error {
 		ctx = p.launcherManager.GetContext()
 	}
 	if err := waitForFlashpointStart(
-		ctx, p.clockForReadiness(), dir, listWindowsProcesses, p.processHasWindow,
+		ctx, p.clockForReadiness(), dir, flashpointStartTimeout, listWindowsProcesses, p.processHasWindow,
 	); err != nil {
 		return err
 	}
@@ -170,21 +170,25 @@ func (p *Platform) ensureFlashpointRunning(dir string) error {
 // arriving in between is lost: the backend stops part way through starting and
 // the whole launcher exits a minute later. The backend starts its game server
 // once its services are up, so that process marks it ready. A Flashpoint
-// without the game server is handed the link once the wait runs out.
+// without the game server is handed the link once the wait, bounded by
+// timeout, runs out.
 func waitForFlashpointStart(
 	ctx context.Context,
 	clock clockwork.Clock,
 	dir string,
+	timeout time.Duration,
 	listProcesses func() ([]windowsProcessInfo, error),
 	hasWindow func(pid int) bool,
 ) error {
 	launcher := filepath.Join(dir, "Launcher", "Flashpoint.exe")
 	server := filepath.Join(dir, "Server", "Flashpoint Game Server.exe")
 
-	ctx, cancel := context.WithTimeout(ctx, flashpointStartTimeout)
+	// The timeout bounds the poll only: Flashpoint ready just before it runs
+	// out still gets its settle.
+	pollCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	windowUp := false
-	err := platforms.PollReady(ctx, clock, flashpointReadyPoll, func(context.Context) (bool, error) {
+	err := platforms.PollReady(pollCtx, clock, flashpointReadyPoll, func(context.Context) (bool, error) {
 		procs, listErr := listProcesses()
 		if listErr != nil {
 			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, listErr)
@@ -248,7 +252,7 @@ func killFlashpointGame(*config.Instance) error {
 		filepath.Join(dir, "FPSoftware"), listWindowsProcesses, retroBatProcessPath, retroBatRunTaskKill,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("stopped %d Flashpoint players, others are still running: %w", killed, err)
 	}
 	// No player means the game has already been closed, which is what a stop
 	// asks for. Reporting it as a failure kept the media active and refused
@@ -291,10 +295,9 @@ func killFlashpointPlayers(
 		}
 		killed++
 	}
-	if killed == 0 && len(errs) > 0 {
-		return 0, errors.Join(errs...)
-	}
-	return killed, nil
+	// A player left running is a stop that did not happen, however many
+	// others were ended.
+	return killed, errors.Join(errs...)
 }
 
 // waitForFlashpointGame is the readiness probe for Flashpoint games. The
