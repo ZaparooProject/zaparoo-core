@@ -130,6 +130,62 @@ func TestPlatformIntegrationTracksSteamReaperForStop(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+// A Steam game that starts after a stop meant for it is declined by Core, so
+// nothing is published for it. The tracker must stop it rather than leave it
+// running with Core reporting nothing active.
+func TestPlatformIntegrationStopsGameCoreDeclined(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, cmd.Start())
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+
+	base := linuxbase.NewBase(platformids.SteamOS)
+	integration := &PlatformIntegration{
+		base:           base,
+		activeMedia:    func() *models.ActiveMedia { return nil },
+		setActiveMedia: func(*models.ActiveMedia) {}, // Core declines it
+		activeGames:    make(map[int]int),
+	}
+
+	integration.onGameStart(123, cmd.Process.Pid, "/game")
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the declined Steam game was left running")
+	}
+}
+
+// Media Core accepted is tracked as before, not stopped.
+func TestPlatformIntegrationLeavesPublishedGameRunning(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	var published *models.ActiveMedia
+	integration := &PlatformIntegration{
+		base:           linuxbase.NewBase(platformids.SteamOS),
+		activeMedia:    func() *models.ActiveMedia { return published },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+		activeGames:    make(map[int]int),
+	}
+
+	integration.onGameStart(123, cmd.Process.Pid, "/game")
+
+	require.NotNil(t, published)
+	assert.NoError(t, syscall.Kill(cmd.Process.Pid, 0))
+}
+
 func TestPlatformIntegrationForgetsReaperAfterNormalExit(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "sleep", "30")
 	require.NoError(t, cmd.Start())

@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
@@ -238,6 +239,12 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 	}
 
 	pi.trackReaperProcess(appID, reaperPID)
+	if publishDeclined(pi.activeMedia()) && pi.base != nil {
+		log.Info().Int("appID", appID).Msg("Steam game started after a stop meant for it, stopping it")
+		if err := pi.base.StopActiveLauncher(platforms.StopForMenu); err != nil {
+			log.Warn().Err(err).Int("appID", appID).Msg("failed to stop a Steam game a stop was meant for")
+		}
+	}
 }
 
 func (pi *PlatformIntegration) publishActiveMediaIfActive(

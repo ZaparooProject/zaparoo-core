@@ -51,7 +51,7 @@ var (
 	killHiddenScriptProcessGroup = func(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }
 	scriptActiveCoreName         = mistermain.GetActiveCoreName
 	scriptFPGAActive             = func(pl *Platform) bool { return pl.isFPGAActive() }
-	scriptReturnToMenu           = func(pl *Platform) error { return pl.ReturnToMenu() }
+	scriptReturnToMenu           = func(pl *Platform) error { return pl.loadMenu(false) }
 )
 
 func scriptIsActive(ctx context.Context) bool {

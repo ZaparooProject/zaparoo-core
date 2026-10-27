@@ -75,6 +75,14 @@ func TestClassify(t *testing.T) {
 			err: fmt.Errorf("%w: execute", zapscript.ErrCommandNotPermitted),
 		},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, category: models.ErrorCategoryInvalidScript},
+		{
+			name: "rotation time under a second", category: models.ErrorCategoryInvalidScript,
+			err: fmt.Errorf("%w: advance=500ms", zapscript.ErrInvalidRotation),
+		},
+		{
+			name: "playlist start out of range", category: models.ErrorCategoryInvalidScript,
+			err: fmt.Errorf("%w: start=0", zapscript.ErrInvalidPlaylistStart),
+		},
 		{name: "blocked", err: zapscript.ErrCommandBlocked, category: models.ErrorCategoryBlocked},
 		{name: "requires profile", err: state.ErrLaunchRequiresProfile, category: models.ErrorCategoryBlocked},
 		{name: "playtime", err: playtime.ErrLimitReached, category: models.ErrorCategoryPlaytimeLimit},

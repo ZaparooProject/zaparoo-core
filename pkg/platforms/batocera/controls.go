@@ -70,7 +70,9 @@ var hotkeyActions = map[string]string{
 
 var (
 	errNoEmulatorContext = errors.New("no emulator is running")
-	errSlotUnsupported   = errors.New("save state slots are chosen by the emulator, not by slot")
+	errSlotUnsupported   = fmt.Errorf(
+		"%w: save state slots are chosen by the emulator, not by slot", platforms.ErrInvalidControlArg,
+	)
 )
 
 // hotkeyContext is the part of hotkeygen's context file Core reads.
@@ -132,7 +134,8 @@ func holdFor(control string, params platforms.ControlParams) (time.Duration, err
 	}
 	seconds, err := strconv.Atoi(raw)
 	if err != nil || seconds < 1 || seconds > maxFastForwardHold {
-		return 0, fmt.Errorf("invalid seconds %q: must be a whole number from 1 to %d", raw, maxFastForwardHold)
+		return 0, fmt.Errorf("%w: seconds %q must be a whole number from 1 to %d",
+			platforms.ErrInvalidControlArg, raw, maxFastForwardHold)
 	}
 	return time.Duration(seconds) * time.Second, nil
 }

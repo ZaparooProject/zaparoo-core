@@ -114,9 +114,27 @@ func TestProbeIdle(t *testing.T) {
 			session: &fakeBus{},
 			system: &fakeBus{
 				owners: map[string]bool{logindName: true},
-				props:  map[string]any{logindName + "|IdleHint": false},
+				props: map[string]any{
+					logindName + "|IdleHint":      false,
+					logindName + "|IdleSinceHint": uint64(1_700_000_000_000_000),
+				},
 			},
 			source: "logind",
+		},
+		{
+			// KDE Plasma and SteamOS game mode, 2026-10-26: IdleSinceHint was
+			// still 0 after three days, and the clear hint read as input on
+			// every poll.
+			name:    "logind whose idle hint the desktop never sets",
+			session: &fakeBus{},
+			system: &fakeBus{
+				owners: map[string]bool{logindName: true},
+				props: map[string]any{
+					logindName + "|IdleHint":      false,
+					logindName + "|IdleSinceHint": uint64(0),
+				},
+			},
+			wantErr: true,
 		},
 		{
 			name:    "logind name without the property",
@@ -155,7 +173,10 @@ func TestLogindReadErrsSafe(t *testing.T) {
 	clock := clockwork.NewFakeClock()
 	b := &fakeBus{
 		owners: map[string]bool{logindName: true},
-		props:  map[string]any{logindName + "|IdleHint": false},
+		props: map[string]any{
+			logindName + "|IdleHint":      false,
+			logindName + "|IdleSinceHint": uint64(clock.Now().Add(-time.Hour).UnixMicro()), //nolint:gosec // test time
+		},
 	}
 	p, ok := logindProbe(context.Background(), b, clock)
 	require.True(t, ok)

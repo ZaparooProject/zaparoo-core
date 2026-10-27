@@ -429,6 +429,11 @@ type LaunchOptions struct {
 	// ActiveMediaPublisher is the launch-scoped publication callback supplied
 	// by Core. Launchers must not retain or invoke it directly.
 	ActiveMediaPublisher func(*models.ActiveMedia)
+	// LaunchedPath is set by a launcher that started a different file from the
+	// one it was given, such as the same arcade set on another root because
+	// the requested one has no core beside it. The media is published under
+	// it, so history names the file that ran.
+	LaunchedPath string
 	// MediaFinished is the launch-scoped callback a launcher invokes, at most
 	// once and from any goroutine, when the media it launched reached its
 	// natural end. It is never called for a stop, a quit or a replacement, and
@@ -498,17 +503,24 @@ type LaunchCommand struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	Controls                 map[string]Control
-	Scanner                  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
-	Test                     func(*config.Instance, string) bool
-	Availability             func(*config.Instance) error
-	Preflight                func(*config.Instance, string, *LaunchOptions) error
-	Kill                     func(*config.Instance) error
-	Launch                   func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
-	Collection               func(context.Context, *config.Instance, string) ([]CollectionItem, error)
-	BuildLaunchCommand       func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
-	WaitForReady             func(context.Context, *config.Instance, *models.ActiveMedia) error
-	ReadyTimeout             func(*models.ActiveMedia) time.Duration
+	Controls           map[string]Control
+	Scanner            func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Test               func(*config.Instance, string) bool
+	Availability       func(*config.Instance) error
+	Preflight          func(*config.Instance, string, *LaunchOptions) error
+	Kill               func(*config.Instance) error
+	Launch             func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	Collection         func(context.Context, *config.Instance, string) ([]CollectionItem, error)
+	BuildLaunchCommand func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
+	WaitForReady       func(context.Context, *config.Instance, *models.ActiveMedia) error
+	ReadyTimeout       func(*models.ActiveMedia) time.Duration
+	// GameRunning reports whether the frontend that started the media is
+	// running a game at all. Optional, and set only where the platform can
+	// tell for its own launches: once a launch's readiness wait has ended,
+	// media of a launcher that says nothing is running is cleared, so a game
+	// that never started is not left playing. Launchers without it, such as
+	// custom launchers that run scripts, are never checked.
+	GameRunning              func(context.Context, *config.Instance, *models.ActiveMedia) (bool, error)
 	ID                       string
 	SystemID                 string
 	UsesRunningInstance      string

@@ -65,8 +65,13 @@ func scrapeJobsForSources(
 		}
 		var systems []string
 		for _, source := range sources {
-			if source.Files <= 0 ||
-				!s.AutoScrapeAllLaunchers && !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID) {
+			if source.Files <= 0 {
+				continue
+			}
+			// A scraper bound to launchers reads what those launchers keep,
+			// which an unavailable launcher does not have.
+			if !s.AutoScrapeAllLaunchers &&
+				(source.Unavailable || !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID)) {
 				continue
 			}
 			if len(s.SupportedSystemIDs) > 0 && !slices.Contains(s.SupportedSystemIDs, source.SystemID) {

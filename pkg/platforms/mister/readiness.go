@@ -63,6 +63,11 @@ const (
 	// on it would only stall scripts. It must stay under the service's
 	// readiness timeout or the wait ends there first.
 	readyOpenWindow = 8 * time.Second
+	// readyCoreWait bounds how long the open window is held back for Main to
+	// finish loading the core. Main loads a core in 2 to 4 s when idle and took
+	// up to 14 s while the card was busy indexing, and it only opens the game
+	// once the core is up, so the window counts from then.
+	readyCoreWait = 30 * time.Second
 	// readyIdleHandover is how long a streamed game may sit open and unread
 	// before it counts as handed over. A core that mounts a game it was
 	// expected to stream, such as the Amiga's floppy images, holds the file
@@ -123,6 +128,8 @@ type coreReadiness struct {
 	watch    func(ctx context.Context, path string) (<-chan gamehandoff.Kind, error)
 	stat     func(path string) (os.FileInfo, error)
 	coreName func() (string, time.Time, error)
+	// coreUp signals when the launched core is up; nil uses waitCoreUp.
+	coreUp   func(ctx context.Context, launchedAt time.Time) <-chan struct{}
 	pressKey func(string) error
 	// pressSequence types a plan's input. It is the platform's own sequence
 	// method, which primes the virtual keyboard first.
@@ -264,10 +271,12 @@ func (r *coreReadiness) gameFile(path string) (string, error) {
 // size of its ROM archives. Other media keeps the default.
 func (r *coreReadiness) readyTimeout(media *models.ActiveMedia) time.Duration {
 	if plan, ok := r.plans.peek(media.Path, r.clock.Now()); ok {
-		return plan.readyTimeout()
+		return readyCoreWait + plan.readyTimeout()
 	}
 	if !strings.EqualFold(filepath.Ext(media.Path), ".mra") {
-		return 0
+		// Room for the core to come up, the open window after it, and the
+		// transfer and settle that follow the open.
+		return readyCoreWait + readyOpenWindow + readyIdleHandover + readyMountSettle
 	}
 	mra, err := mgls.ReadMRA(media.Path)
 	if err != nil {
@@ -382,7 +391,7 @@ func (r *coreReadiness) waitForReady(
 		}
 		log.Debug().Str("file", file).Bool("streamed", streamed).Dur("settle", settle).
 			Msg("waiting for the core to take its game")
-		if err := r.waitForGameFile(ctx, file, streamed, settle); err != nil {
+		if err := r.waitForGameFile(ctx, file, streamed, settle, launchedAt); err != nil {
 			return err
 		}
 		return r.runPlan(ctx, media.Path)
@@ -393,21 +402,53 @@ func (r *coreReadiness) waitForReady(
 // of quiet. A streamed file is handed over once every open of it has closed; a
 // mounted image once it has been opened.
 func (r *coreReadiness) waitForGameFile(
-	ctx context.Context, file string, streamed bool, settle time.Duration,
+	ctx context.Context, file string, streamed bool, settle time.Duration, launchedAt time.Time,
 ) error {
 	events, err := r.watch(ctx, file)
 	if err != nil {
 		return fmt.Errorf("%w: watch game file: %w", platforms.ErrReadinessUnavailable, err)
 	}
 	if err := gamehandoff.Wait(ctx, r.clock, events, gamehandoff.Options{
-		Settle:       settle,
-		OpenWindow:   readyOpenWindow,
-		UntilClose:   streamed,
-		IdleHandover: readyIdleHandover,
+		Settle:          settle,
+		OpenWindow:      readyOpenWindow,
+		OpenWindowStart: r.coreUpSignal(ctx, launchedAt),
+		UntilClose:      streamed,
+		IdleHandover:    readyIdleHandover,
 	}); err != nil {
 		return fmt.Errorf("wait for the core to take %s: %w", file, err)
 	}
 	return nil
+}
+
+func (r *coreReadiness) coreUpSignal(ctx context.Context, launchedAt time.Time) <-chan struct{} {
+	if r.coreUp != nil {
+		return r.coreUp(ctx, launchedAt)
+	}
+	return r.waitCoreUp(ctx, launchedAt)
+}
+
+// waitCoreUp returns a channel closed once Main reports a core other than the
+// menu loaded since launchedAt, or once readyCoreWait has passed since then.
+func (r *coreReadiness) waitCoreUp(ctx context.Context, launchedAt time.Time) <-chan struct{} {
+	up := make(chan struct{})
+	go func() {
+		defer close(up)
+		deadline := launchedAt.Add(readyCoreWait)
+		err := platforms.PollReady(ctx, r.clock, readyCorePoll, func(context.Context) (bool, error) {
+			if !r.clock.Now().Before(deadline) {
+				return true, nil
+			}
+			name, written, nameErr := r.coreName()
+			if nameErr != nil {
+				return false, nil //nolint:nilerr // Main rewrites the file while loading; ask again
+			}
+			return !written.Before(launchedAt) && name != "" && !strings.EqualFold(name, misterconfig.MenuCore), nil
+		})
+		if err != nil {
+			log.Debug().Err(err).Msg("stopped waiting for the core to come up")
+		}
+	}()
+	return up
 }
 
 // waitForArcade waits for the core an MRA names to be running. An arcade core

@@ -60,6 +60,16 @@ func (p *Pending) Err(ctx context.Context) error {
 
 // HasWindow reports whether pid, or a process it started, owns a visible
 // top-level window. It does not activate the window.
+// HasWindowOfClass reports whether the process tree rooted at pid has a
+// visible top-level window of one of the classes.
+func (m *Manager) HasWindowOfClass(pid uint32, classes []string) bool {
+	if m == nil || m.api == nil || pid == 0 || len(classes) == 0 {
+		return false
+	}
+	_, found := m.api.findProcessWindowOfClass(pid, classes)
+	return found
+}
+
 func (m *Manager) HasWindow(pid uint32) bool {
 	if m == nil || m.api == nil || pid == 0 {
 		return false
