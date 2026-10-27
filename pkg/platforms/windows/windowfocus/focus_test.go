@@ -254,11 +254,13 @@ func TestTracker_ReplacedAttemptIsReplacedNotWaitedOn(t *testing.T) {
 	go func() { done <- tr.Wait(t.Context(), clock, true) }()
 
 	// The first attempt is cancelled, as when its process is replaced; the
-	// wait moves on to the second.
+	// wait looks again on its next poll and moves on to the second.
+	cancel1()
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
 	second := &fakeFocuser{release: make(chan struct{})}
 	tr.Track(t.Context(), second, 2)
-	cancel1()
 	close(second.release)
+	clock.Advance(processPollInterval)
 
 	require.NoError(t, <-done)
 	close(first.release)
