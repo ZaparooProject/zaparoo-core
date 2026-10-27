@@ -97,6 +97,7 @@ func (s *State) RecordMediaStop(reason string) (cancel func()) {
 		// can still land between one launch ending and the next publishing,
 		// and has to cancel that launch.
 		s.userStopSeq++
+		s.noteEarlyStopLocked(time.Now())
 	}
 	if s.activeMedia == nil {
 		return func() {}

@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -99,6 +100,47 @@ func TestCmdTitlePassesSlotToLaunchOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
 	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestCmdTitleLaunchableIgnoresSystemLauncherPreference pins that a title
+// resolving to a platform launchable (MiSTer's Paprium under Genesis) is left
+// to the launchable's own launcher. launch.title applies the system's
+// preferred launcher before it knows the path, and RAMegaDrive cannot start a
+// zaparoo:// URI, so carrying it on failed the launch (#1683).
+func TestCmdTitleLaunchableIgnoresSystemLauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	paprium := launchables.VirtualMedia{ID: launchables.MisterGenesisPaprium, Name: "Paprium"}
+	papriumPath := paprium.ZapScript()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{{
+		ID: "RAMegaDrive", SystemID: "Genesis", Groups: []string{"RetroAchievements"},
+	}}).Maybe()
+	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil)).
+		Return(database.SlugResolution{}, false)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil)).
+		Return([]database.SearchResultWithCursor{{SystemID: "Genesis", Name: "Paprium", Path: papriumPath}}, nil)
+	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "Genesis", mock.Anything, []zapscript.TagFilter(nil),
+		mock.AnythingOfType("database.SlugResolution")).Return(nil).Maybe()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, mock.Anything).
+		Return([]database.MediaProperty{}, nil).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, papriumPath, (*platforms.Launcher)(nil), mock.Anything,
+		mock.Anything).Return(nil)
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherPreference([]string{"RetroAchievements"})
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"Genesis/Paprium"}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -2024,4 +2066,79 @@ func TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 	mockPlatform.AssertNotCalled(t, "LaunchMedia",
 		mock.Anything, trackPath, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// fallbackTitleDB answers title searches for one system and finds nothing in
+// any other.
+func fallbackTitleDB(system, path string) *helpers.MockMediaDBI {
+	db := helpers.NewMockMediaDBI()
+	db.On("GetCachedSlugResolution", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(database.SlugResolution{}, false).Maybe()
+	db.On("SetCachedSlugResolution", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	db.On("SearchMediaBySlug", mock.Anything, system, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{{SystemID: system, Name: "doom1_shareware", Path: path}}, nil).Maybe()
+	db.On("SearchMediaBySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySlugPrefix", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySecondarySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("SearchMediaBySlugIn", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Maybe()
+	db.On("GetTitlesWithPreFilter", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything).Return([]database.MediaTitle{}, nil).Maybe()
+	db.On("GetMediaPropertyMetadata", mock.Anything, mock.Anything).
+		Return([]database.MediaProperty{}, nil).Maybe()
+	return db
+}
+
+// Batocera, 2026-10-26: Doom WADs moved from DOS to the new Doom system on the
+// first reindex, and every @DOS/... card written for them found nothing. A
+// title missing from its system is looked for in the system's fallbacks.
+func TestCmdTitleFindsTitleInFallbackSystem(t *testing.T) {
+	t.Parallel()
+
+	wad := "/userdata/roms/prboom/doom1_shareware.wad"
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "DOSBox", SystemID: "DOS"},
+		{ID: "PRBoom", SystemID: "Doom"},
+	}).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, wad, mock.MatchedBy(func(l *platforms.Launcher) bool {
+		return l == nil || l.ID != "DOSBox"
+	}), mock.Anything, mock.Anything).Return(nil)
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherPreference([]string{"DOSBox"})
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: fallbackTitleDB("Doom", wad)},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"DOS/doom1_shareware"}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A title the named system does have is never swapped for a fallback's.
+func TestCmdTitlePrefersItsOwnSystem(t *testing.T) {
+	t.Parallel()
+
+	exe := "/games/dos/doom.exe"
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, exe, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	_, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      &config.Instance{},
+		Database: &database.Database{MediaDB: fallbackTitleDB("DOS", exe)},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"DOS/doom1_shareware"}},
+	})
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
 }

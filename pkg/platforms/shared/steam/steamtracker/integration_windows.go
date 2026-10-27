@@ -64,6 +64,8 @@ type WindowsPlatformIntegration struct {
 	// check that released the lock before acting on it would let a stale
 	// callback publish media, or install or discard a process, for a run that
 	// had already been replaced.
+	stopGame func()
+	stops    trackedStop
 	active   launchKey
 	mu       syncutil.Mutex
 	wg       sync.WaitGroup
@@ -206,6 +208,8 @@ func (pi *WindowsPlatformIntegration) onGameStart(appID, lifecycleID int, _ stri
 	if !pi.publishActiveMediaIfActive(appID, lifecycleID, activeMedia) {
 		log.Debug().Int("appID", appID).Int("lifecycleID", lifecycleID).
 			Msg("discarding stale Steam game start")
+	} else if publishDeclined(pi.activeMedia()) {
+		pi.declineRun(appID, lifecycleID)
 	}
 }
 
@@ -269,6 +273,7 @@ func (pi *WindowsPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID
 		if proc != nil {
 			if pi.trackProcessIfActive(appID, lifecycleID, pid, proc) {
 				log.Debug().Int("pid", pid).Int("attempt", i+1).Msg("found game process")
+				pi.stopIfDeclined(appID, lifecycleID)
 			} else {
 				log.Debug().Int("appID", appID).Int("pid", pid).
 					Msg("discarding stale game process match")
@@ -351,4 +356,42 @@ func (pi *WindowsPlatformIntegration) onGameStop(appID, lifecycleID int) {
 		return
 	}
 	pi.setActiveMedia(nil)
+}
+
+// SetStopGame sets how a game Core declined to publish is stopped once its
+// process has been found.
+func (pi *WindowsPlatformIntegration) SetStopGame(stop func()) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	pi.stopGame = stop
+}
+
+// declineRun records that Core declined to publish the run because a stop was
+// meant for it, and stops the run's game now if its process is already
+// tracked.
+func (pi *WindowsPlatformIntegration) declineRun(appID, lifecycleID int) {
+	run := launchKey{appID: appID, lifecycleID: lifecycleID}
+	pi.mu.Lock()
+	if pi.active != run {
+		pi.mu.Unlock()
+		return
+	}
+	now := pi.stops.declined(run)
+	stop := pi.stopGame
+	pi.mu.Unlock()
+	if now {
+		runStopGame(stop, appID)
+	}
+}
+
+// stopIfDeclined stops the run's game once its process is tracked, when Core
+// declined to publish the run.
+func (pi *WindowsPlatformIntegration) stopIfDeclined(appID, lifecycleID int) {
+	pi.mu.Lock()
+	now := pi.stops.found(launchKey{appID: appID, lifecycleID: lifecycleID})
+	stop := pi.stopGame
+	pi.mu.Unlock()
+	if now {
+		runStopGame(stop, appID)
+	}
 }

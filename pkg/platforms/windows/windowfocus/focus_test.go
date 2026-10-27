@@ -43,6 +43,10 @@ func (f *fakeAPI) findProcessWindow(_ uint32) (uintptr, bool) {
 	return 42, f.findCalls >= f.findAfter
 }
 
+func (f *fakeAPI) findProcessWindowOfClass(pid uint32, _ []string) (uintptr, bool) {
+	return f.findProcessWindow(pid)
+}
+
 func (f *fakeAPI) activateWindow(_ uintptr) bool {
 	f.activateCalls++
 	return f.activateCalls >= f.activateAfter

@@ -1346,6 +1346,19 @@ var SystemMap = map[string]SystemInfo{
 }
 
 // LookupByFolderName returns the SystemInfo for an EmulationStation folder name.
+// engineFiles lists files that sit beside a system's games but are the
+// emulator's own data, not games. Indexed, PrBoom's prboom.wad took the title
+// Doom from Batocera's stock gamelist and @Doom/Doom launched it.
+var engineFiles = map[string][]string{ //nolint:gochecknoglobals // Static exclusion table.
+	systemdefs.SystemDoom: {"prboom.wad", "prboom-plus.wad"},
+}
+
+// ScanExcludes returns the file names a launcher for systemID should leave out
+// of the index because they belong to the emulator.
+func ScanExcludes(systemID string) []string {
+	return append([]string(nil), engineFiles[systemID]...)
+}
+
 func LookupByFolderName(folder string) (SystemInfo, bool) {
 	info, ok := SystemMap[strings.ToLower(folder)]
 	return info, ok

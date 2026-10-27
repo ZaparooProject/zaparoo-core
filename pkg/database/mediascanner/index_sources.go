@@ -30,6 +30,11 @@ type IndexedSource struct {
 	LauncherID string
 	SystemID   string
 	Files      int
+	// Unavailable marks files indexed for a launcher that cannot run here,
+	// such as one whose emulator is not installed. A scraper keyed on the
+	// files themselves still applies to them; one that reads the launcher's
+	// own data does not.
+	Unavailable bool
 }
 
 // IndexSourceOptions requests a bounded summary for selected launchers, or for
@@ -68,12 +73,14 @@ func (c *indexSourceCollector) record(
 	systemID string, files []platforms.ScanResult, launcher *platforms.Launcher,
 	succeeded map[string]bool, incomplete bool,
 ) {
-	if c == nil || !c.all && !c.wanted[launcher.ID] || launcher.AvailabilityReason != "" {
+	if c == nil || !c.all && !c.wanted[launcher.ID] {
 		return
 	}
 	// The index-local cache intentionally does not evaluate launch availability.
 	// Check only opted-in sources, without changing ordinary indexing behavior.
-	if launcher.Availability != nil && launcher.Availability(c.cfg) != nil {
+	unavailable := launcher.AvailabilityReason != "" ||
+		launcher.Availability != nil && launcher.Availability(c.cfg) != nil
+	if unavailable && !c.all {
 		return
 	}
 	if launcher.Scanner != nil && !succeeded[launcher.ID] {
@@ -89,6 +96,8 @@ func (c *indexSourceCollector) record(
 		}
 	}
 	if count > 0 {
-		c.sources = append(c.sources, IndexedSource{LauncherID: launcher.ID, SystemID: systemID, Files: count})
+		c.sources = append(c.sources, IndexedSource{
+			LauncherID: launcher.ID, SystemID: systemID, Files: count, Unavailable: unavailable,
+		})
 	}
 }

@@ -101,8 +101,11 @@ type Deps struct {
 	ActiveMedia    func() *models.ActiveMedia
 	SetActiveMedia func(*models.ActiveMedia)
 	HasWindow      func(pid int) bool
-	Locator        Locator
-	Timeouts       Timeouts
+	// HasWindowOfClass reports whether the process tree has a visible window
+	// of one of the classes. Optional; without it any window counts.
+	HasWindowOfClass func(pid int, classes []string) bool
+	Locator          Locator
+	Timeouts         Timeouts
 }
 
 var (
@@ -808,6 +811,26 @@ func libraryExecutables(lib Library) []string {
 	return exes
 }
 
+// playerWindowClassesOf returns the player window classes of the program
+// running as pid, nil when any window will do, and false when the program
+// could not be looked up.
+func (i *Integration) playerWindowClassesOf(pid int) ([]string, bool) {
+	if i.deps.Processes == nil {
+		return nil, true
+	}
+	procs, err := i.deps.Processes.List()
+	if err != nil {
+		log.Debug().Err(err).Msg("listing processes to find the table's emulator")
+		return nil, false
+	}
+	for _, p := range procs {
+		if p.PID == pid {
+			return playerWindowsFor(p.Exe), true
+		}
+	}
+	return nil, false
+}
+
 // readyPoll is how often WaitForReady looks for the table's window.
 const readyPoll = 250 * time.Millisecond
 
@@ -823,12 +846,27 @@ func (i *Integration) WaitForReady(ctx context.Context, _ *config.Instance, medi
 		return nil
 	}
 
+	classesFor := -1
+	var classes []string
 	err = platforms.PollReady(ctx, i.deps.Clock, readyPoll, func(context.Context) (bool, error) {
 		i.mu.Lock()
 		launch, tracked := i.tracked[gameID]
 		i.mu.Unlock()
 		if !tracked {
 			return false, nil
+		}
+		if classesFor != launch.pid {
+			// A lookup that failed is tried again on the next poll: taking it
+			// as "any window" would report a table loading in the editor
+			// window as ready.
+			found, ok := i.playerWindowClassesOf(launch.pid)
+			if !ok {
+				return false, nil
+			}
+			classesFor, classes = launch.pid, found
+		}
+		if len(classes) > 0 && i.deps.HasWindowOfClass != nil {
+			return i.deps.HasWindowOfClass(launch.pid, classes), nil
 		}
 		return i.deps.HasWindow(launch.pid), nil
 	})

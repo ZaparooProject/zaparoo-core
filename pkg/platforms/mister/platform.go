@@ -101,15 +101,15 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.InputManager
-	ctx                 context.Context
-	fs                  afero.Fs
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
+	launcherRBFCache    launcherRBFCache
+	ctx                 context.Context
+	fs                  afero.Fs
 	launcherManager     platforms.LauncherContextManager
-	trackedProcess      *os.Process
-	stopRequestedProc   *os.Process   // process Core itself is stopping; guarded by processMu
-	processDone         chan struct{} // Signals when tracked process cleanup completes
+	activeMedia         func() *models.ActiveMedia
+	profileData         *profileDataManager
+	processDone         chan struct{}
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
@@ -117,22 +117,23 @@ type Platform struct {
 	lastScan            *tokens.Token
 	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
-	activeMedia         func() *models.ActiveMedia
+	trackedProcess      *os.Process
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
-	profileData         *profileDataManager
+	stopRequestedProc   *os.Process
 	battery             *batteryBoard
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
 	launchCoreAtRBF     func(cores.RBFInfo) error
 	closeConsole        func() error
-	launcherRBFCache    launcherRBFCache
+	coreLoads           coreLoadStops
 	lastLauncher        platforms.Launcher
+	shared.InputManager
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
-	trackedProcessGroup bool
 	processMu           syncutil.RWMutex
 	platformMu          syncutil.Mutex
+	trackedProcessGroup bool
 }
 
 func NewPlatform() *Platform {
@@ -851,7 +852,7 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 
 	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
-		if err := p.ReturnToMenu(); err != nil {
+		if err := p.loadMenu(intent == platforms.StopForMenu); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
 			// The core is still running, so callers must not treat it as stopped.
 			return fmt.Errorf("%w: %w", platforms.ErrStopFailed, err)
@@ -865,7 +866,14 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	return nil
 }
 
+// ReturnToMenu stops what is running and loads the menu core. A core still
+// being loaded for a launch is stopped once it is up: Main drops the menu
+// request it gets while loading a core.
 func (p *Platform) ReturnToMenu() error {
+	return p.loadMenu(true)
+}
+
+func (p *Platform) loadMenu(stopLoadingCore bool) error {
 	p.processMu.Lock()
 	hasTrackedProcess := p.trackedProcess != nil
 	p.processMu.Unlock()
@@ -887,6 +895,9 @@ func (p *Platform) ReturnToMenu() error {
 	if err != nil {
 		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
+	}
+	if stopLoadingCore {
+		p.coreLoads.stopWhenLoaded(time.Now())
 	}
 	p.clearTrackedActiveGame()
 
@@ -990,6 +1001,7 @@ func (p *Platform) LaunchMedia(
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
+	p.coreLoads.launched(time.Now())
 	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
 

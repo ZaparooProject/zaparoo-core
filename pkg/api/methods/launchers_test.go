@@ -23,13 +23,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -567,4 +570,45 @@ func TestHandleLaunchers_RuntimeDetail(t *testing.T) {
 		assert.Empty(t, resp.Launchers[0].Backend)
 		assert.Nil(t, resp.Launchers[0].MisterCore)
 	})
+}
+
+// TestHandleLaunchers_OmitsLaunchableLaunchers pins that the generated
+// launchers behind virtual systems and media are not offered as launcher
+// choices. Each only runs its own zaparoo:// URI, so listing MiSTer's Paprium
+// launcher as a Genesis override option was meaningless (#1683).
+func TestHandleLaunchers_OmitsLaunchableLaunchers(t *testing.T) {
+	t.Parallel()
+
+	paprium := launchables.VirtualMedia{
+		ID:       launchables.MisterGenesisPaprium,
+		Name:     "Paprium",
+		SystemID: systemdefs.SystemGenesis,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+	virtualLaunchers := launchables.LaunchersFor(nil, []launchables.VirtualMedia{paprium})
+	require.Len(t, virtualLaunchers, 1)
+	require.Equal(t, systemdefs.SystemGenesis, virtualLaunchers[0].SystemID)
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice(append([]platforms.Launcher{
+		{ID: "Genesis", SystemID: systemdefs.SystemGenesis},
+	}, virtualLaunchers...))
+
+	for _, params := range []string{``, `{"systems":["Genesis"]}`} {
+		env := requests.RequestEnv{
+			Context:       context.Background(),
+			LauncherCache: cache,
+		}
+		if params != "" {
+			env.Params = []byte(params)
+		}
+		result, err := HandleLaunchers(env)
+		require.NoError(t, err)
+		resp, ok := result.(models.LaunchersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Launchers, 1, "params %q", params)
+		assert.Equal(t, "Genesis", resp.Launchers[0].ID)
+	}
 }

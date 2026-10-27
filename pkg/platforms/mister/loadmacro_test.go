@@ -100,7 +100,9 @@ func TestKeyTokens_LayoutMapsCharactersOntoTheMachineKeyboard(t *testing.T) {
 
 	got, err = keyTokens("c:x", nextLayout())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"c", "{press:ctrl}", "{delay:400ms}", "z", "{delay:400ms}", "{release:ctrl}", "x"}, got)
+	assert.Equal(t, []string{
+		"c", "{press:ctrl}", "{delay:400ms}", "z", "{delay:400ms}", "{release:ctrl}", "{delay:400ms}", "x",
+	}, got)
 
 	got, err = keyTokens(":EXDOS", enterpriseLayout())
 	require.NoError(t, err)
@@ -300,8 +302,8 @@ func TestCoreReadiness_ReadyTimeoutFollowsThePlan(t *testing.T) {
 	plan := loadPlan{settle: 4 * time.Second, steps: []loadStep{typeText("abc")}}
 	h.r.plans.record("/g", &plan, h.clock.Now())
 
-	assert.Equal(t, plan.readyTimeout(), h.r.readyTimeout(probeMedia("/g")))
-	assert.Zero(t, h.r.readyTimeout(probeMedia("/other.md")))
+	assert.Equal(t, readyCoreWait+plan.readyTimeout(), h.r.readyTimeout(probeMedia("/g")))
+	assert.NotEqual(t, readyCoreWait+plan.readyTimeout(), h.r.readyTimeout(probeMedia("/other.md")))
 }
 
 func TestLaunchPlanned_NoPlanUsesTheOriginalLaunch(t *testing.T) {

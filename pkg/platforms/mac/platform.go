@@ -124,6 +124,11 @@ func (p *Platform) StartPost(
 		activeMedia,
 		setActiveMedia,
 	)
+	p.steamTracker.SetStopGame(func() {
+		if err := p.StopActiveLauncher(platforms.StopForMenu); err != nil {
+			log.Warn().Err(err).Msg("failed to stop a Steam game a stop was meant for")
+		}
+	})
 	if err := p.steamTracker.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start Steam game tracker")
 	}
