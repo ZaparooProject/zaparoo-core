@@ -71,8 +71,10 @@ const (
 )
 
 // chordHold is how long a modifier is held before and after the key it
-// modifies. The cores read the keyboard slowly, and a combination whose keys
-// go down and up together is missed.
+// modifies, and how long after it is released before the next key. The cores
+// read the keyboard slowly: a combination whose keys go down and up together is
+// missed, and a key typed as the modifier comes up is read as modified, which
+// typed RUN"1943 on the CPC as RUN"!943.
 const chordHold = 400 * time.Millisecond
 
 // chord types modifiers and a key with the overlap the cores need.
@@ -89,6 +91,7 @@ func chord(modifier, key string, more ...string) string {
 	for i := len(mods) - 1; i >= 0; i-- {
 		fmt.Fprintf(&b, "{release:%s}", mods[i])
 	}
+	fmt.Fprintf(&b, "{delay:%s}", chordHold)
 	return b.String()
 }
 

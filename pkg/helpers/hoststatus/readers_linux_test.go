@@ -419,6 +419,56 @@ func TestLinuxControllers_Read(t *testing.T) {
 	}, controllers)
 }
 
+// Steam Deck, 2026-10-26: device.status counted no controllers. With Steam
+// running, the kernel shows the built-in controller only as its lizard-mode
+// keyboard and mouse, and the gamepad is Steam's virtual one.
+// The Steam Deck controller's lizard-mode keyboard and mouse interfaces.
+const (
+	deckKeyboardAlias = "input:b0003v28DEp1205e0111-e0,1,4,14,k77,7D,7E,7F,ram4,lsfw\n"
+	deckMouseAlias    = "input:b0003v28DEp1205e0111-e0,1,2,4,k110,111,r0,1,6,8,B,C,am4,lsfw\n"
+)
+
+func TestLinuxControllers_SteamDeckBuiltInController(t *testing.T) {
+	t.Parallel()
+
+	inputRoot := sys("class", "input")
+	powerRoot := sys("class", "power_supply")
+	deck := filepath.Join(sys("devices"), "pci0000:00", "usb3", "3-3")
+	fs := afero.NewMemMapFs()
+	writeFiles(t, fs, map[string]string{
+		filepath.Join(inputRoot, "input6", "modalias"):  deckKeyboardAlias,
+		filepath.Join(inputRoot, "input6", "name"):      "Valve Software Steam Deck Controller\n",
+		filepath.Join(inputRoot, "input11", "modalias"): deckMouseAlias,
+		filepath.Join(inputRoot, "input11", "name"):     "Valve Software Steam Deck Controller\n",
+		filepath.Join(inputRoot, "input31", "modalias"): xboxAlias + "\n",
+		filepath.Join(inputRoot, "input31", "name"):     "Microsoft X-Box 360 pad 0\n",
+	})
+	realPaths := map[string]string{
+		filepath.Join(inputRoot, "input6"):  filepath.Join(deck, "3-3:1.0", "input", "input6"),
+		filepath.Join(inputRoot, "input11"): filepath.Join(deck, "3-3:1.1", "input", "input11"),
+		filepath.Join(inputRoot, "input31"): filepath.Join(sys("devices"), "virtual", "input", "input31"),
+	}
+	reader := &LinuxControllers{
+		Fs: fs,
+		Resolve: func(path string) (string, error) {
+			if target, ok := realPaths[path]; ok {
+				return target, nil
+			}
+			return "", errors.New("not a link")
+		},
+		InputRoot: inputRoot,
+		PowerRoot: powerRoot,
+	}
+
+	controllers, err := reader.Read()
+
+	require.NoError(t, err)
+	require.Len(t, controllers, 1, "one built-in controller, not its interfaces or Steam's virtual pad")
+	assert.Equal(t, "Valve Software Steam Deck Controller", controllers[0].Name)
+	assert.Equal(t, "28de", controllers[0].VendorID)
+	assert.Equal(t, "1205", controllers[0].ProductID)
+}
+
 func TestLinuxControllers_BatteryMatchedByAddress(t *testing.T) {
 	t.Parallel()
 

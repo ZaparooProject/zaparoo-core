@@ -320,6 +320,9 @@ func launchArcade(
 						log.Info().Str("from", path).Str("to", resolved).
 							Msg("arcade core missing beside MRA, using copy with core")
 						path = resolved
+						if opts != nil {
+							opts.LaunchedPath = resolved
+						}
 					}
 				}
 			}

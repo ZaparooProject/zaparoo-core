@@ -50,7 +50,7 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 	// Check if FPGA core is active and return to menu if needed
 	if pl.isFPGAActive() {
 		log.Debug().Msg("FPGA core active, returning to menu before console switch")
-		if err := pl.ReturnToMenu(); err != nil {
+		if err := pl.loadMenu(false); err != nil {
 			return nil, fmt.Errorf("failed to return to menu: %w", err)
 		}
 	}

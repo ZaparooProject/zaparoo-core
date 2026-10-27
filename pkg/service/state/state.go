@@ -68,58 +68,63 @@ type readerWriteState struct {
 }
 
 type State struct {
-	activeToken           tokens.Token
-	lastScanned           tokens.Token
-	platform              platforms.Platform
-	ctx                   context.Context
-	softwareToken         *tokens.Token
-	ctxCancelFunc         context.CancelFunc
-	readers               map[string]readers.Reader
-	readerWrites          map[string]*readerWriteState
-	Notifications         chan<- models.Notification
-	activeMedia           *models.ActiveMedia
-	backgroundMedia       *models.ActiveMedia
-	activeProfile         *models.ActiveProfile
-	activePlaylist        *playlists.Playlist
-	backgroundPlaylist    *playlists.Playlist
-	activeMediaReadyCh    chan struct{}
-	inbox                 *inbox.Service
-	deviceMonitor         *device.Monitor
-	onMediaStartHook      func(*models.ActiveMedia, uint64)
-	onMediaStopHook       func()
-	onLaunchAbandoned     func(*models.ActiveMedia)
-	mediaObservers        []MediaObserver
-	playlistObserver      func(slot string, pls *playlists.Playlist)
-	beforeExitHook        func()
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
-	backupCoordinator     *backupcoordinator.Coordinator
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
-	remoteStatus          RemoteStatus
-	librarySyncSignals    LibrarySyncSignals
-	bootUUID              string
-	stopIntent            mediaStopIntent
-	stopIntentTTL         time.Duration
-	activeMediaReadyGen   uint64
-	stopSeq               uint64
-	userStopSeq           uint64
-	stopsDone             uint64
-	stopsInProgress       int
-	zapScriptHolds        int
-	activeMediaPublishMu  syncutil.RWMutex
-	remoteStatusMu        syncutil.RWMutex
-	mediaRestoreMu        syncutil.RWMutex
-	mu                    syncutil.RWMutex
-	mediaLaunchMu         syncutil.RWMutex
-	activeMediaReady      bool
-	beforeExitRunning     bool
-	restartRequested      bool
-	restorePendingRestart bool
-	runZapScript          bool
-	backgroundAutoPaused  bool
-	mediaDBRecoveryActive bool
-	stopService           bool
+	activeToken            tokens.Token
+	lastScanned            tokens.Token
+	librarySyncSignals     LibrarySyncSignals
+	activeMediaPublishedAt time.Time
+	lastLaunchAt           time.Time
+	platform               platforms.Platform
+	ctx                    context.Context
+	uiEvents               *uievents.Service
+	Notifications          chan<- models.Notification
+	activeMedia            *models.ActiveMedia
+	backgroundMedia        *models.ActiveMedia
+	activeProfile          *models.ActiveProfile
+	activePlaylist         *playlists.Playlist
+	backgroundPlaylist     *playlists.Playlist
+	activeMediaReadyCh     chan struct{}
+	inbox                  *inbox.Service
+	deviceMonitor          *device.Monitor
+	onMediaStartHook       func(*models.ActiveMedia, uint64)
+	onMediaStopHook        func()
+	onLaunchAbandoned      func(*models.ActiveMedia)
+	ctxCancelFunc          context.CancelFunc
+	playlistObserver       func(slot string, pls *playlists.Playlist)
+	beforeExitHook         func()
+	pendingLaunchOverride  *PendingLaunchOverride
+	pendingWrite           *PendingWrite
+	backupCoordinator      *backupcoordinator.Coordinator
+	launcherManager        *LauncherManager
+	readerWrites           map[string]*readerWriteState
+	softwareToken          *tokens.Token
+	readers                map[string]readers.Reader
+	remoteStatus           RemoteStatus
+	earlyStop              earlyStop
+	bootUUID               string
+	mediaObservers         []MediaObserver
+	stopIntent             mediaStopIntent
+	stopIntentTTL          time.Duration
+	earlyStopWindow        time.Duration
+	activeMediaReadyGen    uint64
+	stopSeq                uint64
+	userStopSeq            uint64
+	stopsDone              uint64
+	stopsInProgress        int
+	zapScriptHolds         int
+	activeMediaPublishMu   syncutil.RWMutex
+	remoteStatusMu         syncutil.RWMutex
+	mediaRestoreMu         syncutil.RWMutex
+	mu                     syncutil.RWMutex
+	mediaLaunchMu          syncutil.RWMutex
+	activeMediaReady       bool
+	publishedSinceLaunch   bool
+	beforeExitRunning      bool
+	restartRequested       bool
+	restorePendingRestart  bool
+	runZapScript           bool
+	backgroundAutoPaused   bool
+	mediaDBRecoveryActive  bool
+	stopService            bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -139,6 +144,7 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 		backupCoordinator: backupcoordinator.New(),
 		bootUUID:          bootUUID,
 		stopIntentTTL:     defaultStopIntentTTL,
+		earlyStopWindow:   defaultEarlyStopWindow,
 	}
 	// Terminal backup.state event: clients showing a paused/throttled backup
 	// banner clear it when the operation's lease is released.
@@ -811,6 +817,13 @@ func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 		return platforms.MediaLaunchAccess{}, err
 	}
 
+	// A new launch supersedes any stop still waiting for a game to turn up.
+	s.mu.Lock()
+	s.lastLaunchAt = time.Now()
+	s.publishedSinceLaunch = false
+	s.earlyStop = earlyStop{}
+	s.mu.Unlock()
+
 	var accessMu syncutil.Mutex
 	held := true
 	finish := newLaunchFinish(s)
@@ -1121,6 +1134,16 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 			return
 		}
 
+		// A launch publishes its own media with restore access held, and a
+		// stop that overtook it is handled by the launch itself. Media turning
+		// up any other way, from a tracker or watcher, may be the game a stop
+		// landed too early to end.
+		if !restoreAccessHeld && s.takeEarlyStopFor(media) {
+			log.Info().Str("path", media.Path).Msg("game appeared after a stop meant for it, stopping it")
+			s.abandonOvertakenLaunch(media)
+			return
+		}
+
 		// Restore access comes first. The service takes these three locks in
 		// one order everywhere — restore, then launch, then publish — and
 		// taking them in any other order closes a cycle between this, a media
@@ -1226,6 +1249,8 @@ func (s *State) updateActiveMediaStateAs(
 		// media has started
 		s.activeMedia = media
 		s.activeMediaReady = false
+		s.activeMediaPublishedAt = time.Now()
+		s.publishedSinceLaunch = true
 		s.activeMediaReadyGen++
 		gen := s.activeMediaReadyGen
 		s.activeMediaReadyCh = make(chan struct{})
@@ -1258,6 +1283,8 @@ func (s *State) updateActiveMediaStateAs(
 		observers := s.mediaObservers
 		s.activeMedia = media
 		s.activeMediaReady = false
+		s.activeMediaPublishedAt = time.Now()
+		s.publishedSinceLaunch = true
 		s.activeMediaReadyGen++
 		gen := s.activeMediaReadyGen
 		s.activeMediaReadyCh = make(chan struct{})

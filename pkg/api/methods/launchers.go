@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -111,7 +112,7 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	resp := make([]models.Launcher, 0, len(all))
 	for i := range all {
 		l := all[i]
-		if !matchesSystemFilter(l.SystemID, systemFilter) {
+		if launchables.IsLauncherID(l.ID) || !matchesSystemFilter(l.SystemID, systemFilter) {
 			continue
 		}
 		var groups []string
