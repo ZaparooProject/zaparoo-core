@@ -96,6 +96,35 @@ func TestRunTokenZapScript_StopWaitsForALaunchInFlight(t *testing.T) {
 	assert.Equal(t, 1, returns(), "once the launch is over the stop runs")
 }
 
+// Like the stop API, **stop calls off a launch still settling before it waits
+// for it, so a RetroBat swap does not start the game the stop is about to end.
+func TestRunTokenZapScript_StopCallsOffALaunchStillSettling(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	access, err := svc.State.AcquireMediaLaunch()
+	require.NoError(t, err)
+	settling := svc.State.LauncherManager().GetContext()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	failed := make(chan error, 1)
+	go func() {
+		failed <- runTokenZapScriptWithContext(ctx, svc, tokens.Token{
+			Text: "**stop", Source: tokens.SourceAPI, ScanTime: time.Now(),
+		}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}, nil, false)
+	}()
+
+	select {
+	case <-settling.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the settling launch was not called off")
+	}
+	cancel()
+	<-failed
+	access.Release()
+}
+
 // A launch that nobody queued, such as a card scan, is called off by a stop
 // that comes before its media appears.
 func TestRunTokenZapScript_ScanLaunchOvertakenByAStopPublishesNothing(t *testing.T) {

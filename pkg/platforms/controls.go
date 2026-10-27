@@ -30,9 +30,14 @@ import (
 // save_state and load_state.
 const ControlArgSlot = "slot"
 
-// ErrControlUnavailable reports a control the launcher defines but the
-// running core or emulator cannot perform right now.
-var ErrControlUnavailable = errors.New("control not available for the running media")
+var (
+	// ErrControlUnavailable reports a control the launcher defines but the
+	// running core or emulator cannot perform right now.
+	ErrControlUnavailable = errors.New("control not available for the running media")
+	// ErrInvalidControlArg reports a control argument the caller got wrong,
+	// such as a save state slot out of range.
+	ErrInvalidControlArg = errors.New("invalid control argument")
+)
 
 // ControlNames returns the sorted action names a launcher defines controls for.
 func ControlNames(l *Launcher) []string {
@@ -56,10 +61,10 @@ func SlotArg(params ControlParams, minSlot, maxSlot int) (int, error) {
 	}
 	slot, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, fmt.Errorf("invalid slot %q: must be a number", raw)
+		return 0, fmt.Errorf("%w: slot %q must be a number", ErrInvalidControlArg, raw)
 	}
 	if slot < minSlot || slot > maxSlot {
-		return 0, fmt.Errorf("invalid slot %d: must be between %d and %d", slot, minSlot, maxSlot)
+		return 0, fmt.Errorf("%w: slot %d must be between %d and %d", ErrInvalidControlArg, slot, minSlot, maxSlot)
 	}
 	return slot, nil
 }

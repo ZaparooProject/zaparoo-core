@@ -646,6 +646,10 @@ func TestNewLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Kill)
 	assert.NotNil(t, launcher.Availability)
 	assert.NotNil(t, launcher.Launch)
+	// Windows, 2026-10-26: VPX opened its player 15 to 22 s after the launch,
+	// and the 10 s service default released media_ready before it.
+	require.NotNil(t, launcher.ReadyTimeout)
+	assert.GreaterOrEqual(t, launcher.ReadyTimeout(nil), 30*time.Second)
 
 	results, err := launcher.Scanner(context.Background(), nil, systemdefs.SystemPinball, nil)
 	require.NoError(t, err)

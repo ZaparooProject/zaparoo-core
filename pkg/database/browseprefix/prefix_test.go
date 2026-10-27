@@ -38,6 +38,10 @@ func TestParseStem(t *testing.T) {
 		{name: "rank dash", stem: "001 - Sonic", kind: KindRank, rest: "Sonic"},
 		{name: "rank period", stem: "42. Contra", kind: KindRank, rest: "Contra"},
 		{name: "rank paren", stem: "7) Zelda", kind: KindRank, rest: "Zelda"},
+		// ReplayOS, 2026-10-26: titles that start with a number lost it.
+		{name: "hyphenated title", stem: "10-Yard Fight (USA, Europe)", kind: KindNone},
+		{name: "hyphenated title no space", stem: "3-D WorldRunner (USA)", kind: KindNone},
+		{name: "number word title", stem: "720 Degrees (USA)", kind: KindNone},
 		{name: "date full", stem: "1991-06-23 - Sonic", kind: KindDate, rest: "Sonic"},
 		{name: "date dotted", stem: "1991.06.23 Sonic", kind: KindDate, rest: "Sonic"},
 		{name: "date year", stem: "1991 - Sonic", kind: KindDate, rest: "Sonic"},

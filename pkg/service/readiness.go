@@ -76,7 +76,46 @@ func startMediaReadyProbe(svc *ServiceContext, media *models.ActiveMedia, gen ui
 			log.Warn().Err(err).Str("media", media.Name).Msg("media ready wait failed; continuing")
 		}
 		svc.State.MarkActiveMediaReady(gen)
+		clearIfNeverStarted(svc, launcher, media, gen)
 	}()
+}
+
+// neverStartedRecheck is how long after a launch's game was found not running
+// it is asked again, so an emulator that is a moment late is not cut off.
+var neverStartedRecheck = 2 * time.Second
+
+// clearIfNeverStarted clears media whose launcher reports no game running once
+// the launch's readiness wait has ended. ES leaves a game behind a missing-BIOS
+// prompt and RePlayOS drops a ROM it cannot load, and no exit ever follows:
+// the media stayed playing, playtime kept counting and a playlist never moved.
+func clearIfNeverStarted(svc *ServiceContext, launcher *platforms.Launcher, media *models.ActiveMedia, gen uint64) {
+	if launcher == nil || launcher.GameRunning == nil {
+		return
+	}
+	ctx := svc.State.GetContext()
+	for attempt := range 2 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(neverStartedRecheck):
+			}
+		}
+		if !svc.State.ActiveMediaGenerationIs(gen) {
+			return
+		}
+		running, err := launcher.GameRunning(ctx, svc.Config, media)
+		if err != nil {
+			log.Debug().Err(err).Str("media", media.Name).Msg("cannot tell whether the launched game started")
+			return
+		}
+		if running {
+			return
+		}
+	}
+	if svc.State.ExitActiveMedia(gen) {
+		log.Info().Str("media", media.Name).Msg("launched game never started, clearing it")
+	}
 }
 
 // readyLauncher returns the launcher that started media, or nil.

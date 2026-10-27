@@ -38,6 +38,13 @@ const (
 	misterUSBRootCount     = 4
 )
 
+// platformWithCoreLoadStops is an optional interface for platforms that stop a
+// core a stop was meant for when it comes up after the stop.
+type platformWithCoreLoadStops interface {
+	platforms.Platform
+	StopCoreLoadedAfterStop(core string) bool
+}
+
 // platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
 type platformWithArcadeCache interface {
 	platforms.Platform
@@ -363,6 +370,10 @@ func (tr *Tracker) LoadCore() {
 	tr.stopCore()
 	tr.ActiveCore = coreName
 	log.Info().Str("old_core", oldCore).Str("new_core", coreName).Msg("core changed")
+
+	if stopper, ok := tr.pl.(platformWithCoreLoadStops); ok && stopper.StopCoreLoadedAfterStop(coreName) {
+		return
+	}
 
 	if coreName == misterconfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")

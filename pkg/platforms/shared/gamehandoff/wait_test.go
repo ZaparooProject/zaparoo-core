@@ -287,3 +287,42 @@ func TestLaunchLog_MatchesRespelledPath(t *testing.T) {
 	assert.True(t, l.Recent("/media/share/roms/nes/a.nes", time.Minute), "same file name, other mount")
 	assert.False(t, l.Recent("/userdata/roms/nes/b.nes", time.Minute))
 }
+
+// MiSTer, 2026-10-26: Main took up to 14 s to load a core while the card was
+// busy, so a window counted from the launch ran out before the game was even
+// opened. A held window only starts once the emulator is up.
+func TestWait_HeldWindowStartsWhenTheEmulatorIsUp(t *testing.T) {
+	t.Parallel()
+	start := make(chan struct{})
+	opts := untilClose
+	opts.OpenWindowStart = start
+	h, done := startWait(t.Context(), opts)
+
+	h.clock.Advance(testWindow * 2)
+	select {
+	case err := <-done:
+		t.Fatalf("window ran before the emulator was up: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(start)
+	require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
+	h.clock.Advance(testWindow)
+
+	require.NoError(t, <-done, "never opened once up, treated as handed over")
+}
+
+// An open before the emulator reports itself up still counts as the handover.
+func TestWait_OpenBeforeTheWindowStartsCounts(t *testing.T) {
+	t.Parallel()
+	start := make(chan struct{})
+	opts := untilClose
+	opts.OpenWindowStart = start
+	h, done := startWait(t.Context(), opts)
+
+	h.events <- Open
+	h.events <- Close
+	h.settle(t)
+
+	require.NoError(t, <-done)
+}

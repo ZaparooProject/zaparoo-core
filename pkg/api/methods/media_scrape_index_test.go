@@ -120,6 +120,27 @@ func TestScrapeJobsForSourcesQueuesEverySystemForAnAllLaunchersScraper(t *testin
 	assert.True(t, jobs[1].FillMissing)
 }
 
+// Files of a launcher that cannot run here are still the library's: a scraper
+// keyed on the files fills them in, and one bound to launchers does not.
+func TestScrapeJobsForSourcesUnavailableLauncherOnlyForAllLaunchersScrapers(t *testing.T) {
+	t.Parallel()
+	scrapers := arcadeScrapers()
+	gdb := platforms.Scraper{
+		ID: "gamedatabase", Name: "gamedatabase",
+		SupportsFillMissing: true, AutoScrapeAllLaunchers: true, Scrape: fakeScrape,
+	}
+	scrapers[gdb.ID] = gdb
+
+	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 20, Unavailable: true},
+		{LauncherID: "RetroArchNES", SystemID: systemdefs.SystemNES, Files: 42000, Unavailable: true},
+	})
+
+	require.Len(t, jobs, 1, "the arcade scraper reads launcher data an unavailable launcher lacks")
+	assert.Equal(t, "gamedatabase", jobs[0].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade, systemdefs.SystemNES}, jobs[0].Systems)
+}
+
 // orderedScraper is an all-launchers index scraper at a given place in the
 // queue.
 func orderedScraper(id string, order int) platforms.Scraper {

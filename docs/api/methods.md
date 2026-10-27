@@ -844,7 +844,7 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 `path` also accepts the launcher-relative form reported as `relativePath`: a system ID, optionally followed by a path below that system's launcher folder (for example `SNES` or `SNES/USA`). Core browses the first matching folder, in platform root order, that holds indexed content, and the result's `path` is that folder's absolute path. A relative path that matches no indexed folder is an error. This lets a client keep a folder reference that survives the media moving to another root.
 
-Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
+Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate, except platform-defined `zaparoo://` media, which are listed among the files.
 
 A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. Display names leave out set markers such as `(Disc 1)`; the disc number is reported in `tags` instead. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
 
@@ -5163,7 +5163,7 @@ Returns `null` on success.
 
 **Access:** All clients.
 
-List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)).
+List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)). Core's internal launchers for virtual systems and virtual media (`zaparoo://` URIs) are not listed, since each can only launch its own entry.
 
 #### Parameters
 

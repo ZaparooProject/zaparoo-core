@@ -258,17 +258,22 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return nil
 	}
 
+	publishedPath := params.Path
+	if params.Options.LaunchedPath != "" {
+		publishedPath = params.Options.LaunchedPath
+	}
+
 	// Look up the indexed display name from MediaDB. SearchMediaPathExact
 	// requires at least one system to search - a launcher without a
 	// SystemID has nothing to scope the search to, so displayName stays the
 	// filename-parsed fallback in that case, same as before.
 	systemID := params.Launcher.SystemID
-	displayName := tags.ParseTitleFromFilename(getDisplayName(params.Path), false)
+	displayName := tags.ParseTitleFromFilename(getDisplayName(publishedPath), false)
 
 	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
 		ctx, cancel := activeMediaLookupContext(params.Context)
 		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(
-			ctx, []systemdefs.System{{ID: systemID}}, params.Path,
+			ctx, []systemdefs.System{{ID: systemID}}, publishedPath,
 		)
 		cancel()
 		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
@@ -289,7 +294,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	activeMedia := models.NewActiveMedia(
 		systemID,
 		systemMeta.Name,
-		params.Path,
+		publishedPath,
 		displayName,
 		params.Launcher.ID,
 	)
