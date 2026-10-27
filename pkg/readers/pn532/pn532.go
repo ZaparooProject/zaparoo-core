@@ -312,6 +312,7 @@ func createVIDPIDBlocklist() []string {
 		"16D0:109B", // Sinden Lightgun
 		"16D0:109C", // Sinden Lightgun
 		"16D0:109D", // Sinden Lightgun
+		"1209:4D69", // Greaseweazle floppy controller
 	}
 }
 
