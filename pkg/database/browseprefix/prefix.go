@@ -133,7 +133,7 @@ func parseRank(s string) Prefix {
 		}
 		sepEnd++
 	}
-	if sepEnd == digitEnd || sepEnd == len(s) {
+	if sepEnd == digitEnd || sepEnd == len(s) || !isListSeparator(s[digitEnd:sepEnd]) {
 		return Prefix{}
 	}
 
@@ -142,6 +142,18 @@ func parseRank(s string) Prefix {
 		return Prefix{}
 	}
 	return Prefix{Kind: KindRank, Rest: rest}
+}
+
+// isListSeparator reports whether sep, what follows a leading number, marks
+// list numbering ("001 - Sonic", "42. Contra", "7) Zelda") rather than being
+// part of the title. A bare space or a hyphen with no space beside it is a
+// title's own: "720 Degrees", "10-Yard Fight" and "3-D WorldRunner" lost their
+// numbers to a folder that was mostly such titles.
+func isListSeparator(sep string) bool {
+	if strings.ContainsAny(sep, ".)") {
+		return true
+	}
+	return strings.Contains(sep, "-") && strings.ContainsFunc(sep, unicode.IsSpace)
 }
 
 func parseDate(s string) Prefix {

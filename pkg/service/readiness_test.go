@@ -517,3 +517,79 @@ func TestReadyLauncherPrefersTheLauncherCache(t *testing.T) {
 
 	assert.Same(t, cached, readyLauncher(svc, media), "a launcher the platform cannot build is found")
 }
+
+// Batocera and ReplayOS, 2026-10-26: a game behind ES's missing-BIOS prompt, or
+// a ROM RePlayOS could not load, never started and never exited, so its media
+// stayed playing forever. Once readiness ends, a launcher that can tell says
+// whether its game is running, and media it says is not is cleared. Launchers
+// that cannot tell, custom ones running scripts among them, are left alone.
+func TestStartMediaReadyProbeClearsAGameThatNeverStarted(t *testing.T) {
+	withTestMediaReadyTimeout(t, time.Minute)
+	recheck := neverStartedRecheck
+	neverStartedRecheck = 10 * time.Millisecond
+	t.Cleanup(func() { neverStartedRecheck = recheck })
+
+	tests := map[string]struct {
+		err     error
+		answers []bool
+		noHook  bool
+		cleared bool
+	}{
+		"never started":        {answers: []bool{false, false}, cleared: true},
+		"running":              {answers: []bool{true}},
+		"a moment late":        {answers: []bool{false, true}},
+		"frontend unreachable": {err: errors.New("connection refused")},
+		"launcher cannot tell": {noHook: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			asked := make(chan struct{}, 4)
+			launcher := platforms.Launcher{
+				ID: "es",
+				WaitForReady: func(context.Context, *config.Instance, *models.ActiveMedia) error {
+					return nil
+				},
+			}
+			calls := 0
+			if !tt.noHook {
+				launcher.GameRunning = func(context.Context, *config.Instance, *models.ActiveMedia) (bool, error) {
+					defer func() { asked <- struct{}{} }()
+					if tt.err != nil {
+						return false, tt.err
+					}
+					answer := tt.answers[min(calls, len(tt.answers)-1)]
+					calls++
+					return answer, nil
+				}
+			}
+			pl := &readinessPlatform{MockPlatform: mocks.NewMockPlatform(), launchers: []platforms.Launcher{launcher}}
+			svc := newReadinessService(pl)
+			media := models.NewActiveMedia("pcengine", "PC Engine", "/userdata/roms/pcengine/g.pce", "G", "es")
+			svc.State.SetActiveMedia(media)
+			gen, ok := svc.State.ActiveMediaReadyGeneration()
+			require.True(t, ok)
+
+			startMediaReadyProbe(svc, media, gen)
+
+			if tt.cleared {
+				require.Eventually(t, func() bool { return svc.State.ActiveMedia() == nil },
+					time.Second, 5*time.Millisecond, "the game that never started is still playing")
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			require.NoError(t, svc.State.WaitForActiveMediaReady(ctx, gen))
+			if !tt.noHook {
+				for range max(1, len(tt.answers)) {
+					select {
+					case <-asked:
+					case <-time.After(time.Second):
+						t.Fatal("the launcher was not asked")
+					}
+				}
+			}
+			time.Sleep(30 * time.Millisecond)
+			assert.NotNil(t, svc.State.ActiveMedia())
+		})
+	}
+}

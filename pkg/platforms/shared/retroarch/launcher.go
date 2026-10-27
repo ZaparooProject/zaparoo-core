@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 )
@@ -48,6 +49,7 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 	if c.Scan {
 		launcher.Folders = c.Folders
 		launcher.Extensions = c.Extensions
+		launcher.ScanExcludes = esde.ScanExcludes(c.SystemID)
 	}
 
 	launcher.Availability = func(cfg *config.Instance) error {

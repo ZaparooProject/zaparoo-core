@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -753,4 +754,46 @@ func drainNotifications(t *testing.T, ns <-chan models.Notification) {
 			}
 		}
 	})
+}
+
+// ReplayOS, 2026-10-26: a save state slot out of range was logged as a server
+// error. An argument the caller got wrong is the caller's error.
+func TestHandleMediaControl_InvalidControlArgumentIsClientError(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{
+		ID:       "test-launcher",
+		SystemID: "NES",
+		Controls: map[string]platforms.Control{
+			"save_state": {Func: func(_ context.Context, _ *config.Instance, params platforms.ControlParams) error {
+				if _, err := platforms.SlotArg(params, 1, 18); err != nil {
+					return fmt.Errorf("save state: %w", err)
+				}
+				return nil
+			}},
+		},
+	}})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"save_state","args":{"slot":"19"}}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be between 1 and 18")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }

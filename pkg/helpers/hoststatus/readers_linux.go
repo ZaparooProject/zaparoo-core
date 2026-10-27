@@ -270,6 +270,14 @@ type LinuxControllers struct {
 	VirtualName string
 }
 
+// builtInControllers are controllers the kernel can show only as a keyboard and
+// mouse. The Steam Deck's is one: while Steam owns it, the kernel sees its
+// lizard-mode keyboard and mouse interfaces, and the gamepad games use is
+// Steam's virtual pad, which is left out as software.
+var builtInControllers = map[[2]uint16]bool{ //nolint:gochecknoglobals // Static device table.
+	{0x28de, 0x1205}: true, // Valve Steam Deck Controller
+}
+
 // virtualDevicePath is where the kernel roots devices that software created.
 var virtualDevicePath = filepath.Join("devices", "virtual") + string(filepath.Separator)
 
@@ -293,6 +301,7 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 	supplies := r.deviceSupplies()
 
 	controllers := []Controller{}
+	seenBuiltIn := map[[2]uint16]bool{}
 	for _, entry := range entries {
 		id := entry.Name()
 		if !strings.HasPrefix(id, "input") {
@@ -304,8 +313,20 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 			continue
 		}
 		parsed, ok := ParseInputModalias(alias)
-		if !ok || !parsed.IsGamepad() {
+		if !ok {
 			continue
+		}
+		device := [2]uint16{parsed.Vendor, parsed.Product}
+		builtIn := builtInControllers[device]
+		if !parsed.IsGamepad() && !builtIn {
+			continue
+		}
+		// A built-in controller exposes several interfaces; it is one device.
+		if builtIn {
+			if seenBuiltIn[device] {
+				continue
+			}
+			seenBuiltIn[device] = true
 		}
 		name, _ := readTrimmed(r.Fs, filepath.Join(dir, "name"))
 		realPath, resolveErr := r.Resolve(dir)

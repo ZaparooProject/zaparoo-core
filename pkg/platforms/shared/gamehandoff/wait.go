@@ -35,21 +35,11 @@ import (
 
 // Options say what counts as the game being handed over.
 type Options struct {
-	// Settle is how long after the handover the emulator is given to start
-	// running the game.
-	Settle time.Duration
-	// OpenWindow is how long to wait for the game to be opened at all. A game
-	// still unopened after it is one the emulator reads some other way, and
-	// waiting on it would only stall scripts.
-	OpenWindow time.Duration
-	// UntilClose waits for every open to close, for a game read into memory or
-	// streamed to a core. Without it the first open is the handover, for a
-	// disk image the emulator keeps open and reads on demand.
-	UntilClose bool
-	// IdleHandover, with UntilClose, also counts the game as handed over once
-	// it has been open and unread for this long. A core that holds a game
-	// open after loading it, such as a floppy image, never closes it.
-	IdleHandover time.Duration
+	OpenWindowStart <-chan struct{}
+	Settle          time.Duration
+	OpenWindow      time.Duration
+	IdleHandover    time.Duration
+	UntilClose      bool
 }
 
 // Wait returns once events show the game handed over and Settle has passed
@@ -66,9 +56,21 @@ func Wait(ctx context.Context, clock clockwork.Clock, events <-chan Kind, opts O
 		}
 	}
 	defer stopQuiet()
-	noOpen := clock.NewTimer(opts.OpenWindow)
-	defer noOpen.Stop()
-	noOpenC := noOpen.Chan()
+	var noOpen clockwork.Timer
+	var noOpenC <-chan time.Time
+	stopNoOpen := func() {
+		if noOpen != nil {
+			noOpen.Stop()
+		}
+		noOpenC = nil
+	}
+	defer stopNoOpen()
+	opened := false
+	windowStart := opts.OpenWindowStart
+	if windowStart == nil {
+		noOpen = clock.NewTimer(opts.OpenWindow)
+		noOpenC = noOpen.Chan()
+	}
 	var idle clockwork.Timer
 	stopIdle := func() {
 		if idle != nil {
@@ -89,6 +91,12 @@ func Wait(ctx context.Context, clock clockwork.Clock, events <-chan Kind, opts O
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for game handover: %w", ctx.Err())
+		case <-windowStart:
+			windowStart = nil
+			if !opened {
+				noOpen = clock.NewTimer(opts.OpenWindow)
+				noOpenC = noOpen.Chan()
+			}
 		case <-noOpenC:
 			log.Debug().Msg("game was never opened; treating it as handed over")
 			return nil
@@ -100,15 +108,16 @@ func Wait(ctx context.Context, clock clockwork.Clock, events <-chan Kind, opts O
 			switch kind {
 			case Open:
 				open++
-				noOpen.Stop()
-				noOpenC = nil
+				opened = true
+				windowStart = nil
+				stopNoOpen()
 				stopQuiet()
 				if !opts.UntilClose {
 					quiet = clock.NewTimer(opts.Settle)
 				}
 			case Close:
 				open = max(open-1, 0)
-				if opts.UntilClose && open == 0 && noOpenC == nil {
+				if opts.UntilClose && open == 0 && opened {
 					stopQuiet()
 					quiet = clock.NewTimer(opts.Settle)
 				}

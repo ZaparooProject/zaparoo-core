@@ -174,7 +174,10 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 
 	result := LaunchersDefault{Launcher: launcherID}
 
-	log.Debug().
+	// Every launcher is resolved on every launch, hundreds on some platforms, so
+	// the per-call lines stay at trace: at debug they rotated the log within
+	// seconds and took what was being diagnosed with them.
+	log.Trace().
 		Str("launcherID", launcherID).
 		Strs("groups", groups).
 		Int("defaultsCount", len(c.vals.Launchers.Default)).
@@ -207,7 +210,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		return strings.EqualFold(entryLauncher, launcherID)
 	})
 
-	log.Debug().
+	log.Trace().
 		Str("launcherID", launcherID).
 		Str("resolvedServerURL", result.ServerURL).
 		Str("resolvedAction", result.Action).

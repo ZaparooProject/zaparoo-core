@@ -321,6 +321,48 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
+// dropPyGameModules leaves out the .py files that sit beside a .pygame file:
+// the .pygame file is the game, and the .py files beside it are its modules.
+// Indexed, they turned up as games of their own, and launch.random:DOS fell
+// back to one of them. A .py file with no .pygame beside it is a game.
+func dropPyGameModules(results []platforms.ScanResult) []platforms.ScanResult {
+	gameDirs := map[string]bool{}
+	for i := range results {
+		if strings.EqualFold(filepath.Ext(results[i].Path), ".pygame") {
+			gameDirs[filepath.Dir(results[i].Path)] = true
+		}
+	}
+	if len(gameDirs) == 0 {
+		return results
+	}
+	kept := results[:0]
+	for i := range results {
+		if strings.EqualFold(filepath.Ext(results[i].Path), ".py") && gameDirs[filepath.Dir(results[i].Path)] {
+			continue
+		}
+		kept = append(kept, results[i])
+	}
+	return kept
+}
+
+// esGameRunning reports whether EmulationStation is running a game. It is
+// unknown, and an error, when ES's API cannot be reached.
+func esGameRunning(context.Context, *config.Instance, *models.ActiveMedia) (bool, error) {
+	_, running, err := esapi.APIRunningGame()
+	if err != nil {
+		return false, fmt.Errorf("ask EmulationStation for its running game: %w", err)
+	}
+	return running, nil
+}
+
+// stopHasTarget reports whether a stop has anything to act on. A game the
+// tracker has seen running counts even with no media published for it: Core
+// declines to publish a game that ES started after a stop that landed too
+// early, and the stop that follows is for that game.
+func stopHasTarget(activeMedia *models.ActiveMedia, kodiActive, hasTrackedProcess, trackedGame bool) bool {
+	return activeMedia != nil || kodiActive || hasTrackedProcess || trackedGame
+}
+
 func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 
@@ -336,6 +378,7 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	activeMedia := p.activeMedia()
 	p.trackerMu.RLock()
 	kodiActive := p.kodiActive
+	trackedGame := p.lastKnownGame != nil
 	p.trackerMu.RUnlock()
 
 	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
@@ -349,7 +392,7 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	hasTrackedProcess := p.trackedProcess != nil
 	p.processMu.RUnlock()
 
-	if activeMedia == nil && !kodiActive && !hasTrackedProcess {
+	if !stopHasTarget(activeMedia, kodiActive, hasTrackedProcess, trackedGame) {
 		log.Debug().Msg("no active launcher to stop, skipping hotkeygen")
 		return nil
 	}
@@ -756,6 +799,13 @@ func esAPILaunch(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*
 	return nil, nil //nolint:nilnil // API launches don't return a process handle
 }
 
+// esSystemsMissingOnBatocera are ES-DE folders Batocera's EmulationStation has
+// no system for. A game indexed there cannot be started: ES's launch API does
+// nothing for it, while Core reports the launch as done.
+var esSystemsMissingOnBatocera = map[string]struct{}{ //nolint:gochecknoglobals // Static folder set.
+	"doom": {},
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
 	launchers = append(launchers,
@@ -770,11 +820,15 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 
 	for folder, info := range esde.SystemMap {
+		if _, missing := esSystemsMissingOnBatocera[folder]; missing {
+			continue
+		}
 		launchers = append(launchers, platforms.Launcher{
-			ID:         info.GetLauncherID(),
-			SystemID:   info.SystemID,
-			Extensions: info.Extensions,
-			Folders:    []string{folder},
+			ID:           info.GetLauncherID(),
+			SystemID:     info.SystemID,
+			Extensions:   info.Extensions,
+			Folders:      []string{folder},
+			ScanExcludes: esde.ScanExcludes(info.SystemID),
 			Controls: hotkeyControls(afero.NewOsFs(), sendHotkey, func() error {
 				return p.StopActiveLauncher(platforms.StopForMenu)
 			}),
@@ -782,6 +836,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			// Scanner function adds metadata from gamelist.xml
 			Launch:       p.noteLaunches(esAPILaunch),
 			WaitForReady: p.waitForGame,
+			GameRunning:  esGameRunning,
 			Scanner: func(
 				ctx context.Context,
 				cfg *config.Instance,
@@ -813,7 +868,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 					filteredResults = append(filteredResults, result)
 				}
-				results = filteredResults
+				results = dropPyGameModules(filteredResults)
 
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {

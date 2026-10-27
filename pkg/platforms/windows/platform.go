@@ -196,6 +196,11 @@ func (p *Platform) StartPost(
 		setActiveMedia,
 		func() string { return steamClient.FindSteamDir(cfg) },
 	)
+	p.steamTracker.SetStopGame(func() {
+		if err := p.StopActiveLauncher(platforms.StopForMenu); err != nil {
+			log.Warn().Err(err).Msg("failed to stop a Steam game a stop was meant for")
+		}
+	})
 	if err := p.steamTracker.Start(); err != nil {
 		log.Warn().Err(err).Msg("steam game tracker failed to start")
 	}
@@ -349,6 +354,12 @@ func (p *Platform) processHasWindow(pid int) bool {
 	}
 	manager, ok := p.windowFocuser.(*windowfocus.Manager)
 	return ok && pid > 0 && manager.HasWindow(uint32(pid)) //nolint:gosec // Windows process IDs are 32-bit values
+}
+
+func (p *Platform) processHasWindowOfClass(pid int, classes []string) bool {
+	manager, ok := p.windowFocuser.(*windowfocus.Manager)
+	// Windows process IDs are 32-bit values.
+	return ok && pid > 0 && manager.HasWindowOfClass(uint32(pid), classes) //nolint:gosec // see above
 }
 
 func isProcessFinishedError(err error) bool {
@@ -782,6 +793,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Test:         shared.SchemeIDTest(shared.SchemeFlashpoint),
 			WaitForReady: p.waitForFlashpointGame,
 			ReadyTimeout: flashpointReadyTimeoutFor,
+			Kill:         killFlashpointGame,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				// Handle native Flashpoint URL format: flashpoint://run/123
 				// Normalize to standard virtual path format: flashpoint://123
@@ -794,16 +806,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return nil, fmt.Errorf("failed to extract Flashpoint game ID from path: %w", err)
 				}
 
-				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
-				cmd := exec.CommandContext(context.Background(),
-					helpers.ComSpec(), "/c",
-					"start",
-					"flashpoint://run/"+id,
-				)
-				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				err = cmd.Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start flashpoint: %w", err)
+				if err := p.launchFlashpointGame(id); err != nil {
+					return nil, err
 				}
 				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},

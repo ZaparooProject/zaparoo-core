@@ -44,6 +44,7 @@ import (
 	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -673,6 +674,12 @@ func systemRootContentsSources(
 			// way a real RootDirs root already does - not a separate opaque
 			// entry a client has to browse through first.
 			physical = append(physical, entries[i])
+		case entries[i].Path == launchables.Scheme+"://":
+			// Platform-defined virtual media are single titles that belong to
+			// the system (Paprium under Genesis), not an app catalogue like
+			// steam://, so they list among the system's own files rather than
+			// behind a folder named after the scheme.
+			physical = append(physical, entries[i])
 		case strings.Contains(entries[i].Path, "://"):
 			virtual = append(virtual, entries[i])
 		default:
@@ -703,10 +710,16 @@ func systemRootContentsSources(
 			}
 		}
 		var prefix string
-		if platforms.IsSourcePath(physical[i].Path) {
+		switch {
+		case physical[i].Path == launchables.Scheme+"://":
+			// Virtual media all share the bare scheme as ParentDir and have no
+			// subfolders to list.
+			prefix = physical[i].Path
+			includeDirs = false
+		case platforms.IsSourcePath(physical[i].Path):
 			// filepath.Clean mangles "://".
 			prefix = strings.TrimSuffix(physical[i].Path, "/") + "/"
-		} else {
+		default:
 			prefix = filepath.ToSlash(filepath.Clean(physical[i].Path))
 			if !strings.HasSuffix(prefix, "/") {
 				prefix += "/"

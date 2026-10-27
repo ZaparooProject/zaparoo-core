@@ -388,6 +388,13 @@ func launcherID(id uuid.UUID) string {
 	return launcherIDPrefix + EncodeID(id)
 }
 
+// IsLauncherID reports whether id names a generated launchable launcher. These
+// launchers only run their own zaparoo:// URI, so they are never a meaningful
+// launcher choice for a system.
+func IsLauncherID(id string) bool {
+	return strings.HasPrefix(id, launcherIDPrefix)
+}
+
 func pathMatchesID(id uuid.UUID) func(*config.Instance, string) bool {
 	return func(_ *config.Instance, path string) bool {
 		pathID, ok, err := ParseURI(path)

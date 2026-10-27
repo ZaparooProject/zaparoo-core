@@ -415,7 +415,9 @@ func executeTokenZapScript(
 		if !inHookContext && commandStopsPrimaryNow(cmd) {
 			// A stop waits for a launch in flight, the way the stop API does,
 			// so it ends the media that launch publishes. Hook scripts run
-			// from inside launches and stops, and never take the gate.
+			// from inside launches and stops, and never take the gate. Like
+			// the stop API, it first calls off a launch that is still settling.
+			svc.State.LauncherManager().NewContext()
 			release, gateErr := svc.State.AcquireMediaStop(runCtx)
 			if gateErr != nil {
 				return &runfailure.CommandError{

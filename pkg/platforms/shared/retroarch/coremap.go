@@ -163,7 +163,11 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemPCFX, DefaultCore: "mednafen_pcfx", Policy: PolicyFree, ESFolder: "pcfx"},
 	{SystemID: systemdefs.SystemPET2001, DefaultCore: "vice_xpet", Policy: PolicyFree, ESFolder: "pet"},
 	{SystemID: systemdefs.SystemPokemonMini, DefaultCore: "pokemini", Policy: PolicyFree, ESFolder: "pokemini"},
-	{SystemID: systemdefs.SystemDoom, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom"},
+	// ES-DE and EmuDeck keep WADs in a doom folder.
+	{
+		SystemID: systemdefs.SystemDoom, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom",
+		ExtraFolders: []string{"doom"},
+	},
 	{
 		SystemID: systemdefs.SystemPSP, DefaultCore: "ppsspp", Policy: PolicyFree, ESFolder: "psp",
 		PerProfileCore: map[Profile]string{ProfileApplianceARM: ""},
@@ -336,7 +340,7 @@ func coreLaunchForDef(def *CoreDef, profile Profile, coreCounts map[string]int) 
 		ID:         coreLauncherID(filename, def.SystemID, def.ESFolder, coreCounts[filename]),
 		SystemID:   def.SystemID,
 		Core:       filename,
-		Folders:    []string{def.ESFolder},
+		Folders:    append([]string{def.ESFolder}, def.ExtraFolders...),
 		Extensions: append([]string(nil), info.Extensions...),
 		Scan:       true,
 	}, true
