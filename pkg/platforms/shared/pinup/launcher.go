@@ -21,12 +21,19 @@ package pinup
 import (
 	"context"
 	"os"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
+
+// readyTimeout bounds the wait for a table's player window. VPX loads the table
+// behind its editor window first: the player opened 15 to 22 s after the
+// launch on a test cabinet, past the service's 10 s default.
+const readyTimeout = 45 * time.Second
 
 // NewLauncher builds the PinUP Popper launcher around an integration. The
 // lifecycle is external: Popper starts and owns the emulator, and the
@@ -40,6 +47,7 @@ func NewLauncher(i *Integration) platforms.Launcher {
 		SkipFilesystemScan: true,
 		Availability:       i.Available,
 		WaitForReady:       i.WaitForReady,
+		ReadyTimeout:       func(*models.ActiveMedia) time.Duration { return readyTimeout },
 		// A scheme match alone would select this launcher for any popper://
 		// path, and DoLaunch stops the running table before handing the path
 		// over. Rejecting an unlaunchable ID here keeps selection from

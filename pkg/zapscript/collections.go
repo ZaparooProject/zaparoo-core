@@ -134,6 +134,9 @@ func randomFromCollection(
 		}
 		pls := playlists.NewPlaylist(uuid.NewString(), coll.name, []playlists.PlaylistItem{item})
 		pls.Slot = slot
+		// Each roll has a fresh ID, so remembering it would only push out
+		// playlists the user does come back to.
+		pls.Ephemeral = true
 		pls.Unsafe = coll.unsafe
 		pls.AllowedCommands = env.AllowedCommands
 		// A new roll every time the command runs, even when the playlist it

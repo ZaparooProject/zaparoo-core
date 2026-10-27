@@ -292,6 +292,7 @@ func TestCmdRandom_DeckQueuesOneItemPlaylist(t *testing.T) {
 		assert.Empty(t, pls.DeckID, "a deck refresh must not swap the one item for the whole deck")
 		assert.True(t, pls.Playing)
 		assert.True(t, pls.ForceRelaunch, "every roll launches, even onto the item already playing")
+		assert.True(t, pls.Ephemeral, "a roll is not a playlist to remember: each one would push a real one out")
 		assert.False(t, pls.Unsafe, "the user's own deck is trusted")
 		assert.Equal(t, "Weekend", pls.Name)
 	}

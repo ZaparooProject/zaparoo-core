@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -327,6 +328,83 @@ func TestHandleMediaBrowse_RootContentsUsesOrderedPhysicalSources(t *testing.T) 
 	assert.Equal(t, route2+"/Game.sfc", browseResults.Entries[1].Path)
 	assert.Equal(t, 1, browseResults.TotalDirs)
 	assert.Equal(t, 1, browseResults.TotalFiles)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestHandleMediaBrowse_RootContentsListsLaunchableMediaInline pins that a
+// system's merged contents list its zaparoo:// virtual media (MiSTer's Paprium
+// under Genesis) among its own files, not behind a "Zaparoo" folder sorted
+// ahead of everything else (#1683). App catalogue schemes keep their folder.
+func TestHandleMediaBrowse_RootContentsListsLaunchableMediaInline(t *testing.T) {
+	t.Parallel()
+
+	root := browseTestAbsPath("games")
+	route := filepath.ToSlash(filepath.Join(root, "Genesis"))
+	launchableRoute := launchables.Scheme + "://"
+	paprium := launchables.VirtualMedia{ID: launchables.MisterGenesisPaprium, Name: "Paprium"}
+	papriumPath := paprium.ZapScript()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{ID: "Genesis", SystemID: "Genesis", Folders: []string{"Genesis"}},
+	})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, true, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "Genesis")).
+		Return([]database.BrowseVirtualScheme{
+			{Scheme: launchableRoute, FileCount: 1, SystemIDs: []string{"Genesis"}},
+			{Scheme: "steam://", FileCount: 2, SystemIDs: []string{"Genesis"}},
+		}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything, mock.Anything).
+		Return(map[string]database.BrowseRouteCount{
+			route:           {Path: route, FileCount: 2, SystemIDs: []string{"Genesis"}},
+			launchableRoute: {Path: launchableRoute, FileCount: 1, SystemIDs: []string{"Genesis"}},
+			"steam://":      {Path: "steam://", FileCount: 2, SystemIDs: []string{"Genesis"}},
+		}, nil)
+
+	wantSources := []database.BrowseSource{
+		{PathPrefix: route + "/", IncludeDirs: true},
+		{PathPrefix: launchableRoute, IncludeDirs: false},
+	}
+	directoryOpts := mock.MatchedBy(func(opts database.BrowseDirectoriesOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, wantSources, opts.Overlay.Sources)
+	})
+	mockMediaDB.On("BrowseDirectories", mock.Anything, directoryOpts).Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, mock.MatchedBy(func(opts database.BrowseDirCountOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, wantSources, opts.Overlay.Sources)
+	})).Return(0, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, wantSources, opts.Overlay.Sources)
+	})).Return(3, nil)
+	mockMediaDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, wantSources, opts.Overlay.Sources)
+	})).Return([]database.SearchResultWithCursor{
+		{MediaID: 1, SystemID: "Genesis", Name: "Comix Zone", Path: route + "/Comix Zone.md"},
+		{MediaID: 2, SystemID: "Genesis", Name: "Paprium", Path: papriumPath},
+		{MediaID: 3, SystemID: "Genesis", Name: "Sonic", Path: route + "/Sonic.md"},
+	}, nil)
+	stubNoSingletonAliases(mockMediaDB, "Genesis")
+
+	systems := []string{"Genesis"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Systems:  &systems,
+		RootView: stringPtr(browseRootViewContents),
+	})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	paths := make([]string, 0, len(browseResults.Entries))
+	for i := range browseResults.Entries {
+		paths = append(paths, browseResults.Entries[i].Path)
+	}
+	assert.Equal(t, []string{"steam://", route + "/Comix Zone.md", papriumPath, route + "/Sonic.md"}, paths)
+	assert.Equal(t, 3, browseResults.TotalFiles)
 	mockMediaDB.AssertExpectations(t)
 }
 

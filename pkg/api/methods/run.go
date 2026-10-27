@@ -315,27 +315,15 @@ func HandleRunRest(
 	}
 }
 
-func waitForCurrentMediaReady(ctx context.Context, st *state.State) error {
-	for {
-		gen, active := st.ActiveMediaReadyGeneration()
-		if !active {
-			return nil
-		}
-
-		err := st.WaitForActiveMediaReady(ctx, gen)
-		switch {
-		case err == nil, errors.Is(err, state.ErrNoActiveMedia):
-			return nil
-		case errors.Is(err, state.ErrActiveMediaChanged):
-			continue
-		default:
-			return fmt.Errorf("wait for active media ready: %w", err)
-		}
-	}
-}
-
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
+
+	// Call off a launch still settling before waiting for it: a launch that
+	// is replacing a game waits on the launcher context before starting the
+	// new one, and would otherwise start it only for this stop to end it a
+	// moment later. Done before before_exit, so a launch that hook starts
+	// gets the fresh context.
+	env.State.LauncherManager().NewContext()
 
 	// Deliberately before the media stop gate: a before_exit script may launch
 	// media, which takes the read side of the same gate that AcquireMediaStop
@@ -349,9 +337,9 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 	}
 	defer release()
 
-	if err := waitForCurrentMediaReady(env.Context, env.State); err != nil {
-		return nil, err
-	}
+	// The stop goes ahead without waiting for the media to be ready: a load
+	// can take minutes, and a caller that gives up first loses its stop. A
+	// game that appears after the stop has landed is stopped by state.
 
 	// A before_exit script can launch media of its own. Stopping now would
 	// kill what the hook just started instead of what the caller asked to stop.

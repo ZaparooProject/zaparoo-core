@@ -149,8 +149,21 @@ func mutterProbe(ctx context.Context, b bus) (idleProbe, bool) {
 // logindProbe uses the session's IdleHint. It is coarse, since the desktop
 // only raises the hint after its own idle delay, but it errs safe: while the
 // hint is clear the session reads as active.
+//
+// It only counts as a source once the desktop has set the hint at some point.
+// KDE and SteamOS's game mode never do, and there a hint that is always clear
+// read as input on every poll: it cancelled every playlist countdown and kept
+// idle rotation from ever firing, while claiming keyboard and mouse coverage.
 func logindProbe(ctx context.Context, b bus, clock clockwork.Clock) (idleProbe, bool) {
 	if !b.hasOwner(ctx, logindName) {
+		return idleProbe{}, false
+	}
+	since, err := b.property(ctx, logindName, logindSessionObj, "IdleSinceHint")
+	if err != nil {
+		return idleProbe{}, false
+	}
+	if usec, ok := since.(uint64); !ok || usec == 0 {
+		log.Debug().Msg("input activity: the desktop never sets logind's idle hint; not using it")
 		return idleProbe{}, false
 	}
 	read := func(ctx context.Context) (time.Duration, error) {

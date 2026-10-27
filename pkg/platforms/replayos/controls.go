@@ -52,6 +52,12 @@ const (
 	// that RePlayOS shows under SYSTEM > INFORMATION > NET CONTROL CODE.
 	netControlTokenKey = "replay_http_token" //nolint:gosec // config key name, not a credential
 
+	// dataLocationKey is the replay.cfg key for SYSTEM > DATA LOCATION. Set to
+	// dataLocationLocalSD, saves live on the SD card whatever storage holds
+	// the ROMs.
+	dataLocationKey     = "system_data_location"
+	dataLocationLocalSD = "local_sd"
+
 	// replayGameView is the get_status view while a game is running.
 	replayGameView = "game_play"
 
@@ -83,12 +89,16 @@ type netControl struct {
 	client  *http.Client
 	baseURL string
 	cfgPath string
+	// localSD is the SD card mount saves move to with DATA LOCATION set to
+	// LOCAL SD.
+	localSD string
 }
 
 func newNetControl() *netControl {
 	return &netControl{
 		baseURL: netControlBaseURL,
 		cfgPath: replayCfgPath,
+		localSD: "/media/sd",
 		client:  &http.Client{Timeout: netControlTimeout, Transport: useragent.Transport(nil)},
 	}
 }
@@ -135,6 +145,10 @@ func (n *netControl) get(ctx context.Context, endpoint string, query url.Values)
 
 	resp, err := n.client.Do(req)
 	if err != nil {
+		// A cancelled caller is not a sign that net control is off.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("net control request: %w", ctxErr)
+		}
 		return nil, fmt.Errorf("%w: %w", errNetControlUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -183,12 +197,70 @@ func (n *netControl) status(ctx context.Context) (netStatus, error) {
 // requireGame checks that a game is running, because RePlayOS queues state
 // and reset commands without a game and silently drops them.
 func (n *netControl) requireGame(ctx context.Context) error {
+	_, err := n.runningGame(ctx)
+	return err
+}
+
+// runningGame returns the status of the running game, or an error when no
+// game is running.
+func (n *netControl) runningGame(ctx context.Context) (netStatus, error) {
 	status, err := n.status(ctx)
 	if err != nil {
-		return err
+		return netStatus{}, err
 	}
 	if status.View != replayGameView {
-		return fmt.Errorf("%w: %w", errNoGameRunning, platforms.ErrControlUnavailable)
+		return netStatus{}, fmt.Errorf("%w: %w", errNoGameRunning, platforms.ErrControlUnavailable)
+	}
+	return status, nil
+}
+
+// stateFile returns where RePlayOS keeps slot's save state for the game file:
+// the game's own path with roms swapped for saves, on dataRoot instead of the
+// game's storage when dataRoot is set. It is false when the path has no roms
+// folder to swap.
+func stateFile(gameFile string, slot int, dataRoot string) (string, bool) {
+	dir, base := filepath.Split(filepath.Clean(gameFile))
+	parts := strings.Split(filepath.Clean(dir), string(filepath.Separator))
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] != "roms" {
+			continue
+		}
+		parts[i] = "saves"
+		root := string(filepath.Separator)
+		if dataRoot != "" {
+			root, parts = dataRoot, parts[i:]
+		}
+		name := strings.TrimSuffix(base, filepath.Ext(base)) + ".sst" + strconv.Itoa(slot)
+		return filepath.Join(root, filepath.Join(parts...), name), true
+	}
+	return "", false
+}
+
+// dataRoot returns where RePlayOS keeps saves when it is not beside the ROMs.
+func (n *netControl) dataRoot() string {
+	if location, _ := readCfgValue(n.cfgPath, dataLocationKey); location == dataLocationLocalSD {
+		return n.localSD
+	}
+	return ""
+}
+
+// errNoSavedState reports a load from a slot nothing was saved to. RePlayOS
+// accepts such a load and does nothing, so it is caught before asking.
+var errNoSavedState = errors.New("no save state in that slot")
+
+// checkStateSaved fails a load from an empty slot. It only refuses when the
+// game's saves folder exists, so an install keeping saves elsewhere still
+// loads.
+func checkStateSaved(gameFile string, slot int, dataRoot string) error {
+	path, ok := stateFile(gameFile, slot, dataRoot)
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		return nil //nolint:nilerr // saves kept somewhere else; let RePlayOS decide
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("%w: slot %d: %w", errNoSavedState, slot, platforms.ErrControlUnavailable)
 	}
 	return nil
 }
@@ -212,6 +284,26 @@ func (n *netControl) waitForGame(
 			return status.View == replayGameView && sameGame(status.GameFile, media.Path), nil
 		})
 	}
+}
+
+// runningGameFile returns the file RePlayOS is playing, and false when it is
+// not playing one or net control cannot be reached.
+func (n *netControl) runningGameFile(ctx context.Context) (string, bool) {
+	status, err := n.status(ctx)
+	if err != nil || status.View != replayGameView || status.GameFile == "" {
+		return "", false
+	}
+	return status.GameFile, true
+}
+
+// gameRunning reports whether RePlayOS is playing a game. It is unknown, and
+// an error, when net control cannot be reached.
+func (n *netControl) gameRunning(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) (bool, error) {
+	status, err := n.status(ctx)
+	if err != nil {
+		return false, err
+	}
+	return status.View == replayGameView, nil
 }
 
 // sameGame reports whether the game RePlayOS is running is the launched one.
@@ -241,10 +333,16 @@ func (n *netControl) stateControl(endpoint string) platforms.ControlFunc {
 		if slotErr != nil {
 			return fmt.Errorf("%s: %w", endpoint, slotErr)
 		}
-		if err := n.requireGame(ctx); err != nil {
+		status, err := n.runningGame(ctx)
+		if err != nil {
 			return err
 		}
-		_, err := n.get(ctx, endpoint, url.Values{"slot": {strconv.Itoa(slot)}})
+		if endpoint == "load_state" {
+			if savedErr := checkStateSaved(status.GameFile, slot, n.dataRoot()); savedErr != nil {
+				return savedErr
+			}
+		}
+		_, err = n.get(ctx, endpoint, url.Values{"slot": {strconv.Itoa(slot)}})
 		return err
 	}
 }
