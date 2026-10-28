@@ -528,13 +528,18 @@ func executeTokenZapScript(
 					return fmt.Errorf("normalize playlist slot: %w", slotErr)
 				}
 			}
+			// A clear names its slot but leaves the slot with no playlist.
+			next := result.Playlist
+			if next != nil && next.Clear {
+				next = nil
+			}
 			if resultSlot == mediaslot.Background {
-				currentBackground = result.Playlist
+				currentBackground = next
 			} else {
-				currentPrimary = result.Playlist
+				currentPrimary = next
 			}
 			if currentPlaylist == nil || currentPlaylist.Slot == resultSlot {
-				currentPlaylist = result.Playlist
+				currentPlaylist = next
 			}
 		}
 

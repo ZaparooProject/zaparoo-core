@@ -133,7 +133,7 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		if err = queuePlaylistUpdate(&env, clearUpdate); err != nil {
 			return platforms.CmdResult{}, err
 		}
-		return platforms.CmdResult{PlaylistChanged: true}, nil
+		return platforms.CmdResult{PlaylistChanged: true, Playlist: clearUpdate}, nil
 	}
 
 	return platforms.CmdResult{}, nil

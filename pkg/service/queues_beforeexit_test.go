@@ -35,11 +35,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -507,4 +509,77 @@ func TestRunTokenZapScript_ControlBackgroundSlotReachesBackgroundAudio(t *testin
 	assert.Equal(t, []string{"pause"}, pm.snapshot())
 	assert.NotNil(t, env.svc.State.ActiveMedia(), "the game keeps running")
 	assert.NotNil(t, env.svc.State.BackgroundMedia())
+}
+
+// TestRunTokenZapScript_ControlBackgroundStopKeepsPrimaryPlaylist stops the
+// background slot and then moves the primary playlist in the same script.
+// Closing the background playlist must not hide the primary one from the
+// commands after it.
+func TestRunTokenZapScript_ControlBackgroundStopKeepsPrimaryPlaylist(t *testing.T) {
+	// Not parallel: cmdControl resolves launchers through the global launcher
+	// cache, which this test replaces for its duration.
+	env := setupExitTestEnv(t, keypressHook)
+	pm := &stubPlayback{}
+	env.svc.PlaybackManager = pm
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		platforms.NativeAudioLauncher(pm, env.svc.State.SetBackgroundMedia, nil, nil),
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+
+	env.svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		systemdefs.SystemAudio, "Audio", "music.mp3", "Music", platforms.NativeAudioLauncherID))
+	primary := playlists.NewPlaylist("primary", "Primary",
+		[]playlists.PlaylistItem{{ZapScript: "**a"}, {ZapScript: "**b"}})
+	queue := make(chan *playlists.Playlist, 10)
+
+	err := runTokenZapScript(env.svc, tokens.Token{
+		UID:      "card",
+		Text:     "**control:stop?slot=background||**playlist.next",
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{Active: primary, Queue: queue}, nil, false)
+	require.NoError(t, err)
+
+	require.Len(t, queue, 2)
+	clearUpdate := <-queue
+	assert.Equal(t, mediaslot.Background, clearUpdate.Slot)
+	assert.True(t, clearUpdate.Clear)
+	next := <-queue
+	assert.Equal(t, "primary", next.ID)
+	assert.Equal(t, 1, next.Index)
+}
+
+// TestRunTokenZapScript_ControlBackgroundStopLeavesNoBackgroundPlaylist stops
+// the background slot and then asks for its playlist in the same script. The
+// closed slot must read as empty, not as the clear request that closed it.
+func TestRunTokenZapScript_ControlBackgroundStopLeavesNoBackgroundPlaylist(t *testing.T) {
+	// Not parallel: cmdControl resolves launchers through the global launcher
+	// cache, which this test replaces for its duration.
+	env := setupExitTestEnv(t, keypressHook)
+	pm := &stubPlayback{}
+	env.svc.PlaybackManager = pm
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		platforms.NativeAudioLauncher(pm, env.svc.State.SetBackgroundMedia, nil, nil),
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+
+	env.svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		systemdefs.SystemAudio, "Audio", "music.mp3", "Music", platforms.NativeAudioLauncherID))
+	background := playlists.NewPlaylist("background", "Background",
+		[]playlists.PlaylistItem{{ZapScript: "**a"}, {ZapScript: "**b"}})
+	background.Slot = mediaslot.Background
+	queue := make(chan *playlists.Playlist, 10)
+
+	err := runTokenZapScript(env.svc, tokens.Token{
+		UID:      "card",
+		Text:     "**control:stop?slot=background||**playlist.next?slot=background",
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{Background: background, Queue: queue}, nil, false)
+	require.ErrorIs(t, err, zapscript.ErrNoPlaylistActive)
+
+	require.Len(t, queue, 1)
+	clearUpdate := <-queue
+	assert.Equal(t, mediaslot.Background, clearUpdate.Slot)
+	assert.True(t, clearUpdate.Clear)
 }

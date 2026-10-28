@@ -823,6 +823,8 @@ func TestCmdControl_BackgroundStopClosesBackgroundPlaylist(t *testing.T) {
 	result, err := cmdControl(mocks.NewMockPlatform(), env)
 	require.NoError(t, err)
 	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
 	require.NotNil(t, rig.audio)
 	assert.Zero(t, rig.gameCalls)
 	require.Len(t, queue, 1)
