@@ -344,17 +344,27 @@ func TestInitMediaThumbCache_UsableBeforeReapFinishes(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true})
-	InitMediaThumbCache(pl)
+	waitReap := InitMediaThumbCache(pl)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 	cache := mediaThumbCachePointer.Load()
 	require.NotNil(t, cache)
 	exists, err := afero.DirExists(cache.fs, cache.dir)
 	require.NoError(t, err)
 	assert.True(t, exists, "the live directory exists as soon as Init returns")
+	waited := make(chan struct{})
+	go func() {
+		waitReap()
+		close(waited)
+	}()
 	select {
-	case <-cache.reapDone:
+	case <-waited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("background reap did not finish")
+	}
+	select {
+	case <-cache.reapDone:
+	default:
+		t.Fatal("the wait returned before the reap finished")
 	}
 }
 

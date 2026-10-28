@@ -536,9 +536,11 @@ func (c *mediaThumbCache) wipeSystems(systemIDs []string) {
 // given platform. Must be called once during service start, before any
 // media.image requests are handled. The cache is usable as soon as this
 // returns; stale-version directories and abandoned temporary files are reaped
-// in the background so a large cache does not delay startup. Uses atomic store
-// so concurrent StartWithReady calls in tests do not race.
-func InitMediaThumbCache(pl platforms.Platform) {
+// in the background so a large cache does not delay startup. The returned
+// function waits for that reap, so a stopping service does not leave it
+// writing to the data directory. Uses atomic store so concurrent
+// StartWithReady calls in tests do not race.
+func InitMediaThumbCache(pl platforms.Platform) (waitReap func()) {
 	cache := newMediaThumbCache(pl)
 	if err := cache.fs.MkdirAll(cache.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
 		log.Debug().Err(err).Str("dir", cache.dir).Msg("media.image: thumb cache: failed to create dir")
@@ -549,6 +551,7 @@ func InitMediaThumbCache(pl platforms.Platform) {
 		defer close(cache.reapDone)
 		cache.reapStaleVersions()
 	}()
+	return func() { <-cache.reapDone }
 }
 
 // WipeMediaThumbCache removes all cached thumbnails and, when mediaDB is not
