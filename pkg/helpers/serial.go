@@ -62,6 +62,8 @@ var ignoreDevices = []serialDevice{
 	{Vid: "16d0", Pid: "123d"}, // GB Operator
 	{Vid: "16d0", Pid: "123e"}, // SN Operator
 	{Vid: "16d0", Pid: "134d"}, // 64 Operator
+	// Greaseweazle floppy controller
+	{Vid: "1209", Pid: "4d69"},
 }
 
 func ignoreSerialDevice(path string) bool {
