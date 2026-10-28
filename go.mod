@@ -20,7 +20,7 @@ require (
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
-	github.com/creativeprojects/go-selfupdate v1.6.0
+	github.com/creativeprojects/go-selfupdate v1.7.0
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/expr-lang/expr v1.17.8
@@ -73,9 +73,10 @@ require (
 )
 
 require (
-	code.gitea.io/sdk/gitea v0.23.2 // indirect
+	code.gitea.io/sdk/gitea v0.25.1 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
+	github.com/ProtonMail/go-crypto v1.5.2 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/andybalholm/brotli v1.2.6 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
@@ -83,6 +84,7 @@ require (
 	github.com/bodgit/sevenzip v1.6.1 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
@@ -130,7 +132,7 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/tscholl2/siec v0.0.0-20240310163802-c2c6f6198406 // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/ulikunitz/xz v0.5.17 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	gitlab.com/gitlab-org/api/client-go v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
