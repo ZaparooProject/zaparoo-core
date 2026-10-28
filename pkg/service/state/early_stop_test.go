@@ -151,11 +151,15 @@ func TestEarlyStop_OtherGameIsPublished(t *testing.T) {
 func TestEarlyStop_StopAfterTheWindowIsNotEarly(t *testing.T) {
 	t.Parallel()
 	st, _, stopped := newLaunchStopState(t)
-	st.mu.Lock()
-	st.earlyStopWindow = time.Nanosecond
-	st.mu.Unlock()
 
 	launchPublished(t, st, "game.nes")
+	// Move the launch and its publication out of the window rather than
+	// shrinking the window: a coarse clock, as on Windows, can read the same
+	// instant for the publication and the stop, which is inside any window.
+	st.mu.Lock()
+	st.lastLaunchAt = st.lastLaunchAt.Add(-2 * st.earlyStopWindow)
+	st.activeMediaPublishedAt = st.activeMediaPublishedAt.Add(-2 * st.earlyStopWindow)
+	st.mu.Unlock()
 	st.RecordMediaStop(models.MediaStopReasonStopped)
 	st.SetActiveMedia(nil)
 
