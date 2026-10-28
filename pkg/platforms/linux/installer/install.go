@@ -296,11 +296,40 @@ func syncSystemFile(fs afero.Fs, path string, content []byte) (bool, error) {
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	//nolint:gosec // system config needs to be readable by system services
-	if err := afero.WriteFile(fs, path, content, 0o644); err != nil {
-		return false, fmt.Errorf("write %s: %w", path, err)
+	if err := replaceSystemFile(fs, path, content); err != nil {
+		return false, err
 	}
 	return true, nil
+}
+
+// replaceSystemFile writes content beside path and renames it into place, so
+// a failed write never leaves the existing file truncated. The leading dot
+// and random suffix keep udev and modprobe from loading the partial file.
+func replaceSystemFile(fs afero.Fs, path string, content []byte) error {
+	tmp, err := afero.TempFile(fs, filepath.Dir(path), "."+filepath.Base(path)+"-")
+	if err != nil {
+		return fmt.Errorf("create temporary file for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err = tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = fs.Remove(tmpPath)
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err = tmp.Close(); err != nil {
+		_ = fs.Remove(tmpPath)
+		return fmt.Errorf("close %s: %w", tmpPath, err)
+	}
+	//nolint:gosec // system config needs to be readable by system services
+	if err = fs.Chmod(tmpPath, 0o644); err != nil {
+		_ = fs.Remove(tmpPath)
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	if err = fs.Rename(tmpPath, path); err != nil {
+		_ = fs.Remove(tmpPath)
+		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)
+	}
+	return nil
 }
 
 // doInstallHardware is the internal testable implementation.
