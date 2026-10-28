@@ -2108,7 +2108,8 @@ func StartWithListener(
 		return err
 	}
 
-	methods.InitMediaThumbCache(platform)
+	waitThumbReap := methods.InitMediaThumbCache(platform)
+	defer waitThumbReap()
 
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
