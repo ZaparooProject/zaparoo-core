@@ -50,6 +50,91 @@ type failingApplicationCopyFile struct {
 
 var errInjectedApplicationCopy = errors.New("injected application copy failure")
 
+var errInjectedHardware = errors.New("injected hardware install failure")
+
+// failingHardwareFS fails one step of reading or replacing target.
+type failingHardwareFS struct {
+	afero.Fs
+	operation string
+	target    string
+}
+
+type failingHardwareFile struct {
+	afero.File
+	operation string
+}
+
+func (fs *failingHardwareFS) inTargetDir(name string) bool {
+	return filepath.Dir(name) == filepath.Dir(fs.target)
+}
+
+func (fs *failingHardwareFS) Open(name string) (afero.File, error) {
+	if fs.operation == "read" && name == fs.target {
+		return nil, errInjectedHardware
+	}
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open backing filesystem: %w", err)
+	}
+	return file, nil
+}
+
+func (fs *failingHardwareFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
+	if fs.operation == "create" && fs.inTargetDir(name) {
+		return nil, errInjectedHardware
+	}
+	file, err := fs.Fs.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, fmt.Errorf("open backing filesystem file: %w", err)
+	}
+	if fs.inTargetDir(name) && (fs.operation == "write" || fs.operation == "close") {
+		return &failingHardwareFile{File: file, operation: fs.operation}, nil
+	}
+	return file, nil
+}
+
+func (fs *failingHardwareFS) Chmod(name string, mode os.FileMode) error {
+	if fs.operation == "chmod" && fs.inTargetDir(name) {
+		return errInjectedHardware
+	}
+	if err := fs.Fs.Chmod(name, mode); err != nil {
+		return fmt.Errorf("chmod backing filesystem file: %w", err)
+	}
+	return nil
+}
+
+func (fs *failingHardwareFS) Rename(oldname, newname string) error {
+	if fs.operation == "rename" && newname == fs.target {
+		return errInjectedHardware
+	}
+	if err := fs.Fs.Rename(oldname, newname); err != nil {
+		return fmt.Errorf("rename backing filesystem file: %w", err)
+	}
+	return nil
+}
+
+func (file *failingHardwareFile) Write(p []byte) (int, error) {
+	if file.operation == "write" {
+		return 0, errInjectedHardware
+	}
+	written, err := file.File.Write(p)
+	if err != nil {
+		return written, fmt.Errorf("write backing filesystem file: %w", err)
+	}
+	return written, nil
+}
+
+func (file *failingHardwareFile) Close() error {
+	err := file.File.Close()
+	if file.operation == "close" {
+		return errors.Join(err, errInjectedHardware)
+	}
+	if err != nil {
+		return fmt.Errorf("close backing filesystem file: %w", err)
+	}
+	return nil
+}
+
 func (fs *failingApplicationCopyFS) Stat(name string) (os.FileInfo, error) {
 	if fs.operation == "stat" && name == fs.source {
 		return nil, errInjectedApplicationCopy
@@ -271,6 +356,169 @@ func TestInstallApplication(t *testing.T) {
 			cmd.AssertExpectations(t)
 		})
 	}
+}
+
+func TestInstallHardware(t *testing.T) {
+	t.Parallel()
+
+	const staleUdevRules = "SUBSYSTEMS==\"usb\", ATTRS{idProduct}==\"7523\", ATTRS{idVendor}==\"1a86\", " +
+		"MODE=\"0660\", TAG+=\"uaccess\"\n"
+
+	expectUdevReload := func(cmd *mocks.MockCommandExecutor) {
+		cmd.On("Run", mock.Anything, "udevadm", []string{"control", "--reload-rules"}).Return(nil).Once()
+		cmd.On("Run", mock.Anything, "udevadm", []string{"trigger"}).Return(nil).Once()
+	}
+	expectModulesReload := func(cmd *mocks.MockCommandExecutor) {
+		cmd.On("Run", mock.Anything, "systemctl", []string{"restart", "systemd-modules-load.service"}).
+			Return(nil).Once()
+	}
+
+	tests := []struct {
+		existing        map[string]string
+		setupMock       func(*mocks.MockCommandExecutor)
+		wrapFS          func(afero.Fs) afero.Fs
+		name            string
+		errorContains   string
+		skipUdevDir     bool
+		skipModprobeDir bool
+	}{
+		{
+			name: "fresh install writes both files and reloads",
+			setupMock: func(cmd *mocks.MockCommandExecutor) {
+				expectUdevReload(cmd)
+				expectModulesReload(cmd)
+			},
+		},
+		{
+			name:      "stale udev rules are replaced",
+			existing:  map[string]string{udevPath: staleUdevRules, modprobePath: modprobeFile},
+			setupMock: expectUdevReload,
+		},
+		{
+			name:     "current files are left alone",
+			existing: map[string]string{udevPath: udevFile, modprobePath: modprobeFile},
+		},
+		{
+			name:          "missing udev rules directory",
+			skipUdevDir:   true,
+			errorContains: "udev rules directory does not exist",
+		},
+		{
+			name:            "missing modprobe directory",
+			skipModprobeDir: true,
+			setupMock:       expectUdevReload,
+			errorContains:   "modprobe directory does not exist",
+		},
+		{
+			name: "udev rules write failure",
+			wrapFS: func(fs afero.Fs) afero.Fs {
+				return &failingHardwareFS{Fs: fs, operation: "create", target: udevPath}
+			},
+			errorContains: "error creating udev rules",
+		},
+		{
+			name: "modprobe blacklist write failure",
+			wrapFS: func(fs afero.Fs) afero.Fs {
+				return &failingHardwareFS{Fs: fs, operation: "create", target: modprobePath}
+			},
+			setupMock:     expectUdevReload,
+			errorContains: "error creating modprobe blacklist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			if !tt.skipUdevDir {
+				require.NoError(t, fs.MkdirAll(filepath.Dir(udevPath), 0o755))
+			}
+			if !tt.skipModprobeDir {
+				require.NoError(t, fs.MkdirAll(filepath.Dir(modprobePath), 0o755))
+			}
+			for path, content := range tt.existing {
+				require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o644))
+			}
+			if tt.wrapFS != nil {
+				fs = tt.wrapFS(fs)
+			}
+
+			cmd := &mocks.MockCommandExecutor{}
+			if tt.setupMock != nil {
+				tt.setupMock(cmd)
+			}
+
+			err := doInstallHardware(cmd, fs)
+
+			if tt.errorContains != "" {
+				require.ErrorContains(t, err, tt.errorContains)
+			} else {
+				require.NoError(t, err)
+				udevContent, readErr := afero.ReadFile(fs, udevPath)
+				require.NoError(t, readErr)
+				assert.Equal(t, udevFile, string(udevContent))
+				modprobeContent, readErr := afero.ReadFile(fs, modprobePath)
+				require.NoError(t, readErr)
+				assert.Equal(t, modprobeFile, string(modprobeContent))
+			}
+			cmd.AssertExpectations(t)
+		})
+	}
+}
+
+func TestInstallHardwareRequiresRoot(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("Cannot test root requirement as root")
+	}
+
+	require.ErrorContains(t, InstallHardware(), "hardware install must be run as root")
+}
+
+func TestSyncSystemFileFailurePreservesExistingFile(t *testing.T) {
+	t.Parallel()
+
+	const original = "original rules\n"
+
+	for _, operation := range []string{"read", "create", "write", "close", "chmod", "rename"} {
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+
+			base := afero.NewMemMapFs()
+			require.NoError(t, base.MkdirAll(filepath.Dir(udevPath), 0o755))
+			require.NoError(t, afero.WriteFile(base, udevPath, []byte(original), 0o644))
+			fs := &failingHardwareFS{Fs: base, operation: operation, target: udevPath}
+
+			changed, err := syncSystemFile(fs, udevPath, []byte(udevFile))
+
+			require.ErrorIs(t, err, errInjectedHardware)
+			assert.False(t, changed)
+			content, readErr := afero.ReadFile(base, udevPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, original, string(content))
+			entries, readErr := afero.ReadDir(base, filepath.Dir(udevPath))
+			require.NoError(t, readErr)
+			require.Len(t, entries, 1, "temporary file should be removed")
+			assert.Equal(t, filepath.Base(udevPath), entries[0].Name())
+		})
+	}
+}
+
+func TestSyncSystemFileWritesReadableFile(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(modprobePath), 0o755))
+
+	changed, err := syncSystemFile(fs, modprobePath, []byte(modprobeFile))
+
+	require.NoError(t, err)
+	assert.True(t, changed)
+	info, err := fs.Stat(modprobePath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
 
 func TestInstallService(t *testing.T) {
