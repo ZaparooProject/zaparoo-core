@@ -27,6 +27,8 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,13 +51,10 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	if env.ExprEnv == nil || !env.ExprEnv.MediaPlaying {
-		return platforms.CmdResult{}, ErrNoActiveMedia
-	}
-
-	launcherID := env.ExprEnv.ActiveMedia.LauncherID
-	if launcherID == "" {
-		return platforms.CmdResult{}, ErrNoLauncher
+	slot, routed := controlMediaSlot(&env)
+	launcherID, err := controlLauncherID(&env, slot)
+	if err != nil {
+		return platforms.CmdResult{}, err
 	}
 
 	// Resolve through the launcher cache, not pl.Launchers: launchers built at
@@ -78,23 +77,11 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, fmt.Errorf("action %q %w %s", action, ErrUnsupportedControlAction, launcherID)
 	}
 
-	// Build control params from advargs, stripping the global "when" key
-	var args map[string]string
-	raw := env.Cmd.AdvArgs.Raw()
-	if len(raw) > 0 {
-		args = make(map[string]string, len(raw))
-		for k, v := range raw {
-			if k == string(zapscript.KeyWhen) {
-				continue
-			}
-			args[k] = v
-		}
-		if len(args) == 0 {
-			args = nil
-		}
-	}
+	args := controlArgs(&env, launcherID, slot, routed)
 
-	if env.WaitForMediaReady != nil {
+	// Readiness gates the primary media only. Background audio has no load
+	// to wait for, and waiting would hold it on a game that is still loading.
+	if slot == mediaslot.Primary && env.WaitForMediaReady != nil {
 		ctx := env.LauncherCtx
 		if ctx == nil {
 			ctx = env.ServiceCtx
@@ -102,19 +89,19 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		if err := env.WaitForMediaReady(ctx); err != nil {
+		if err = env.WaitForMediaReady(ctx); err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("wait for media ready: %w", err)
 		}
 	}
 
-	log.Info().Str("action", action).Str("launcher", launcherID).Msg("executing control command")
+	log.Info().Str("action", action).Str("launcher", launcherID).Str("slot", slot).
+		Msg("executing control command")
 
 	cancelStop := func() {}
-	if action == platforms.ControlStop {
+	if action == platforms.ControlStop && slot == mediaslot.Primary {
 		cancelStop = env.RecordStop(apimodels.MediaStopReasonStopped)
 	}
 
-	var err error
 	switch {
 	case control.Func != nil:
 		ctx := env.LauncherCtx
@@ -139,5 +126,81 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, fmt.Errorf("control action %q failed: %w", action, err)
 	}
 
+	// Stopping the background slot closes the playlist driving it too, the
+	// same as the stop command and the media.control API.
+	if action == platforms.ControlStop && slot == mediaslot.Background {
+		clearUpdate := &playlists.Playlist{Slot: mediaslot.Background, Clear: true}
+		if err = queuePlaylistUpdate(&env, clearUpdate); err != nil {
+			return platforms.CmdResult{}, err
+		}
+		return platforms.CmdResult{PlaylistChanged: true}, nil
+	}
+
 	return platforms.CmdResult{}, nil
+}
+
+// controlMediaSlot reports which media slot a control command targets. The
+// slot argument is shared with save state controls, so only a value naming a
+// media slot routes the command; any other value, such as a save state
+// number, is left for the primary launcher. routed reports whether the slot
+// argument was consumed as a media slot.
+func controlMediaSlot(env *platforms.CmdEnv) (slot string, routed bool) {
+	raw, ok := env.Cmd.AdvArgs.Raw()[string(zapscript.KeySlot)]
+	if !ok {
+		return mediaslot.Primary, false
+	}
+	normalized, err := mediaslot.Normalize(raw)
+	if err != nil {
+		return mediaslot.Primary, false
+	}
+	return normalized, true
+}
+
+// controlLauncherID returns the launcher of the media playing in slot.
+func controlLauncherID(env *platforms.CmdEnv, slot string) (string, error) {
+	if slot == mediaslot.Background {
+		var media *apimodels.ActiveMedia
+		if env.BackgroundMedia != nil {
+			media = env.BackgroundMedia()
+		}
+		if media == nil {
+			return "", ErrNoActiveMedia
+		}
+		if media.LauncherID == "" {
+			return "", ErrNoLauncher
+		}
+		return media.LauncherID, nil
+	}
+	if env.ExprEnv == nil || !env.ExprEnv.MediaPlaying {
+		return "", ErrNoActiveMedia
+	}
+	if env.ExprEnv.ActiveMedia.LauncherID == "" {
+		return "", ErrNoLauncher
+	}
+	return env.ExprEnv.ActiveMedia.LauncherID, nil
+}
+
+// controlArgs builds the control params from the advanced args. The global
+// "when" key is dropped, and a slot argument that routed the command is
+// passed on only to native audio, which plays both slots and needs to know
+// which one to act on.
+func controlArgs(env *platforms.CmdEnv, launcherID, slot string, routed bool) map[string]string {
+	raw := env.Cmd.AdvArgs.Raw()
+	args := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if k == string(zapscript.KeyWhen) {
+			continue
+		}
+		if routed && k == string(zapscript.KeySlot) {
+			continue
+		}
+		args[k] = v
+	}
+	if routed && launcherID == platforms.NativeAudioLauncherID {
+		args[string(zapscript.KeySlot)] = slot
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return args
 }

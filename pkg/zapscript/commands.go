@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -60,6 +61,7 @@ type RunCommandOptions struct {
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
+	BackgroundMedia    func() *apimodels.ActiveMedia
 	PlaylistMemory     platforms.PlaylistMemory
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
@@ -588,6 +590,7 @@ func RunCommand(
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
+		BackgroundMedia:    opts.BackgroundMedia,
 		PlaylistMemory:     opts.PlaylistMemory,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,

@@ -463,6 +463,7 @@ func executeTokenZapScript(
 				PlaybackManager:  svc.PlaybackManager,
 				UI:               svc.UI,
 				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
+				BackgroundMedia:  svc.State.BackgroundMedia,
 				PlaylistMemory:   playlistMemoryFor(svc),
 			},
 			&cmdEnv,

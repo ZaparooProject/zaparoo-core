@@ -481,3 +481,30 @@ func TestRunTokenZapScript_BeforeExitControlStopOnNativeAudio(t *testing.T) {
 	assert.Nil(t, env.svc.State.ActiveMedia(), "the stop control clears the media it stopped")
 	assert.Zero(t, env.rec.count("stop"), "nothing is left for the outer stop to exit")
 }
+
+// TestRunTokenZapScript_ControlBackgroundSlotReachesBackgroundAudio runs a
+// **control aimed at the background slot while a game holds the primary slot.
+// The service must hand the command its background media so the action
+// reaches native audio, not the game's launcher.
+func TestRunTokenZapScript_ControlBackgroundSlotReachesBackgroundAudio(t *testing.T) {
+	// Not parallel: cmdControl resolves launchers through the global launcher
+	// cache, which this test replaces for its duration.
+	env := setupExitTestEnv(t, keypressHook)
+	pm := &stubPlayback{}
+	env.svc.PlaybackManager = pm
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		platforms.NativeAudioLauncher(pm, env.svc.State.SetBackgroundMedia, nil, nil),
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+
+	env.setNESMediaRunning()
+	env.svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		systemdefs.SystemAudio, "Audio", "music.mp3", "Music", platforms.NativeAudioLauncherID))
+
+	require.NoError(t, env.run(t, "**control:pause?slot=background"))
+
+	assert.Equal(t, []string{"pause"}, pm.snapshot())
+	assert.NotNil(t, env.svc.State.ActiveMedia(), "the game keeps running")
+	assert.NotNil(t, env.svc.State.BackgroundMedia())
+}
