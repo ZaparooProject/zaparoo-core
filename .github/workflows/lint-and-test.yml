@@ -207,7 +207,9 @@ jobs:
 
       - name: Run govulncheck (SARIF)
         if: matrix.os == 'ubuntu'
-        run: govulncheck -format sarif -o govulncheck.sarif ./...
+        # govulncheck has no output-file flag; the report goes to stdout. Write it
+        # aside first so a failed scan leaves no partial file for the upload.
+        run: govulncheck -format sarif ./... > govulncheck.sarif.tmp && mv govulncheck.sarif.tmp govulncheck.sarif
         continue-on-error: true
 
       - name: Run govulncheck (CI gate)
