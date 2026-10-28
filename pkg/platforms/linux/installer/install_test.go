@@ -273,6 +273,87 @@ func TestInstallApplication(t *testing.T) {
 	}
 }
 
+func TestInstallHardware(t *testing.T) {
+	t.Parallel()
+
+	const staleUdevRules = "SUBSYSTEMS==\"usb\", ATTRS{idProduct}==\"7523\", ATTRS{idVendor}==\"1a86\", " +
+		"MODE=\"0660\", TAG+=\"uaccess\"\n"
+
+	expectUdevReload := func(cmd *mocks.MockCommandExecutor) {
+		cmd.On("Run", mock.Anything, "udevadm", []string{"control", "--reload-rules"}).Return(nil).Once()
+		cmd.On("Run", mock.Anything, "udevadm", []string{"trigger"}).Return(nil).Once()
+	}
+	expectModulesReload := func(cmd *mocks.MockCommandExecutor) {
+		cmd.On("Run", mock.Anything, "systemctl", []string{"restart", "systemd-modules-load.service"}).
+			Return(nil).Once()
+	}
+
+	tests := []struct {
+		existing      map[string]string
+		setupMock     func(*mocks.MockCommandExecutor)
+		name          string
+		errorContains string
+		skipUdevDir   bool
+	}{
+		{
+			name: "fresh install writes both files and reloads",
+			setupMock: func(cmd *mocks.MockCommandExecutor) {
+				expectUdevReload(cmd)
+				expectModulesReload(cmd)
+			},
+		},
+		{
+			name:      "stale udev rules are replaced",
+			existing:  map[string]string{udevPath: staleUdevRules, modprobePath: modprobeFile},
+			setupMock: expectUdevReload,
+		},
+		{
+			name:     "current files are left alone",
+			existing: map[string]string{udevPath: udevFile, modprobePath: modprobeFile},
+		},
+		{
+			name:          "missing udev rules directory",
+			skipUdevDir:   true,
+			errorContains: "udev rules directory does not exist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			if !tt.skipUdevDir {
+				require.NoError(t, fs.MkdirAll(filepath.Dir(udevPath), 0o755))
+			}
+			require.NoError(t, fs.MkdirAll(filepath.Dir(modprobePath), 0o755))
+			for path, content := range tt.existing {
+				require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o644))
+			}
+
+			cmd := &mocks.MockCommandExecutor{}
+			if tt.setupMock != nil {
+				tt.setupMock(cmd)
+			}
+
+			err := doInstallHardware(cmd, fs)
+
+			if tt.errorContains != "" {
+				require.ErrorContains(t, err, tt.errorContains)
+			} else {
+				require.NoError(t, err)
+				udevContent, readErr := afero.ReadFile(fs, udevPath)
+				require.NoError(t, readErr)
+				assert.Equal(t, udevFile, string(udevContent))
+				modprobeContent, readErr := afero.ReadFile(fs, modprobePath)
+				require.NoError(t, readErr)
+				assert.Equal(t, modprobeFile, string(modprobeContent))
+			}
+			cmd.AssertExpectations(t)
+		})
+	}
+}
+
 func TestInstallService(t *testing.T) {
 	// Cannot use t.Parallel() - tests modify shared XDG paths
 

@@ -20,6 +20,7 @@
 package installer
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -278,23 +279,41 @@ func InstallDesktop() error {
 // InstallHardware installs hardware support files (udev rules, modprobe blacklist).
 // Must be run as root.
 func InstallHardware() error {
-	return doInstallHardware(&command.RealExecutor{})
-}
-
-// doInstallHardware is the internal testable implementation.
-func doInstallHardware(cmd command.Executor) error {
 	if os.Geteuid() != 0 {
 		return errors.New("hardware install must be run as root")
 	}
+	return doInstallHardware(&command.RealExecutor{}, afero.NewOsFs())
+}
 
+// syncSystemFile writes content to path when the file is missing or differs,
+// so re-running the installer replaces files left by older versions. It
+// reports whether the file was written.
+func syncSystemFile(fs afero.Fs, path string, content []byte) (bool, error) {
+	current, err := afero.ReadFile(fs, path)
+	switch {
+	case err == nil && bytes.Equal(current, content):
+		return false, nil
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	//nolint:gosec // system config needs to be readable by system services
+	if err := afero.WriteFile(fs, path, content, 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// doInstallHardware is the internal testable implementation.
+func doInstallHardware(cmd command.Executor, fs afero.Fs) error {
 	// install udev rules
-	if _, err := os.Stat(filepath.Dir(udevPath)); os.IsNotExist(err) {
+	if _, err := fs.Stat(filepath.Dir(udevPath)); os.IsNotExist(err) {
 		return errors.New("udev rules directory does not exist")
-	} else if _, err := os.Stat(udevPath); os.IsNotExist(err) {
-		err = os.WriteFile(udevPath, []byte(udevFile), 0o644) //nolint:gosec // udev rules need to be readable by system
-		if err != nil {
-			return fmt.Errorf("error creating udev rules: %w", err)
-		}
+	}
+	changed, err := syncSystemFile(fs, udevPath, []byte(udevFile))
+	if err != nil {
+		return fmt.Errorf("error creating udev rules: %w", err)
+	}
+	if changed {
 		// these are just for convenience, don't care too much if they fail
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
@@ -303,14 +322,14 @@ func doInstallHardware(cmd command.Executor) error {
 	}
 
 	// install modprobe blacklist
-	if _, err := os.Stat(filepath.Dir(modprobePath)); os.IsNotExist(err) {
+	if _, err = fs.Stat(filepath.Dir(modprobePath)); os.IsNotExist(err) {
 		return errors.New("modprobe directory does not exist")
-	} else if _, err := os.Stat(modprobePath); os.IsNotExist(err) {
-		//nolint:gosec // modprobe config needs to be readable by system
-		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644)
-		if err != nil {
-			return fmt.Errorf("error creating modprobe blacklist: %w", err)
-		}
+	}
+	changed, err = syncSystemFile(fs, modprobePath, []byte(modprobeFile))
+	if err != nil {
+		return fmt.Errorf("error creating modprobe blacklist: %w", err)
+	}
+	if changed {
 		// this is just for convenience, don't care too much if it fails
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = cmd.Run(ctx, "systemctl", "restart", "systemd-modules-load.service")
