@@ -241,3 +241,16 @@ func TestRBFInfoMglExactName(t *testing.T) {
 		})
 	}
 }
+
+func TestOfficialDateSuffix(t *testing.T) {
+	t.Parallel()
+
+	date, ok := officialDateSuffix("PSX_20241010")
+	assert.True(t, ok)
+	assert.Equal(t, "20241010", date)
+
+	for _, name := range []string{"PSX", "PSX_2024101a", "PSX-20241010", "PSX_unstable_20241010_abc123"} {
+		_, ok := officialDateSuffix(name)
+		assert.False(t, ok, name)
+	}
+}

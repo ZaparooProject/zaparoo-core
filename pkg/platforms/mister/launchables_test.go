@@ -11,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
@@ -403,4 +404,40 @@ func TestLaunchOtherCoreLoadsExactCachedRBF(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, process)
 	assert.Equal(t, release.Path, loaded.Path)
+}
+
+func TestLaunchOtherCoreReturnsExactRBFLaunchError(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{{
+		Path:      "/media/fat/_Other/Chess_20241010.rbf",
+		Filename:  "Chess_20241010.rbf",
+		ShortName: "Chess",
+		MglName:   "_Other/Chess",
+	}})
+	launchErr := errors.New("launch failed")
+	p := &Platform{
+		closeConsole:    func() error { return nil },
+		launchCoreAtRBF: func(cores.RBFInfo) error { return launchErr },
+	}
+
+	process, err := p.launchOtherCore("_Other/Chess")(&config.Instance{}, "", nil)
+
+	require.ErrorIs(t, err, launchErr)
+	assert.Nil(t, process)
+}
+
+func TestLaunchOtherCoreDefaultsToCommandInterface(t *testing.T) {
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; refusing to load a core")
+	}
+	withRBFCache(t, []cores.RBFInfo{{
+		Path:      "/media/fat/_Other/Chess_20241010.rbf",
+		Filename:  "Chess_20241010.rbf",
+		ShortName: "Chess",
+		MglName:   "_Other/Chess",
+	}})
+	p := &Platform{closeConsole: func() error { return nil }}
+
+	_, err := p.launchOtherCore("_Other/Chess")(&config.Instance{}, "", nil)
+
+	require.ErrorContains(t, err, "command interface not accessible")
 }
