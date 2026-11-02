@@ -114,6 +114,9 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from MediaBlobs;
 	delete from MediaTitleTags;
 	delete from MediaTags;
+	delete from MediaLinks;
+	delete from MediaSources;
+	delete from MediaCoverThumbs;
 	delete from Media;
 	delete from MediaTitles;
 	delete from Tags;
@@ -264,6 +267,23 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		"DELETE FROM MediaProperties WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%s))",
 		dbidPlaceholders), systemDBIDs...); err != nil {
 		return fmt.Errorf("failed to delete MediaProperties: %w", err)
+	}
+	// Media DBIDs are reused once deleted, so a row left behind in any table
+	// keyed by one, with foreign keys off, would attach to a later media row.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM MediaLinks WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))"+
+			" OR TargetMediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))",
+		dbidPlaceholders), append(append([]any{}, systemDBIDs...), systemDBIDs...)...); err != nil {
+		return fmt.Errorf("failed to delete MediaLinks: %w", err)
+	}
+	for _, table := range []string{"MediaSources", "MediaCoverThumbs"} {
+		//nolint:gosec // Safe: table is a fixed name and prepareVariadic only generates placeholders
+		if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM %s WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%s))",
+			table, dbidPlaceholders), systemDBIDs...); err != nil {
+			return fmt.Errorf("failed to delete %s: %w", table, err)
+		}
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx,
@@ -430,6 +450,22 @@ func sqlCleanMediaOrphans(ctx context.Context, db *sql.DB) (int64, error) {
 		"DELETE FROM MediaProperties WHERE MediaDBID IN (SELECT DBID FROM Media WHERE IsMissing = 1)",
 	); err != nil {
 		return 0, fmt.Errorf("failed to delete MediaProperties for missing media: %w", err)
+	}
+	// Media DBIDs are reused once deleted, so a link left behind with foreign
+	// keys off would attach a later row to the wrong target.
+	if _, err = conn.ExecContext(ctx, `DELETE FROM MediaLinks
+		WHERE MediaDBID IN (SELECT DBID FROM Media WHERE IsMissing = 1)
+		   OR TargetMediaDBID IN (SELECT DBID FROM Media WHERE IsMissing = 1)`,
+	); err != nil {
+		return 0, fmt.Errorf("failed to delete MediaLinks for missing media: %w", err)
+	}
+	for _, table := range []string{"MediaSources", "MediaCoverThumbs", "SlugResolutionCache"} {
+		//nolint:gosec // Safe: table is a fixed name
+		if _, err = conn.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE MediaDBID IN (SELECT DBID FROM Media WHERE IsMissing = 1)",
+		); err != nil {
+			return 0, fmt.Errorf("failed to delete %s for missing media: %w", table, err)
+		}
 	}
 
 	// Delete the missing Media rows themselves.

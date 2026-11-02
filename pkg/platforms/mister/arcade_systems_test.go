@@ -180,6 +180,35 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	assert.Equal(t, 2, mraReads, "second demand serves from memory")
 }
 
+// A link classifies into the same granular system as its target, because it
+// is the same descriptor, and must stay a link there too.
+func TestArcadeSystemCacheClassifiedLinksKeepTarget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "game.mra")
+	require.NoError(t, os.WriteFile(targetPath, []byte(
+		"<misterromdescription><setname>CPS1GAME</setname></misterromdescription>",
+	), 0o600))
+	linkPath := filepath.Join(dir, "_Organized", "Game (World).mra")
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o750))
+	require.NoError(t, os.Symlink(targetPath, linkPath))
+
+	cache := newTestArcadeSystemCache(t)
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return []arcadedb.ArcadeDbEntry{{Setname: "cps1game", Platform: "Capcom CPS-1"}}, nil
+	}
+	input := []platforms.ScanResult{{Path: targetPath}, {Path: linkPath, LinkTarget: targetPath}}
+	_, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
+	require.NoError(t, err)
+
+	results, err := cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, input, results)
+}
+
 // TestArcadeSystemCacheClassifiesCave68000MRAFiles covers the CAVE 68000
 // system through the shared classification pass: representative sets, an
 // alternate region set, a Free Play variant, an uppercase MRA setname, sets
@@ -755,11 +784,13 @@ func TestArcadeSystemCacheScanFilesIncludesOrganizerWhenScanDuplicatesEnabled(t 
 
 	results, err := cache.scanFiles(context.Background(), cfg)
 	require.NoError(t, err)
+	// Every alias is a link to the descriptor it names, so the index can give
+	// it that row's scraped data.
 	assert.ElementsMatch(t, []platforms.ScanResult{
 		{Path: canonicalPath},
-		{Path: organizedAlias},
-		{Path: inPlaceAlias},
-		{Path: yearAlias},
+		{Path: organizedAlias, LinkTarget: canonicalPath},
+		{Path: inPlaceAlias, LinkTarget: canonicalPath},
+		{Path: yearAlias, LinkTarget: canonicalPath},
 	}, results)
 	assert.NotContains(t, results, platforms.ScanResult{Path: brokenAlias},
 		"a dangling alias must not reach classification")

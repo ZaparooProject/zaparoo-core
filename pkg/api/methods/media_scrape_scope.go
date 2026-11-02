@@ -101,6 +101,21 @@ func resolveScrapeScope(env *requests.RequestEnv, params models.MediaScrapeParam
 	if err != nil {
 		return nil, fmt.Errorf("resolve scrape media: %w", err)
 	}
+	// A linked row is never scraped itself: its target is, and the link takes
+	// the result once the run finishes.
+	target, linked, err := env.Database.MediaDB.GetMediaLinkTarget(env.Context, row.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve scrape media link: %w", err)
+	}
+	if linked {
+		row, err = env.Database.MediaDB.GetMediaWithTitleAndSystem(env.Context, target)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && (row == nil || row.IsMissing)) {
+			return nil, models.ClientErrf("scope media not found")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resolve scrape media link target: %w", err)
+		}
+	}
 	path, err := database.CanonicalScrapePath(row.Path, false)
 	if err != nil {
 		return nil, models.ClientErrf("invalid indexed scrape path: %w", err)

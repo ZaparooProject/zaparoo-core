@@ -293,6 +293,7 @@ type launcherPrecomp struct {
 	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
 	skipInternalSymlinks  bool     // skip symlinks whose target is inside this launcher's roots
 	scanDuplicates        bool     // launcher opted into indexing its own alias trees
+	linkInternalSymlinks  bool     // index internal symlinks as links to their target's row
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -385,6 +386,7 @@ func newLauncherPrecomp(
 	}
 	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks && !scanDuplicates
 	lp.scanDuplicates = scanDuplicates
+	lp.linkInternalSymlinks = l.ScanSkipInternalSymlinks && scanDuplicates
 
 	return lp
 }
@@ -721,6 +723,56 @@ func (m *LauncherMatcher) ShouldSkipBrokenScanSymlink(
 	return !exists, nil
 }
 
+// ScanDuplicateLinkTarget returns the absolute path a symlink points at when
+// the link is an alias the launcher would have skipped, but indexes because it
+// opted into scan_duplicates. Such a row is the same media as its target's, so
+// the index links the two and scrape data follows the target. Only launchers
+// declaring ScanSkipInternalSymlinks qualify, and the target must lie inside
+// the launcher's own folders. readTarget is only called once such a launcher
+// owns the link, so every ordinary scan pays nothing.
+func (m *LauncherMatcher) ScanDuplicateLinkTarget(
+	systemID, linkPath string,
+	readTarget func() (string, error),
+) (target string, linked bool, err error) {
+	if len(m.scanDuplicates) == 0 {
+		return "", false, nil
+	}
+
+	normLink := NormalizePathForComparison(linkPath)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	var candidateRoots []string
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.launcherPaths(launcher)
+		if !lc.linkInternalSymlinks {
+			continue
+		}
+		if lc.ownsPath(normLink) {
+			candidateRoots = append(candidateRoots, lc.rootPairs...)
+			candidateRoots = append(candidateRoots, lc.absFolders...)
+		}
+	}
+	if len(candidateRoots) == 0 {
+		return "", false, nil
+	}
+
+	raw, err := readTarget()
+	if err != nil {
+		return "", false, err
+	}
+	resolved := resolveSymlinkTargetLexically(linkPath, raw)
+	normTarget := NormalizePathForComparison(resolved)
+	for _, root := range candidateRoots {
+		if normTarget != root && pathHasPrefixNormalized(normTarget, root) {
+			return resolved, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // scanDuplicatesCoversLink reports whether a launcher scanning duplicates owns
 // the given path. The empty-map check keeps this free for every setup without
 // the opt-in, which is the only reason it can sit in the walk's symlink branch.
@@ -745,6 +797,19 @@ func (m *LauncherMatcher) scanDuplicatesCoversLink(systemID, linkPath string) bo
 				if normLink != root && pathHasPrefixNormalized(normLink, root) {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+// ownsPath reports whether a normalized path lies strictly inside one of the
+// launcher's folders.
+func (lp *launcherPrecomp) ownsPath(normPath string) bool {
+	for _, roots := range [][]string{lp.rootPairs, lp.absFolders} {
+		for _, root := range roots {
+			if normPath != root && pathHasPrefixNormalized(normPath, root) {
+				return true
 			}
 		}
 	}

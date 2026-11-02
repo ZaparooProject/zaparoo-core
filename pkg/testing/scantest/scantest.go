@@ -86,7 +86,7 @@ func IndexScanResults(
 	for _, result := range results {
 		require.NoError(tb, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
 			DB: db, SystemID: systemID, Path: result.Path, ProvidedName: result.Name,
-			Source: result.Source, NoExt: result.NoExt,
+			Source: result.Source, LinkTarget: result.LinkTarget, NoExt: result.NoExt,
 		}))
 	}
 	stats, err := db.ReconcileStagedSystem(ctx, systemID, opts)

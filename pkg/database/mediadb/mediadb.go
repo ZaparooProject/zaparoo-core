@@ -199,6 +199,7 @@ type MediaDB struct {
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	batchInsertScanSource   *BatchInserter
+	batchInsertScanLink     *BatchInserter
 	dbPath                  string
 	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
@@ -2457,6 +2458,13 @@ func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 		}
 		db.batchInsertScanSource = nil
 	}
+	if db.batchInsertScanLink != nil {
+		if closeErr := db.batchInsertScanLink.finish(flush); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanLink")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanLink: %w", closeErr))
+		}
+		db.batchInsertScanLink = nil
+	}
 
 	return errors.Join(closeErrs...)
 }
@@ -2488,6 +2496,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 		db.batchInsertScanTag,
 		db.batchInsertScanProperty,
 		db.batchInsertScanSource,
+		db.batchInsertScanLink,
 	} {
 		if bi == nil {
 			continue
@@ -2537,6 +2546,21 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 			media.Source.Group,
 		); err != nil {
 			return fmt.Errorf("failed to stage scanned media source %s: %w", media.Path, err)
+		}
+	}
+	if media.LinkTarget != "" && media.LinkTarget != media.Path {
+		// Created on the first link, so a scan without any holds no buffer
+		// for them.
+		if db.batchInsertScanLink == nil {
+			inserter, err := NewBatchInserterWithOptions(db.ctx, db.tx, "ScanStageLinks",
+				[]string{"Path", "TargetPath"}, db.batchSize, true)
+			if err != nil {
+				return fmt.Errorf("failed to create batch inserter for scan stage links: %w", err)
+			}
+			db.batchInsertScanLink = inserter
+		}
+		if err := db.batchInsertScanLink.Add(media.Path, media.LinkTarget); err != nil {
+			return fmt.Errorf("failed to stage scanned media link %s: %w", media.Path, err)
 		}
 	}
 	return nil

@@ -849,6 +849,12 @@ func startMediaScrapeOperation(
 				}
 			}
 			sourceErrs.report(env.State.Inbox())
+			// Scrapers write only to a linked row's target. Copying onto the
+			// links runs before the counts and caches below are refreshed, so
+			// they include it.
+			if syncErr := db.MediaDB.SyncLinkedMedia(env.State.GetContext(), params.Systems); syncErr != nil {
+				log.Warn().Err(syncErr).Str("scraper", scraperID).Msg("failed to sync linked media after scrape")
+			}
 			if refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB) && terminal != nil {
 				// The terminal count was read before this refresh and may have come
 				// from a stale fallback; the refreshed value is the settled one.
@@ -927,6 +933,10 @@ func startMediaScrapeOperation(
 			operation = next
 			scraperID, runID = operation.ScraperID, operation.RunID
 			params.Force = operation.Force
+			params.Systems = operation.Systems
+			if operation.Scope != nil {
+				params.Systems = []string{operation.Scope.SystemID}
+			}
 			ch = startQueuedScraper(scrapeCtx, env, &operation)
 		}
 	}()

@@ -273,6 +273,63 @@ scan_duplicates = true
 		"a dangling alias must not become an unlaunchable row")
 }
 
+// TestScanResults_ArcadeOrganizerAliasesLinkToTarget pins that every Organizer
+// alias the opt-in indexes carries the descriptor it names, so the index can
+// give it that row's scraped data. Real files and links to media outside the
+// scan root are their own media.
+func TestScanResults_ArcadeOrganizerAliasesLinkToTarget(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	fixture := newArcadeOrganizerFixture(t, rootDir)
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "arcade-launcher"
+scan_duplicates = true
+`))
+	platform := installArcadeOrganizerLauncher(t, cfg, rootDir)
+
+	results, err := getScanResultsReporting(
+		context.Background(), cfg, platform, systemdefs.SystemArcade, fixture.arcadeDir, nil, nil,
+	)
+	require.NoError(t, err)
+
+	expected := make([]platforms.ScanResult, 0, 4+len(fixture.aliases()))
+	expected = append(expected,
+		platforms.ScanResult{Path: fixture.canonicalPath},
+		platforms.ScanResult{Path: fixture.alternativePath},
+		platforms.ScanResult{Path: fixture.offsetPath},
+		platforms.ScanResult{Path: fixture.externalAlias},
+	)
+	for _, alias := range fixture.aliases() {
+		expected = append(expected, platforms.ScanResult{Path: alias, LinkTarget: fixture.canonicalPath})
+	}
+	assert.ElementsMatch(t, expected, results)
+}
+
+// Without the opt-in the aliases are skipped, and nothing is ever a link.
+func TestScanResults_NoLinksWithoutScanDuplicates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	fixture := newArcadeOrganizerFixture(t, rootDir)
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	platform := installArcadeOrganizerLauncher(t, cfg, rootDir)
+
+	results, err := getScanResultsReporting(
+		context.Background(), cfg, platform, systemdefs.SystemArcade, fixture.arcadeDir, nil, nil,
+	)
+	require.NoError(t, err)
+	for _, result := range results {
+		assert.Empty(t, result.LinkTarget, result.Path)
+	}
+}
+
 func TestGetFiles_IgnoresArcadeOrganizerSibling(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	rootDir := t.TempDir()

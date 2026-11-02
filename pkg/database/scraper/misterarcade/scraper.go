@@ -153,6 +153,11 @@ func (s *scraperImpl) scrapeLoop(
 	defer s.unmapped.LogSummary(scraperID)
 	bgpriority.Apply()
 
+	if opts.Scope != nil {
+		s.scrapeScope(ctx, opts, targets, ch)
+		return
+	}
+
 	started := time.Now()
 	var total matchStats
 	for step, systemID := range targets {
@@ -286,6 +291,36 @@ func (s *scraperImpl) scrapeSystem(
 	}
 	report(stats.Processed, written)
 	return matchStats{Processed: stats.Processed, Matched: written, Skipped: stats.Skipped}, nil
+}
+
+// scrapeScope scrapes only the media one scoped request selected, such as a
+// single game's "Update metadata", rather than its whole system.
+func (s *scraperImpl) scrapeScope(
+	ctx context.Context, opts scraper.ScrapeOptions, targets []string, ch chan<- scraper.ScrapeUpdate,
+) {
+	selection, err := scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+	if err != nil {
+		ch <- scraper.ScrapeUpdate{FatalErr: fmt.Errorf("misterarcade: %w", err), Done: true}
+		return
+	}
+	if len(targets) == 0 {
+		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
+		return
+	}
+	media, _ := selection.Pending()
+	candidates := make([]descriptorRow, 0, len(media))
+	for i := range media {
+		if strings.EqualFold(filepath.Ext(media[i].Path), mra.Ext) {
+			candidates = append(candidates, descriptorRow{
+				path: media[i].Path, dbid: media[i].DBID, titleDBID: media[i].MediaTitleDBID,
+			})
+		}
+	}
+	writeTargets, _ := s.buildTargets(ctx, candidates, map[int64]struct{}{}, opts)
+	for i := range writeTargets {
+		writeTargets[i].Write.FillMissing = opts.FillMissing
+	}
+	scraper.ApplyScopedTargets(ctx, s.db, opts, selection, writeTargets, ch)
 }
 
 // completedMedia lists the media rows this run must leave alone. A forced or

@@ -2694,6 +2694,33 @@ func (m *MockMediaDBI) ForEachMediaBySystemID(
 	return nil
 }
 
+func (m *MockMediaDBI) SyncLinkedMedia(ctx context.Context, systemIDs []string) error {
+	if !m.hasExpectedCall("SyncLinkedMedia") {
+		return nil
+	}
+	if err := m.Called(ctx, systemIDs).Error(0); err != nil {
+		return fmt.Errorf("mock SyncLinkedMedia failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetMediaLinkTarget(
+	ctx context.Context, mediaDBID int64,
+) (targetDBID int64, linked bool, err error) {
+	if !m.hasExpectedCall("GetMediaLinkTarget") {
+		return 0, false, nil
+	}
+	args := m.Called(ctx, mediaDBID)
+	targetDBID, ok := args.Get(0).(int64)
+	if !ok && args.Get(0) != nil {
+		return 0, false, fmt.Errorf("mock GetMediaLinkTarget returned %T, want int64", args.Get(0))
+	}
+	if err = args.Error(2); err != nil {
+		return 0, false, fmt.Errorf("mock GetMediaLinkTarget failed: %w", err)
+	}
+	return targetDBID, args.Bool(1), nil
+}
+
 func (m *MockMediaDBI) GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error) {
 	if !m.hasExpectedCall("GetMediaSourceRoots") {
 		return nil, nil

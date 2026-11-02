@@ -850,10 +850,15 @@ func countMediaTagsForTagDBIDs(ctx context.Context, db sqlQueryable, tagDBIDs []
 func forEachMediaTitleBySystemDBID(
 	queryCtx, cancelCtx context.Context, db *sql.DB, systemDBID int64, fn func(*database.MediaTitle) error,
 ) error {
+	linkFilter, err := titleLinkFilter(queryCtx, db, "MediaTitles")
+	if err != nil {
+		return err
+	}
+	//nolint:gosec // linkFilter is a fixed predicate.
 	rows, err := db.QueryContext(queryCtx, `
 		SELECT DBID, SystemDBID, Slug, Name
 		FROM MediaTitles
-		WHERE SystemDBID = ?
+		WHERE SystemDBID = ?`+linkFilter+`
 	`, systemDBID)
 	if err != nil {
 		return fmt.Errorf("failed to query media titles by system DBID: %w", err)
@@ -2526,12 +2531,16 @@ func (db *MediaDB) streamMediaTitlesWithoutSentinel(
 	for _, tagDBID := range tagDBIDs {
 		args = append(args, tagDBID)
 	}
+	linkFilter, err := titleLinkFilter(queryCtx, db.sql.Load(), "mt")
+	if err != nil {
+		return err
+	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
 	stmt, err := db.sql.Load().PrepareContext(queryCtx, `
 		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
-		WHERE mt.SystemDBID = ?
+		WHERE mt.SystemDBID = ?`+linkFilter+`
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM Media m

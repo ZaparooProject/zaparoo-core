@@ -205,6 +205,7 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 	result := files[:0]
 	positions := make(map[string]int, len(files))
 	sourceConflicts := make(map[string]bool)
+	linkConflicts := make(map[string]bool)
 	for _, file := range files {
 		key := scanResultIdentity(file.Path)
 		position, found := positions[key]
@@ -234,6 +235,15 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 				sourceConflicts[key] = true
 				log.Warn().Str("system", systemID).Str("path", existing.Path).
 					Msg("coalesced scan result with conflicting media source provenance")
+			}
+		}
+		if !linkConflicts[key] {
+			switch {
+			case existing.LinkTarget == "":
+				existing.LinkTarget = file.LinkTarget
+			case file.LinkTarget != "" && existing.LinkTarget != file.LinkTarget:
+				existing.LinkTarget = ""
+				linkConflicts[key] = true
 			}
 		}
 		existing.NoExt = existing.NoExt || file.NoExt
@@ -806,6 +816,24 @@ func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bo
 	return false, nil
 }
 
+// scanLinkTarget asks the matcher which media a symlink is a link to, keeping
+// cancellation distinguishable the same way shouldSkipSymlinkAlias does. A
+// target that cannot be read leaves the entry indexed as its own media.
+func scanLinkTarget(ctx context.Context, path string, check func() (string, bool, error)) (string, error) {
+	target, linked, err := check()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("unable to read scan symlink target")
+		return "", nil
+	}
+	if !linked {
+		return "", nil
+	}
+	return target, nil
+}
+
 // shouldSkipBrokenAlias asks the matcher whether a symlink is a dead alias,
 // keeping cancellation distinguishable from a filesystem answer the same way
 // shouldSkipSymlinkAlias does. Any other error keeps the entry: a scan must
@@ -846,12 +874,21 @@ func GetFiles(
 	path string,
 	pauser *syncutil.Pauser,
 ) ([]string, error) {
-	return getFilesReporting(ctx, cfg, platform, systemID, path, pauser, nil)
+	results, err := getScanResultsReporting(ctx, cfg, platform, systemID, path, pauser, nil)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(results))
+	for i := range results {
+		files = append(files, results[i].Path)
+	}
+	return files, nil
 }
 
-// getFilesReporting is GetFiles reporting the walk as it runs through onWalk,
-// which may be called from several walk workers at once.
-func getFilesReporting(
+// getScanResultsReporting is GetFiles reporting the walk as it runs through
+// onWalk, which may be called from several walk workers at once. Its results
+// also carry the target of every symlink indexed as a link to other media.
+func getScanResultsReporting(
 	ctx context.Context,
 	cfg *config.Instance,
 	platform platforms.Platform,
@@ -859,7 +896,7 @@ func getFilesReporting(
 	path string,
 	pauser *syncutil.Pauser,
 	onWalk func(walkUpdate),
-) ([]string, error) {
+) ([]platforms.ScanResult, error) {
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -870,7 +907,15 @@ func getFilesReporting(
 		if !ok {
 			return nil, fmt.Errorf("platform cannot read source root path %s", path)
 		}
-		return getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
+		files, sourceErr := getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		results := make([]platforms.ScanResult, 0, len(files))
+		for _, f := range files {
+			results = append(results, platforms.ScanResult{Path: f})
+		}
+		return results, nil
 	}
 
 	var entriesScanned atomic.Int64
@@ -882,7 +927,7 @@ func getFilesReporting(
 	progress := newWalkProgress(systemID, path, walkStartTime, onWalk)
 
 	var mu syncutil.Mutex
-	var results []string
+	var results []platforms.ScanResult
 
 	conf := &fastwalk.Config{
 		Follow:     true,
@@ -947,6 +992,7 @@ func getFilesReporting(
 			}
 		}
 
+		var linkTarget string
 		if isSymlink {
 			skip, skipErr := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
 				return matcher.ShouldSkipScanSymlink(system.ID, p, func() (string, error) {
@@ -980,6 +1026,18 @@ func getFilesReporting(
 					Str("path", p).
 					Msg("skipping symlink whose target no longer exists")
 				return skipEntry(d)
+			}
+
+			if !d.IsDir() {
+				var linkErr error
+				linkTarget, linkErr = scanLinkTarget(ctx, p, func() (string, bool, error) {
+					return matcher.ScanDuplicateLinkTarget(system.ID, p, func() (string, error) {
+						return readlinkWithContext(ctx, p)
+					})
+				})
+				if linkErr != nil {
+					return linkErr
+				}
 			}
 		}
 
@@ -1052,13 +1110,13 @@ func getFilesReporting(
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
 				if matcher.MatchSystemArchiveEntryForScan(system.ID, abs) {
-					results = append(results, abs)
+					results = append(results, platforms.ScanResult{Path: abs})
 				}
 			}
 			mu.Unlock()
 		} else if matcher.MatchSystemFileForScan(system.ID, p) {
 			mu.Lock()
-			results = append(results, p)
+			results = append(results, platforms.ScanResult{Path: p, LinkTarget: linkTarget})
 			mu.Unlock()
 		}
 
@@ -1809,7 +1867,7 @@ func NewNamesIndexWithSources(
 			status.WalkStalled = false
 		}
 		for _, systemPath := range systemPaths[systemID] {
-			pathFiles, pathErr := getFilesReporting(ctx, cfg, platform, systemID, systemPath, pauser, onWalk)
+			pathFiles, pathErr := getScanResultsReporting(ctx, cfg, platform, systemID, systemPath, pauser, onWalk)
 			walkMu.Lock()
 			walkBase = status.WalkEntries
 			walkMu.Unlock()
@@ -1822,9 +1880,7 @@ func NewNamesIndexWithSources(
 				filesystemIncomplete = true
 				continue
 			}
-			for _, f := range pathFiles {
-				files = append(files, platforms.ScanResult{Path: f})
-			}
+			files = append(files, pathFiles...)
 		}
 		if status.WalkEntries > 0 {
 			status.WalkEntries = 0
@@ -2025,6 +2081,7 @@ func NewNamesIndexWithSources(
 				ProvidedName: file.Name,
 				PrefixPolicy: prefixPolicy,
 				Source:       file.Source,
+				LinkTarget:   file.LinkTarget,
 				NoExt:        file.NoExt,
 			})
 			insertDur += time.Since(insertStart)
