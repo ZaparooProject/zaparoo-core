@@ -147,8 +147,9 @@ func run() error {
 	if runningErr != nil {
 		return fmt.Errorf("error checking service status: %w", runningErr)
 	}
+	var startErr error
 	if !running {
-		startErr := svc.Start()
+		startErr = svc.Start()
 		if startErr != nil {
 			log.Error().Err(startErr).Msg("could not start service")
 		}
@@ -172,6 +173,10 @@ func run() error {
 		)
 	})
 	if err != nil {
+		// With no service running there is nothing to fall back to.
+		if startErr != nil {
+			return fmt.Errorf("could not start service: %w", startErr)
+		}
 		// Launched without a terminal (no tty or TERM), there is no TUI to
 		// show. The service runs in its own process, so this is not a fault.
 		log.Warn().Err(err).Msg("TUI unavailable, service continues in the background")

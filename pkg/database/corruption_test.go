@@ -85,6 +85,7 @@ func TestIsStorageFailure(t *testing.T) {
 		{name: "not a database", err: sqlite3.Error{Code: sqlite3.ErrNotADB}, want: true},
 		{name: "disk I/O error", err: fmt.Errorf("query: %w", sqlite3.Error{Code: sqlite3.ErrIoErr}), want: true},
 		{name: "disk full", err: sqlite3.Error{Code: sqlite3.ErrFull}, want: true},
+		{name: "read-only database", err: sqlite3.Error{Code: sqlite3.ErrReadonly}, want: true},
 		{name: "wrapped I/O string", err: errors.New("exec: disk I/O error"), want: true},
 		{name: "wrapped full string", err: errors.New("exec: database or disk is full"), want: true},
 		{name: "os EIO", err: &os.PathError{Op: "write", Path: "x", Err: syscall.EIO}, want: true},
@@ -132,21 +133,28 @@ func TestLockContention(t *testing.T) {
 // take it would otherwise report the same failure over and over. Not parallel:
 // it swaps the global logger.
 func TestMarkCorruptReportsWriteFailureOnce(t *testing.T) {
-	markerWriteFailureReported.Store(false)
-	t.Cleanup(func() { markerWriteFailureReported.Store(false) })
 	var buf strings.Builder
 	prevLogger := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = prevLogger })
 
-	dbPath := filepath.Join(t.TempDir(), "missing-dir", "test.db")
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing-dir", "test.db")
+	otherPath := filepath.Join(dir, "missing-dir", "other.db")
+	t.Cleanup(func() {
+		markerWriteFailuresReported.Delete(dbPath)
+		markerWriteFailuresReported.Delete(otherPath)
+	})
 	MarkCorrupt(dbPath, "first", time.Now())
 	MarkCorrupt(dbPath, "second", time.Now())
+	// Another database's first failure is still reported.
+	MarkCorrupt(otherPath, "first", time.Now())
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	require.Len(t, lines, 2)
+	require.Len(t, lines, 3)
 	assert.Contains(t, lines[0], `"level":"error"`)
 	assert.Contains(t, lines[1], `"level":"debug"`)
+	assert.Contains(t, lines[2], `"level":"error"`)
 	assert.False(t, IsMarkedCorrupt(dbPath))
 }
 

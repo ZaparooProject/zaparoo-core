@@ -44,8 +44,8 @@ var ErrNullSQL = errors.New("UserDB is not connected")
 // SQLite fails that upgrade with SQLITE_BUSY straight away, without waiting on
 // the busy timeout, whenever another connection is writing or has written
 // since the read. Taking the write lock up front makes the transaction queue
-// behind the other writer instead. The cost is that a read-only transaction
-// (GetDeck) also queues on the write lock; it holds it for a few small reads.
+// behind the other writer instead. Read-only GetDeck begins its own deferred
+// transaction so it does not queue on the write lock.
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 	"&_cache_size=-512&_mmap_size=0&_txlock=immediate"
 

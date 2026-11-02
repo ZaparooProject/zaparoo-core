@@ -1481,3 +1481,24 @@ func TestHandleUnmountEvent_NoMatchingToken(t *testing.T) {
 		// Expected - no event
 	}
 }
+
+// A detector whose event feed closes on its own, as when its D-Bus
+// connection drops, leaves the reader blind to mounts. It has to report
+// itself disconnected so it is pruned and detected again, now that a
+// connected path-less reader is never replaced.
+func TestProcessEvents_FeedEndedReportsDisconnected(t *testing.T) {
+	reader := NewReader(&config.Instance{})
+	mockDetector := newMockMountDetector()
+	reader.detector = mockDetector
+	reader.scanChan = make(chan readers.Scan, 10)
+	reader.stopChan = make(chan struct{})
+	reader.device = config.ReadersConnect{Driver: DriverID}
+	require.True(t, reader.Connected())
+
+	reader.wg.Add(1)
+	go reader.processEvents()
+	close(mockDetector.eventsChan)
+	reader.wg.Wait()
+
+	assert.False(t, reader.Connected())
+}

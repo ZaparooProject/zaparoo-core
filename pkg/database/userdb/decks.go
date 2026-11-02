@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,20 +69,30 @@ func (db *UserDB) CreateDeck(deck *database.Deck) error {
 // GetDeck returns a deck with its items in position order, both read from
 // the same snapshot.
 func (db *UserDB) GetDeck(deckID string) (*database.Deck, error) {
-	conn := db.sql.Load()
-	if conn == nil {
+	pool := db.sql.Load()
+	if pool == nil {
 		return nil, ErrNullSQL
 	}
-	tx, err := conn.BeginTx(db.ctx, nil)
+	// The pool begins every transaction IMMEDIATE, which would make this read
+	// queue on the write lock behind any writer for up to the busy timeout.
+	// A deferred transaction on a pinned connection still reads the deck and
+	// its items from one snapshot without waiting on writers.
+	conn, err := pool.Conn(db.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin deck read: %w", err)
 	}
+	defer func() { _ = conn.Close() }()
+	if _, err = conn.ExecContext(db.ctx, "BEGIN DEFERRED"); err != nil {
+		return nil, fmt.Errorf("failed to begin deck read: %w", err)
+	}
 	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		if _, rollbackErr := conn.ExecContext(context.WithoutCancel(db.ctx), "ROLLBACK"); rollbackErr != nil {
 			log.Warn().Err(rollbackErr).Msg("failed to end deck read")
+			// A connection still inside a transaction must not go back to the pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}()
-	return sqlGetDeckWithItems(db.ctx, tx, deckID)
+	return sqlGetDeckWithItems(db.ctx, conn, deckID)
 }
 
 // ListDecks returns every deck without items, most recently updated first,

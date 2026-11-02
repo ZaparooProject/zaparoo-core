@@ -151,8 +151,9 @@ func (s *Service) Add(title string, opts ...MessageOption) error {
 	inserted, err := s.db.AddInboxMessage(msg)
 	if err != nil {
 		// The caller logs the returned error too, so this line only adds the
-		// title. A cancelled write is shutdown overtaking the message.
-		level := zerolog.WarnLevel
+		// title. A cancelled write is shutdown overtaking the message, and a
+		// failing disk is the device's storage; anything else is a fault.
+		level := database.StorageFailureLevel(err)
 		if errors.Is(err, context.Canceled) {
 			level = zerolog.DebugLevel
 		}

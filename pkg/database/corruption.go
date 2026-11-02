@@ -27,7 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"time"
 
@@ -77,7 +77,9 @@ func IsStorageFailure(err error) bool {
 	}
 	var sqliteErr sqlite3.Error
 	if errors.As(err, &sqliteErr) {
-		return sqliteErr.Code == sqlite3.ErrIoErr || sqliteErr.Code == sqlite3.ErrFull
+		return sqliteErr.Code == sqlite3.ErrIoErr ||
+			sqliteErr.Code == sqlite3.ErrFull ||
+			sqliteErr.Code == sqlite3.ErrReadonly
 	}
 	if errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EROFS) {
 		return true
@@ -132,10 +134,11 @@ func CorruptBackupPath(dbPath string) string {
 	return CorruptMarkerPath(dbPath) + ".bak"
 }
 
-// markerWriteFailureReported limits a failed marker write to one report per
-// process. Storage that cannot take the marker rarely recovers while Core
-// runs, and every later read of the corrupt database tries the write again.
-var markerWriteFailureReported atomic.Bool
+// markerWriteFailuresReported limits a failed marker write to one report per
+// database path. Storage that cannot take the marker rarely recovers while
+// Core runs, and every later read of the corrupt database tries the write
+// again.
+var markerWriteFailuresReported sync.Map
 
 // MarkCorrupt writes the corrupt marker sidecar next to dbPath recording that
 // corruption was detected. Best-effort — failures are logged, not returned.
@@ -144,7 +147,7 @@ func MarkCorrupt(dbPath, reason string, now time.Time) {
 	contents := fmt.Sprintf("%s\n%s\n", now.UTC().Format(time.RFC3339Nano), reason)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		level := StorageFailureLevel(err)
-		if !markerWriteFailureReported.CompareAndSwap(false, true) {
+		if _, reported := markerWriteFailuresReported.LoadOrStore(dbPath, struct{}{}); reported {
 			level = zerolog.DebugLevel
 		}
 		log.WithLevel(level).Err(err).Str("path", path).Msg("failed to write database corrupt marker")

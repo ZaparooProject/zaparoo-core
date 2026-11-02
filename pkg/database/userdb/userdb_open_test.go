@@ -51,26 +51,39 @@ func TestReadThenWriteTransactionWaitsForConcurrentWriter(t *testing.T) {
 	var count int
 	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM History").Scan(&count))
 
-	otherWrite := make(chan error, 1)
-	go func() {
-		otherWrite <- db.AddHistory(&database.HistoryEntry{
-			Time: time.Now(), Type: "nfc", TokenID: "other", TokenValue: "other", Success: true,
-		})
-	}()
-	// Give the other write the chance to land first, as it would under a
-	// deferred BEGIN. Under BEGIN IMMEDIATE it waits on this transaction.
-	select {
-	case err = <-otherWrite:
-		require.NoError(t, err)
-		otherWrite <- nil
-	case <-time.After(200 * time.Millisecond):
-	}
+	// The open transaction already holds the write lock, as BEGIN IMMEDIATE
+	// takes it up front. A second connection that does not wait must be
+	// refused at once; under a deferred BEGIN it would write first and leave
+	// this transaction's snapshot stale.
+	probe, err := sql.Open("sqlite3", db.GetDBPath()+"?_busy_timeout=0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, probe.Close()) })
+	_, err = probe.ExecContext(ctx,
+		"INSERT INTO DeviceState (Key, Value, UpdatedAt) VALUES ('probe', '1', 0)")
+	require.ErrorContains(t, err, "database is locked")
 
 	_, err = tx.ExecContext(ctx,
 		"INSERT INTO DeviceState (Key, Value, UpdatedAt) VALUES ('read_then_write', '1', 0)")
 	require.NoError(t, err, "read-then-write transaction lost its write to a concurrent writer")
 	require.NoError(t, tx.Commit())
-	require.NoError(t, <-otherWrite)
+}
+
+// Reading a deck must not queue on the write lock: a read-only request
+// waited out the whole busy timeout behind any writer, and could not be
+// cancelled while it did.
+func TestGetDeckDoesNotWaitOnWriteLock(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	writer, err := db.sql.Load().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = writer.Rollback() }()
+
+	started := time.Now()
+	_, err = db.GetDeck("missing-deck")
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
+	assert.Less(t, time.Since(started), time.Second)
 }
 
 func TestOpenSQLConnectionDoesNotPublish(t *testing.T) {

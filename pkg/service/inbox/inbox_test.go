@@ -222,7 +222,8 @@ func TestService_Add_FailureLogLevel(t *testing.T) {
 		wantLevel string
 	}{
 		{name: "cancelled at shutdown", err: fmt.Errorf("insert: %w", context.Canceled), wantLevel: "debug"},
-		{name: "other failure", err: errors.New("db error"), wantLevel: "warn"},
+		{name: "failing disk", err: errors.New("exec: disk I/O error"), wantLevel: "warn"},
+		{name: "other failure", err: errors.New("no such column: Foo"), wantLevel: "error"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -236,7 +237,6 @@ func TestService_Add_FailureLogLevel(t *testing.T) {
 
 			require.Error(t, NewService(mockDB, make(chan models.Notification, 1)).Add("Test Title"))
 			assert.Contains(t, buf.String(), `"level":"`+tt.wantLevel+`"`)
-			assert.NotContains(t, buf.String(), `"level":"error"`)
 		})
 	}
 }
