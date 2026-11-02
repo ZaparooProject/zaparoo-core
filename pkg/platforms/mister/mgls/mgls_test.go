@@ -868,3 +868,82 @@ func TestReadMglMalformed(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	assert.NotErrorIs(t, err, ErrMalformedMGL)
 }
+
+func TestBuildLaunchMglNamesExactReleaseRBF(t *testing.T) {
+	t.Parallel()
+
+	rbf := func(name string) cores.RBFInfo {
+		return cores.RBFInfo{
+			Path:      "/media/fat/_Console/" + name + ".rbf",
+			Filename:  name + ".rbf",
+			ShortName: "PSX",
+			MglName:   "_Console/PSX",
+		}
+	}
+	unstable := cores.RBFInfo{
+		Path:      "/media/fat/_Console/PSX_unstable_20250101_abc123.rbf",
+		Filename:  "PSX_unstable_20250101_abc123.rbf",
+		ShortName: "PSX_unstable_20250101_abc123",
+		MglName:   "_Console/PSX_unstable_20250101_abc123",
+	}
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{rbf("PSX_20240101"), rbf("PSX_20241010"), unstable})
+
+	system, err := cores.GetCore("PSX")
+	require.NoError(t, err)
+	mgl, err := buildLaunchMgl(nil, cache, system, "/media/fat/games/PSX/game.cue", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/PSX_20241010</rbf>")
+}
+
+func TestBuildLaunchMglErrors(t *testing.T) {
+	t.Parallel()
+
+	nes, err := cores.GetCore("NES")
+	require.NoError(t, err)
+
+	t.Run("core not installed", func(t *testing.T) {
+		t.Parallel()
+		_, err := buildLaunchMgl(nil, &cores.RBFCache{}, nes, "/media/fat/games/NES/game.nes", nil)
+		require.ErrorContains(t, err, "resolving core RBF")
+	})
+
+	t.Run("no slot for file", func(t *testing.T) {
+		t.Parallel()
+		cache := &cores.RBFCache{}
+		cache.BuildFromRBFs([]cores.RBFInfo{{
+			Path:      "/media/fat/_Console/NES_20241010.rbf",
+			Filename:  "NES_20241010.rbf",
+			ShortName: "NES",
+			MglName:   "_Console/NES",
+		}})
+		_, err := buildLaunchMgl(nil, cache, nes, "/media/fat/games/NES/game.sfc", nil)
+		require.ErrorContains(t, err, "failed to generate MGL")
+	})
+}
+
+func TestBuildLaunchMglAppliesSystemHook(t *testing.T) {
+	t.Parallel()
+
+	neoGeo, err := cores.GetCore("NeoGeo")
+	require.NoError(t, err)
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{{
+		Path:      "/media/fat/_Console/NeoGeo_20241010.rbf",
+		Filename:  "NeoGeo_20241010.rbf",
+		ShortName: "NeoGeo",
+		MglName:   "_Console/NeoGeo",
+	}})
+
+	mgl, err := buildLaunchMgl(nil, cache, neoGeo, "/media/fat/games/NeoGeo/mslug.zip", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/NeoGeo_20241010</rbf>")
+	assert.Contains(t, mgl, `path="../../../../../media/fat/games/NeoGeo/mslug.zip"`)
+}
+
+func TestLaunchTempMglReportsMissingCore(t *testing.T) {
+	t.Parallel()
+
+	err := launchTempMgl(nil, &cores.Core{ID: "NotInstalled", RBF: "_Console/NotInstalled"}, "", nil)
+	require.ErrorContains(t, err, "resolving core RBF")
+}
