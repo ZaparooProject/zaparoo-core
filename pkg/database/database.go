@@ -233,6 +233,7 @@ type MediaHistorySyncRef struct {
 
 type MediaHistoryTopEntry struct {
 	LastPlayedAt  time.Time
+	MediaIdentity *MediaIdentity
 	SystemID      string
 	SystemName    string
 	MediaName     string

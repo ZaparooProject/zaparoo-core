@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,6 +90,35 @@ func TestFallbackMediaIdentity_RejectsUnbuildableObservations(t *testing.T) {
 			t.Parallel()
 			_, ok := FallbackMediaIdentity(nil, tt.systemID, tt.path)
 			assert.False(t, ok)
+		})
+	}
+}
+
+// A corrupt media database is about to be rebuilt, so its rows must not
+// stand in for an unindexed file any more than a mid-index database's.
+func TestMediaDBSettled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		indexingStatus string
+		markedCorrupt  bool
+		settled        bool
+	}{
+		{name: "completed", indexingStatus: mediadb.IndexingStatusCompleted, settled: true},
+		{name: "running", indexingStatus: mediadb.IndexingStatusRunning},
+		{name: "pending", indexingStatus: mediadb.IndexingStatusPending},
+		{name: "corrupt status", indexingStatus: mediadb.IndexingStatusCorrupt},
+		{name: "marked corrupt", indexingStatus: mediadb.IndexingStatusCompleted, markedCorrupt: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mediaDB := helpers.NewMockMediaDBI()
+			mediaDB.On("IsMarkedCorrupt").Return(tt.markedCorrupt).Maybe()
+			mediaDB.On("GetIndexingStatus").Return(tt.indexingStatus, nil).Maybe()
+			mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Maybe()
+			assert.Equal(t, tt.settled, MediaDBSettled(mediaDB))
 		})
 	}
 }

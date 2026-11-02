@@ -614,7 +614,7 @@ func sqlGetDistinctMediaHistory(
 			history.DBID, history.StartTime, history.EndTime,
 			history.SystemID, history.SystemName, history.MediaPath,
 			history.MediaName, history.LauncherID, history.PlayTime,
-			history.SessionSource, history.SessionConfidence
+			history.SessionSource, history.SessionConfidence, history.MediaIdentity
 		FROM MediaHistory AS history
 		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
 		WHERE history.DBID < ?
@@ -638,6 +638,7 @@ func sqlGetDistinctMediaHistory(
 		var entry database.MediaHistoryEntry
 		var startTimeUnix int64
 		var endTimeUnix sql.NullInt64
+		var rawIdentity string
 		if scanErr := rows.Scan(
 			&entry.DBID,
 			&startTimeUnix,
@@ -650,9 +651,11 @@ func sqlGetDistinctMediaHistory(
 			&entry.PlayTime,
 			&entry.SessionSource,
 			&entry.SessionConfidence,
+			&rawIdentity,
 		); scanErr != nil {
 			return list, fmt.Errorf("failed to scan distinct media history row: %w", scanErr)
 		}
+		entry.MediaIdentity = database.DecodeMediaIdentity(rawIdentity)
 		entry.StartTime = time.Unix(startTimeUnix, 0)
 		if endTimeUnix.Valid {
 			endTime := time.Unix(endTimeUnix.Int64, 0)
@@ -980,7 +983,7 @@ func sqlGetMediaHistoryTop(
 		SELECT
 			sub.SystemID, sub.MediaName, sub.TotalPlayTime,
 			sub.SessionCount, sub.LastPlayedAt,
-			mh2.SystemName, mh2.MediaPath
+			mh2.SystemName, mh2.MediaPath, mh2.MediaIdentity
 		FROM (
 			SELECT SystemID, MediaName,
 				SUM(PlayTime) as TotalPlayTime,
@@ -1025,6 +1028,7 @@ func sqlGetMediaHistoryTop(
 	for rows.Next() {
 		var entry database.MediaHistoryTopEntry
 		var lastPlayedUnix int64
+		var rawIdentity string
 
 		err = rows.Scan(
 			&entry.SystemID,
@@ -1034,10 +1038,12 @@ func sqlGetMediaHistoryTop(
 			&lastPlayedUnix,
 			&entry.SystemName,
 			&entry.MediaPath,
+			&rawIdentity,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history top row: %w", err)
 		}
+		entry.MediaIdentity = database.DecodeMediaIdentity(rawIdentity)
 
 		entry.LastPlayedAt = time.Unix(lastPlayedUnix, 0)
 		list = append(list, entry)

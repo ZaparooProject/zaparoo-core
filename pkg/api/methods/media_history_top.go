@@ -80,11 +80,14 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("error getting media history top: %w", err)
 	}
 	mediaRefs := make([]mediaPathRef, 0, len(entries))
+	identityRefs := make([]identityRef, 0, len(entries))
 	for i := range entries {
-		mediaRefs = append(mediaRefs, mediaPathRef{
+		ref := mediaPathRef{
 			SystemID: entries[i].SystemID,
 			Path:     entries[i].MediaPath,
-		})
+		}
+		mediaRefs = append(mediaRefs, ref)
+		identityRefs = append(identityRefs, identityRef{Ref: ref, Identity: entries[i].MediaIdentity})
 	}
 	mediaIDs := make(map[mediaPathRef]int64)
 	var tagsByID map[int64][]database.TagInfo
@@ -97,10 +100,15 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 	if enrichErr != nil {
 		log.Debug().Err(enrichErr).Msg("could not enrich media history top from media database")
 	} else {
+		addMediaIdentityMatches(&env, mediaRows, identityRefs)
+		// Identity matching may have used up the path lookup's deadline, so
+		// the batch lookups get their own; indexed entries keep their metadata.
+		batchCtx, cancelBatch := optionalDBEnrichmentContext(env.Context)
+		defer cancelBatch()
 		var resolvedRefs []database.MediaRef
 		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
-		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
-		zapScripts = mediaTitleZapScripts(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		tagsByID, tagsKnown = mediaTagsByRefs(batchCtx, env.Database.MediaDB, resolvedRefs)
+		zapScripts = mediaTitleZapScripts(batchCtx, env.Database.MediaDB, resolvedRefs)
 	}
 
 	responseEntries := make([]models.MediaHistoryTopEntry, 0, len(entries))

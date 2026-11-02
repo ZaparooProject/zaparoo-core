@@ -29,6 +29,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -53,7 +55,11 @@ func historyMediaName(active *models.ActiveMedia) string {
 	if active.Path == "" {
 		return ""
 	}
-	return tags.ParseTitleFromFilename(helpers.GetPathName(active.Path), false)
+	mediaType := slugs.MediaTypeGame
+	if system, err := systemdefs.GetSystem(active.SystemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+	return tags.ParseTitleFromFilenameForMedia(helpers.GetPathName(active.Path), false, mediaType)
 }
 
 const (
@@ -316,7 +322,7 @@ func (t *mediaHistoryTracker) lookupMediaIdentity(
 		return identity, found, err
 	}
 	identity, found = mediascanner.FallbackMediaIdentity(t.cfg, systemID, path)
-	if !found || !mediaDBSettledForIdentitySweep(t.db.MediaDB) {
+	if !found || !mediascanner.MediaDBSettled(t.db.MediaDB) {
 		return database.MediaIdentity{}, false, nil
 	}
 	return identity, true, nil

@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -268,7 +269,11 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// SystemID has nothing to scope the search to, so displayName stays the
 	// filename-parsed fallback in that case, same as before.
 	systemID := params.Launcher.SystemID
-	displayName := tags.ParseTitleFromFilename(getDisplayName(publishedPath), false)
+	mediaType := slugs.MediaTypeGame
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+	displayName := tags.ParseTitleFromFilenameForMedia(getDisplayName(publishedPath), false, mediaType)
 
 	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
 		ctx, cancel := activeMediaLookupContext(params.Context)

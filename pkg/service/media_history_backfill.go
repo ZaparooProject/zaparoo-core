@@ -29,7 +29,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
@@ -157,30 +156,6 @@ func mediaHistoryIdentitySweepMarker(mediaDB database.MediaDBI) string {
 		strconv.FormatInt(generatedAt, 10) + ":" + mediaHistoryIdentitySweepRevision
 }
 
-// mediaDBSettledForIdentitySweep reports whether the media database is idle
-// enough to sweep: no indexing under way or owed, and no optimization (which
-// includes the disambiguation backfill) under way or owed. Status read
-// failures count as unsettled.
-func mediaDBSettledForIdentitySweep(mediaDB database.MediaDBI) bool {
-	indexingStatus, err := mediaDB.GetIndexingStatus()
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to check indexing status before identity sweep")
-		return false
-	}
-	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
-		return false
-	}
-	optimizationStatus, err := mediaDB.GetOptimizationStatus()
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to check optimization status before identity sweep")
-		return false
-	}
-	if optimizationStatus == mediadb.IndexingStatusRunning || optimizationStatus == mediadb.IndexingStatusPending {
-		return false
-	}
-	return true
-}
-
 // runMediaHistoryIdentitySweep enriches history rows below the current
 // identity policy version with the scanner's complete identity observation.
 // Interruptible at any point: the sweep's completion marker is only written
@@ -205,7 +180,7 @@ func runMediaHistoryIdentitySweep(
 	} else if found && stored == marker {
 		return
 	}
-	if !mediaDBSettledForIdentitySweep(db.MediaDB) {
+	if !mediascanner.MediaDBSettled(db.MediaDB) {
 		return
 	}
 
@@ -231,7 +206,7 @@ func runMediaHistoryIdentitySweep(
 		}
 		// Re-check every batch: an index or optimization starting mid-sweep
 		// aborts without the marker, and the completion notification retries.
-		if !mediaDBSettledForIdentitySweep(db.MediaDB) {
+		if !mediascanner.MediaDBSettled(db.MediaDB) {
 			log.Info().Int64("cursor", afterDBID).
 				Msg("media history identity sweep deferring to media update")
 			return

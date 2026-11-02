@@ -1216,3 +1216,18 @@ func TestMediaHistoryTracker_Listen_OrphanedEntryWithoutReplacementResetsSyncSta
 	assert.True(t, tracker.lastPlaySyncRequestAt.IsZero())
 	assert.Equal(t, 1, syncRequests)
 }
+
+// A name parsed from the path keeps a game's all-caps hyphenated title but
+// still drops a video file's scene release group.
+func TestHistoryMediaName_ParsesWithSystemMediaType(t *testing.T) {
+	t.Parallel()
+
+	game := &models.ActiveMedia{SystemID: "SNES", Path: filepath.Join(string(filepath.Separator), "tmp", "F-ZERO.sfc")}
+	assert.Equal(t, "F-ZERO", historyMediaName(game))
+
+	video := &models.ActiveMedia{
+		SystemID: "Video",
+		Path:     filepath.Join(string(filepath.Separator), "media", "Movie Title-GROUP.mkv"),
+	}
+	assert.Equal(t, "Movie Title", historyMediaName(video))
+}
