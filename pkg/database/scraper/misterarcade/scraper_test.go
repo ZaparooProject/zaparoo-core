@@ -546,3 +546,33 @@ func TestScrapeDoesNotLoadTitles(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetTitlesBySystemID", mock.Anything)
 	mediaDB.AssertExpectations(t)
 }
+
+// A scoped run, such as one game's "Update metadata", reads and writes only
+// the selected row. The system's other descriptors are never loaded.
+func TestScopedScrapeWritesOnlyTheSelectedRow(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	selected := descriptor(t, fs, "1941 - Counter Attack (World)", "1941")
+	descriptor(t, fs, "1942", "1941")
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+	scope := &database.ScrapeScope{SystemID: systemdefs.SystemArcade, Path: selected, MediaID: 100}
+	mediaDB.On("GetScrapeMedia", mock.Anything, *scope).Return([]database.MediaFullRow{{
+		Media:  database.Media{DBID: 100, MediaTitleDBID: 1, Path: selected},
+		Title:  database.MediaTitle{DBID: 1, Name: "1941", Slug: "1941"},
+		System: arcadeSystem(),
+	}}, nil).Once()
+	writes := captureWrites(t, mediaDB)
+
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{Scope: scope, Force: true})
+
+	last := final[len(final)-1]
+	assert.Equal(t, 1, last.Total)
+	assert.Equal(t, 1, last.Matched)
+	require.Len(t, *writes, 1)
+	assert.Equal(t, int64(100), (*writes)[0].MediaDBID)
+	mediaDB.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
+	mediaDB.AssertExpectations(t)
+}

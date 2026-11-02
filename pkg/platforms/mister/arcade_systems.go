@@ -309,6 +309,7 @@ func (c *arcadeSystemCache) scanFiles(
 						}
 						return nil
 					}
+					var linkTarget string
 					if info.Mode()&os.ModeSymlink != 0 {
 						if readLink != nil {
 							skip, skipErr := matcher.ShouldSkipScanSymlink(
@@ -328,10 +329,21 @@ func (c *arcadeSystemCache) scanFiles(
 						if brokenErr == nil && broken {
 							return nil
 						}
+						if readLink != nil {
+							target, linked, linkErr := matcher.ScanDuplicateLinkTarget(
+								systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+							)
+							if linkErr != nil {
+								log.Debug().Err(linkErr).Str("path", path).
+									Msg("unable to read MiSTer arcade symlink target")
+							} else if linked {
+								linkTarget = target
+							}
+						}
 					}
 					ext := filepath.Ext(path)
 					if strings.EqualFold(ext, ".mra") || strings.EqualFold(ext, ".mgl") {
-						results = append(results, platforms.ScanResult{Path: path})
+						results = append(results, platforms.ScanResult{Path: path, LinkTarget: linkTarget})
 					}
 					return nil
 				},

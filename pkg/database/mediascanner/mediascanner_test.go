@@ -88,6 +88,27 @@ func TestCoalesceScanResultsFillsMissingName(t *testing.T) {
 	assert.Equal(t, files[2], result[1])
 }
 
+func TestCoalesceScanResultsLinkTargets(t *testing.T) {
+	t.Parallel()
+
+	alias := filepath.Join("roms", "_Arcade", "_Organized", "Game.mra")
+	other := filepath.Join("roms", "_Arcade", "_Organized", "Other.mra")
+	target := filepath.Join("roms", "_Arcade", "Game.mra")
+	files := []platforms.ScanResult{
+		{Path: alias},
+		{Path: alias, LinkTarget: target},
+		{Path: other, LinkTarget: target},
+		{Path: other, LinkTarget: filepath.Join("roms", "_Arcade", "Elsewhere.mra")},
+		{Path: other, LinkTarget: target},
+	}
+
+	result := coalesceScanResults("Arcade", files)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, target, result[0].LinkTarget, "a duplicate without a target keeps the one found")
+	assert.Empty(t, result[1].LinkTarget, "conflicting targets link to neither")
+}
+
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
 // both have their scanners executed. This reproduces the bug where only one scanner
 // per system ID gets run.

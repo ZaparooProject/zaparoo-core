@@ -433,6 +433,11 @@ type ScanResult struct {
 	// Name is the display name of the media, shown to the users and used for
 	// search queries.
 	Name string
+	// LinkTarget is the absolute path of the media this entry is a symlink
+	// alias of, when the launcher indexes its alias trees as links. The index
+	// gives such a row its target's scraped data. A pipeline scanner that
+	// rebuilds results must carry it over or the link is lost.
+	LinkTarget string
 	// NoExt indicates this is a virtual path with no file extension.
 	// When true, filepath.Ext() extraction is skipped to avoid extracting
 	// garbage from paths like "/games/file.txt/Game (v1.0)" or "kodi://123/Dr. Strange".

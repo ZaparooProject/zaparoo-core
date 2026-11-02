@@ -249,6 +249,9 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	// Linked rows take the run's results once it finishes, across every
+	// system the run covered.
+	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil)).Return(nil).Once()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{

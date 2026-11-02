@@ -37,7 +37,9 @@ func scrapeScopePredicate(scope database.ScrapeScope) (predicate string, values 
 	if err := scope.Validate(); err != nil {
 		return "", nil, fmt.Errorf("invalid scrape scope: %w", err)
 	}
-	where := "m.IsMissing = 0 AND m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)"
+	// Linked rows are never scraped themselves; they take their target's data.
+	where := "m.IsMissing = 0 AND m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)" +
+		" AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = m.DBID)"
 	args := []any{scope.SystemID}
 	pathExpr := "m.Path"
 	path := scope.Path

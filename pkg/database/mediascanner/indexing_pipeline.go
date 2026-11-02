@@ -77,6 +77,8 @@ type StageMediaPathParams struct {
 	SystemID     string
 	MediaType    slugs.MediaType
 	ProvidedName string
+	// LinkTarget is the path of the media this file is a symlink alias of.
+	LinkTarget   string
 	PrefixPolicy browseprefix.Policy
 	NoExt        bool
 }
@@ -119,6 +121,9 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		Tags:          stagedTagsFromFragments(&pf, params.Config),
 		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
 		Source:        source,
+	}
+	if params.LinkTarget != "" {
+		staged.LinkTarget = pathutil.CanonicalMediaPath(params.LinkTarget)
 	}
 	if err := params.DB.StageScannedMedia(&staged); err != nil {
 		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)

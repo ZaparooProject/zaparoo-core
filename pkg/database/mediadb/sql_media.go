@@ -228,10 +228,17 @@ func sqlForEachMediaBySystemID(
 	systemID string,
 	fn func(*database.MediaWithFullPath) error,
 ) error {
+	// Linked rows are left out: scrapers write to the target, and the link
+	// takes the result from it.
+	linkFilter, err := mediaLinkFilter(queryCtx, db, "m")
+	if err != nil {
+		return err
+	}
+	//nolint:gosec // linkFilter is a fixed predicate.
 	query := `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
 		FROM Media m INDEXED BY sqlite_autoindex_Media_1
-		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)` + linkFilter + `
 		ORDER BY m.Path
 	`
 	rows, err := db.QueryContext(queryCtx, query, systemID)
@@ -274,11 +281,16 @@ func sqlForEachMediaBySystemID(
 func sqlGetMediaPageBySystemID(
 	ctx context.Context, db *sql.DB, systemID, afterPath string, limit int,
 ) ([]database.MediaWithFullPath, error) {
+	linkFilter, err := mediaLinkFilter(ctx, db, "m")
+	if err != nil {
+		return nil, err
+	}
+	//nolint:gosec // linkFilter is a fixed predicate.
 	query := `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
 		FROM Media m INDEXED BY sqlite_autoindex_Media_1
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
-		  AND m.Path > ?
+		  AND m.Path > ?` + linkFilter + `
 		ORDER BY m.Path
 		LIMIT ?
 	`

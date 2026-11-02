@@ -1153,6 +1153,10 @@ type ScanStagedMedia struct {
 	TitleName     string
 	SortName      string
 	SecondarySlug string
+	// LinkTarget is the canonical path of the media this row is a symlink
+	// alias of. Reconcile links the two so the row follows its target's
+	// scraped data.
+	LinkTarget    string
 	Tags          []ScanStagedTag
 	Properties    []ScanStagedProperty
 	SlugLength    int
@@ -1632,6 +1636,13 @@ type MediaDBI interface {
 	GetMediaPageBySystemID(ctx context.Context, systemID, afterPath string, limit int) ([]MediaWithFullPath, error)
 	// GetMediaSourceRoots returns distinct local metadata roots for present media in a system.
 	GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error)
+	// SyncLinkedMedia copies each linked row's target scraped data onto it,
+	// for the given systems or every system when none are given. A linked row
+	// is a symlink alias of other media, indexed by a launcher that opted into
+	// scan_duplicates. The streams above never return one.
+	SyncLinkedMedia(ctx context.Context, systemIDs []string) error
+	// GetMediaLinkTarget returns the media a linked row is an alias of.
+	GetMediaLinkTarget(ctx context.Context, mediaDBID int64) (int64, bool, error)
 	// GetMediaSourcesForScrape returns source rows for a full system or optional scrape scope.
 	// Unique is evaluated against the full system before scope filtering.
 	GetMediaSourcesForScrape(ctx context.Context, systemID string, scope *ScrapeScope) ([]MediaSource, error)
