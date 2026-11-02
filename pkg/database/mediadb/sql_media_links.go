@@ -476,6 +476,13 @@ func (db *MediaDB) SyncLinkedMedia(ctx context.Context, systemIDs []string) (ret
 	if err != nil {
 		return err
 	}
+	// Recomputed in the same transaction: if it failed after the tags
+	// committed, the next sync would find nothing to change and never retry.
+	if len(result.tagTitles) > 0 {
+		if err = sqlRecomputeTitleDisambiguation(ctx, tx, result.tagTitles); err != nil {
+			return fmt.Errorf("sync linked media: recompute disambiguation: %w", err)
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync linked media: commit: %w", err)
 	}
@@ -502,11 +509,6 @@ func (db *MediaDB) SyncLinkedMedia(ctx context.Context, systemIDs []string) (ret
 			db.MarkScrapeTagCacheStale(nil)
 		} else {
 			db.addScrapeTagSystems(systems)
-		}
-	}
-	if len(result.tagTitles) > 0 {
-		if disErr := db.RecomputeTitleDisambiguation(ctx, result.tagTitles); disErr != nil {
-			log.Warn().Err(disErr).Msg("failed to recompute title disambiguation after linked media sync")
 		}
 	}
 	log.Debug().
@@ -572,9 +574,10 @@ func mediaLinkFilter(ctx context.Context, db sqlQueryable, mediaAlias string) (s
 	return " AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = " + mediaAlias + ".DBID)", nil
 }
 
-// titleLinkFilter is a predicate keeping only titles with a present row that
-// is not a link, for the title streams scrapers select from. Empty when no
-// link exists.
+// titleLinkFilter is a predicate dropping titles whose every row is a link,
+// for the title streams scrapers select from. A title whose rows are only
+// missing is kept, as before links existed, so forced cleanup still reaches
+// it. Empty when no link exists.
 func titleLinkFilter(ctx context.Context, db sqlQueryable, titleAlias string) (string, error) {
 	hasLinks, err := sqlSystemHasMediaLinks(ctx, db, nil)
 	if err != nil || !hasLinks {
@@ -582,6 +585,6 @@ func titleLinkFilter(ctx context.Context, db sqlQueryable, titleAlias string) (s
 	}
 	return strings.Join([]string{
 		" AND EXISTS (SELECT 1 FROM Media lm WHERE lm.MediaTitleDBID = ", titleAlias, ".DBID",
-		" AND lm.IsMissing = 0 AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = lm.DBID))",
+		" AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = lm.DBID))",
 	}, ""), nil
 }

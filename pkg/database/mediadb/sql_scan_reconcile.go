@@ -1006,16 +1006,28 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 		hasLinks = true
 	}
-	// A walked row that is no longer a link loses the data copied from its
-	// former target, then the link itself. Only walked rows are judged, so an
-	// incomplete scan never unlinks media it did not reach.
+	// A walked row that is no longer a link to its stored target loses the
+	// data copied from that target, then the link itself. That covers a file
+	// that became real media and a link repointed at a target the upsert
+	// refused. Only walked rows are judged, so an incomplete scan never unlinks
+	// media it did not reach.
 	if hasLinks {
 		unlinkedRows := `
 			SELECT l.MediaDBID FROM MediaLinks l
 			JOIN Media a ON a.DBID = l.MediaDBID
 			JOIN ScanStage s ON s.Path = a.Path
 			WHERE a.SystemDBID = ?
-			  AND NOT EXISTS (SELECT 1 FROM ScanStageLinks sl WHERE sl.Path = a.Path)`
+			  AND NOT EXISTS (
+				SELECT 1 FROM ScanStageLinks sl
+				JOIN Media t ON t.SystemDBID = a.SystemDBID AND t.Path = sl.TargetPath
+				WHERE sl.Path = a.Path AND t.DBID = l.TargetMediaDBID
+			  )`
+		// Losing the copied tags can change what disambiguates those titles.
+		if _, err = execStep("capture unlinked titles", `
+			INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
+			SELECT a.MediaTitleDBID FROM Media a WHERE a.DBID IN (`+unlinkedRows+`)`, systemDBID); err != nil {
+			return stats, err
+		}
 		unlinkStart := clock.Now()
 		err = sqlPurgeLinkCopies(ctx, db, unlinkedRows, systemDBID)
 		recordStep("purge unlinked media", clock.Since(unlinkStart))

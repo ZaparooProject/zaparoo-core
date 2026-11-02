@@ -1698,9 +1698,12 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	op := database.ScrapingOperation{
 		Version: 1, ScraperID: "first", RunID: "one", FillMissing: true,
 		Systems: []string{"Pinball"}, Pending: []database.ScrapeJob{
-			{ScraperID: "second", RunID: "two", FillMissing: true, Systems: []string{"Pinball"}},
+			{ScraperID: "second", RunID: "two", FillMissing: true, Systems: []string{"Arcade"}},
 		},
 	}
+	// Each job's linked rows are synced for that job's own systems.
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Pinball"}).Return(nil).Once()
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Arcade"}).Return(nil).Once()
 	db.On("GetScrapingOperation").Return(op, true, nil).Once()
 	db.On("GetScrapingStatus").Return(mediadb.IndexingStatusPending, nil).Once()
 	require.NoError(t, ResumeMediaScrape(&env, op))

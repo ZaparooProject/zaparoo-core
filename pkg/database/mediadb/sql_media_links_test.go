@@ -55,7 +55,7 @@ func stagedLinkTestMedia(path, title, linkTarget string) database.ScanStagedMedi
 
 func indexLinkTestMedia(
 	t *testing.T, db *MediaDB, opts database.ScanReconcileOpts, files ...database.ScanStagedMedia,
-) {
+) database.ScanReconcileStats {
 	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, db.BeginTransaction(false))
@@ -66,9 +66,10 @@ func indexLinkTestMedia(
 	for i := range files {
 		require.NoError(t, db.StageScannedMedia(&files[i]))
 	}
-	_, err := db.ReconcileStagedSystem(ctx, systemdefs.SystemArcade, opts)
+	stats, err := db.ReconcileStagedSystem(ctx, systemdefs.SystemArcade, opts)
 	require.NoError(t, err)
 	require.NoError(t, db.CommitTransaction())
+	return stats
 }
 
 func linkTestMedia(t *testing.T, db *MediaDB, path string) *database.Media {
@@ -323,15 +324,44 @@ func TestMediaLinks_UnlinkedRowLosesCopies(t *testing.T) {
 	_, linked := linkTestTarget(t, db, alias.DBID)
 	assert.True(t, linked, "an incomplete scan keeps links it did not walk")
 
-	// The alias is now a real file.
+	// The alias is now a real file. Losing the copied tags marks its title
+	// for the disambiguation recompute.
 	files[1].LinkTarget = ""
-	indexLinkTestMedia(t, db, database.ScanReconcileOpts{}, files...)
+	stats := indexLinkTestMedia(t, db, database.ScanReconcileOpts{}, files...)
+	assert.Equal(t, int64(1), stats.TouchedTitles)
 	_, linked = linkTestTarget(t, db, alias.DBID)
 	assert.False(t, linked)
 	assert.Empty(t, linkTestProperties(t, db, alias.DBID))
 	for _, tag := range linkTestTags(t, db, alias.DBID) {
 		assert.False(t, strings.HasPrefix(tag, "genre:") || strings.HasPrefix(tag, "scraper."), tag)
 	}
+}
+
+// A link repointed at a target the upsert refuses, here another link, is no
+// longer a link to the game it used to show.
+func TestMediaLinks_RepointedToRefusedTargetUnlinks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	otherPath := arcadeLinkPath("_1 A-E", "ASO.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+	target := stagedLinkTestMedia(targetPath, "ASO", "")
+	other := stagedLinkTestMedia(otherPath, "ASO", targetPath)
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, other, stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", targetPath))
+	scrapeLinkTestTarget(t, db, linkTestMedia(t, db, targetPath))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil))
+	alias := linkTestMedia(t, db, aliasPath)
+	require.NotEmpty(t, linkTestProperties(t, db, alias.DBID))
+
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, other, stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", otherPath))
+	_, linked := linkTestTarget(t, db, alias.DBID)
+	assert.False(t, linked)
+	assert.Empty(t, linkTestProperties(t, db, alias.DBID), "the old target's art must not stay")
 }
 
 // Reconcile copies the target's existing data onto a new link, so it does
@@ -386,12 +416,16 @@ func TestMediaLinks_ScraperStreamsSkipLinks(t *testing.T) {
 
 	targetPath := arcadeLinkPath("ASO.mra")
 	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
-	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
-		stagedLinkTestMedia(targetPath, "ASO", ""),
-		stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", targetPath),
-	)
-	target := linkTestMedia(t, db, targetPath)
+	gonePath := arcadeLinkPath("Gone.mra")
+	target := stagedLinkTestMedia(targetPath, "ASO", "")
+	link := stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", targetPath)
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{}, target, link, stagedLinkTestMedia(gonePath, "Gone", ""))
+	// Gone.mra is deleted, so its title's only row is missing.
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{}, target, link)
+	targetRow := linkTestMedia(t, db, targetPath)
 	alias := linkTestMedia(t, db, aliasPath)
+	gone := linkTestMedia(t, db, gonePath)
+	require.True(t, gone.IsMissing)
 
 	var mediaPaths []string
 	require.NoError(t, db.ForEachMediaBySystemID(ctx, systemdefs.SystemArcade,
@@ -399,11 +433,11 @@ func TestMediaLinks_ScraperStreamsSkipLinks(t *testing.T) {
 			mediaPaths = append(mediaPaths, m.Path)
 			return nil
 		}))
-	assert.Equal(t, []string{targetPath}, mediaPaths)
+	assert.Equal(t, []string{targetPath, gonePath}, mediaPaths)
 
 	page, err := db.GetMediaPageBySystemID(ctx, systemdefs.SystemArcade, "", 10)
 	require.NoError(t, err)
-	require.Len(t, page, 1)
+	require.Len(t, page, 2)
 	assert.Equal(t, targetPath, page[0].Path)
 
 	var titleIDs []int64
@@ -412,7 +446,8 @@ func TestMediaLinks_ScraperStreamsSkipLinks(t *testing.T) {
 			titleIDs = append(titleIDs, title.DBID)
 			return nil
 		}))
-	assert.Equal(t, []int64{target.MediaTitleDBID}, titleIDs)
+	assert.ElementsMatch(t, []int64{targetRow.MediaTitleDBID, gone.MediaTitleDBID}, titleIDs,
+		"a title whose rows are only missing stays, so forced cleanup still reaches it")
 
 	system, err := db.FindSystemBySystemID(systemdefs.SystemArcade)
 	require.NoError(t, err)
@@ -422,7 +457,7 @@ func TestMediaLinks_ScraperStreamsSkipLinks(t *testing.T) {
 			sentinelTitles = append(sentinelTitles, title.DBID)
 			return nil
 		}))
-	assert.Equal(t, []int64{target.MediaTitleDBID}, sentinelTitles)
+	assert.ElementsMatch(t, []int64{targetRow.MediaTitleDBID, gone.MediaTitleDBID}, sentinelTitles)
 
 	scoped, err := db.GetScrapeMedia(ctx, database.ScrapeScope{
 		SystemID: systemdefs.SystemArcade, Path: aliasPath, MediaID: alias.DBID,

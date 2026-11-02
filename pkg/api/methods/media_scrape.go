@@ -933,6 +933,10 @@ func startMediaScrapeOperation(
 			operation = next
 			scraperID, runID = operation.ScraperID, operation.RunID
 			params.Force = operation.Force
+			params.Systems = operation.Systems
+			if operation.Scope != nil {
+				params.Systems = []string{operation.Scope.SystemID}
+			}
 			ch = startQueuedScraper(scrapeCtx, env, &operation)
 		}
 	}()
