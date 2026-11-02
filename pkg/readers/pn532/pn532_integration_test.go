@@ -1371,3 +1371,29 @@ func TestWriteWithContext_WriteNDEFErrorIsLoggedOnce(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, 1, countLogEntries(decodeLogEntries(t, buf), "error", "PN532 error"))
 }
+
+// A write cancelled while waiting to retry returns the cancellation, which
+// says nothing of the tag failure that is returned to the caller. That
+// failure must still be logged, at its own level.
+func TestWriteWithContext_LogsCallbackFailureHiddenByCancellation(t *testing.T) {
+	// Not parallel: captures the global logger.
+	buf := captureDebugLog(t)
+	writeFailure := errors.New("write verification failed")
+	tag := &mockTag{uid: "test-uid", tagType: pn532.TagTypeNTAG, writeNDEFErr: writeFailure}
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{
+		writeToNextTagWithRetryFunc: func(
+			_, writeCtx context.Context, writeFunc func(context.Context, pn532.Tag) error,
+		) error {
+			_ = writeFunc(writeCtx, tag)
+			return context.Canceled
+		},
+	}
+
+	_, err := reader.WriteWithContext(context.Background(), "hello")
+
+	require.ErrorIs(t, err, writeFailure)
+	entries := decodeLogEntries(t, buf)
+	assert.Equal(t, 1, countLogEntries(entries, "debug", "PN532 error"), "the cancellation itself")
+	assert.Equal(t, 1, countLogEntries(entries, "error", "PN532 error"), "the write failure it hid")
+}

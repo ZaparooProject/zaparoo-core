@@ -331,7 +331,12 @@ func TestLocalClient_ErrorResponse(t *testing.T) {
 
 	_, err := LocalClient(context.Background(), cfg, "invalid.method", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid Request")
+	// The service answered, so callers can tell this from a request that
+	// never reached it.
+	var rpcErr *RPCError
+	require.ErrorAs(t, err, &rpcErr)
+	require.EqualError(t, err, "Invalid Request")
+	assert.False(t, IsServiceUnavailable(err))
 }
 
 func TestLocalClient_ContextCancellation(t *testing.T) {
@@ -508,6 +513,9 @@ func TestLocalClient_ConnectionFailure(t *testing.T) {
 	_, err := LocalClient(context.Background(), cfg, "test.method", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to dial websocket")
+	var rpcErr *RPCError
+	assert.NotErrorAs(t, err, &rpcErr)
+	assert.True(t, IsServiceUnavailable(err), "nothing listening is a stopped service")
 }
 
 func TestWaitNotification_ReceivesNotification(t *testing.T) {

@@ -1252,6 +1252,23 @@ func trackerRecentFileChanged(filename string) bool {
 		strings.EqualFold(filepath.Ext(base), ".cfg")
 }
 
+// loadRecentReporting loads a recents file and logs a failure below Error
+// when it is the file being replaced or a third-party MGL it names.
+func (tr *Tracker) loadRecentReporting(name string) {
+	recentErr := tr.loadRecent(name)
+	if recentErr == nil {
+		return
+	}
+	switch {
+	case errors.Is(recentErr, os.ErrNotExist):
+		log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+	case errors.Is(recentErr, mgls.ErrMalformedMGL):
+		log.Warn().Err(recentErr).Str("file", name).Msg("recent mgl file is malformed")
+	default:
+		log.Error().Msgf("error loading recent file: %s", recentErr)
+	}
+}
+
 func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
 	go func() {
 		<-settled
@@ -1283,17 +1300,7 @@ func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
 		// MiSTer truncates and rewrites binary recent files. Let the write
 		// settle before reading the first complete record.
 		return func() {
-			recentErr := tr.loadRecent(name)
-			if recentErr != nil {
-				switch {
-				case errors.Is(recentErr, os.ErrNotExist):
-					log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-				case errors.Is(recentErr, mgls.ErrMalformedMGL):
-					log.Warn().Err(recentErr).Str("file", name).Msg("recent mgl file is malformed")
-				default:
-					log.Error().Msgf("error loading recent file: %s", recentErr)
-				}
-			}
+			tr.loadRecentReporting(name)
 		}, true
 	}
 	return nil, false

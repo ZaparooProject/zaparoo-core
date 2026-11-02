@@ -506,3 +506,45 @@ func TestCmdHTTPUnreachableURLIsNotReported(t *testing.T) {
 		})
 	}
 }
+
+// A URL that cannot be made into a request is the user's script; it is
+// logged as a warning, not reported as a fault.
+func TestCmdHTTPInvalidURLIsNotReported(t *testing.T) {
+	// Serial: captures the package-global logger.
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	for _, tc := range []struct {
+		run  func(platforms.CmdEnv) (platforms.CmdResult, error)
+		name string
+		cmd  string
+		args []string
+	}{
+		{
+			name: "get", cmd: gozapscript.ZapScriptCmdHTTPGet, args: []string{"http://[::1"},
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPGet(nil, env) },
+		},
+		{
+			name: "post", cmd: gozapscript.ZapScriptCmdHTTPPost, args: []string{"http://[::1", "text/plain", "x"},
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPPost(nil, env) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output lockedBuffer
+			original := log.Logger
+			log.Logger = zerolog.New(&output)
+			t.Cleanup(func() { log.Logger = original })
+
+			_, err := tc.run(platforms.CmdEnv{
+				Cfg: &config.Instance{},
+				Cmd: gozapscript.Command{Name: tc.cmd, Args: tc.args},
+			})
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				return strings.Contains(output.String(), "creating request for url")
+			}, 5*time.Second, 10*time.Millisecond)
+			assert.Contains(t, output.String(), `"level":"warn"`)
+			assert.NotContains(t, output.String(), `"level":"error"`)
+		})
+	}
+}

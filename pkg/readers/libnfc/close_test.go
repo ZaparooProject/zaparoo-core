@@ -27,7 +27,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag/tagsim"
 	"github.com/clausecker/nfc/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -171,4 +173,117 @@ func TestCloseWithoutPolling(t *testing.T) {
 	require.NoError(t, r.Close())
 	assert.True(t, dev.closed)
 	require.NoError(t, r.Close())
+}
+
+// A device stuck in a libnfc call that never returns must not hold Close for
+// good: Close runs with the reader state lock held. It gives up after its
+// bound, and the poll goroutine still closes the device once the call ends.
+func TestCloseGivesUpOnStuckDevice(t *testing.T) {
+	t.Parallel()
+
+	dev := newBlockingDevice()
+	r := NewACR122Reader(&config.Instance{})
+	r.closeWait = 50 * time.Millisecond
+	r.startPolling(dev, make(chan readers.Scan, 1))
+	select {
+	case <-dev.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll never started")
+	}
+
+	require.NoError(t, waitClosed(t, closeAsync(r)))
+	assert.False(t, dev.closed.Load(), "the device must not be closed under a running call")
+
+	close(dev.release)
+	assert.Eventually(t, dev.closed.Load, 5*time.Second, 10*time.Millisecond)
+	assert.False(t, dev.closedDuringPoll.Load())
+}
+
+// writeBlockingDevice presents an NTAG and holds the first block write in
+// "C" until the test releases it.
+type writeBlockingDevice struct {
+	*fakeDevice
+	entered       chan struct{}
+	release       chan struct{}
+	mu            syncutil.Mutex
+	inWrite       atomic.Bool
+	closed        atomic.Bool
+	closedInWrite atomic.Bool
+}
+
+func (d *writeBlockingDevice) InitiatorPollTarget(m []nfc.Modulation, n int, p time.Duration) (int, nfc.Target, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.fakeDevice.InitiatorPollTarget(m, n, p)
+}
+
+func (d *writeBlockingDevice) InitiatorTransceiveBytes(tx, rx []byte, timeout int) (int, error) {
+	if tx[0] == 0xA2 && d.inWrite.CompareAndSwap(false, true) {
+		select {
+		case d.entered <- struct{}{}:
+		default:
+		}
+		<-d.release
+		d.inWrite.Store(false)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.fakeDevice.InitiatorTransceiveBytes(tx, rx, timeout)
+}
+
+func (d *writeBlockingDevice) Close() error {
+	if d.inWrite.Load() {
+		d.closedInWrite.Store(true)
+	}
+	d.closed.Store(true)
+	return nil
+}
+
+func closeAsync(r *Reader) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- r.Close() }()
+	return done
+}
+
+// A tag write runs on the poll goroutine, so Close has to wait for the write
+// that is talking to the tag before the device is freed under it.
+func TestCloseWaitsForWriteInFlight(t *testing.T) {
+	t.Parallel()
+
+	dev := &writeBlockingDevice{
+		fakeDevice: &fakeDevice{type2: tagsim.NewType2(tagsim.PagesNTAG215)},
+		entered:    make(chan struct{}, 1),
+		release:    make(chan struct{}),
+	}
+	r := NewACR122Reader(&config.Instance{})
+	r.startPolling(dev, make(chan readers.Scan, 16))
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := r.WriteTarget(t.Context(), "**launch.system:nes", readers.WriteOptions{})
+		writeDone <- err
+	}()
+	select {
+	case <-dev.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the write never reached the tag")
+	}
+
+	closeDone := closeAsync(r)
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while a write was still talking to the tag")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.False(t, dev.closed.Load(), "the device must not be closed under a running write")
+
+	close(dev.release)
+	require.NoError(t, waitClosed(t, closeDone))
+	assert.True(t, dev.closed.Load())
+	assert.False(t, dev.closedInWrite.Load())
+	select {
+	case <-writeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the write never returned")
+	}
 }

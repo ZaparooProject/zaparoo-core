@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog"
@@ -1607,4 +1608,33 @@ func TestTrackerIgnoresRecentTempFile(t *testing.T) {
 	path, err := recentGamePath(recentFile, nil)
 	require.NoError(t, err)
 	assert.Empty(t, path)
+}
+
+// A recents file can point at a malformed third-party MGL, or be replaced
+// before it is read; neither is a Core fault.
+func TestTrackerRecentFileLoadFailuresAreNotErrors(t *testing.T) {
+	// Serial: captures the package-global logger.
+	var buf bytes.Buffer
+	original := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = original })
+
+	dir := t.TempDir()
+	badMGL := filepath.Join(dir, "bad.mgl")
+	require.NoError(t, os.WriteFile(badMGL, []byte("<mistergamedescription>\n<rbf>_Console/NES</rbf>\n"), 0o600))
+	recents := filepath.Join(dir, "cores_recent.cfg")
+	writeRecentEntry(t, recents, dir, "bad.mgl")
+
+	tr := &Tracker{}
+	tr.loadRecentReporting(recents)
+	assert.Contains(t, buf.String(), "recent mgl file is malformed")
+
+	buf.Reset()
+	tr.loadRecentReporting(filepath.Join(dir, "gone", "cores_recent.cfg"))
+	assert.Contains(t, buf.String(), "recent file was replaced before it could be read")
+	assert.NotContains(t, buf.String(), `"level":"error"`)
+
+	buf.Reset()
+	tr.logMalformedMGL(filepath.Join(dir, "missing.mgl"), mgls.ErrMalformedMGL)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
 }

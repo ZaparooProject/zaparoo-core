@@ -191,6 +191,9 @@ type Reader struct {
 	reads         readRetries
 	activeWriteMu syncutil.RWMutex
 	mu            syncutil.RWMutex // protects polling, pnd, pollStop, pollDone, closeErr
+	// closeWait bounds how long Close waits for the poll goroutine. Zero
+	// means defaultCloseWait.
+	closeWait time.Duration
 	// misses counts polls in a row that found no tag.
 	misses  int
 	polling bool
@@ -387,6 +390,10 @@ func (r *Reader) writeTagUntilStopped(req *WriteRequest, stop <-chan struct{}) {
 	close(finished)
 }
 
+// defaultCloseWait is long enough for the poll goroutine to finish a poll or
+// a tag write's current exchange once it is asked to stop.
+const defaultCloseWait = 10 * time.Second
+
 // closeDevice runs on the poll goroutine after its last libnfc call.
 func (r *Reader) closeDevice(pnd device) {
 	r.mu.Lock()
@@ -428,7 +435,20 @@ func (r *Reader) Close() error {
 	if stop != nil {
 		close(stop)
 	}
-	<-done
+	wait := r.closeWait
+	if wait <= 0 {
+		wait = defaultCloseWait
+	}
+	select {
+	case <-done:
+	case <-time.After(wait):
+		// The goroutine is stuck in a libnfc call that has not returned, as
+		// with a device that neither answers nor fails. Close runs with the
+		// reader state lock held, so it stops waiting; the goroutine still
+		// closes the device once that call returns.
+		log.Warn().Dur("waited", wait).Msg("NFC device did not stop in time; closing it in the background")
+		return nil
+	}
 
 	r.mu.Lock()
 	err := r.closeErr

@@ -1057,24 +1057,35 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 		// Logged once here rather than per attempt: the session retries the
 		// callback, and the error still carries the wire trace of the attempt
 		// that failed last.
-		classified := classifyWriteError(err)
-		switch {
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			logTraceableError(err, "write to next tag")
-		case errors.Is(classified, readers.ErrTagNotDetected),
-			errors.Is(classified, readers.ErrUnsupportedTagType),
-			errors.Is(classified, readers.ErrTagRemoved):
-			logExpectedError(err, "write to next tag")
-		default:
-			logTraceableError(err, "write to next tag")
+		logWriteFailure(err)
+		// A write cancelled during its retry delay returns the context error,
+		// which says nothing of the failure that is returned below.
+		if writeErr != nil && !errors.Is(err, writeErr) {
+			logWriteFailure(writeErr)
 		}
 		if writeErr != nil {
 			return nil, classifyWriteError(writeErr)
 		}
-		return nil, fmt.Errorf("failed to write to tag: %w", classified)
+		return nil, fmt.Errorf("failed to write to tag: %w", classifyWriteError(err))
 	}
 
 	return resultToken, nil
+}
+
+// logWriteFailure logs a failed write once, below Error when it is a user
+// condition rather than a reader fault. It keeps any wire trace.
+func logWriteFailure(err error) {
+	classified := classifyWriteError(err)
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		logTraceableError(err, "write to next tag")
+	case errors.Is(classified, readers.ErrTagNotDetected),
+		errors.Is(classified, readers.ErrUnsupportedTagType),
+		errors.Is(classified, readers.ErrTagRemoved):
+		logExpectedError(err, "write to next tag")
+	default:
+		logTraceableError(err, "write to next tag")
+	}
 }
 
 // writeWaitTimeout is the text of the error go-pn532 returns when no tag was
@@ -1087,20 +1098,31 @@ const writeWaitTimeout = "timeout waiting for tag"
 // not the reader's, so they are logged the same way on every driver: no tag
 // presented, and a tag that cannot be written.
 func classifyWriteError(err error) error {
-	// The chip reporting no answer, or an RF error, from the tag mid-write
-	// means the tag left the field, as when it is pulled away too soon.
-	var chipErr *pn532.PN532Error
-	if errors.As(err, &chipErr) && (chipErr.IsTimeoutError() || chipErr.IsRFError()) {
-		return fmt.Errorf("%w: %w", readers.ErrTagRemoved, err)
-	}
 	switch {
 	case errors.Is(err, pn532.ErrInvalidTag):
 		return fmt.Errorf("%w: %w", readers.ErrUnsupportedTagType, err)
 	case strings.Contains(err.Error(), writeWaitTimeout), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%w: %w", readers.ErrTagNotDetected, err)
+	case tagLeftField(err):
+		return fmt.Errorf("%w: %w", readers.ErrTagRemoved, err)
 	default:
 		return err
 	}
+}
+
+// tagLeftField reports the chip losing a tag it was already exchanging data
+// with: no answer or an RF error from a tag command means the tag left the
+// field, as when it is pulled away too soon. Detection never sends these
+// commands, so a tag that was never presented is not counted as removed.
+func tagLeftField(err error) bool {
+	var chipErr *pn532.PN532Error
+	if !errors.As(err, &chipErr) {
+		return false
+	}
+	if chipErr.Command != "InDataExchange" && chipErr.Command != "InCommunicateThru" {
+		return false
+	}
+	return chipErr.IsTimeoutError() || chipErr.IsRFError()
 }
 
 func (r *Reader) CancelWrite() {

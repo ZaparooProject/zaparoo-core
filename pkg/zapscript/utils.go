@@ -226,11 +226,20 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 // executeError classifies a failed execute command from its timeout
 // context's error and the error running it.
 func executeError(ctxErr, runErr error) error {
-	if errors.Is(ctxErr, context.DeadlineExceeded) {
-		return fmt.Errorf("%w after %v", ErrExecuteTimeout, ExecuteTimeout)
-	}
 	var exitErr *exec.ExitError
-	if errors.As(runErr, &exitErr) {
+	exited := errors.As(runErr, &exitErr)
+	// A process that never started has no exit status, so a failure to start
+	// stays a fault even when the deadline has also passed.
+	ran := exited || runErr == nil || errors.Is(runErr, context.DeadlineExceeded)
+	if errors.Is(ctxErr, context.DeadlineExceeded) && ran {
+		if runErr == nil {
+			return fmt.Errorf("%w after %v", ErrExecuteTimeout, ExecuteTimeout)
+		}
+		// The cause is kept as text: wrapping a context error would class
+		// the timeout as a cancellation.
+		return fmt.Errorf("%w after %v: %s", ErrExecuteTimeout, ExecuteTimeout, runErr.Error())
+	}
+	if exited {
 		return fmt.Errorf("%w: %w", ErrExecuteExitStatus, runErr)
 	}
 	return fmt.Errorf("failed to execute command: %w", runErr)

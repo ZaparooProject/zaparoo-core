@@ -115,11 +115,25 @@ func disableZapScriptWithRequest(
 // leaving a management UI. Keep authentication, protocol and other transport
 // failures reportable.
 func logZapScriptToggleError(err error, message string) {
-	if isConnectionRefused(err) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, ErrServiceUnavailable) {
+	if IsServiceUnavailable(err) {
 		log.Warn().Err(err).Msg(message)
 	} else {
 		log.Error().Err(err).Msg(message)
 	}
+}
+
+// RPCError is an error the service returned for a request it received. The
+// service has already logged it at a level that matches its cause.
+type RPCError struct {
+	Message string
+}
+
+func (e *RPCError) Error() string { return e.Message }
+
+// IsServiceUnavailable reports a request that did not reach a running
+// service: it was stopped, starting, or restarting.
+func IsServiceUnavailable(err error) bool {
+	return isConnectionRefused(err) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, ErrServiceUnavailable)
 }
 
 // dialLocalWebsocket opens a connection to the local API service.
@@ -244,7 +258,7 @@ func LocalClient(
 	}
 
 	if resp.Error != nil {
-		return "", errors.New(resp.Error.Message)
+		return "", &RPCError{Message: resp.Error.Message}
 	}
 
 	var b []byte

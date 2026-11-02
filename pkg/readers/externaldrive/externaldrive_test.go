@@ -1496,3 +1496,8 @@ func TestHandleUnmountEvent_NoMatchingToken(t *testing.T) {
 		// Expected - no event
 	}
 }
+
+func TestCloseWithoutOpen(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, NewReader(&config.Instance{}).Close())
+}

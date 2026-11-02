@@ -21,6 +21,8 @@ package esapi
 
 import (
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -130,4 +132,29 @@ func TestAPIRequest_DroppedConnectionIsNotLauncherUnavailable(t *testing.T) {
 
 	require.Error(t, err)
 	require.NotErrorIs(t, err, platforms.ErrLauncherUnavailable)
+}
+
+func TestAPIRequest_GetWithDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(server.Close)
+
+	body, err := sendAPIRequest(server.URL, "/runningGame", "", 0)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", string(body))
+}
+
+// The exported request targets EmulationStation's fixed local address; with
+// nothing on it the launcher is unavailable rather than broken.
+func TestAPIRequest_LocalEmulationStation(t *testing.T) {
+	t.Parallel()
+
+	_, err := APIRequest("/runningGame", "", 200*time.Millisecond)
+	if err != nil {
+		assert.ErrorIs(t, err, platforms.ErrLauncherUnavailable)
+	}
 }

@@ -364,6 +364,9 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 	filesCount := 0
 	unknownFieldFiles := 0
 	invalidFiles := 0
+	// firstProblem locates the first rejected file for the caller: file name,
+	// key and position only, never the file's values.
+	firstProblem := ""
 	rawLaunchers := make([]LaunchersCustom, 0)
 	for _, launcherPath := range launcherFiles {
 		log.Debug().Msgf("loading custom launcher: %s", launcherPath)
@@ -392,6 +395,9 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 				log.Warn().Str("file", launcherPath).Strs("unknownFields", fields).
 					Int("unknownFieldCount", len(unknown.Errors)).
 					Msg("custom launcher file skipped: unknown configuration fields")
+				if firstProblem == "" && len(fields) > 0 {
+					firstProblem = fmt.Sprintf("%s: unknown field %s", filepath.Base(launcherPath), fields[0])
+				}
 			case errors.As(decodeErr, &invalid):
 				invalidFiles++
 				// Error() and position only: String() includes source text.
@@ -399,6 +405,10 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 				log.Warn().Err(decodeErr).Str("file", launcherPath).
 					Int("line", row).Int("column", column).
 					Msg("custom launcher file skipped: invalid TOML or value")
+				if firstProblem == "" {
+					firstProblem = fmt.Sprintf("%s: line %d, column %d: %s",
+						filepath.Base(launcherPath), row, column, decodeErr.Error())
+				}
 			default:
 				log.Error().Err(decodeErr).Str("file", launcherPath).Msg("error parsing custom launcher")
 			}
@@ -417,10 +427,10 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 
 	if len(launcherFiles) > 0 && filesCount == 0 {
 		if unknownFieldFiles == len(launcherFiles) {
-			return ErrCustomLauncherUnknownFields
+			return fmt.Errorf("%w: %s", ErrCustomLauncherUnknownFields, firstProblem)
 		}
 		if unknownFieldFiles+invalidFiles == len(launcherFiles) {
-			return ErrCustomLauncherInvalid
+			return fmt.Errorf("%w: %s", ErrCustomLauncherInvalid, firstProblem)
 		}
 		return errors.New("failed to parse any custom launcher files")
 	}

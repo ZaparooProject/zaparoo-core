@@ -1445,3 +1445,8 @@ func TestRunCommandBoundedTokenAllowsArgumentlessCommand(t *testing.T) {
 
 	require.NoError(t, err)
 }
+
+func TestIsExpectedRunError_Nil(t *testing.T) {
+	t.Parallel()
+	assert.False(t, IsExpectedRunError(nil))
+}

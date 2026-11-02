@@ -100,7 +100,7 @@ func createConsoleRestoreFunc(cm platforms.ConsoleManager) func() {
 		// Exit console mode before loading menu. Close uses the explicit Main
 		// console lease when available and retains the stock F12 fallback.
 		if err := cm.Close(); err != nil {
-			log.Warn().Err(err).Msg("error closing console")
+			log.Error().Err(err).Msg("error closing console")
 		}
 		time.Sleep(100 * time.Millisecond)
 

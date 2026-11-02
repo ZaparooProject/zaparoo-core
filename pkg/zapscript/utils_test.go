@@ -22,7 +22,11 @@ package zapscript
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -174,12 +178,35 @@ allow_execute = [".*"]`))
 func TestExecuteError_Timeout(t *testing.T) {
 	t.Parallel()
 
-	err := executeError(context.DeadlineExceeded, errors.New("signal: killed"))
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell to produce a killed process")
+	}
+	killed := exec.CommandContext(t.Context(), "sh", "-c", "kill -9 $$").Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, killed, &exitErr)
 
-	require.ErrorIs(t, err, ErrExecuteTimeout)
-	require.NotErrorIs(t, err, context.DeadlineExceeded)
-	assert.True(t, IsExpectedRunError(err))
-	assert.Contains(t, err.Error(), ExecuteTimeout.String())
+	for _, runErr := range []error{killed, context.DeadlineExceeded, nil} {
+		err := executeError(context.DeadlineExceeded, runErr)
+
+		require.ErrorIs(t, err, ErrExecuteTimeout)
+		require.NotErrorIs(t, err, context.DeadlineExceeded)
+		assert.True(t, IsExpectedRunError(err))
+		assert.Contains(t, err.Error(), ExecuteTimeout.String())
+	}
+	assert.Contains(t, executeError(context.DeadlineExceeded, killed).Error(), "signal: killed")
+}
+
+// A command that failed to start once the deadline had passed is not the
+// user's script running too long, and its own error must not be lost.
+func TestExecuteError_StartFailureAfterDeadlineIsNotATimeout(t *testing.T) {
+	t.Parallel()
+
+	startErr := &os.PathError{Op: "fork/exec", Path: "/missing", Err: syscall.ENOENT}
+	err := executeError(context.DeadlineExceeded, startErr)
+
+	require.NotErrorIs(t, err, ErrExecuteTimeout)
+	require.ErrorIs(t, err, syscall.ENOENT)
+	assert.False(t, IsExpectedRunError(err))
 }
 
 // TestExecuteError_StartFailureStaysUnexpected verifies a failure to run the

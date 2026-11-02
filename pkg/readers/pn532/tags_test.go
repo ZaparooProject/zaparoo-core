@@ -223,6 +223,16 @@ func TestClassifyWriteError(t *testing.T) {
 	}
 	authFailure := classifyWriteError(&pn532.PN532Error{Command: "InDataExchange", ErrorCode: 0x14})
 	require.NotErrorIs(t, authFailure, readers.ErrTagRemoved)
+
+	// A chip timeout from anything but a tag command is not a removed tag.
+	notATagCommand := classifyWriteError(&pn532.PN532Error{Command: "InListPassiveTarget", ErrorCode: 0x01})
+	require.NotErrorIs(t, notATagCommand, readers.ErrTagRemoved)
+	// The wait for a tag running out stays "no tag", even with a chip
+	// timeout in the chain.
+	waitedOut := classifyWriteError(fmt.Errorf("%w: %w", context.DeadlineExceeded,
+		&pn532.PN532Error{Command: "InDataExchange", ErrorCode: 0x01}))
+	require.ErrorIs(t, waitedOut, readers.ErrTagNotDetected)
+	require.NotErrorIs(t, waitedOut, readers.ErrTagRemoved)
 }
 
 // fakeTagOps stands in for go-pn532's tag operations: it returns a set NDEF

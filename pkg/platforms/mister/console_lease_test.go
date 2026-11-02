@@ -278,6 +278,18 @@ func TestMainConsoleLeaseController_ReleaseTreatsGoneLeaseAsReleased(t *testing.
 		require.NoError(t, controller.Release(ctx, "test-nonce"))
 	})
 
+	t.Run("state unreadable while main holds the lease", func(t *testing.T) {
+		t.Parallel()
+
+		controller, fs := newTestConsoleLeaseController(t)
+		require.NoError(t, afero.WriteFile(fs, controller.statePath, []byte("garbled\n"), 0o600))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, controller.Release(ctx, "test-nonce"), context.DeadlineExceeded,
+			"a state that cannot be read must not count as a released lease")
+	})
+
 	t.Run("main holds the lease but never answers", func(t *testing.T) {
 		t.Parallel()
 

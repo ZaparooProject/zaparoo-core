@@ -2766,3 +2766,54 @@ func TestGetFiles_ZipsAsDirsSkipsNoArchiveExtensions(t *testing.T) {
 		onDisk,
 	}, files)
 }
+
+// An "any" scanner whose backing service is down, such as Kodi on another
+// host, is skipped at Warn rather than reported as a fault on every index.
+func TestAnyScannerSourceUnavailableIsSkipped(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	anyLauncher := platforms.Launcher{
+		ID: "TestUnreachableAnyScanner",
+		Scanner: func(context.Context, *config.Instance, string, []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, fmt.Errorf("get shows: %w", platforms.ErrScannerSourceUnreachable)
+		},
+	}
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{anyLauncher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	buf := &syncLogBuffer{}
+	prevLogger := log.Logger
+	prevGlobal := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = prevLogger; zerolog.SetGlobalLevel(prevGlobal) }()
+
+	systems := []systemdefs.System{{ID: "test-system-for-any-scanner"}}
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	log.Logger = prevLogger
+	zerolog.SetGlobalLevel(prevGlobal)
+	output := buf.String()
+	assert.Contains(t, output, "skipping TestUnreachableAnyScanner 'any' scanner: service unavailable")
+	assert.NotContains(t, output, "error running TestUnreachableAnyScanner")
+}

@@ -304,6 +304,20 @@ func TestLaunchFileRejectsEntryInsideZip(t *testing.T) {
 		})
 	}
 
+	t.Run("other failure under a zip-named directory", func(t *testing.T) {
+		t.Parallel()
+
+		fs := launchStatErrorFS{Fs: afero.NewMemMapFs(), err: os.ErrPermission}
+		path := filepath.Join("media", "fat", "games", "Pack.zip", "game.mgl")
+
+		var command bytes.Buffer
+		err := launchFile(fs, &command, path, true)
+
+		require.ErrorIs(t, err, os.ErrPermission)
+		require.NotErrorIs(t, err, ErrLaunchFileInZip)
+		assert.Empty(t, command.String())
+	})
+
 	t.Run("directory named like a zip", func(t *testing.T) {
 		t.Parallel()
 

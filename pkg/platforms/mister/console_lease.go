@@ -115,12 +115,23 @@ func (c *mainConsoleLeaseController) sendRelease(ctx context.Context, nonce stri
 	return nil
 }
 
+// leaseGone reports that Main no longer holds the lease: it never wrote a
+// state, its state names another lease, or its process has exited. A state
+// that exists but cannot be read proves nothing, so the release still goes
+// ahead.
 func (c *mainConsoleLeaseController) leaseGone(nonce string) bool {
-	if !c.Available() {
+	state, err := c.readState()
+	if errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	state, err := c.readState()
-	return err == nil && state.nonce != nonce
+	if err != nil {
+		return false
+	}
+	if state.nonce != nonce || state.pid <= 0 {
+		return true
+	}
+	_, err = c.fs.Stat(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(state.pid)))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func (c *mainConsoleLeaseController) writeCommand(command string) error {

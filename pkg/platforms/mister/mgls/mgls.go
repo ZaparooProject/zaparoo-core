@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"syscall"
 	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -202,7 +203,9 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 	}
 
 	if _, err := fs.Stat(path); err != nil {
-		if inZip(lowerPath) {
+		// Only ENOTDIR shows the path runs through a file; a real directory
+		// named like a zip can still fail for any other reason.
+		if inZip(lowerPath) && errors.Is(err, syscall.ENOTDIR) {
 			return fmt.Errorf("%w: %s", ErrLaunchFileInZip, path)
 		}
 		wrapped := fmt.Errorf("launch file not accessible: %w", err)
