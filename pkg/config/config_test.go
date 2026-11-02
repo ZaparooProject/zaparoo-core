@@ -1810,3 +1810,19 @@ zapscript = "**launch.system:SNES"
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.Mappings(), "a mapping deleted from config.toml must not survive a reload")
 }
+
+// A hand-edited config.toml with a syntax error is the user's to fix. Load
+// marks it so callers can tell it from a failure to read the file, and keeps
+// the running configuration.
+func TestLoad_UnparseableFileIsInvalidConfigFile(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, CfgFile), []byte("[audio\n"), 0o600))
+
+	err = cfg.Load()
+	require.ErrorIs(t, err, ErrInvalidConfigFile)
+	assert.True(t, cfg.AudioFeedback(), "a refused load keeps the running values")
+}

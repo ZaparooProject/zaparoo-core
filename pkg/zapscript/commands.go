@@ -39,9 +39,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
@@ -91,6 +93,62 @@ var (
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
 	errAmbiguousPath       = errors.New("ambiguous case-insensitive path")
 )
+
+// IsExpectedRunError reports whether a failed command or token run is an
+// expected user, configuration or environment condition that should be logged
+// at Warn rather than Error (keeping it out of Sentry). These are not bugs: a
+// missing file or title, media no launcher handles, a double-tap during an
+// active launch, a user-supplied system, command or argument that isn't valid,
+// a launcher whose program or service isn't available, a user script that
+// failed, or a run refused by configuration, by a hook, or by the bound the
+// token carries. Cancellation is handled separately by callers.
+func IsExpectedRunError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, target := range expectedRunErrors {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+var expectedRunErrors = []error{
+	ErrFileNotFound,
+	ErrInvalidScript,
+	ErrInvalidArguments,
+	// A command written with the wrong arguments is the script's mistake.
+	ErrArgCount,
+	ErrRequiredArgs,
+	ErrUnknownCommand,
+	// Refusals by configuration are the setting working, not a bug.
+	ErrCommandBlocked,
+	ErrCommandNotPermitted,
+	ErrExecuteNotAllowed,
+	ErrExecuteTimeout,
+	ErrExecuteExitStatus,
+	ErrHTTPNotAllowed,
+	ErrRemoteSource,
+	ErrNoHistory,
+	ErrNoPlaylistActive,
+	ErrNoControlCapabilities,
+	ErrUnsupportedControlAction,
+	titles.ErrNoMatch,
+	titles.ErrLowConfidence,
+	systemdefs.ErrUnknownSystem,
+	helpers.ErrNoLauncher,
+	virtualpath.ErrSchemeMismatch,
+	platforms.ErrScriptAlreadyRunning,
+	platforms.ErrLauncherUnavailable,
+	// A playlist move refused while another launch runs is busy, the same as
+	// a launch the guard refuses.
+	state.ErrLaunchInProgress,
+	state.ErrLaunchBlockedByHook,
+	state.ErrLaunchRequiresProfile,
+	state.ErrRunZapScriptDisabled,
+	playtime.ErrLimitReached,
+}
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
 func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
@@ -702,21 +760,7 @@ func RunCommand(
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
-		case errors.Is(err, ErrFileNotFound),
-			errors.Is(err, ErrInvalidArguments),
-			errors.Is(err, platforms.ErrScriptAlreadyRunning),
-			// A playlist move refused while another launch runs is busy, the
-			// same as a launch the guard refuses.
-			errors.Is(err, state.ErrLaunchInProgress),
-			errors.Is(err, systemdefs.ErrUnknownSystem),
-			errors.Is(err, titles.ErrNoMatch),
-			errors.Is(err, ErrNoControlCapabilities),
-			errors.Is(err, ErrUnsupportedControlAction),
-			errors.Is(err, ErrNoHistory),
-			// Refusals by configuration are the setting working, not a bug.
-			errors.Is(err, ErrExecuteNotAllowed),
-			errors.Is(err, ErrHTTPNotAllowed),
-			errors.Is(err, ErrRemoteSource):
+		case IsExpectedRunError(err):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", logCmd)

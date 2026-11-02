@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,6 +115,8 @@ func TestClient_APIRequest(t *testing.T) {
 		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Method not found")
+		assert.NotErrorIs(t, err, platforms.ErrScannerSourceUnreachable,
+			"a JSON-RPC error is Kodi answering, so it stays reportable")
 	})
 
 	t.Run("non-success HTTP status", func(t *testing.T) {
@@ -131,6 +134,7 @@ func TestClient_APIRequest(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected HTTP status from kodi api: 503")
+		require.ErrorIs(t, err, platforms.ErrScannerSourceUnreachable)
 		assert.NotContains(t, err.Error(), "private upstream response")
 	})
 
@@ -148,6 +152,7 @@ func TestClient_APIRequest(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "status 200, content type text/plain")
+		require.ErrorIs(t, err, platforms.ErrScannerSourceUnreachable)
 		assert.NotContains(t, err.Error(), "Malformed private response")
 	})
 
@@ -158,6 +163,20 @@ func TestClient_APIRequest(t *testing.T) {
 
 		// This should return a connection error
 		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
+		require.ErrorIs(t, err, platforms.ErrScannerSourceUnreachable)
+	})
+
+	t.Run("cancelled request stays a cancellation", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+		defer server.Close()
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL + "/jsonrpc")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := client.APIRequest(ctx, kodi.APIMethodPlayerGetActivePlayers, nil)
 		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
 	})
 }

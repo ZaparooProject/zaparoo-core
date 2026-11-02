@@ -748,7 +748,7 @@ func startServiceWithOptions(
 	launchersStarted := time.Now()
 	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
-		if errors.Is(err, config.ErrCustomLauncherUnknownFields) {
+		if errors.Is(err, config.ErrCustomLauncherUnknownFields) || errors.Is(err, config.ErrCustomLauncherInvalid) {
 			log.Warn().Err(err).Msg("error loading custom launchers")
 		} else {
 			log.Error().Err(err).Msg("error loading custom launchers")

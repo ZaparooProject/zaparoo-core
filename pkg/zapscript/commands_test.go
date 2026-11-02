@@ -35,8 +35,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -852,6 +855,51 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			level: "warn",
 		},
 		{
+			name:  "no active playlist is expected",
+			err:   fmt.Errorf("wrapped: %w", ErrNoPlaylistActive),
+			level: "warn",
+		},
+		{
+			name:  "invalid launch format is expected",
+			err:   fmt.Errorf("%w: sfiii2n", ErrInvalidLaunchFormat),
+			level: "warn",
+		},
+		{
+			name:  "media with no launcher is expected",
+			err:   fmt.Errorf("%w for: game.xyz", helpers.ErrNoLauncher),
+			level: "warn",
+		},
+		{
+			name:  "unavailable launcher is expected",
+			err:   fmt.Errorf("failed to send request: %w", platforms.ErrLauncherUnavailable),
+			level: "warn",
+		},
+		{
+			name:  "launcher given another scheme's path is expected",
+			err:   fmt.Errorf("%w: expected launchbox, got steam", virtualpath.ErrSchemeMismatch),
+			level: "warn",
+		},
+		{
+			name:  "execute timeout is expected",
+			err:   fmt.Errorf("%w after 2s", ErrExecuteTimeout),
+			level: "warn",
+		},
+		{
+			name:  "execute non-zero exit is expected",
+			err:   fmt.Errorf("%w: exit status 1", ErrExecuteExitStatus),
+			level: "warn",
+		},
+		{
+			name:  "playtime limit is expected",
+			err:   playtime.ErrLimitReached,
+			level: "warn",
+		},
+		{
+			name:  "launch blocked by hook is expected",
+			err:   state.ErrLaunchBlockedByHook,
+			level: "warn",
+		},
+		{
 			name:  "malformed Kodi response stays reportable",
 			err:   fmt.Errorf("control action stop failed: %w", &json.SyntaxError{}),
 			level: "error",
@@ -1396,4 +1444,9 @@ func TestRunCommandBoundedTokenAllowsArgumentlessCommand(t *testing.T) {
 	)
 
 	require.NoError(t, err)
+}
+
+func TestIsExpectedRunError_Nil(t *testing.T) {
+	t.Parallel()
+	assert.False(t, IsExpectedRunError(nil))
 }

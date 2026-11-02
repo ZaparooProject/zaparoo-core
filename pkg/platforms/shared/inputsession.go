@@ -60,6 +60,10 @@ type parsedInputMacro struct {
 // this is far more than anything driving a real device needs.
 const maxSessionKeyboardHolds = 128
 
+// ErrTooManyKeyboardHolds is returned when a session asks to hold a key
+// combination past maxSessionKeyboardHolds.
+var ErrTooManyKeyboardHolds = errors.New("too many held key combinations")
+
 // heldInputState is the input one session holds across requests. A keyboard
 // hold is a list of keys pressed together, such as Shift and a letter, and is
 // identified by that list. keyboard counts how many of the session's holds
@@ -303,7 +307,7 @@ func (l *InputManager) sessionKeyboardDownLocked(session *inputSession, codes []
 		return nil
 	}
 	if len(state.keyboardHolds) >= maxSessionKeyboardHolds {
-		return fmt.Errorf("session already holds %d key combinations", maxSessionKeyboardHolds)
+		return fmt.Errorf("%w: session already holds %d", ErrTooManyKeyboardHolds, maxSessionKeyboardHolds)
 	}
 	for i, code := range codes {
 		if state.keyboard[code] == 0 {

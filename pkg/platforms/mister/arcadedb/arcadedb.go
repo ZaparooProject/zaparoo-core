@@ -263,7 +263,8 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 	if fallbackErr != nil {
 		return nil, errors.Join(parseErr, fallbackErr)
 	}
-	log.Error().Err(parseErr).Msg("invalid cached arcade database; using embedded fallback")
+	// Handled by the embedded copy, so this is not a fault.
+	log.Warn().Err(parseErr).Msg("invalid cached arcade database; using embedded fallback")
 	return fallback, nil
 }
 

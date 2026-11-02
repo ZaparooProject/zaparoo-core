@@ -246,11 +246,21 @@ func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (plat
 				cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 			}
 			if startErr := cmd.Start(); startErr != nil {
+				// A configured program that is not installed is the user's
+				// setup, not a fault in Core.
+				missing := errors.Is(startErr, exec.ErrNotFound) || errors.Is(startErr, os.ErrNotExist)
 				event := log.Error().Err(startErr)
+				if missing {
+					event = log.Warn().Err(startErr)
+				}
 				for key, value := range launcherStartDiagnostics(afero.NewOsFs(), cmd, startErr) {
 					event = event.Str(key, value)
 				}
 				event.Msgf("error running custom launcher: %s", output)
+				if missing {
+					return nil, fmt.Errorf("failed to start custom launcher command: %w: %w",
+						platforms.ErrLauncherUnavailable, startErr)
+				}
 				return nil, fmt.Errorf("failed to start custom launcher command: %w", startErr)
 			}
 			return cmd.Process, nil

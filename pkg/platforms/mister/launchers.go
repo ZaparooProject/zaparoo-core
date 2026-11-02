@@ -91,6 +91,10 @@ var misterDefaultScanExcludes = []string{
 	"sid_data.bin",
 }
 
+// misterNoArchiveExtensions are the files MiSTer Main loads through load_core,
+// which reads them from disk and cannot reach inside a zip.
+var misterNoArchiveExtensions = []string{".mgl", ".mra", ".rbf"}
+
 // arcadeScanFolders are the folders indexed as Arcade media, as declared by
 // the catalog. _Utility holds MRAs for test and streaming tools such as
 // MiSTercade and Groovy setups.
@@ -783,7 +787,9 @@ func launchAltCoreWithDefinition(
 }
 
 func logMGLLaunchError(err error) {
-	if errors.Is(err, zapscript.ErrFileNotFound) {
+	// A missing file, or one MiSTer cannot load from where it is, is the
+	// user's media rather than a launcher fault.
+	if zapscript.IsExpectedRunError(err) {
 		log.Warn().Err(err).Msg("error launching mgl")
 	} else {
 		log.Error().Err(err).Msg("error launching mgl")
@@ -1224,6 +1230,13 @@ func applyDefaultScanExcludes(launchers []platforms.Launcher) []platforms.Launch
 			continue
 		}
 		launcher.ScanExcludes = append(launcher.ScanExcludes, misterDefaultScanExcludes...)
+	}
+	return launchers
+}
+
+func applyNoArchiveExtensions(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launchers[i].NoArchiveExtensions = misterNoArchiveExtensions
 	}
 	return launchers
 }

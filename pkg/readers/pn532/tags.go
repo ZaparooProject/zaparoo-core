@@ -118,8 +118,13 @@ func (r *Reader) readNDEFMessage(ctx context.Context, detectedTag *pn532.Detecte
 	// already detected the tag via InListPassiveTarget. Calling DetectTag would
 	// perform a redundant detection with InRelease(0) which can corrupt tag state.
 	if err := r.tagOps.InitFromDetectedTag(ctx, detectedTag); err != nil {
-		logTraceableError(err, "init tag for NDEF")
-		log.Warn().Err(err).
+		// go-pn532 reports an unsupported tag and one that left the field
+		// before it could be initialised the same way. Both are the user's
+		// doing, not the reader's, so only the warning below is logged.
+		if !errors.Is(err, tagops.ErrUnsupportedTag) {
+			logTraceableError(err, "init tag for NDEF")
+		}
+		withTrace(log.Warn().Err(err), err).
 			Str("uid", detectedTag.UID).
 			Str("tagType", string(detectedTag.Type)).
 			Msg("failed to initialize tag for NDEF reading")

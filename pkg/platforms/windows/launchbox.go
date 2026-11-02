@@ -1185,7 +1185,15 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 
 		_, err = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(params))
 		if err != nil {
-			log.Error().Err(err).Msg("failed to send write request to API")
+			// The service logs a write it received at a level that matches
+			// its cause, and one that never reached a running service is
+			// expected while it starts or stops. Anything else is a fault.
+			var rpcErr *client.RPCError
+			if errors.As(err, &rpcErr) || client.IsServiceUnavailable(err) {
+				log.Warn().Err(err).Msg("failed to send write request to API")
+			} else {
+				log.Error().Err(err).Msg("failed to send write request to API")
+			}
 			return
 		}
 

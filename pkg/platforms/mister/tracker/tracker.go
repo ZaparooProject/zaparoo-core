@@ -75,6 +75,7 @@ type Tracker struct {
 	readActiveGame   func() (string, error)
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
+	malformedMGLs    map[malformedMGLKey]struct{}
 	setActiveGame    func(string) error
 	coreNameFile     string
 	selection        selectionFiles
@@ -86,6 +87,39 @@ type Tracker struct {
 	ActiveCore       string
 	NameMap          []NameMapping
 	mu               syncutil.Mutex
+}
+
+// malformedMGLKey identifies one version of an MGL file that failed to decode.
+type malformedMGLKey struct {
+	modTime time.Time
+	path    string
+	size    int64
+}
+
+// maxMalformedMGLs bounds the memo of reported malformed MGLs. Resetting it
+// when full costs at most one repeated warning per file.
+const maxMalformedMGLs = 32
+
+// logMalformedMGL reports an MGL that does not decode. MGLs come from MiSTer
+// and third-party scripts (SAM writes a temp MGL it may leave truncated), and
+// ACTIVEGAME keeps pointing at one across every core change, so the same file
+// is only worth a warning once. Callers hold tr.mu.
+func (tr *Tracker) logMalformedMGL(path string, err error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		log.Warn().Err(err).Str("path", path).Msg("active game mgl file is malformed")
+		return
+	}
+	key := malformedMGLKey{path: path, size: info.Size(), modTime: info.ModTime()}
+	if _, seen := tr.malformedMGLs[key]; seen {
+		log.Debug().Err(err).Str("path", path).Msg("active game mgl file is still malformed")
+		return
+	}
+	if tr.malformedMGLs == nil || len(tr.malformedMGLs) >= maxMalformedMGLs {
+		tr.malformedMGLs = make(map[malformedMGLKey]struct{})
+	}
+	tr.malformedMGLs[key] = struct{}{}
+	log.Warn().Err(err).Str("path", path).Msg("active game mgl file is malformed")
 }
 
 // coreNameAliases maps the CORENAME a stock core reports to its system ID, for
@@ -101,23 +135,36 @@ func coreNameAliases() map[string]string {
 
 func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping {
 	nameMap := make([]NameMapping, 0)
+	launchers := pl.Launchers(cfg)
+
+	// A catalog core ID is not always a system ID: MacQuadra800 and Z486 are
+	// cores of the MacOS and DOS systems. Their launcher, which shares the
+	// core's ID, names the system.
+	launcherSystems := make(map[string]string, len(launchers))
+	for i := range launchers {
+		if launchers[i].SystemID != "" {
+			launcherSystems[launchers[i].ID] = launchers[i].SystemID
+		}
+	}
 
 	for key := range cores.Systems {
 		system := cores.Systems[key]
-		switch {
-		case system.SetName != "":
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.SetName,
-				System:   system.ID,
-				Name:     system.ID,
-			})
-		default:
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.ID,
-				System:   system.ID,
-				Name:     system.ID,
-			})
+		systemID := system.ID
+		if _, err := systemdefs.LookupSystem(systemID); err != nil {
+			var ok bool
+			if systemID, ok = launcherSystems[system.ID]; !ok {
+				continue
+			}
 		}
+		coreName := system.ID
+		if system.SetName != "" {
+			coreName = system.SetName
+		}
+		nameMap = append(nameMap, NameMapping{
+			CoreName: coreName,
+			System:   systemID,
+			Name:     systemID,
+		})
 	}
 
 	// Some cores name themselves differently from their system, for example the
@@ -131,7 +178,6 @@ func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping 
 	// system ID (for example RA_SNES for SNES). Include launcher runtime data
 	// so tracker validation does not discard authoritative media from them.
 	if runtimeProvider, ok := pl.(platforms.LauncherRuntimeProvider); ok {
-		launchers := pl.Launchers(cfg)
 		for i := range launchers {
 			launcher := &launchers[i]
 			if launcher.SystemID == "" {
@@ -668,9 +714,12 @@ func (tr *Tracker) loadGameLocked() {
 		if mglErr != nil {
 			// A missing MGL (e.g. AmigaVision virtual paths, or a cleaned-up temp
 			// MGL) just means we can't track that game; not a fault worth Sentry.
-			if errors.Is(mglErr, os.ErrNotExist) {
+			switch {
+			case errors.Is(mglErr, os.ErrNotExist):
 				log.Warn().Err(mglErr).Str("path", path).Msg("active game mgl file not found")
-			} else {
+			case errors.Is(mglErr, mgls.ErrMalformedMGL):
+				tr.logMalformedMGL(path, mglErr)
+			default:
 				log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
 			}
 		} else {
@@ -851,7 +900,7 @@ func resolveMGLRelativePath(mglPath, coreName string, exists func(string) bool) 
 
 // recentGamePath reads the newest launchable path from a MiSTer recent file.
 func recentGamePath(filename string, storageSelection []byte) (string, error) {
-	if !strings.Contains(filename, "_recent") {
+	if !strings.Contains(filename, "_recent") || !strings.EqualFold(filepath.Ext(filename), ".cfg") {
 		return "", nil
 	}
 
@@ -1194,8 +1243,30 @@ func trackerFileChanged(op fsnotify.Op) bool {
 }
 
 func trackerRecentFileChanged(filename string) bool {
+	// Main writes cores_recent.cfg through a .tmp file and renames it, so the
+	// extension check keeps the half-written temp file from being read as a
+	// game recents file.
+	base := filepath.Base(filename)
 	return filepath.Dir(filename) == filepath.Clean(misterconfig.CoreConfigFolder) &&
-		strings.Contains(filepath.Base(filename), "_recent")
+		strings.Contains(base, "_recent") &&
+		strings.EqualFold(filepath.Ext(base), ".cfg")
+}
+
+// loadRecentReporting loads a recents file and logs a failure below Error
+// when it is the file being replaced or a third-party MGL it names.
+func (tr *Tracker) loadRecentReporting(name string) {
+	recentErr := tr.loadRecent(name)
+	if recentErr == nil {
+		return
+	}
+	switch {
+	case errors.Is(recentErr, os.ErrNotExist):
+		log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+	case errors.Is(recentErr, mgls.ErrMalformedMGL):
+		log.Warn().Err(recentErr).Str("file", name).Msg("recent mgl file is malformed")
+	default:
+		log.Error().Msgf("error loading recent file: %s", recentErr)
+	}
 }
 
 func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
@@ -1229,14 +1300,7 @@ func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
 		// MiSTer truncates and rewrites binary recent files. Let the write
 		// settle before reading the first complete record.
 		return func() {
-			recentErr := tr.loadRecent(name)
-			if recentErr != nil {
-				if errors.Is(recentErr, os.ErrNotExist) {
-					log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-				} else {
-					log.Error().Msgf("error loading recent file: %s", recentErr)
-				}
-			}
+			tr.loadRecentReporting(name)
 		}, true
 	}
 	return nil, false

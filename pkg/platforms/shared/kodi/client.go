@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
 )
@@ -633,14 +634,15 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	client := &http.Client{Transport: useragent.Transport(nil)}
 	resp, err := client.Do(kodiReq) //nolint:gosec // G704: URL from user config, Kodi client's purpose
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("failed to send request: %w: %w", platforms.ErrScannerSourceUnreachable, err)
 	}
 	defer func() {
 		_ = resp.Body.Close() // Ignore close error in defer
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("unexpected HTTP status from kodi api: %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w: unexpected HTTP status from kodi api: %d",
+			platforms.ErrScannerSourceUnreachable, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
@@ -660,8 +662,8 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 		} else if mediaType == "" {
 			mediaType = "unspecified"
 		}
-		return nil, fmt.Errorf("invalid kodi JSON response (status %d, content type %s)",
-			resp.StatusCode, mediaType)
+		return nil, fmt.Errorf("%w: invalid kodi JSON response (status %d, content type %s)",
+			platforms.ErrScannerSourceUnreachable, resp.StatusCode, mediaType)
 	}
 	if apiResp.Error != nil {
 		return nil, fmt.Errorf("error from kodi api: %s", apiResp.Error.Message)

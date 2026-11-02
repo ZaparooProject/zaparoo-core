@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -3575,6 +3576,99 @@ func TestNamedExplicitOnlySystemIsStillLaunchable(t *testing.T) {
 			assert.True(t, result.MediaChanged)
 			mockMediaDB.AssertExpectations(t)
 			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCmdLaunch_UnrecognisedTextIsInvalidLaunchFormat verifies launch text
+// that is no path, URI, title or <system>/<path> value is reported as invalid
+// arguments, an expected condition, rather than an unclassified failure.
+func TestCmdLaunch_UnrecognisedTextIsInvalidLaunchFormat(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"sfiii2n", "1944", "https%3A%2F%2Fexample.com%2Fgame"} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+			mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+			env := platforms.CmdEnv{
+				Cmd:      zapscript.Command{Name: "launch", Args: []string{text}},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
+			}
+
+			_, err := cmdLaunch(mockPlatform, env)
+
+			require.ErrorIs(t, err, ErrInvalidLaunchFormat)
+			require.ErrorIs(t, err, ErrInvalidArguments)
+			assert.Equal(t, "invalid launch format: "+text, err.Error())
+			assert.True(t, IsExpectedRunError(err))
+			mockPlatform.AssertNotCalled(
+				t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+			)
+		})
+	}
+}
+
+// TestCmdLaunch_NoExactPathResultIsNoMatch verifies an exact-path lookup with
+// no result reports the no-match condition.
+func TestCmdLaunch_NoExactPathResultIsNoMatch(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "snes-launcher", SystemID: "snes", Folders: []string{}},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, "Sonic\\Game").
+		Return([]database.SearchResult{}, nil)
+
+	env := platforms.CmdEnv{
+		Cmd:      zapscript.Command{Name: "launch", Args: []string{"snes/Sonic\\Game"}},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorIs(t, err, titles.ErrNoMatch)
+	assert.Contains(t, err.Error(), "no results found for: Sonic\\Game")
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestCmdSearch_NoResultIsNoMatch verifies a search with no result, across
+// all systems or within one, reports the no-match condition.
+func TestCmdSearch_NoResultIsNoMatch(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{"sonic", "snes/sonic"} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+				Return([]database.SearchResultWithCursor{}, nil)
+
+			env := platforms.CmdEnv{
+				Cmd:      zapscript.Command{Name: "launch.search", Args: []string{query}},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			_, err := cmdSearch(mockPlatform, env)
+
+			require.ErrorIs(t, err, titles.ErrNoMatch)
+			assert.Contains(t, err.Error(), "no results found for: sonic")
 		})
 	}
 }

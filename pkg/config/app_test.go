@@ -22,6 +22,7 @@ package config
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,4 +48,22 @@ func TestVersionFlagName_IsFrozen(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "version", VersionFlagName)
+}
+
+// A tag write waits for a tag for ReaderWriteWait, so its request has to
+// outlast that wait or an untapped write ends as an API timeout.
+func TestAPIRequestTimeoutFor(t *testing.T) {
+	t.Parallel()
+
+	timeout, bounded := APIRequestTimeoutFor(models.MethodVersion)
+	assert.True(t, bounded)
+	assert.Equal(t, APIRequestTimeout, timeout)
+
+	timeout, bounded = APIRequestTimeoutFor("READERS.WRITE")
+	assert.True(t, bounded)
+	assert.Equal(t, ReaderWriteRequestTimeout, timeout)
+	assert.Greater(t, timeout, ReaderWriteWait)
+
+	_, bounded = APIRequestTimeoutFor(models.MethodSettingsBackup)
+	assert.False(t, bounded)
 }

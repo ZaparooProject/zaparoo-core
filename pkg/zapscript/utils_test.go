@@ -21,7 +21,12 @@ package zapscript
 
 import (
 	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,10 +165,60 @@ allow_execute = [".*"]`))
 
 	_, err := cmdExecute(nil, env)
 
-	require.Error(t, err, "execute should fail with non-zero exit")
+	require.ErrorIs(t, err, ErrExecuteExitStatus, "execute should fail with non-zero exit")
+	assert.True(t, IsExpectedRunError(err), "a failing user command is not a Core fault")
 	assert.Contains(t, err.Error(), "exit status 1")
 	assert.NotContains(t, err.Error(), "stderr_test_message")
 	assert.NotContains(t, err.Error(), "bash")
+}
+
+// TestExecuteError_Timeout verifies an overrun is reported as an execute
+// timeout, an expected condition, and not as context.DeadlineExceeded, which
+// callers treat as a cancelled run.
+func TestExecuteError_Timeout(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell to produce a killed process")
+	}
+	killed := exec.CommandContext(t.Context(), "sh", "-c", "kill -9 $$").Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, killed, &exitErr)
+
+	for _, runErr := range []error{killed, context.DeadlineExceeded, nil} {
+		err := executeError(context.DeadlineExceeded, runErr)
+
+		require.ErrorIs(t, err, ErrExecuteTimeout)
+		require.NotErrorIs(t, err, context.DeadlineExceeded)
+		assert.True(t, IsExpectedRunError(err))
+		assert.Contains(t, err.Error(), ExecuteTimeout.String())
+	}
+	assert.Contains(t, executeError(context.DeadlineExceeded, killed).Error(), "signal: killed")
+}
+
+// A command that failed to start once the deadline had passed is not the
+// user's script running too long, and its own error must not be lost.
+func TestExecuteError_StartFailureAfterDeadlineIsNotATimeout(t *testing.T) {
+	t.Parallel()
+
+	startErr := &os.PathError{Op: "fork/exec", Path: "/missing", Err: syscall.ENOENT}
+	err := executeError(context.DeadlineExceeded, startErr)
+
+	require.NotErrorIs(t, err, ErrExecuteTimeout)
+	require.ErrorIs(t, err, syscall.ENOENT)
+	assert.False(t, IsExpectedRunError(err))
+}
+
+// TestExecuteError_StartFailureStaysUnexpected verifies a failure to run the
+// command at all is not mistaken for the command's own failure.
+func TestExecuteError_StartFailureStaysUnexpected(t *testing.T) {
+	t.Parallel()
+
+	err := executeError(nil, errors.New("fork/exec: resource temporarily unavailable"))
+
+	require.NotErrorIs(t, err, ErrExecuteExitStatus)
+	require.NotErrorIs(t, err, ErrExecuteTimeout)
+	assert.False(t, IsExpectedRunError(err))
 }
 
 // TestCmdExecute_TimeoutConstant verifies the timeout constant value.

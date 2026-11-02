@@ -87,6 +87,9 @@ type MiSTerConsoleManager struct {
 	platform        *Platform
 	activeVT        string
 	leaseNonce      string
+	// staleLeaseNonce is a lease whose release failed. Main may still hold
+	// it, so the next Open releases it before acquiring a new one.
+	staleLeaseNonce string
 	framebufferWait time.Duration
 	mu              syncutil.RWMutex
 	active          bool
@@ -235,6 +238,18 @@ func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (
 		return false, nil
 	}
 
+	m.mu.Lock()
+	stale := m.staleLeaseNonce
+	m.staleLeaseNonce = ""
+	m.mu.Unlock()
+	if stale != "" {
+		releaseCtx, releaseCancel := context.WithTimeout(ctx, 3*time.Second)
+		if err := m.leaseController.Release(releaseCtx, stale); err != nil {
+			log.Warn().Err(err).Msg("could not release an earlier Main console lease")
+		}
+		releaseCancel()
+	}
+
 	leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)
 	nonce, err := m.leaseController.Acquire(leaseCtx, vt)
 	leaseCancel()
@@ -297,23 +312,34 @@ func (m *MiSTerConsoleManager) Close() error {
 		}
 	}
 
+	var closeErr error
 	if leaseNonce != "" {
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		err := m.leaseController.Release(releaseCtx, leaseNonce)
 		releaseCancel()
 		if err != nil {
-			return fmt.Errorf("failed to release Main console lease: %w", err)
+			closeErr = fmt.Errorf("failed to release Main console lease: %w", err)
 		}
 	} else if err := m.platform.KeyboardPress("{f12}"); err != nil {
-		return fmt.Errorf("failed to press F12 key: %w", err)
+		closeErr = fmt.Errorf("failed to press F12 key: %w", err)
 	}
 
+	// Forget the console even when the release failed. Keeping it would make
+	// every later Open skip console setup and every Close retry a lease Main
+	// no longer answers for; the next Open acquires a fresh one instead,
+	// first trying once more to release the one Main may still hold.
 	m.mu.Lock()
 	m.active = false
 	m.activeVT = ""
 	m.leaseNonce = ""
+	if closeErr != nil && leaseNonce != "" {
+		m.staleLeaseNonce = leaseNonce
+	}
 	m.mu.Unlock()
 
+	if closeErr != nil {
+		return closeErr
+	}
 	log.Debug().Msg("console closed, returned to FPGA mode")
 	return nil
 }

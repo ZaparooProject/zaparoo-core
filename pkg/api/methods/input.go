@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"errors"
 	"fmt"
 
 	zapscriptlib "github.com/ZaparooProject/go-zapscript"
@@ -28,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
@@ -40,6 +42,15 @@ func hasPersistentInputTokens(args []string) bool {
 		}
 	}
 	return false
+}
+
+// keyboardPressError marks a press the session refused for holding too many
+// key combinations as the client's request, not a server fault.
+func keyboardPressError(err error) error {
+	if errors.Is(err, shared.ErrTooManyKeyboardHolds) {
+		return models.ClientErrf("keyboard press failed: %w", err)
+	}
+	return fmt.Errorf("keyboard press failed: %w", err)
 }
 
 // checkInputTokens applies the configured allow and block lists to a request's
@@ -93,14 +104,14 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 
 	if env.InputSession != nil {
 		if err := env.InputSession.KeyboardPressSequence(env.Context, args, 0); err != nil {
-			return nil, fmt.Errorf("keyboard press failed: %w", err)
+			return nil, keyboardPressError(err)
 		}
 	} else {
 		if hasPersistentInputTokens(args) {
 			return nil, models.ClientErrf("persistent keyboard input requires a supported WebSocket session")
 		}
 		if err := zapscript.PressKeyboardSequence(env.Platform, args, 0); err != nil {
-			return nil, fmt.Errorf("keyboard press failed: %w", err)
+			return nil, keyboardPressError(err)
 		}
 	}
 

@@ -2706,3 +2706,114 @@ func TestGetFiles_PausedPauserInterruptsWalk(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
+
+// TestGetFiles_ZipsAsDirsSkipsNoArchiveExtensions verifies a zip entry whose
+// extension the launcher can only load from disk is not indexed, while the
+// launcher's other files in the same zip still are.
+func TestGetFiles_ZipsAsDirsSkipsNoArchiveExtensions(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	zipPath := filepath.Join(rootDir, "Final Fight.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	for _, name := range []string{"X68000/a.mgl", "X68000/Final Fight.MGL", "X68000/disk.hdf"} {
+		fw, createErr := w.Create(name)
+		require.NoError(t, createErr)
+		_, writeErr := fw.Write([]byte("data"))
+		require.NoError(t, writeErr)
+	}
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+	onDisk := filepath.Join(rootDir, "b.mgl")
+	require.NoError(t, os.WriteFile(onDisk, []byte("data"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:                  systemdefs.SystemX68000,
+		SystemID:            systemdefs.SystemX68000,
+		Folders:             []string{rootDir},
+		Extensions:          []string{".d88", ".hdf", ".mgl"},
+		NoArchiveExtensions: []string{".mgl", ".mra", ".rbf"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemX68000, rootDir, nil)
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{
+		filepath.Join(zipPath, "X68000", "disk.hdf"),
+		onDisk,
+	}, files)
+}
+
+// An "any" scanner whose backing service is down, such as Kodi on another
+// host, is skipped at Warn rather than reported as a fault on every index.
+func TestAnyScannerSourceUnavailableIsSkipped(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	anyLauncher := platforms.Launcher{
+		ID: "TestUnreachableAnyScanner",
+		Scanner: func(context.Context, *config.Instance, string, []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, fmt.Errorf("get shows: %w", platforms.ErrScannerSourceUnreachable)
+		},
+	}
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{anyLauncher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	buf := &syncLogBuffer{}
+	prevLogger := log.Logger
+	prevGlobal := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = prevLogger; zerolog.SetGlobalLevel(prevGlobal) }()
+
+	systems := []systemdefs.System{{ID: "test-system-for-any-scanner"}}
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	log.Logger = prevLogger
+	zerolog.SetGlobalLevel(prevGlobal)
+	output := buf.String()
+	assert.Contains(t, output, "skipping TestUnreachableAnyScanner 'any' scanner: service unavailable")
+	assert.NotContains(t, output, "error running TestUnreachableAnyScanner")
+}

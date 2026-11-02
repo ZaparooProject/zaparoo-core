@@ -38,7 +38,6 @@ const (
 	periodBetweenLoop         = 250 * time.Millisecond
 	autoConnStr               = "libnfcauto:"
 	maxMifareClassic1KSectors = 16
-	defaultWriteTimeoutTries  = 4 * 30 // ~30 seconds
 )
 
 // ErrWriteCancelled wraps context.Canceled, so a cancel the user asked for is
@@ -178,15 +177,23 @@ func (r *readRetries) reset() {
 }
 
 type Reader struct {
-	cfg           *config.Instance
-	pnd           device
-	prevToken     *tokens.Token
-	write         chan WriteRequest
-	activeWrite   *WriteRequest
+	cfg         *config.Instance
+	pnd         device
+	prevToken   *tokens.Token
+	write       chan WriteRequest
+	activeWrite *WriteRequest
+	closeErr    error
+	// pollStop asks the poll goroutine to exit, and pollDone is closed once
+	// it has closed the device. Both are nil until polling starts.
+	pollStop      chan struct{}
+	pollDone      chan struct{}
 	conn          config.ReadersConnect
 	reads         readRetries
 	activeWriteMu syncutil.RWMutex
-	mu            syncutil.RWMutex // protects polling, pnd
+	mu            syncutil.RWMutex // protects polling, pnd, pollStop, pollDone, closeErr
+	// closeWait bounds how long Close waits for the poll goroutine. Zero
+	// means defaultCloseWait.
+	closeWait time.Duration
 	// misses counts polls in a row that found no tag.
 	misses  int
 	polling bool
@@ -257,100 +264,197 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 
 	r.mu.Lock()
 	r.conn = device
+	r.mu.Unlock()
+
+	r.startPolling(pnd, iq)
+	return nil
+}
+
+// startPolling hands pnd to a new poll goroutine. From here on the goroutine
+// owns the device: it makes every libnfc call and closes the device after its
+// last one, so Close can never free the device under a call still running in
+// C.
+func (r *Reader) startPolling(pnd device, iq chan<- readers.Scan) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	r.mu.Lock()
 	r.pnd = pnd
 	r.polling = true
 	r.prevToken = nil
+	r.pollStop = stop
+	r.pollDone = done
 	r.mu.Unlock()
 
-	go func() {
-		for {
-			r.mu.RLock()
-			polling := r.polling
-			pnd := r.pnd
-			r.mu.RUnlock()
-			if !polling || pnd == nil {
-				break
+	go r.poll(pnd, iq, stop, done)
+}
+
+func (r *Reader) poll(pnd device, iq chan<- readers.Scan, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	defer r.closeDevice(pnd)
+
+	// Close waits for this goroutine, so a send must not outlive the
+	// consumer: the reader manager stops reading before it closes readers.
+	send := func(scan readers.Scan) bool {
+		select {
+		case iq <- scan:
+			return true
+		case <-stop:
+			return false
+		}
+	}
+
+	for {
+		r.mu.RLock()
+		polling := r.polling
+		r.mu.RUnlock()
+		if !polling {
+			return
+		}
+		select {
+		case <-stop:
+			return
+		case req := <-r.write:
+			r.writeTagUntilStopped(&req, stop)
+		case <-time.After(periodBetweenLoop):
+			// continue with reading
+		}
+
+		token, removed, err := r.pollDevice(pnd, r.prevToken, timesToPoll, periodBetweenPolls)
+		if errors.Is(err, nfc.Error(nfc.EIO)) {
+			log.Warn().Msgf("error during poll: %s", err)
+			log.Warn().Msg("fatal IO error, device was possibly unplugged")
+
+			log.Warn().Msg("reader error, sending error signal")
+			r.prevToken = nil
+			send(readers.Scan{
+				Source:      tokens.SourceReader,
+				ReaderID:    r.ReaderID(),
+				Token:       nil,
+				ReaderError: true,
+			})
+			return
+		} else if err != nil {
+			log.Warn().Msgf("error polling device: %s", err)
+			continue
+		}
+
+		if removed {
+			log.Info().Msg("token removed, sending to input queue")
+			if !send(readers.Scan{
+				Source:            tokens.SourceReader,
+				ReaderID:          r.ReaderID(),
+				Token:             nil,
+				WrittenTagRemoved: r.writtenTag,
+			}) {
+				return
 			}
-			select {
-			case req := <-r.write:
-				r.writeTag(&req)
-			case <-time.After(periodBetweenLoop):
-				// continue with reading
-			}
-
-			token, removed, err := r.pollDevice(pnd, r.prevToken, timesToPoll, periodBetweenPolls)
-			if errors.Is(err, nfc.Error(nfc.EIO)) {
-				log.Warn().Msgf("error during poll: %s", err)
-				log.Warn().Msg("fatal IO error, device was possibly unplugged")
-
-				log.Warn().Msg("reader error, sending error signal")
-				iq <- readers.Scan{
-					Source:      tokens.SourceReader,
-					ReaderID:    r.ReaderID(),
-					Token:       nil,
-					ReaderError: true,
-				}
-				r.prevToken = nil
-
-				err = r.Close()
-				if err != nil {
-					log.Warn().Msgf("error closing device: %s", err)
-				}
-
-				break
-			} else if err != nil {
-				log.Warn().Msgf("error polling device: %s", err)
+			r.prevToken = nil
+			r.writtenTag = false
+		} else if token != nil {
+			if r.prevToken != nil && token.UID == r.prevToken.UID {
 				continue
 			}
+			// A different tag replaced the written one without a gap.
+			r.writtenTag = false
 
-			if removed {
-				log.Info().Msg("token removed, sending to input queue")
-				iq <- readers.Scan{
-					Source:            tokens.SourceReader,
-					ReaderID:          r.ReaderID(),
-					Token:             nil,
-					WrittenTagRemoved: r.writtenTag,
-				}
-				r.prevToken = nil
-				r.writtenTag = false
-			} else if token != nil {
-				if r.prevToken != nil && token.UID == r.prevToken.UID {
-					continue
-				}
-				// A different tag replaced the written one without a gap.
-				r.writtenTag = false
-
-				log.Info().Msg("new token detected, sending to input queue")
-				iq <- readers.Scan{
-					Source:   tokens.SourceReader,
-					ReaderID: r.ReaderID(),
-					Token:    token,
-				}
-				r.prevToken = token
+			log.Info().Msg("new token detected, sending to input queue")
+			if !send(readers.Scan{
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    token,
+			}) {
+				return
 			}
+			r.prevToken = token
+		}
+	}
+}
+
+// writeTagUntilStopped runs a write request, cancelling it if the reader is
+// closed: a write waiting for a tag would otherwise hold Close for its whole
+// timeout.
+func (r *Reader) writeTagUntilStopped(req *WriteRequest, stop <-chan struct{}) {
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-stop:
+			select {
+			case req.Cancel <- true:
+			default:
+			}
+		case <-finished:
 		}
 	}()
+	r.writeTag(req)
+	close(finished)
+}
 
-	return nil
+// defaultCloseWait is long enough for the poll goroutine to finish a poll or
+// a tag write's current exchange once it is asked to stop.
+const defaultCloseWait = 10 * time.Second
+
+// closeDevice runs on the poll goroutine after its last libnfc call.
+func (r *Reader) closeDevice(pnd device) {
+	r.mu.Lock()
+	r.polling = false
+	r.pnd = nil
+	r.mu.Unlock()
+
+	log.Debug().Msgf("closing device: %s", r.conn.ConnectionString())
+	if err := pnd.Close(); err != nil {
+		r.mu.Lock()
+		r.closeErr = fmt.Errorf("failed to close NFC device: %w", err)
+		r.mu.Unlock()
+	}
 }
 
 func (r *Reader) Close() error {
 	r.mu.Lock()
 	r.polling = false
-	if r.pnd == nil {
-		r.mu.Unlock()
-		return nil
-	}
+	stop, done := r.pollStop, r.pollDone
+	r.pollStop = nil
 	pnd := r.pnd
-	r.pnd = nil
+	if done == nil {
+		r.pnd = nil
+	}
 	r.mu.Unlock()
 
-	log.Debug().Msgf("closing device: %s", r.conn.ConnectionString())
-	err := pnd.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close NFC device: %w", err)
+	if done == nil {
+		// No poll goroutine took the device, so nothing else can be using it.
+		if pnd == nil {
+			return nil
+		}
+		log.Debug().Msgf("closing device: %s", r.conn.ConnectionString())
+		if err := pnd.Close(); err != nil {
+			return fmt.Errorf("failed to close NFC device: %w", err)
+		}
+		return nil
 	}
-	return nil
+
+	if stop != nil {
+		close(stop)
+	}
+	wait := r.closeWait
+	if wait <= 0 {
+		wait = defaultCloseWait
+	}
+	select {
+	case <-done:
+	case <-time.After(wait):
+		// The goroutine is stuck in a libnfc call that has not returned, as
+		// with a device that neither answers nor fails. Close runs with the
+		// reader state lock held, so it stops waiting; the goroutine still
+		// closes the device once that call returns.
+		log.Warn().Dur("waited", wait).Msg("NFC device did not stop in time; closing it in the background")
+		return nil
+	}
+
+	r.mu.Lock()
+	err := r.closeErr
+	r.closeErr = nil
+	r.mu.Unlock()
+	return err
 }
 
 func (r *Reader) Metadata() readers.DriverMetadata {
@@ -529,17 +633,24 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 	if res.Cancelled {
 		return nil, ErrWriteCancelled
 	} else if res.Err != nil {
-		// Expected user conditions (no tag presented, unsupported tag) log at
-		// Warn; genuine hardware write failures stay at Error for Sentry.
-		if errors.Is(res.Err, readers.ErrTagNotDetected) || errors.Is(res.Err, readers.ErrUnsupportedTagType) {
-			log.Warn().Msgf("error writing to tag: %s", res.Err)
-		} else {
-			log.Error().Msgf("error writing to tag: %s", res.Err)
-		}
+		logWriteError(res.Err)
 		return nil, res.Err
 	}
 
 	return res.Token, nil
+}
+
+// logWriteError logs a failed write. Expected user conditions (no tag
+// presented, unsupported tag, reader unplugged) log at Warn; genuine hardware
+// write failures stay at Error for Sentry.
+func logWriteError(err error) {
+	if errors.Is(err, readers.ErrTagNotDetected) ||
+		errors.Is(err, readers.ErrUnsupportedTagType) ||
+		errors.Is(err, readers.ErrReaderDisconnected) {
+		log.Warn().Msgf("error writing to tag: %s", err)
+	} else {
+		log.Error().Msgf("error writing to tag: %s", err)
+	}
 }
 
 func (r *Reader) CancelWrite() {
@@ -972,9 +1083,11 @@ func (r *Reader) writeTag(req *WriteRequest) {
 	var target nfc.Target
 	var err error
 	var lastPollErr error
-	tries := defaultWriteTimeoutTries
+	// Each round waits periodBetweenLoop and then polls, so a count of rounds
+	// ran well past the wait; the clock bounds it instead.
+	deadline := time.Now().Add(config.ReaderWriteWait)
 
-	for tries > 0 {
+	for time.Now().Before(deadline) {
 		select {
 		case <-req.Cancel:
 			log.Info().Msgf("write cancelled by user")
@@ -1001,13 +1114,16 @@ func (r *Reader) writeTag(req *WriteRequest) {
 		if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
 			log.Warn().Msgf("could not poll: %s", err)
 			lastPollErr = err
+			// The reader is gone, as when it is unplugged. Waiting out the
+			// timeout only delays the error; the read loop then closes the device.
+			if errors.Is(err, nfc.Error(nfc.EIO)) {
+				break
+			}
 		}
 
 		if count > 0 {
 			break
 		}
-
-		tries--
 	}
 
 	if count == 0 {
@@ -1016,9 +1132,11 @@ func (r *Reader) writeTag(req *WriteRequest) {
 		// failed, so surface it as a genuine fault rather than masking it as
 		// ErrTagNotDetected (which downstream treats as an expected condition).
 		if lastPollErr != nil {
-			req.Result <- WriteRequestResult{
-				Err: fmt.Errorf("failed to poll for tag: %w", lastPollErr),
+			pollErr := fmt.Errorf("failed to poll for tag: %w", lastPollErr)
+			if errors.Is(lastPollErr, nfc.Error(nfc.EIO)) {
+				pollErr = fmt.Errorf("%w: %w", readers.ErrReaderDisconnected, pollErr)
 			}
+			req.Result <- WriteRequestResult{Err: pollErr}
 			return
 		}
 		log.Warn().Msgf("could not detect a tag")

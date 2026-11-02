@@ -22,11 +22,14 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +86,43 @@ func TestHandleInputKeyboard_UsesDurableInputSession(t *testing.T) {
 	assert.Equal(t, []string{"{press:up}"}, session.keyboardArgs)
 	assert.Zero(t, session.keyboardDelay)
 	assert.False(t, session.released)
+}
+
+// TestHandleInputKeyboard_TooManyHoldsIsClientError verifies a session refusing
+// another held key combination is the client's request, not a server fault,
+// while other press failures still are.
+func TestHandleInputKeyboard_TooManyHoldsIsClientError(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		err         error
+		name        string
+		clientError bool
+	}{
+		{
+			name:        "too many holds",
+			err:         fmt.Errorf("%w: session already holds 128", shared.ErrTooManyKeyboardHolds),
+			clientError: true,
+		},
+		{name: "device failure", err: errors.New("device not available"), clientError: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := requests.RequestEnv{
+				Context:      t.Context(),
+				InputSession: &recordingInputSession{keyboardErr: tc.err},
+				Params:       json.RawMessage(`{"keys":"{press:up}"}`),
+				IsLocal:      true,
+			}
+
+			_, err := HandleInputKeyboard(env)
+
+			require.ErrorIs(t, err, tc.err)
+			var clientErr *models.ClientError
+			assert.Equal(t, tc.clientError, errors.As(err, &clientErr))
+		})
+	}
 }
 
 func TestHandleInputGamepad_UsesDurableInputSession(t *testing.T) {

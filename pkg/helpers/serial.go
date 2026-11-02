@@ -88,7 +88,9 @@ func ignoreSerialDevice(path string) bool {
 	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {
-		log.Error().Err(err).Msg("udevadm failed")
+		// udevadm exits non-zero for a device it does not know and is killed
+		// by the timeout on a slow system; both just skip the ignore list.
+		log.Warn().Err(err).Str("path", path).Msg("udevadm failed")
 		return false
 	}
 

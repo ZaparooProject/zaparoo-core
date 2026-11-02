@@ -127,6 +127,7 @@ type Reader struct {
 	activeTokens map[string]*tokens.Token
 	device       config.ReadersConnect
 	wg           sync.WaitGroup
+	closeOnce    sync.Once
 	mu           syncutil.RWMutex
 	// feedEnded is set when the detector's event feed closes on its own,
 	// as when its D-Bus connection drops. The reader then sees no more
@@ -225,8 +226,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 }
 
 func (r *Reader) Close() error {
-	// Check if Open() was called (stopChan is only initialized in Open)
-	if r.stopChan != nil {
+	// stopChan is only initialized in Open. A reader can be closed more than
+	// once, for example by State.SetReader replacing it and then by shutdown,
+	// and closing stopChan twice panics.
+	if r.stopChan == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
 		close(r.stopChan)
 		r.wg.Wait()
 
@@ -235,7 +241,7 @@ func (r *Reader) Close() error {
 		}
 
 		log.Info().Msg("external drive reader stopped")
-	}
+	})
 
 	return nil
 }

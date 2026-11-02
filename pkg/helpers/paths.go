@@ -530,9 +530,31 @@ func scanExcludeSubject(path, normPath string) string {
 	return normPath
 }
 
+// hasExtension reports whether lowerPath ends in any of exts, compared without
+// case.
+func hasExtension(lowerPath string, exts []string) bool {
+	for _, ext := range exts {
+		if ext != "" && strings.HasSuffix(lowerPath, strings.ToLower(ext)) {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchSystemFileForScan returns true if path matches a launcher for the given
 // system and is not blocked by that launcher's scan-only exclude patterns.
 func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
+	return m.matchScanFile(systemID, path, false)
+}
+
+// MatchSystemArchiveEntryForScan is MatchSystemFileForScan for a path naming
+// an entry inside an archive. It also skips launchers that list the entry's
+// extension in NoArchiveExtensions.
+func (m *LauncherMatcher) MatchSystemArchiveEntryForScan(systemID, path string) bool {
+	return m.matchScanFile(systemID, path, true)
+}
+
+func (m *LauncherMatcher) matchScanFile(systemID, path string, inArchive bool) bool {
 	lowerPath := strings.ToLower(path)
 	normPath := NormalizePathForComparison(path)
 
@@ -543,6 +565,10 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 	for i := range launchers {
 		launcher := &launchers[i]
 		if !m.pathIsLauncher(launcher, path, lowerPath, normPath) {
+			continue
+		}
+		if inArchive && hasExtension(lowerPath, launcher.NoArchiveExtensions) {
+			matchedExcluded = true
 			continue
 		}
 		if m.pathIsExcludedFromScan(launcher, excludeSubject) {

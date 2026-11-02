@@ -53,7 +53,7 @@ import (
 const (
 	quickDetectionTimeout = 15 * time.Second
 	ndefReadTimeout       = 5 * time.Second
-	writeTimeout          = 30 * time.Second
+	writeTimeout          = config.ReaderWriteWait
 	deviceTimeout         = 5 * time.Second
 	writeRetryCount       = 3
 )
@@ -130,6 +130,36 @@ func ClearFailedProbe(path string) {
 	probeStateMu.Lock()
 	defer probeStateMu.Unlock()
 	delete(failedProbePaths, path)
+}
+
+// Package-level state for device paths whose polling session has failed.
+// A reader that answers Init but then stops responding fails its session the
+// same way on every reconnect tick, so only the first failure at a path is
+// reported as an error. It is package level because each reconnect builds a
+// fresh Reader. Entries are cleared once a tag is read at that path again.
+var (
+	sessionFailureMu    syncutil.Mutex
+	sessionFailurePaths = make(map[string]struct{})
+)
+
+// recordSessionFailure marks path as having a failed session and reports
+// whether this is the first failure since the path last worked.
+func recordSessionFailure(path string) bool {
+	sessionFailureMu.Lock()
+	defer sessionFailureMu.Unlock()
+	if _, failed := sessionFailurePaths[path]; failed {
+		return false
+	}
+	sessionFailurePaths[path] = struct{}{}
+	return true
+}
+
+// clearSessionFailure forgets an earlier session failure at path, so the next
+// failure there is reported as an error again.
+func clearSessionFailure(path string) {
+	sessionFailureMu.Lock()
+	defer sessionFailureMu.Unlock()
+	delete(sessionFailurePaths, path)
 }
 
 // PN532Device abstracts the pn532.Device for testing.
@@ -281,15 +311,24 @@ func logTraceableError(err error, operation string) {
 	default:
 		event = log.Error().Err(err).Str("operation", operation)
 	}
+	withTrace(event, err).Msg("PN532 error")
+}
 
+// logExpectedError logs a PN532 error that comes from an expected user or
+// hardware condition at Warn, keeping any wire trace data.
+func logExpectedError(err error, operation string) {
+	withTrace(log.Warn().Err(err).Str("operation", operation), err).Msg("PN532 error")
+}
+
+// withTrace adds the wire trace data carried by err, if any, to event.
+func withTrace(event *zerolog.Event, err error) *zerolog.Event {
 	if trace := pn532.GetTrace(err); trace != nil {
 		event = event.
 			Str("transport", trace.Transport).
 			Str("port", trace.Port).
 			Str("wire_trace", trace.FormatTrace())
 	}
-
-	event.Msg("PN532 error")
+	return event
 }
 
 func createVIDPIDBlocklist() []string {
@@ -338,6 +377,7 @@ type Reader struct {
 	writeMutex                syncutil.Mutex
 	writeOperationMutex       syncutil.Mutex
 	connected                 bool
+	closing                   bool
 	suppressScansUntilRemoval bool
 	tagRemovedDuringWrite     bool
 	writingTag                bool
@@ -483,9 +523,14 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 		return r.handleTagDetected(ctx, detectedTag, iq)
 	})
 
+	r.writeMutex.Lock()
+	r.closing = false
+	r.writeMutex.Unlock()
+
 	// Start session
 	r.connected = true
 	r.wg.Add(1)
+	devicePath := device.Path
 	go func() {
 		defer r.wg.Done()
 		defer func() {
@@ -495,7 +540,14 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 		}()
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
-				logTraceableError(err, "session polling")
+				// The connect loop reopens the reader every tick and a reader
+				// in this state fails the same way each time, so only the
+				// first failure at this path is an error.
+				if recordSessionFailure(devicePath) {
+					logTraceableError(err, "session polling")
+				} else {
+					logExpectedError(err, "session polling")
+				}
 
 				readerID := r.ReaderID()
 				r.mutex.Lock()
@@ -524,6 +576,7 @@ func (r *Reader) suppressingTagScans() bool {
 
 func (r *Reader) handleTagDetected(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
 	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
+	clearSessionFailure(r.Path())
 	if r.suppressingTagScans() {
 		log.Info().Msg("suppressing PN532 scan during or immediately after tag write")
 		return nil
@@ -611,6 +664,19 @@ func (r *Reader) Close() error {
 	// Wait for session goroutine to complete outside of lock to avoid deadlock.
 	// The goroutines may need to acquire the mutex before they can exit.
 	r.wg.Wait()
+
+	// A write runs on its own context, so cancelling the session does not stop
+	// it. Cancel it and wait for it to return before the port is closed under
+	// it. No other lock is held here: the write takes the lifecycle lock and
+	// writeMutex while it holds writeOperationMutex.
+	r.writeMutex.Lock()
+	r.closing = true
+	if r.writeCancel != nil {
+		r.writeCancel()
+	}
+	r.writeMutex.Unlock()
+	r.writeOperationMutex.Lock()
+	r.writeOperationMutex.Unlock() //nolint:gocritic,staticcheck // only waits for an in-flight write
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -895,6 +961,10 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 
 	// Create cancellable context for this write operation under writeMutex.
 	r.writeMutex.Lock()
+	if r.closing {
+		r.writeMutex.Unlock()
+		return nil, errors.New("reader is closing")
+	}
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
 	r.tagRemovedDuringWrite = false
 	r.writingTag = false
@@ -961,7 +1031,6 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			r.writeMutex.Unlock()
 
 			if writeNDEFErr != nil {
-				logTraceableError(writeNDEFErr, "write NDEF")
 				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", writeNDEFErr)
 				return writeErr
 			}
@@ -985,14 +1054,38 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			return nil
 		})
 	if err != nil {
-		logTraceableError(err, "write to next tag")
+		// Logged once here rather than per attempt: the session retries the
+		// callback, and the error still carries the wire trace of the attempt
+		// that failed last.
+		logWriteFailure(err)
+		// A write cancelled during its retry delay returns the context error,
+		// which says nothing of the failure that is returned below.
+		if writeErr != nil && !errors.Is(err, writeErr) {
+			logWriteFailure(writeErr)
+		}
 		if writeErr != nil {
-			return nil, writeErr
+			return nil, classifyWriteError(writeErr)
 		}
 		return nil, fmt.Errorf("failed to write to tag: %w", classifyWriteError(err))
 	}
 
 	return resultToken, nil
+}
+
+// logWriteFailure logs a failed write once, below Error when it is a user
+// condition rather than a reader fault. It keeps any wire trace.
+func logWriteFailure(err error) {
+	classified := classifyWriteError(err)
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		logTraceableError(err, "write to next tag")
+	case errors.Is(classified, readers.ErrTagNotDetected),
+		errors.Is(classified, readers.ErrUnsupportedTagType),
+		errors.Is(classified, readers.ErrTagRemoved):
+		logExpectedError(err, "write to next tag")
+	default:
+		logTraceableError(err, "write to next tag")
+	}
 }
 
 // writeWaitTimeout is the text of the error go-pn532 returns when no tag was
@@ -1010,9 +1103,26 @@ func classifyWriteError(err error) error {
 		return fmt.Errorf("%w: %w", readers.ErrUnsupportedTagType, err)
 	case strings.Contains(err.Error(), writeWaitTimeout), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%w: %w", readers.ErrTagNotDetected, err)
+	case tagLeftField(err):
+		return fmt.Errorf("%w: %w", readers.ErrTagRemoved, err)
 	default:
 		return err
 	}
+}
+
+// tagLeftField reports the chip losing a tag it was already exchanging data
+// with: no answer or an RF error from a tag command means the tag left the
+// field, as when it is pulled away too soon. Detection never sends these
+// commands, so a tag that was never presented is not counted as removed.
+func tagLeftField(err error) bool {
+	var chipErr *pn532.PN532Error
+	if !errors.As(err, &chipErr) {
+		return false
+	}
+	if chipErr.Command != "InDataExchange" && chipErr.Command != "InCommunicateThru" {
+		return false
+	}
+	return chipErr.IsTimeoutError() || chipErr.IsRFError()
 }
 
 func (r *Reader) CancelWrite() {

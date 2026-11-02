@@ -119,6 +119,11 @@ func reloadConfigBeforeSave(cfg *config.Instance, action string) error {
 		log.Warn().Err(err).Str("action", action).Msg("config file missing, saving in-memory values")
 		return nil
 	}
+	if errors.Is(err, config.ErrInvalidConfigFile) {
+		log.Warn().Err(err).Str("action", action).
+			Msg("config file could not be loaded; refusing to overwrite it")
+		return models.ClientErrf("error loading settings file: %w", err)
+	}
 	log.Error().Err(err).Str("action", action).
 		Msg("config file could not be loaded; refusing to overwrite it")
 	return errors.New("error loading settings file")
@@ -129,6 +134,10 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings reload request")
 
 	err := env.Config.Load()
+	if errors.Is(err, config.ErrInvalidConfigFile) {
+		log.Warn().Err(err).Msg("error loading settings")
+		return nil, models.ClientErrf("error loading settings: %w", err)
+	}
 	if err != nil {
 		log.Error().Err(err).Msg("error loading settings")
 		return nil, errors.New("error loading settings")

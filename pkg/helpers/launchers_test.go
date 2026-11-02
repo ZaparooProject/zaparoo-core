@@ -20,15 +20,20 @@
 package helpers
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -491,6 +496,64 @@ func TestFormatExtensions(t *testing.T) {
 
 			result := formatExtensions(tt.input)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCustomLauncherMissingExecutableIsUnavailable verifies a custom launcher
+// whose program is not installed is the user's setup, logged at Warn and
+// reported as an unavailable launcher, while other start failures stay errors.
+func TestCustomLauncherMissingExecutableIsUnavailable(t *testing.T) {
+	// Replaces the global logger; keep it and its subtests serial.
+	notExecutable := filepath.Join(t.TempDir(), "launcher-script")
+	require.NoError(t, os.WriteFile(notExecutable, []byte("#!/bin/sh\n"), 0o600))
+
+	for _, tc := range []struct {
+		name        string
+		execute     string
+		level       string
+		unavailable bool
+		skipWindows bool
+	}{
+		{name: "not on PATH", execute: "nonexistent-binary-zaparoo-test", level: "warn", unavailable: true},
+		{
+			name:        "absolute path missing",
+			execute:     `"` + filepath.Join(t.TempDir(), "missing-launcher") + `"`,
+			level:       "warn",
+			unavailable: true,
+		},
+		{
+			name: "exists but cannot run", execute: `"` + notExecutable + `"`,
+			level: "error", unavailable: false, skipWindows: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipWindows && runtime.GOOS == "windows" {
+				t.Skip("file mode does not control execution on Windows")
+			}
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test")
+			launchers := ParseCustomLaunchers(mockPlatform, []config.LaunchersCustom{
+				{ID: "TestExec", Execute: tc.execute + " [[media_path]]"},
+			})
+			require.Len(t, launchers, 1)
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+			buf.Reset()
+
+			_, err = launchers[0].Launch(cfg, filepath.Join("some", "game.bin"), nil)
+
+			require.Error(t, err)
+			assert.Equal(t, tc.unavailable, errors.Is(err, platforms.ErrLauncherUnavailable))
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, tc.level, entry["level"])
+			assert.Contains(t, entry["message"], "error running custom launcher")
 		})
 	}
 }

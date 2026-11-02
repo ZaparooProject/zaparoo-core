@@ -101,14 +101,21 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 	mockPlatform.AssertCalled(t, "Launchers", mock.AnythingOfType("*config.Instance"))
 }
 
-func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
+func TestHandleLaunchersRefresh_InvalidFilesAreClientErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, document string
-		clientError    bool
+		name, document, position string
+		clientError              bool
 	}{
-		{name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'", clientError: true},
-		{name: "syntax error", document: "broken {{{", clientError: false},
+		{
+			name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'",
+			position: "bad.toml: unknown field launchers.custom.excute (line 2, column 1)", clientError: true,
+		},
+		{name: "syntax error", document: "broken {{{", position: "bad.toml: line 1, column", clientError: true},
+		{
+			name: "wrong value type", document: "[[launchers.custom]]\nid = 5",
+			position: "bad.toml: line 2, column", clientError: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -124,7 +131,9 @@ func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
 			pl := mocks.NewMockPlatform()
 			pl.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
 			_, err = HandleLaunchersRefresh(requests.RequestEnv{Context: t.Context(), Config: cfg, Platform: pl})
-			require.EqualError(t, err, "error loading custom launchers")
+			require.ErrorContains(t, err, "error loading custom launchers: ")
+			assert.Contains(t, err.Error(), tc.position, "the client is told where the file is wrong")
+			assert.NotContains(t, err.Error(), "private value")
 			var clientErr *models.ClientError
 			assert.Equal(t, tc.clientError, errors.As(err, &clientErr))
 			pl.AssertNotCalled(t, "Launchers", mock.Anything)

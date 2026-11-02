@@ -211,6 +211,28 @@ func TestClassifyWriteError(t *testing.T) {
 	require.NotErrorIs(t, other, readers.ErrUnsupportedTagType)
 
 	require.ErrorIs(t, classifyWriteError(context.Canceled), context.Canceled)
+
+	// A tag pulled away part-way through a write: the chip reports that the
+	// tag stopped answering, wrapped through the retry and block write layers.
+	for _, code := range []byte{0x01, 0x2B} {
+		pulled := classifyWriteError(fmt.Errorf(
+			"failed to write NTAG NDEF data after 3 retries: %w",
+			fmt.Errorf("tag write failed (block 4): %w",
+				&pn532.PN532Error{Command: "InDataExchange", ErrorCode: code, BytesSent: 6, Target: 1})))
+		require.ErrorIs(t, pulled, readers.ErrTagRemoved)
+	}
+	authFailure := classifyWriteError(&pn532.PN532Error{Command: "InDataExchange", ErrorCode: 0x14})
+	require.NotErrorIs(t, authFailure, readers.ErrTagRemoved)
+
+	// A chip timeout from anything but a tag command is not a removed tag.
+	notATagCommand := classifyWriteError(&pn532.PN532Error{Command: "InListPassiveTarget", ErrorCode: 0x01})
+	require.NotErrorIs(t, notATagCommand, readers.ErrTagRemoved)
+	// The wait for a tag running out stays "no tag", even with a chip
+	// timeout in the chain.
+	waitedOut := classifyWriteError(fmt.Errorf("%w: %w", context.DeadlineExceeded,
+		&pn532.PN532Error{Command: "InDataExchange", ErrorCode: 0x01}))
+	require.ErrorIs(t, waitedOut, readers.ErrTagNotDetected)
+	require.NotErrorIs(t, waitedOut, readers.ErrTagRemoved)
 }
 
 // fakeTagOps stands in for go-pn532's tag operations: it returns a set NDEF
@@ -471,4 +493,24 @@ func TestLogTagInfo(t *testing.T) {
 		(&Reader{tagOps: &fakeTagOps{infoErr: errors.New("no info")}}).logTagInfo(genuine)
 		(&Reader{}).logTagInfo(genuine)
 	})
+}
+
+// An unsupported tag, or one that left the field before it was initialised,
+// is the user's doing and is not logged as an error.
+func TestReadTag_UnsupportedTagIsNotAnError(t *testing.T) {
+	// Not parallel: captures the global logger.
+	buf := captureDebugLog(t)
+	initErr := &pn532.TraceableError{Err: tagops.ErrUnsupportedTag, Transport: "UART", Port: "/dev/ttyUSB0"}
+	reader := &Reader{tagOps: &fakeTagOps{initErr: initErr}}
+	sim := tagsim.NewType2(tagsim.PagesNTAG215)
+
+	tokenType, _, _ := reader.readTag(context.Background(), ntagDetected(sim))
+
+	assert.Equal(t, tokens.TypeNTAG, tokenType, "the tag is still reported")
+	output := buf.String()
+	for _, entry := range decodeLogEntries(t, buf) {
+		assert.NotEqual(t, "error", entry.Level, entry.Message)
+	}
+	assert.Contains(t, output, "failed to initialize tag for NDEF reading")
+	assert.Contains(t, output, "wire_trace")
 }

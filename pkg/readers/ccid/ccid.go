@@ -53,7 +53,7 @@ const (
 	pollInterval = 250 * time.Millisecond
 	openTimeout  = 5 * time.Second
 	ioTimeout    = 5 * time.Second
-	writeTimeout = 30 * time.Second
+	writeTimeout = config.ReaderWriteWait
 
 	// removalMisses is how many polls in a row must find no tag before it is
 	// reported removed, so one dropped poll is not a removal.

@@ -30,9 +30,11 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"syscall"
 	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -169,6 +171,16 @@ func validateLoadCorePath(path string) error {
 	return nil
 }
 
+// ErrLaunchFileInZip is returned for an MGL, MRA or RBF path inside a zip.
+// MiSTer Main loads these from disk and cannot reach inside an archive, so
+// no launcher can run one.
+var ErrLaunchFileInZip = fmt.Errorf("%w: MiSTer cannot load this file from inside a zip", helpers.ErrNoLauncher)
+
+// inZip reports whether a lowercased path names an entry inside a zip.
+func inZip(lowerPath string) bool {
+	return s.Contains(filepath.ToSlash(lowerPath), ".zip/")
+}
+
 func launchFileWithDefaults(path string) error {
 	fs := afero.NewOsFs()
 	return launchFile(fs, newCommandInterfaceWriter(fs), path, true)
@@ -191,6 +203,11 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 	}
 
 	if _, err := fs.Stat(path); err != nil {
+		// Only ENOTDIR shows the path runs through a file; a real directory
+		// named like a zip can still fail for any other reason.
+		if inZip(lowerPath) && errors.Is(err, syscall.ENOTDIR) {
+			return fmt.Errorf("%w: %s", ErrLaunchFileInZip, path)
+		}
 		wrapped := fmt.Errorf("launch file not accessible: %w", err)
 		// A generated MGL disappearing is an internal failure, not missing media.
 		if requested && errors.Is(err, os.ErrNotExist) {
@@ -439,6 +456,11 @@ type MGL struct {
 	File    MGLFile  `xml:"file"`
 }
 
+// ErrMalformedMGL reports an MGL file that exists but does not decode as an
+// MGL. MGLs are written by MiSTer and third-party scripts, so a truncated or
+// foreign file is an expected input rather than a fault.
+var ErrMalformedMGL = errors.New("malformed MGL")
+
 func ReadMgl(path string) (MGL, error) {
 	var mgl MGL
 
@@ -457,7 +479,7 @@ func ReadMgl(path string) (MGL, error) {
 
 	err = decoder.Decode(&mgl)
 	if err != nil {
-		return mgl, fmt.Errorf("failed to decode MGL: %w", err)
+		return mgl, fmt.Errorf("%w: %w", ErrMalformedMGL, err)
 	}
 
 	return mgl, nil
