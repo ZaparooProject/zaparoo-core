@@ -375,6 +375,11 @@ func TestCloseTwice(t *testing.T) {
 	})
 }
 
+func TestCloseWithoutOpen(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, NewReader(&config.Instance{}).Close())
+}
+
 func TestProcessEvents_MountEvent(t *testing.T) {
 	// Create temp directory with zaparoo.txt
 	tempDir := t.TempDir()
@@ -1495,9 +1500,4 @@ func TestHandleUnmountEvent_NoMatchingToken(t *testing.T) {
 	case <-ctx.Done():
 		// Expected - no event
 	}
-}
-
-func TestCloseWithoutOpen(t *testing.T) {
-	t.Parallel()
-	require.NoError(t, NewReader(&config.Instance{}).Close())
 }
