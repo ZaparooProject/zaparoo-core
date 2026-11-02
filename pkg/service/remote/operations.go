@@ -127,7 +127,9 @@ func (m *manager) handleOperation(
 	if stored.ParamsDigest != candidate.ParamsDigest || stored.OperationID != candidate.OperationID ||
 		stored.OperationType != candidate.OperationType || stored.ProtocolVersion != candidate.ProtocolVersion ||
 		!stored.DeadlineAt.Equal(candidate.DeadlineAt) || !bytes.Equal(stored.Origin, candidate.Origin) {
-		log.Error().Str("command_id", operation.CommandID).
+		// The payload is untrusted remote input and is refused, like an
+		// invalid envelope; nothing on the device went wrong.
+		log.Warn().Str("command_id", operation.CommandID).
 			Msg("remote command ID reused with conflicting payload")
 		return
 	}

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -342,7 +343,7 @@ func (b *BatchInserter) executeChunk(chunkSize int, chunkBuffer []any) error {
 
 	_, execErr := stmt.ExecContext(b.ctx, chunkBuffer...)
 	if execErr != nil {
-		log.Error().Err(execErr).
+		log.WithLevel(database.StorageFailureLevel(execErr)).Err(execErr).
 			Str("table", b.tableName).
 			Int("chunk_size", chunkSize).
 			Msg("chunked batch insert failed")

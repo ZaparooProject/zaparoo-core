@@ -24,6 +24,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"syscall"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -100,6 +102,17 @@ func TestLogMaintenanceError(t *testing.T) {
 			name:          "other error logs at error",
 			err:           errors.New("disk write failed"),
 			expectedLevel: "error",
+		},
+		{
+			name: "read-only filesystem logs at warn",
+			err: fmt.Errorf("failed to create cache temp file: %w",
+				&fs.PathError{Op: "open", Path: "tags.cache.tmp", Err: syscall.EROFS}),
+			expectedLevel: "warn",
+		},
+		{
+			name:          "full disk logs at warn",
+			err:           fmt.Errorf("failed to sync cache temp file: %w", syscall.ENOSPC),
+			expectedLevel: "warn",
 		},
 	}
 

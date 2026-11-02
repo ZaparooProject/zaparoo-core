@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
@@ -94,10 +95,10 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil, fmt.Errorf("error getting system media counts: %w", err)
 			}
-			log.Error().Err(err).Msg("error getting system media counts")
+			log.WithLevel(database.UnavailableLevel(err)).Err(err).Msg("error getting system media counts")
 			indexed, err = env.Database.MediaDB.IndexedSystems()
 			if err != nil {
-				log.Error().Err(err).Msg("error getting indexed systems")
+				log.WithLevel(database.UnavailableLevel(err)).Err(err).Msg("error getting indexed systems")
 				indexed = []string{}
 			}
 		}

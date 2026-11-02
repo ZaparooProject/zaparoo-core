@@ -141,7 +141,8 @@ func (f *startupFailureError) enter() (*StartResult, error) {
 	// it has to contain the explanation. The interrupted-backup path does not
 	// log on its own, so without this that one failure reaches storage with
 	// nothing in the log saying what happened.
-	log.Error().Err(f.err).Msg("startup failed; staying up to report it")
+	log.WithLevel(database.StartupFailureLevel(f.err)).Err(f.err).Str("headline", f.headline).
+		Msg("startup failed; staying up to report it")
 
 	logPath := helpers.PersistLog(f.platform)
 	f.startup.SetFailed(f.headline, f.detail, logPath)

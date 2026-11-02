@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -80,6 +81,34 @@ func requirePoolWait(t *testing.T, sqlDB *sql.DB, failureMessage string) {
 // TestBeginTransactionAppliesIndexingCacheBoost forces pool-wide pragma setup
 // onto a different connection from the writer. The writer retains a temp table,
 // reproducing SQLite's rejection when temp_store is changed after BeginTx.
+// Cancelling the database context ends the writer's transaction and closes
+// its connection underneath it, so releasing the boosted writer afterwards
+// finds nothing left to close. That is shutdown, not a rollback failure.
+func TestRollbackTransactionAfterCancelSucceeds(t *testing.T) {
+	t.Parallel()
+	for _, boosted := range []bool{true, false} {
+		t.Run(map[bool]string{true: "boosted", false: "steady state"}[boosted], func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			mediaDB := openIndexingCacheTestDB(ctx, t)
+			mediaDB.SetIndexingCacheSize(boosted)
+
+			require.NoError(t, mediaDB.BeginTransaction(false))
+			writer := mediaDB.txConn
+			cancel()
+			// database/sql rolls the transaction back and discards its
+			// connection on its own goroutine; wait for that so the rollback
+			// below always follows it.
+			require.Eventually(t, func() bool {
+				return errors.Is(writer.PingContext(context.Background()), sql.ErrConnDone)
+			}, 5*time.Second, time.Millisecond)
+
+			require.NoError(t, mediaDB.RollbackTransaction())
+		})
+	}
+}
+
 func TestBeginTransactionAppliesIndexingCacheBoost(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

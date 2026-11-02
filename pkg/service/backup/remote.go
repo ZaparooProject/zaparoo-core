@@ -49,6 +49,7 @@ import (
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -411,6 +412,12 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 		if statusErr := m.writeRemoteStatus(failed); statusErr != nil {
 			log.Warn().Err(statusErr).Msg("failed to persist failed remote backup status")
 		}
+		// The status keeps only a safe summary; the cause is only ever here.
+		level := zerolog.WarnLevel
+		if errors.Is(err, context.Canceled) {
+			level = zerolog.DebugLevel
+		}
+		log.WithLevel(level).Err(err).Msg("remote backup run failed")
 		m.notifyRemoteFailure(err)
 		return RemoteRunInfo{}, err
 	}
@@ -1199,7 +1206,8 @@ func remoteTransferTimeout(sizeBytes int64) time.Duration {
 }
 
 func (m *Manager) notifyRemoteFailure(err error) {
-	if m.inbox == nil {
+	// A run cut short by shutdown did not fail, and the next run retries it.
+	if m.inbox == nil || errors.Is(err, context.Canceled) {
 		return
 	}
 

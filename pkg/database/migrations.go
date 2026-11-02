@@ -37,6 +37,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -271,6 +272,16 @@ func writeSchemaVersionSidecar(sidecarPath, dbPath string, version int64) error 
 // the binary supports. This happens when switching from a newer binary
 // (e.g. beta) to an older one (e.g. stable).
 var ErrSchemaAhead = errors.New("database schema is newer than this binary supports")
+
+// StartupFailureLevel is the level to log a failed start at. ErrSchemaAhead
+// is Warn: it follows a user installing an older build, startup explains the
+// refusal to them, and no fix in this binary could change the outcome.
+func StartupFailureLevel(err error) zerolog.Level {
+	if errors.Is(err, ErrSchemaAhead) {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
+}
 
 // CheckSchemaVersion compares the database's migration version against the
 // latest migration embedded in the current binary. Returns ErrSchemaAhead

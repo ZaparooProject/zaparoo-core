@@ -671,7 +671,8 @@ func startPostIndexOptimization(
 			if database.IsOptimizationCanceled(err) {
 				log.Debug().Err(err).Msg("post-index background optimization canceled")
 			} else {
-				log.Error().Err(err).Msg("post-index background optimization failed")
+				log.WithLevel(database.StorageFailureLevel(err)).Err(err).
+					Msg("post-index background optimization failed")
 			}
 		}
 	}()
@@ -939,7 +940,7 @@ func startMediaDBGeneration(
 					TotalFiles: &total,
 				}, db.MediaDB))
 			default:
-				log.Error().Err(err).Msg("error generating media db")
+				log.WithLevel(database.StorageFailureLevel(err)).Err(err).Msg("error generating media db")
 				// TODO: error notification to client
 				notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),

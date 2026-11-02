@@ -26,12 +26,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +69,93 @@ func TestIsCorruptionError(t *testing.T) {
 			assert.Equal(t, tt.want, IsCorruptionError(tt.err))
 		})
 	}
+}
+
+func TestIsStorageFailure(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err  error
+		name string
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "unrelated", err: errors.New("constraint failed"), want: false},
+		{name: "busy is contention, not storage", err: sqlite3.Error{Code: sqlite3.ErrBusy}, want: false},
+		{name: "corrupt", err: sqlite3.Error{Code: sqlite3.ErrCorrupt}, want: true},
+		{name: "not a database", err: sqlite3.Error{Code: sqlite3.ErrNotADB}, want: true},
+		{name: "disk I/O error", err: fmt.Errorf("query: %w", sqlite3.Error{Code: sqlite3.ErrIoErr}), want: true},
+		{name: "disk full", err: sqlite3.Error{Code: sqlite3.ErrFull}, want: true},
+		{name: "read-only database", err: sqlite3.Error{Code: sqlite3.ErrReadonly}, want: true},
+		{name: "wrapped I/O string", err: errors.New("exec: disk I/O error"), want: true},
+		{name: "wrapped full string", err: errors.New("exec: database or disk is full"), want: true},
+		{name: "os EIO", err: &os.PathError{Op: "write", Path: "x", Err: syscall.EIO}, want: true},
+		{name: "os ENOSPC", err: &os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC}, want: true},
+		{name: "os EROFS", err: &os.PathError{Op: "open", Path: "x", Err: syscall.EROFS}, want: true},
+		{name: "os ENOENT", err: &os.PathError{Op: "open", Path: "x", Err: syscall.ENOENT}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsStorageFailure(tt.err))
+			wantLevel := zerolog.ErrorLevel
+			if tt.want {
+				wantLevel = zerolog.WarnLevel
+			}
+			assert.Equal(t, wantLevel, StorageFailureLevel(tt.err))
+		})
+	}
+}
+
+func TestStartupFailureLevel(t *testing.T) {
+	t.Parallel()
+	ahead := fmt.Errorf("opening user database: %w",
+		fmt.Errorf("%w: database is at version 9", ErrSchemaAhead))
+	assert.Equal(t, zerolog.WarnLevel, StartupFailureLevel(ahead))
+	assert.Equal(t, zerolog.ErrorLevel, StartupFailureLevel(errors.New("open failed")))
+}
+
+func TestLockContention(t *testing.T) {
+	t.Parallel()
+	for _, code := range []sqlite3.ErrNo{sqlite3.ErrBusy, sqlite3.ErrLocked} {
+		got, ok := LockContention(fmt.Errorf("insert: %w", sqlite3.Error{Code: code}))
+		assert.True(t, ok)
+		assert.Equal(t, code, got.Code)
+	}
+	_, ok := LockContention(sqlite3.Error{Code: sqlite3.ErrIoErr})
+	assert.False(t, ok)
+	_, ok = LockContention(errors.New("database is locked"))
+	assert.False(t, ok, "only a typed SQLite error carries the codes to report")
+	_, ok = LockContention(nil)
+	assert.False(t, ok)
+}
+
+// Every read of a corrupt database retries the marker, so storage that cannot
+// take it would otherwise report the same failure over and over. Not parallel:
+// it swaps the global logger.
+func TestMarkCorruptReportsWriteFailureOnce(t *testing.T) {
+	var buf strings.Builder
+	prevLogger := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prevLogger })
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing-dir", "test.db")
+	otherPath := filepath.Join(dir, "missing-dir", "other.db")
+	t.Cleanup(func() {
+		markerWriteFailuresReported.Delete(dbPath)
+		markerWriteFailuresReported.Delete(otherPath)
+	})
+	MarkCorrupt(dbPath, "first", time.Now())
+	MarkCorrupt(dbPath, "second", time.Now())
+	// Another database's first failure is still reported.
+	MarkCorrupt(otherPath, "first", time.Now())
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 3)
+	assert.Contains(t, lines[0], `"level":"error"`)
+	assert.Contains(t, lines[1], `"level":"debug"`)
+	assert.Contains(t, lines[2], `"level":"error"`)
+	assert.False(t, IsMarkedCorrupt(dbPath))
 }
 
 func TestCorruptMarkerLifecycle(t *testing.T) {
@@ -282,4 +373,15 @@ func TestPreserveCorruptFile(t *testing.T) {
 
 		assert.NoFileExists(t, CorruptBackupPath(path))
 	})
+}
+
+func TestIsUnavailable(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsUnavailable(sqlite3.Error{Code: sqlite3.ErrCorrupt}))
+	assert.True(t, IsUnavailable(fmt.Errorf("query: %w", sql.ErrConnDone)))
+	assert.True(t, IsUnavailable(errors.New("query hidden media: sql: database is closed")))
+	assert.False(t, IsUnavailable(errors.New("no such column: Foo")))
+	assert.False(t, IsUnavailable(nil))
+	assert.Equal(t, zerolog.WarnLevel, UnavailableLevel(sql.ErrConnDone))
+	assert.Equal(t, zerolog.ErrorLevel, UnavailableLevel(errors.New("no such column: Foo")))
 }

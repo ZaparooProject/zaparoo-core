@@ -36,9 +36,11 @@ import (
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
@@ -118,7 +120,11 @@ func run() error {
 				return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
 			}
 
-			log.Error().Msgf("error starting service: %s", err)
+			// A taken API port and a database newer than this build were already
+			// logged at Warn where they happened.
+			if !api.IsAddrInUse(err) && !errors.Is(err, database.ErrSchemaAhead) {
+				log.Error().Msgf("error starting service: %s", err)
+			}
 			return fmt.Errorf("error starting service: %w", err)
 		}
 	} else {
@@ -166,15 +172,18 @@ func run() error {
 			"desktop",
 		)
 		if err != nil {
-			log.Error().Err(err).Msgf("error building UI")
-			return fmt.Errorf("error building UI: %w", err)
+			warnTUIUnavailable(err)
+			restarting = restart.WaitForShutdown(sigs, exit, svcDone, restartRequested, nil)
+			break
 		}
 
 		restarting = restart.WaitForShutdown(sigs, exit, svcDone, restartRequested, app.Stop)
 		err = app.Run()
 		if err != nil {
-			log.Error().Err(err).Msg("error running UI")
-			return fmt.Errorf("error running UI: %w", err)
+			// The shutdown watcher is already running, so keep the service
+			// up headless until it is signalled.
+			warnTUIUnavailable(err)
+			break
 		}
 
 		exit <- true
@@ -193,4 +202,12 @@ func run() error {
 	}
 
 	return nil
+}
+
+// warnTUIUnavailable reports a TUI that could not start, typically because
+// there is no terminal (no tty or TERM). The service keeps running headless,
+// so this is not a fault.
+func warnTUIUnavailable(err error) {
+	log.Warn().Err(err).Msg("TUI unavailable, running headless")
+	_, _ = fmt.Fprintf(os.Stderr, "TUI unavailable (%s), running headless. Press Ctrl+C to stop.\n", err)
 }

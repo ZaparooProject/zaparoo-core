@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -271,7 +272,7 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 				return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
 			}
 
-			log.Error().Msgf("error starting service: %s", err)
+			log.WithLevel(api.StartupFailureLevel(err)).Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
 		}
 		svcDone = svcResult.Done

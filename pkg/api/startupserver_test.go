@@ -32,6 +32,7 @@ import (
 	"time"
 
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -248,4 +249,16 @@ func TestStartupServer_ShutdownReleasesThePortBeforeItReturns(t *testing.T) {
 		require.NoErrorf(t, err, "port still held after shutdown returned, on pass %d", i)
 		require.NoError(t, again.Close())
 	}
+}
+
+// enter() in pkg/service logs the failure itself, at Warn for a database a
+// newer build wrote. SetFailed logging it again at Error sent every downgrade
+// to error reporting a second time.
+func TestStartupServer_SetFailedDoesNotRelogAsError(t *testing.T) {
+	logs := captureLogs(t, zerolog.WarnLevel)
+
+	srv := newTestStartupServer(t)
+	srv.SetFailed("Zaparoo cannot open your saved data", "Reinstall the newer version.", "")
+
+	assert.NotContains(t, logs.String(), "service entered failed state")
 }

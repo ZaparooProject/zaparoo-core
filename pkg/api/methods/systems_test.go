@@ -20,9 +20,11 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -35,6 +37,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -383,4 +388,27 @@ category = []
 	tools = toolsSystem()
 	assert.Equal(t, "Other", tools.Category)
 	assert.Equal(t, []string{"Other", "Computer"}, tools.Categories)
+}
+
+// While a damaged media database is being replaced, every systems request
+// failed its counts and was reported as an error, once per request.
+func TestHandleSystems_UnavailableDatabaseIsNotAnError(t *testing.T) {
+	// Serial: captures the package-global logger.
+	var buf bytes.Buffer
+	original := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = original })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, nil, errors.New("query hidden media: sql: database is closed"))
+	mockMediaDB.On("IndexedSystems").Return([]string(nil),
+		fmt.Errorf("indexed systems: %w", sqlite3.Error{Code: sqlite3.ErrCorrupt}))
+
+	_, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: &helpers.LauncherCache{},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
+	assert.NotContains(t, buf.String(), `"level":"error"`)
 }

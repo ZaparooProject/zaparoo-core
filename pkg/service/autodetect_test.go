@@ -1091,3 +1091,60 @@ func TestAutoDetector_UpdateConnectedSkipsPathlessReaders(t *testing.T) {
 	assert.False(t, ad.isConnected(""))
 	assert.True(t, ad.isConnected("/dev/ttyUSB0"))
 }
+
+// externaldrive detects itself on every tick with no path, so nothing marked
+// it connected: each tick opened a new instance and SetReader closed the
+// running one. A pathless reader already in State must be left alone.
+func TestAutoDetector_DetectReaders_PathlessReaderOpenedOnce(t *testing.T) {
+	t.Parallel()
+
+	ad := NewAutoDetector(nil)
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(true)
+
+	newPathless := func() *mocks.MockReader {
+		r := mocks.NewMockReader()
+		r.On("Metadata").Return(readers.DriverMetadata{
+			ID:                "externaldrive",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: true,
+		})
+		r.On("IDs").Return([]string{"externaldrive"}).Maybe()
+		r.On("Detect", mock.Anything).Return("externaldrive:")
+		r.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		r.On("Connected").Return(true).Maybe()
+		r.On("Path").Return("").Maybe()
+		r.On("ReaderID").Return("externaldrive-abc123")
+		r.On("Close").Return(nil).Maybe()
+		return r
+	}
+	first := newPathless()
+	second := newPathless()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{first}).Once()
+	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{second}).Once()
+
+	st, notifCh := state.NewState(mockPlatform, "test-uuid")
+	scanChan := make(chan readers.Scan, 10)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range notifCh { //nolint:revive // drain channel
+		}
+	}()
+
+	require.NoError(t, ad.DetectReaders(mockPlatform, cfg, st, scanChan))
+	require.NoError(t, ad.DetectReaders(mockPlatform, cfg, st, scanChan))
+
+	first.AssertNumberOfCalls(t, "Open", 1)
+	first.AssertNotCalled(t, "Close")
+	second.AssertNotCalled(t, "Open", mock.Anything, mock.Anything, mock.Anything)
+	rs := st.ListReaders()
+	require.Len(t, rs, 1)
+	assert.Same(t, first, rs[0])
+
+	st.StopService()
+	close(st.Notifications)
+	<-done
+}

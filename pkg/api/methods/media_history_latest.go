@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,7 +41,7 @@ func HandleMediaHistoryLatest(env requests.RequestEnv) (any, error) { //nolint:g
 	entry, found, err := env.Database.UserDB.GetLatestMediaHistory()
 	if err != nil {
 		if !apidiag.IsContextFailure(env.Context, err) {
-			log.Error().Err(err).Msg("error getting latest media history")
+			log.WithLevel(database.StorageFailureLevel(err)).Err(err).Msg("error getting latest media history")
 		}
 		return nil, fmt.Errorf("error getting latest media history: %w", err)
 	}

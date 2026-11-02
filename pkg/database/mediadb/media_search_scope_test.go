@@ -29,7 +29,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -353,7 +355,7 @@ func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
 		)
 		require.NoError(t, queryErr)
 		actual, streamErr := sqlSearchMediaByLargeTitleDBIDSetInSystems(
-			ctx, mediaDB.sql.Load(), snesCandidates[query], map[int64]string{1: "SNES"}, bounds, cursor, limit,
+			ctx, mediaDB.sql.Load(), snesCandidates[query], map[int64]string{1: "SNES"}, bounds, nil, cursor, limit,
 		)
 		require.NoError(t, streamErr)
 		require.Len(t, actual, len(expected))
@@ -392,7 +394,7 @@ func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
 	require.NoError(t, err)
 	multiActual, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
 		ctx, mediaDB.sql.Load(), allCandidates["alpha"], map[int64]string{1: "SNES", 2: "NES"},
-		mediaDBIDBounds{first: 1, last: rowsPerSystem * 2}, nil, 100,
+		mediaDBIDBounds{first: 1, last: rowsPerSystem * 2}, nil, nil, 100,
 	)
 	require.NoError(t, err)
 	require.Len(t, multiActual, len(multiExpected))
@@ -645,7 +647,7 @@ func TestScopedCandidateStreamQueryPlanUsesRowIDOrder(t *testing.T) {
 	seedBrowsePlanTestDB(t, mediaDB, 100)
 
 	rows, err := mediaDB.sql.Load().QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+scopedCandidateStreamQuery(1), 1, 100, 1,
+		context.Background(), "EXPLAIN QUERY PLAN "+scopedCandidateStreamQuery(1, nil), 1, 100, 1,
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rows.Close()) }()
@@ -680,7 +682,7 @@ func TestSQLSearchMediaByLargeTitleDBIDSetInSystems(t *testing.T) {
 	bounds := mediaDBIDBounds{first: 1, last: (sqliteMaxParams + pageSize) * 2}
 	results, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
 		context.Background(), mediaDB.sql.Load(), candidateIDs, map[int64]string{1: "MiSTer:Arcade"},
-		bounds, nil, pageSize,
+		bounds, nil, nil, pageSize,
 	)
 	require.NoError(t, err)
 	require.Len(t, results, pageSize)
@@ -693,7 +695,7 @@ func TestSQLSearchMediaByLargeTitleDBIDSetInSystems(t *testing.T) {
 	cursor := results[len(results)-1].MediaID
 	secondPage, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
 		context.Background(), mediaDB.sql.Load(), candidateIDs, map[int64]string{1: "MiSTer:Arcade"},
-		bounds, &cursor, pageSize,
+		bounds, nil, &cursor, pageSize,
 	)
 	require.NoError(t, err)
 	require.Len(t, secondPage, pageSize)
@@ -733,4 +735,144 @@ func TestSQLSearchMediaByLargeTitleDBIDSet(t *testing.T) {
 	for i := range secondPage {
 		assert.Equal(t, int64((i+pageSize+1)*2), secondPage[i].MediaID)
 	}
+}
+
+// Hiding a single file used to push every broad search off the candidate
+// stream and onto a grouped LIKE scan of every system, which on a MiSTer
+// library outlived the API request deadline.
+func TestMediaDB_SearchMediaWithFilters_StreamsWithHiddenMedia(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	nes, err := systemdefs.GetSystem(systemdefs.SystemNES)
+	require.NoError(t, err)
+
+	entries := make([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}, sqliteMaxParams)
+	for i := range entries {
+		entries[i] = struct {
+			slug       string
+			secSlug    string
+			titleDBID  int64
+			systemDBID int64
+		}{slug: "rtype", titleDBID: int64(i + 1), systemDBID: 1}
+	}
+	cache := buildTestCache(entries, map[int64]string{1: nes.ID})
+	cache.complete = true
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+	mediaDB.slugSearchCache.Store(cache)
+
+	mock.ExpectQuery("SELECT EXISTS\\(SELECT mt\\.MediaDBID").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("SELECT Value FROM DBConfig").
+		WithArgs(DBConfigHiddenDirectories).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}))
+	mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(int64(1), int64(20_000)))
+	path := filepath.Join("games", "nes", "rtype.nes")
+	mock.ExpectQuery("FROM Media NOT INDEXED.*AND NOT \\(EXISTS").
+		WithArgs(int64(1), int64(10_000), int64(1), "user", "hidden", "user", "hidden").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"Name", "Path", "DBID", "DisambiguationTypes", "MediaTitleDBID", "SystemDBID",
+		}).AddRow("R-Type", path, int64(5), "", int64(5), int64(1)))
+	expectSearchTagsQuery(mock, 5, 5)
+
+	results, err := mediaDB.SearchMediaWithFilters(context.Background(), &database.SearchFilters{
+		Systems: []systemdefs.System{*nes}, Query: "R-Type", ExcludeHidden: true, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, path, results[0].Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Both candidate streams keep hidden files and hidden folders out once they
+// serve searches over a library with something hidden.
+func TestCandidateStreamsExcludeHiddenMedia(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+
+	const total = sqliteMaxParams + 100
+	var visible []string
+	for i := 1; i <= total; i++ {
+		name := fmt.Sprintf("Game %04d", i)
+		path := root + fmt.Sprintf("game-%04d.nes", i)
+		if i >= 5 && i <= 8 {
+			path = root + fmt.Sprintf("Hidden/game-%04d.nes", i)
+		}
+		f.insert(name, path)
+		if i != 2 && i != 3 && (i < 5 || i > 8) {
+			visible = append(visible, name)
+		}
+	}
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"game-0002.nes", root+"game-0003.nes")
+	hideDirs(t, f.mediaDB, root+"Hidden")
+	require.NoError(t, f.mediaDB.RebuildSlugSearchCache())
+
+	const limit = 20
+	for name, systems := range map[string][]systemdefs.System{
+		"system-scope": {f.system},
+		"global":       systemdefs.AllSystems(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			results, err := f.mediaDB.SearchMediaWithFilters(ctx, &database.SearchFilters{
+				Systems: systems, Query: "game", ExcludeHidden: true, Limit: limit,
+			})
+			require.NoError(t, err)
+			names := make([]string, 0, len(results))
+			for i := range results {
+				names = append(names, results[i].Name)
+			}
+			assert.Equal(t, visible[:limit], names)
+		})
+	}
+}
+
+func TestScopedCandidateStreamQueryPlanWithVisibilityFilters(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	seedBrowsePlanTestDB(t, mediaDB, 100)
+
+	clauses, clauseArgs := buildCandidateTagFilterSQL(append(
+		filters.ExcludeHidden(nil),
+		zapscript.TagFilter{
+			Type: hiddenDirFilterType, Value: "NES\x00roms/nes/Hidden/", Operator: zapscript.TagOperatorNOT,
+		},
+	))
+	args := append([]any{1, 100, 1}, clauseArgs...)
+	rows, err := mediaDB.sql.Load().QueryContext(
+		context.Background(), "EXPLAIN QUERY PLAN "+scopedCandidateStreamQuery(1, clauses), args...,
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var planLines []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		planLines = append(planLines, detail)
+	}
+	require.NoError(t, rows.Err())
+
+	plan := strings.Join(planLines, "\n")
+	assert.Contains(t, plan, "INTEGER PRIMARY KEY")
+	assert.NotContains(t, plan, "USE TEMP B-TREE FOR ORDER BY")
 }
