@@ -360,6 +360,21 @@ func TestClose(t *testing.T) {
 	assert.True(t, mockDetector.stopped, "Detector should be stopped")
 }
 
+// A reader replaced in State and later closed again at shutdown used to panic
+// closing stopChan a second time.
+func TestCloseTwice(t *testing.T) {
+	t.Parallel()
+
+	reader := NewReader(&config.Instance{})
+	reader.detector = newMockMountDetector()
+	reader.stopChan = make(chan struct{})
+
+	require.NoError(t, reader.Close())
+	assert.NotPanics(t, func() {
+		require.NoError(t, reader.Close())
+	})
+}
+
 func TestProcessEvents_MountEvent(t *testing.T) {
 	// Create temp directory with zaparoo.txt
 	tempDir := t.TempDir()

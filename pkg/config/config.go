@@ -317,6 +317,10 @@ func constructConfig(configDir string, defaults Values, fs afero.Fs, allowEnviro
 	return &cfg, nil
 }
 
+// ErrInvalidConfigFile is a config.toml that exists but does not parse, such
+// as a hand edit with a TOML syntax error. The file is the user's to fix.
+var ErrInvalidConfigFile = errors.New("invalid config file")
+
 func (c *Instance) Load() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -347,7 +351,7 @@ func (c *Instance) Load() error {
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
 		c.loaded = oldLoaded
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidConfigFile, err)
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {

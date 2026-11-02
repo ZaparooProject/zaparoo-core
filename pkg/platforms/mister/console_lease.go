@@ -15,6 +15,7 @@ import (
 	"time"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -73,7 +74,7 @@ func (c *mainConsoleLeaseController) Acquire(ctx context.Context, vt string) (st
 	if err := c.waitForState(ctx, "acquired", nonce); err != nil {
 		acquireErr := fmt.Errorf("acquire Main console lease: %w", err)
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), c.cleanupTimeout)
-		releaseErr := c.Release(releaseCtx, nonce)
+		releaseErr := c.sendRelease(releaseCtx, nonce)
 		releaseCancel()
 		if releaseErr != nil {
 			return "", errors.Join(acquireErr, fmt.Errorf("clean up uncertain Main console lease: %w", releaseErr))
@@ -83,7 +84,28 @@ func (c *mainConsoleLeaseController) Acquire(ctx context.Context, vt string) (st
 	return nonce, nil
 }
 
+// Release ends a lease Acquire returned. The lease only exists inside Main, so
+// once Main has exited or its state names a different lease (Main restarted,
+// or the lease was superseded) there is nothing left to release.
 func (c *mainConsoleLeaseController) Release(ctx context.Context, nonce string) error {
+	if c.leaseGone(nonce) {
+		log.Debug().Msg("Main console lease already gone, nothing to release")
+		return nil
+	}
+	if err := c.sendRelease(ctx, nonce); err != nil {
+		if c.leaseGone(nonce) {
+			log.Debug().Err(err).Msg("Main console lease ended without a release confirmation")
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// sendRelease asks Main to release a lease and waits for the confirmation.
+// Acquire uses it directly to clean up a lease it never saw granted, where a
+// state naming another lease does not prove the request was dropped.
+func (c *mainConsoleLeaseController) sendRelease(ctx context.Context, nonce string) error {
 	if err := c.writeCommand(fmt.Sprintf("zaparoo_console release %s\n", nonce)); err != nil {
 		return err
 	}
@@ -91,6 +113,14 @@ func (c *mainConsoleLeaseController) Release(ctx context.Context, nonce string) 
 		return fmt.Errorf("release Main console lease: %w", err)
 	}
 	return nil
+}
+
+func (c *mainConsoleLeaseController) leaseGone(nonce string) bool {
+	if !c.Available() {
+		return true
+	}
+	state, err := c.readState()
+	return err == nil && state.nonce != nonce
 }
 
 func (c *mainConsoleLeaseController) writeCommand(command string) error {

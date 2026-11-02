@@ -72,13 +72,15 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 		if err != nil {
-			log.Error().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
+			log.Warn().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
 			return
 		}
 
 		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
-			log.Error().Err(err).Msgf("getting url: %s", redactURL(rawURL))
+			// The URL and the network behind it are the user's; an endpoint
+			// that is down or unreachable is not a Core fault.
+			log.Warn().Err(err).Msgf("getting url: %s", redactURL(rawURL))
 			return
 		}
 		err = resp.Body.Close()
@@ -111,14 +113,14 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(payload))
 		if err != nil {
-			log.Error().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
+			log.Warn().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
 			return
 		}
 		req.Header.Set("Content-Type", mime)
 
 		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
-			log.Error().Err(err).Msgf("error posting to url: %s", redactURL(rawURL))
+			log.Warn().Err(err).Msgf("error posting to url: %s", redactURL(rawURL))
 			return
 		}
 		err = resp.Body.Close()

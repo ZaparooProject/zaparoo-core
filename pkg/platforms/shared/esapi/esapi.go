@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,6 +39,10 @@ const apiURL = "http://localhost:1234"
 var ErrInvalidRunningGameResponse = errors.New("invalid running game response")
 
 func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
+	return sendAPIRequest(apiURL, path, body, timeout)
+}
+
+func sendAPIRequest(baseURL, path, body string, timeout time.Duration) ([]byte, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -50,30 +55,34 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	var req *http.Request
 	var err error
 	if body != "" {
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, apiURL+path, bytes.NewBuffer([]byte(body)))
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewBuffer([]byte(body)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "text/plain")
 		log.Trace().
 			Str("method", "POST").
-			Str("url", apiURL+path).
+			Str("url", baseURL+path).
 			Str("contentType", "text/plain").
 			Str("body", body).
 			Msg("ES API request")
 	} else {
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, http.NoBody)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, http.NoBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 		log.Trace().
 			Str("method", "GET").
-			Str("url", apiURL+path).
+			Str("url", baseURL+path).
 			Msg("ES API request")
 	}
 
 	resp, err := client.Do(req) //nolint:gosec // G704: URL from user config
 	if err != nil {
+		if isConnectionRefused(err) {
+			// EmulationStation is not running, so there is nothing to send to.
+			return nil, fmt.Errorf("failed to send request: %w: %w", platforms.ErrLauncherUnavailable, err)
+		}
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	if resp == nil {

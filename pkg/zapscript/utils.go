@@ -44,6 +44,17 @@ import (
 // ExecuteTimeout is the maximum duration for execute commands.
 const ExecuteTimeout = 2 * time.Second
 
+var (
+	// ErrExecuteTimeout is returned when an execute command is killed for
+	// running past ExecuteTimeout. It deliberately does not wrap
+	// context.DeadlineExceeded: the user's command overran, the run was not
+	// cancelled.
+	ErrExecuteTimeout = errors.New("execute command timed out")
+	// ErrExecuteExitStatus is returned when an execute command runs and exits
+	// with a non-zero status: the user's program failed, not Core.
+	ErrExecuteExitStatus = errors.New("execute command exited with an error")
+)
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg(strings.Join(env.Cmd.Args, ", "))
@@ -207,10 +218,20 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")
 		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return platforms.CmdResult{}, fmt.Errorf("execute command timed out after %v", ExecuteTimeout)
-		}
-		return platforms.CmdResult{}, fmt.Errorf("failed to execute command: %w", err)
+		return platforms.CmdResult{}, executeError(ctx.Err(), err)
 	}
 	return platforms.CmdResult{}, nil
+}
+
+// executeError classifies a failed execute command from its timeout
+// context's error and the error running it.
+func executeError(ctxErr, runErr error) error {
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		return fmt.Errorf("%w after %v", ErrExecuteTimeout, ExecuteTimeout)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return fmt.Errorf("%w: %w", ErrExecuteExitStatus, runErr)
+	}
+	return fmt.Errorf("failed to execute command: %w", runErr)
 }

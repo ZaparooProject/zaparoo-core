@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -1007,6 +1008,18 @@ var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
 // as a successful no-op, the way a launch that resolves to nothing new is.
 var ErrMediaLaunchSkipped = errMediaLaunchSkipped
 
+// ErrInvalidLaunchFormat is returned for launch text that is not a path, URI,
+// title or <system>/<path> value, such as a bare word or garbled token text.
+var ErrInvalidLaunchFormat error = invalidLaunchFormatError{}
+
+// invalidLaunchFormatError keeps the message clients have always shown while
+// classing it as invalid arguments.
+type invalidLaunchFormatError struct{}
+
+func (invalidLaunchFormatError) Error() string { return "invalid launch format" }
+
+func (invalidLaunchFormatError) Unwrap() error { return ErrInvalidArguments }
+
 type launchTarget struct {
 	path                  string
 	systemID              string
@@ -1338,7 +1351,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// attempt to parse the <system>/<path> format
 	systemID, lookupPath, ok := cutSystemPath(path)
 	if !ok {
-		return platforms.CmdResult{}, fmt.Errorf("invalid launch format: %s", path)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrInvalidLaunchFormat, path)
 	}
 
 	system, err := systemdefs.LookupSystem(systemID)
@@ -1376,7 +1389,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		if err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search for exact path '%s': %w", lookupPath, err)
 		} else if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
+			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", lookupPath, titles.ErrNoMatch)
 		}
 
 		log.Info().Msgf("found result: %s", res[0].Path)
@@ -1507,7 +1520,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 
 		if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
+			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", query, titles.ErrNoMatch)
 		}
 
 		target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
@@ -1554,7 +1567,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	if len(res) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
+		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", searchQuery, titles.ErrNoMatch)
 	}
 
 	target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}

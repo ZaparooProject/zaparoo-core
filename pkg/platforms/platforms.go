@@ -48,6 +48,12 @@ var ErrNotSupported = errors.New("operation not supported on this platform")
 // is preserved. Return this directly, without joining it with another failure.
 var ErrScannerUnavailable = errors.New("optional scanner source is unavailable")
 
+// ErrScannerSourceUnreachable marks a configured scanner source, such as a
+// media server on the network, that did not answer usefully: it was offline,
+// timed out, or replied with something other than its API. That is the
+// user's network and setup, not a Core fault. Scanning stays incomplete.
+var ErrScannerSourceUnreachable = errors.New("scanner source is unreachable")
+
 // ErrScriptAlreadyRunning reports a script launch refused because the platform's
 // script runner is occupied. The caller must still receive the refusal.
 var ErrScriptAlreadyRunning = errors.New("a script is already running")
@@ -57,6 +63,12 @@ var ErrScriptAlreadyRunning = errors.New("a script is already running")
 // platforms returning it must leave active media in place so Core's state
 // keeps matching reality.
 var ErrStopFailed = errors.New("failed to stop active launcher")
+
+// ErrLauncherUnavailable reports a launch refused because the program or
+// service the launcher hands media to is not there: a configured executable
+// that is missing, or a frontend API that is not running. It is a condition of
+// the host, not a fault in Core.
+var ErrLauncherUnavailable = errors.New("launcher is unavailable")
 
 // ScreenshotResult is the result of a platform screenshot capture.
 type ScreenshotResult struct {
@@ -523,17 +535,21 @@ type Launcher struct {
 	// media of a launcher that says nothing is running is cleared, so a game
 	// that never started is not left playing. Launchers without it, such as
 	// custom launchers that run scripts, are never checked.
-	GameRunning              func(context.Context, *config.Instance, *models.ActiveMedia) (bool, error)
-	ID                       string
-	SystemID                 string
-	UsesRunningInstance      string
-	AvailabilityReason       string
-	Detected                 *bool
-	Folders                  []string
-	Groups                   []string
-	Extensions               []string
-	ScanExcludes             []string
-	ScanDirectoryExcludes    []string
+	GameRunning           func(context.Context, *config.Instance, *models.ActiveMedia) (bool, error)
+	ID                    string
+	SystemID              string
+	UsesRunningInstance   string
+	AvailabilityReason    string
+	Detected              *bool
+	Folders               []string
+	Groups                []string
+	Extensions            []string
+	ScanExcludes          []string
+	ScanDirectoryExcludes []string
+	// NoArchiveExtensions lists extensions the launcher can only load from a
+	// file on disk. With ZipsAsDirs, a matching entry inside an archive is not
+	// indexed for this launcher, since launching it could only fail.
+	NoArchiveExtensions      []string
 	Schemes                  []string
 	Lifecycle                LauncherLifecycle
 	SupportsDetails          bool

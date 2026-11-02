@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -275,6 +276,48 @@ func TestLaunchFileErrorClassification(t *testing.T) {
 			assert.Empty(t, command.String())
 		})
 	}
+}
+
+// TestLaunchFileRejectsEntryInsideZip verifies an MGL, MRA or RBF inside a zip,
+// which MiSTer Main cannot load, fails as media no launcher can run without
+// writing to the command interface. A real directory named like a zip is
+// still loaded.
+func TestLaunchFileRejectsEntryInsideZip(t *testing.T) {
+	t.Parallel()
+
+	for _, ext := range []string{".mgl", ".MRA", ".rbf"} {
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+
+			// Stat through a zip file fails with ENOTDIR, as on the device.
+			fs := launchStatErrorFS{Fs: afero.NewMemMapFs(), err: syscall.ENOTDIR}
+			path := filepath.Join("media", "fat", "games", "X68000", "Final Fight.zip", "X68000", "Final Fight"+ext)
+
+			var command bytes.Buffer
+			err := launchFile(fs, &command, path, true)
+
+			require.ErrorIs(t, err, ErrLaunchFileInZip)
+			require.ErrorIs(t, err, helpers.ErrNoLauncher)
+			require.NotErrorIs(t, err, syscall.ENOTDIR)
+			assert.True(t, zapscript.IsExpectedRunError(err))
+			assert.Empty(t, command.String())
+		})
+	}
+
+	t.Run("directory named like a zip", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		path := filepath.Join("media", "fat", "games", "Pack.zip", "game.mgl")
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
+
+		var command bytes.Buffer
+		err := launchFile(fs, &command, path, true)
+
+		require.NoError(t, err)
+		assert.Equal(t, "load_core "+path+"\n", command.String())
+	})
 }
 
 func TestLaunchGeneratedFileMissingIsUnexpected(t *testing.T) {
@@ -788,4 +831,26 @@ func TestGenerateMgl_NeoGeoNeoMatchesZip(t *testing.T) {
 			"</mistergamedescription>"
 		assert.Equal(t, want, mgl, path)
 	}
+}
+
+// MGLs come from MiSTer and third-party scripts, so callers need to tell a
+// file that does not decode apart from one they could not read at all.
+func TestReadMglMalformed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tests := map[string]string{
+		"truncated": "<mistergamedescription>\n\t<rbf>_Console/SNES</rbf>\n\t<file",
+		"mra xml":   "<misterromdescription><name>Pooyan</name></misterromdescription>",
+	}
+	for name, content := range tests {
+		path := filepath.Join(dir, name+".mgl")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		_, err := ReadMgl(path)
+		require.ErrorIs(t, err, ErrMalformedMGL, name)
+	}
+
+	_, err := ReadMgl(filepath.Join(dir, "missing.mgl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.NotErrorIs(t, err, ErrMalformedMGL)
 }

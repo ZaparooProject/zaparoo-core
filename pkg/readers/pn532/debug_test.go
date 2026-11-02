@@ -41,13 +41,14 @@ type debugLogEntry struct {
 }
 
 // captureDebugLog redirects the global logger into a buffer for the duration of
-// the test. These tests cannot run in parallel because of it.
+// the test. These tests cannot run in parallel because of it. Writes are
+// serialised because a reader's session goroutine logs alongside the test.
 func captureDebugLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	originalLogger := log.Logger
 	originalLevel := zerolog.GlobalLevel()
-	log.Logger = zerolog.New(&buf)
+	log.Logger = zerolog.New(zerolog.SyncWriter(&buf))
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	t.Cleanup(func() {
 		log.Logger = originalLogger

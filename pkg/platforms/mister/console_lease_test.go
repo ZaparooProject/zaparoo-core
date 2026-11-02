@@ -143,6 +143,7 @@ func TestMainConsoleLeaseController_Release(t *testing.T) {
 	t.Parallel()
 
 	controller, fs := newTestConsoleLeaseController(t)
+	require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "acquired", "test-nonce"))
 	go func() {
 		fields := waitForLeaseCommand(fs, controller.commandPath, "release")
 		if len(fields) >= 3 {
@@ -167,7 +168,8 @@ func TestMainConsoleLeaseController_AcquireCommandFailure(t *testing.T) {
 func TestMainConsoleLeaseController_ReleaseCommandFailure(t *testing.T) {
 	t.Parallel()
 
-	controller, _ := newTestConsoleLeaseController(t)
+	controller, fs := newTestConsoleLeaseController(t)
+	require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "acquired", "test-nonce"))
 	controller.commandPath = filepath.Join(string(filepath.Separator), "missing", "MiSTer_cmd")
 
 	err := controller.Release(context.Background(), "test-nonce")
@@ -190,6 +192,7 @@ func TestMainConsoleLeaseController_ReleaseStateFailure(t *testing.T) {
 	t.Parallel()
 
 	controller, fs := newTestConsoleLeaseController(t)
+	require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "acquired", "test-nonce"))
 	go func() {
 		fields := waitForLeaseCommand(fs, controller.commandPath, "release")
 		if len(fields) >= 3 {
@@ -226,4 +229,72 @@ func TestMainConsoleLeaseController_WaitForFailure(t *testing.T) {
 	err := controller.waitForState(context.Background(), "acquired", "test-nonce")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "busy")
+}
+
+// The lease lives inside Main. Once Main has exited, or restarted and names a
+// different lease, there is nothing to release and Close must not keep
+// retrying a nonce Main will never answer for.
+func TestMainConsoleLeaseController_ReleaseTreatsGoneLeaseAsReleased(t *testing.T) {
+	t.Parallel()
+
+	t.Run("main state missing", func(t *testing.T) {
+		t.Parallel()
+
+		controller, _ := newTestConsoleLeaseController(t)
+		require.NoError(t, controller.Release(leaseTestContext(t), "test-nonce"))
+	})
+
+	t.Run("main process gone", func(t *testing.T) {
+		t.Parallel()
+
+		controller, fs := newTestConsoleLeaseController(t)
+		require.NoError(t, afero.WriteFile(
+			fs, controller.statePath, []byte("1 2147483647 acquired test-nonce\n"), 0o600,
+		))
+		require.NoError(t, controller.Release(leaseTestContext(t), "test-nonce"))
+	})
+
+	t.Run("state names another lease", func(t *testing.T) {
+		t.Parallel()
+
+		controller, fs := newTestConsoleLeaseController(t)
+		require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "ready", "-"))
+		require.NoError(t, controller.Release(leaseTestContext(t), "test-nonce"))
+	})
+
+	t.Run("main restarts while releasing", func(t *testing.T) {
+		t.Parallel()
+
+		controller, fs := newTestConsoleLeaseController(t)
+		require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "acquired", "test-nonce"))
+		go func() {
+			if len(waitForLeaseCommand(fs, controller.commandPath, "release")) >= 3 {
+				_ = writeConsoleLeaseState(fs, controller.statePath, "ready", "-")
+			}
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		require.NoError(t, controller.Release(ctx, "test-nonce"))
+	})
+
+	t.Run("main holds the lease but never answers", func(t *testing.T) {
+		t.Parallel()
+
+		controller, fs := newTestConsoleLeaseController(t)
+		require.NoError(t, writeConsoleLeaseState(fs, controller.statePath, "acquired", "test-nonce"))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, controller.Release(ctx, "test-nonce"), context.DeadlineExceeded)
+	})
+}
+
+// leaseTestContext bounds a release that should return at once, so a
+// regression fails instead of waiting forever for Main.
+func leaseTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }

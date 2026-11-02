@@ -56,10 +56,8 @@ func (p apiRequestPriority) String() string {
 }
 
 func requestTimeoutForAPIMethod(method string) time.Duration {
-	if models.MethodHasUnboundedRuntime(method) {
-		return 0
-	}
-	return config.APIRequestTimeout
+	timeout, _ := config.APIRequestTimeoutFor(method)
+	return timeout
 }
 
 func requestContextForAPIMethod(

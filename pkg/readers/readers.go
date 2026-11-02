@@ -33,9 +33,17 @@ import (
 // during a tag write (no tag was presented, or an unsupported tag was). Reader
 // drivers return these so the write path can log them at Warn rather than Error,
 // keeping them out of Sentry while genuine hardware failures remain at Error.
+//
+// ErrReaderDisconnected is returned when the reader itself went away during a
+// write, as when it is unplugged. It is a physical condition, not a fault.
+//
+// ErrTagRemoved is returned when the tag left the reader part-way through a
+// write, so the reader lost contact with it.
 var (
 	ErrTagNotDetected     = errors.New("could not detect a tag")
 	ErrUnsupportedTagType = errors.New("unsupported tag type")
+	ErrReaderDisconnected = errors.New("reader disconnected")
+	ErrTagRemoved         = errors.New("tag removed during write")
 )
 
 type Capability string

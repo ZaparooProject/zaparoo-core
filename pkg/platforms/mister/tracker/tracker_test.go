@@ -3,10 +3,12 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1531,4 +1535,76 @@ func TestLoadCoreLeavesCoreStoppedAfterStopUnpublished(t *testing.T) {
 
 	assert.Equal(t, []string{"esprade"}, pl.cores)
 	assert.Nil(t, published, "a core stopped on arrival is not published")
+}
+
+// SAM writes a temp MGL that can be left truncated, and ACTIVEGAME keeps
+// naming it, so every core change re-reads the same broken file. It is
+// third-party input: worth one warning, never an error per core change.
+func TestLoadCoreMalformedMGLIsNotAnError(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared logger and
+	// GlobalLauncherCache, and ResolvePath changes the working directory.
+
+	var logs bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	originalCache := helpers.GlobalLauncherCache
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{}).Maybe()
+	pl.On("RootDirs", mock.Anything).Return([]string{}).Maybe()
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+
+	dir := t.TempDir()
+	mglPath := filepath.Join(dir, "SAM_Game.mgl")
+	mgl := "<mistergamedescription>\n\t<rbf>_Console/SNES</rbf>\n\t<file delay=\"2\" type=\"f\" index=\"0\""
+	require.NoError(t, os.WriteFile(mglPath, []byte(mgl), 0o600))
+	coreFile := filepath.Join(dir, "CORENAME")
+
+	tr := &Tracker{
+		pl:             pl,
+		cfg:            &config.Instance{},
+		coreNameFile:   coreFile,
+		ActiveCore:     misterconfig.MenuCore,
+		readActiveGame: func() (string, error) { return mglPath, nil },
+		activeMedia:    func() *models.ActiveMedia { return nil },
+		setActiveMedia: func(*models.ActiveMedia) {},
+		setActiveGame:  func(string) error { return nil },
+	}
+
+	for _, core := range []string{"SNES", "Genesis"} {
+		require.NoError(t, os.WriteFile(coreFile, []byte(core), 0o600))
+		tr.LoadCore()
+	}
+
+	output := logs.String()
+	assert.NotContains(t, output, `"level":"error"`)
+	assert.Equal(t, 1, strings.Count(output, "active game mgl file is malformed"),
+		"the same broken file is warned about once")
+	assert.Contains(t, output, "active game mgl file is still malformed")
+}
+
+// MiSTer Main writes cores_recent.cfg through a temp file. Reading the temp
+// file as a game recents file would write a raw core or MGL path into
+// ACTIVEGAME.
+func TestTrackerIgnoresRecentTempFile(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(misterconfig.CoreConfigFolder, "cores_recent.cfg.tmp")
+	assert.False(t, trackerRecentFileChanged(tmpFile))
+
+	tr := &Tracker{}
+	load, settle := tr.trackerFileLoad(tmpFile)
+	assert.Nil(t, load)
+	assert.False(t, settle)
+
+	dir := t.TempDir()
+	recentFile := filepath.Join(dir, "cores_recent.cfg.tmp")
+	writeRecentEntry(t, recentFile, dir, "SNES_20240101.rbf")
+	path, err := recentGamePath(recentFile, nil)
+	require.NoError(t, err)
+	assert.Empty(t, path)
 }

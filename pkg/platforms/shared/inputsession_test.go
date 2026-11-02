@@ -322,6 +322,7 @@ func TestInputSession_HoldsAreBounded(t *testing.T) {
 	tokens := comboTokens(t, "press", maxSessionKeyboardHolds+1)
 	err := input.keyboardPressSequenceLocked(t.Context(), tokens, time.Nanosecond, session)
 	require.Error(t, err)
+	require.ErrorIs(t, err, ErrTooManyKeyboardHolds)
 	assert.Contains(t, err.Error(), "key combinations")
 
 	input.inputMu.Lock()

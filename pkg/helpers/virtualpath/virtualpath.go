@@ -188,6 +188,10 @@ func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
 	return result, nil
 }
 
+// ErrSchemeMismatch reports a virtual path handed to a launcher for a different
+// scheme, such as a launcher override naming the wrong launcher for the media.
+var ErrSchemeMismatch = errors.New("scheme mismatch")
+
 // ExtractSchemeID extracts the ID component from a scheme-based virtual path
 // with proper URL decoding. Returns error if the path doesn't match the expected scheme.
 // Example: ExtractSchemeID("steam://123/Game%20Name", "steam") -> "123", nil
@@ -199,7 +203,7 @@ func ExtractSchemeID(virtualPath, expectedScheme string) (string, error) {
 
 	// RFC 3986: scheme comparison is case-insensitive
 	if !strings.EqualFold(result.Scheme, expectedScheme) {
-		return "", fmt.Errorf("scheme mismatch: expected %s, got %s", expectedScheme, result.Scheme)
+		return "", fmt.Errorf("%w: expected %s, got %s", ErrSchemeMismatch, expectedScheme, result.Scheme)
 	}
 
 	return result.ID, nil

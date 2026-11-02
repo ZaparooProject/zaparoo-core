@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 )
 
 var AppVersion = "DEVELOPMENT"
@@ -94,4 +96,27 @@ const (
 // adding another line elsewhere stays harmless.
 func VersionLine(version, platformID string) string {
 	return fmt.Sprintf("Zaparoo v%s (%s)", version, platformID)
+}
+
+const (
+	// ReaderWriteWait is how long a reader waits for a tag to be presented
+	// for a write.
+	ReaderWriteWait = 30 * time.Second
+	// ReaderWriteRequestTimeout outlasts ReaderWriteWait plus the write
+	// itself, so a write nobody tapped ends with the reader's "no tag"
+	// result rather than the request deadline.
+	ReaderWriteRequestTimeout = ReaderWriteWait + 15*time.Second
+)
+
+// APIRequestTimeoutFor is the whole-request deadline for an API method, and
+// whether it has one at all. The server request context and the local client
+// wait both use it so the two cannot disagree.
+func APIRequestTimeoutFor(method string) (timeout time.Duration, bounded bool) {
+	if models.MethodHasUnboundedRuntime(method) {
+		return 0, false
+	}
+	if strings.EqualFold(method, models.MethodReadersWrite) {
+		return ReaderWriteRequestTimeout, true
+	}
+	return APIRequestTimeout, true
 }

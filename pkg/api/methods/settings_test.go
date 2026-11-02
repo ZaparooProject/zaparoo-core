@@ -2273,11 +2273,38 @@ func TestHandleSettingsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
 		IsLocal:  true,
 	})
 	require.Error(t, err)
+	// A hand-edited file with a syntax error is the user's to fix: it goes
+	// back to them with the parse position and stays out of error reports.
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.ErrorIs(t, err, config.ErrInvalidConfigFile)
 
 	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
 	require.NoError(t, err)
 	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
 	assert.False(t, cfg.ErrorReporting(), "a refused update must not change the running config")
+}
+
+func TestHandleSettingsReload_UnparseableConfigIsClientError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, config.CfgFile), []byte("[audio\n"), 0o600))
+
+	_, err = HandleSettingsReload(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		IsLocal:  true,
+	})
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.ErrorIs(t, err, config.ErrInvalidConfigFile)
 }
 
 func TestHandlePlaytimeLimitsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {

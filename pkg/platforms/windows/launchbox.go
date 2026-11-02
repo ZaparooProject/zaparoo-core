@@ -1185,7 +1185,9 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 
 		_, err = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(params))
 		if err != nil {
-			log.Error().Err(err).Msg("failed to send write request to API")
+			// The API logs the write failure itself, at a level that matches
+			// its cause, so this is not a second error report.
+			log.Warn().Err(err).Msg("failed to send write request to API")
 			return
 		}
 

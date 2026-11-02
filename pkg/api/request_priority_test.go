@@ -48,6 +48,8 @@ func TestRequestTimeoutForAPIMethod(t *testing.T) {
 		{"media asset", models.MethodMediaAsset, config.APIRequestTimeout},
 		{"unknown", "custom.method", config.APIRequestTimeout},
 		{"empty", "", config.APIRequestTimeout},
+		{"reader write", models.MethodReadersWrite, config.ReaderWriteRequestTimeout},
+		{"reader write case insensitive", "READERS.WRITE", config.ReaderWriteRequestTimeout},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +58,14 @@ func TestRequestTimeoutForAPIMethod(t *testing.T) {
 			assert.Equal(t, tt.want, requestTimeoutForAPIMethod(tt.method))
 		})
 	}
+}
+
+// A write nobody taps has to end with the reader's "no tag" result. When both
+// waits were 30 seconds the request deadline won by a millisecond, so every
+// such write reached the client and Sentry as an API timeout.
+func TestReaderWriteRequestOutlastsTagWait(t *testing.T) {
+	t.Parallel()
+	assert.Greater(t, requestTimeoutForAPIMethod(models.MethodReadersWrite), config.ReaderWriteWait+5*time.Second)
 }
 
 func TestRequestContextForBackupHasNoDeadlineAndPreservesCancellation(t *testing.T) {
