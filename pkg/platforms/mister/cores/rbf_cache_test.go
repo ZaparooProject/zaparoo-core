@@ -1349,3 +1349,71 @@ func TestGetByMglPath(t *testing.T) {
 	_, ok = cache.GetByMglPath("_Console/Unknown12345")
 	assert.False(t, ok)
 }
+
+func TestBuildFromRBFs_PrefersNewestReleaseBuild(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("media", "fat")
+	at := func(name string) RBFInfo {
+		return parseRBFPathAt(root, filepath.Join(root, "_Console", name))
+	}
+	older := at("PSX_20240101.rbf")
+	newer := at("PSX_20241010.rbf")
+	undated := at("PSX.rbf")
+	unstable := at("PSX_unstable_20250101_abc123.rbf")
+
+	orders := [][]RBFInfo{
+		{older, newer, undated, unstable},
+		{unstable, undated, newer, older},
+		{undated, older, unstable, newer},
+	}
+	for _, files := range orders {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+
+		got, ok := cache.GetBySystemID("PSX")
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+		assert.Equal(t, filepath.Join("_Console", "PSX_20241010"), got.MglExactName())
+
+		got, ok = cache.GetByMglPath(filepath.Join("_Console", "PSX"))
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+
+		got, ok = cache.GetByShortName("PSX")
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+	}
+}
+
+func TestBuildFromRBFs_DatedReleaseBeatsUndated(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("media", "fat")
+	dated := parseRBFPathAt(root, filepath.Join(root, "_Console", "PSX_20240101.rbf"))
+	undated := parseRBFPathAt(root, filepath.Join(root, "_Console", "PSX.rbf"))
+
+	for _, files := range [][]RBFInfo{{undated, dated}, {dated, undated}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetBySystemID("PSX")
+		require.True(t, ok)
+		assert.Equal(t, dated.Path, got.Path)
+	}
+}
+
+func TestGetByMglPath_GlobPrefersNewestReleaseBuild(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("media", "fat")
+	older := parseRBFPathAt(root, filepath.Join(root, "_Console", "PSX2P_20240101.rbf"))
+	newer := parseRBFPathAt(root, filepath.Join(root, "_Console", "PSX2P_20241010.rbf"))
+
+	for _, files := range [][]RBFInfo{{older, newer}, {newer, older}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetByMglPath(filepath.Join("_Console", "PSX2*"))
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+	}
+}

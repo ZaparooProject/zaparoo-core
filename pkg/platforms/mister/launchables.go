@@ -13,6 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -363,6 +364,18 @@ func (p *Platform) launchCore(
 	return func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		if err := p.closeLaunchConsole(); err != nil {
 			log.Warn().Err(err).Msg("failed to close console before FPGA launch")
+		}
+		// A short path loads Main's alphabetically last match, which can be an
+		// unstable nightly beside the release, so load the exact RBF when known.
+		if rbfInfo, ok := cores.GlobalRBFCache.GetByMglPath(corePath); ok {
+			launch := p.launchCoreAtRBF
+			if launch == nil {
+				launch = mgls.LaunchCoreAtRBF
+			}
+			if err := launch(rbfInfo); err != nil {
+				return nil, fmt.Errorf("failed to launch MiSTer core %s: %w", rbfInfo.Path, err)
+			}
+			return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 		}
 		if err := p.launchShortCoreFile(corePath); err != nil {
 			return nil, fmt.Errorf("failed to launch MiSTer core %s: %w", corePath, err)

@@ -11,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -366,4 +367,40 @@ load_path = "_Other/Arduboy"
 	assert.Equal(t, []string{"Favorites"}, categories["Chess"], "override of a built-in keeps its categories")
 	assert.Equal(t, []string{"Favorites", "Handheld"}, categories["Arduboy"], "new entry keeps its categories")
 	assert.Empty(t, categories["Donut"])
+}
+
+func TestLaunchOtherCoreLoadsExactCachedRBF(t *testing.T) {
+	release := cores.RBFInfo{
+		Path:      "/media/fat/_Other/Chess_20241010.rbf",
+		Filename:  "Chess_20241010.rbf",
+		ShortName: "Chess",
+		MglName:   "_Other/Chess",
+	}
+	withRBFCache(t, []cores.RBFInfo{
+		release,
+		{
+			Path:      "/media/fat/_Other/Chess_unstable_20250101_abc123.rbf",
+			Filename:  "Chess_unstable_20250101_abc123.rbf",
+			ShortName: "Chess_unstable_20250101_abc123",
+			MglName:   "_Other/Chess_unstable_20250101_abc123",
+		},
+	})
+	var loaded cores.RBFInfo
+	p := &Platform{
+		closeConsole: func() error { return nil },
+		launchCoreAtRBF: func(info cores.RBFInfo) error {
+			loaded = info
+			return nil
+		},
+		launchShortCore: func(string) error {
+			t.Fatal("cached core must not launch by short path")
+			return nil
+		},
+	}
+
+	process, err := p.launchOtherCore("_Other/Chess")(&config.Instance{}, "", nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, process)
+	assert.Equal(t, release.Path, loaded.Path)
 }

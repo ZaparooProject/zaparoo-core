@@ -196,3 +196,48 @@ func TestShallowScanRBF_IncludesLightGunSindenCores(t *testing.T) {
 	assert.Equal(t, "NES-Sinden", found.ShortName)
 	assert.Equal(t, "NES-Sinden.rbf", found.Filename)
 }
+
+func TestRBFInfoMglExactName(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("media", "fat")
+	tests := []struct {
+		name    string
+		relPath string
+		want    string
+	}{
+		{
+			name:    "dated core in folder",
+			relPath: filepath.Join("_Console", "PSX_20241010.rbf"),
+			want:    filepath.Join("_Console", "PSX_20241010"),
+		},
+		{
+			name:    "undated core in folder",
+			relPath: filepath.Join("_Console", "PSX.rbf"),
+			want:    filepath.Join("_Console", "PSX"),
+		},
+		{
+			name:    "unstable core",
+			relPath: filepath.Join("_Unstable", "PSX_unstable_20250101_abc123.rbf"),
+			want:    filepath.Join("_Unstable", "PSX_unstable_20250101_abc123"),
+		},
+		{
+			name:    "nested core directory",
+			relPath: filepath.Join("_RA_Cores", "Cores", "Foo_20240101.rbf"),
+			want:    filepath.Join("_RA_Cores", "Cores", "Foo_20240101"),
+		},
+		{
+			name:    "root core",
+			relPath: "menu_20240101.rbf",
+			want:    "menu_20240101",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			info := parseRBFPathAt(root, filepath.Join(root, tt.relPath))
+			assert.Equal(t, tt.want, info.MglExactName())
+		})
+	}
+}

@@ -868,3 +868,30 @@ func TestReadMglMalformed(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	assert.NotErrorIs(t, err, ErrMalformedMGL)
 }
+
+func TestBuildLaunchMglNamesExactReleaseRBF(t *testing.T) {
+	t.Parallel()
+
+	rbf := func(name string) cores.RBFInfo {
+		return cores.RBFInfo{
+			Path:      "/media/fat/_Console/" + name + ".rbf",
+			Filename:  name + ".rbf",
+			ShortName: "PSX",
+			MglName:   "_Console/PSX",
+		}
+	}
+	unstable := cores.RBFInfo{
+		Path:      "/media/fat/_Console/PSX_unstable_20250101_abc123.rbf",
+		Filename:  "PSX_unstable_20250101_abc123.rbf",
+		ShortName: "PSX_unstable_20250101_abc123",
+		MglName:   "_Console/PSX_unstable_20250101_abc123",
+	}
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{rbf("PSX_20240101"), rbf("PSX_20241010"), unstable})
+
+	system, err := cores.GetCore("PSX")
+	require.NoError(t, err)
+	mgl, err := buildLaunchMgl(nil, cache, system, "/media/fat/games/PSX/game.cue", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/PSX_20241010</rbf>")
+}

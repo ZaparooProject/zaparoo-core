@@ -312,9 +312,21 @@ func unstableCoreBaseName(shortName string) (string, bool) {
 	return shortName[:markerIndex], true
 }
 
+// preferRBFBuild reports whether a should be chosen over b when both share a
+// short name: dated release builds come first, newest first, then undated.
+func preferRBFBuild(a, b RBFInfo) bool {
+	aDate, aDated := officialDateSuffix(strings.TrimSuffix(a.Filename, filepath.Ext(a.Filename)))
+	bDate, bDated := officialDateSuffix(strings.TrimSuffix(b.Filename, filepath.Ext(b.Filename)))
+	if aDated != bDated {
+		return aDated
+	}
+	return aDate > bDate
+}
+
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
 // scanned RBF list. Exact core names take precedence over standardized
-// unstable-nightly fallbacks. No filesystem access; safe to call in tests.
+// unstable-nightly fallbacks, and among builds sharing a short name the newest
+// dated release is listed first. No filesystem access; safe to call in tests.
 func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 	c.bySystemID = make(map[string]RBFInfo)
 	c.byShortName = make(map[string][]RBFInfo)
@@ -327,6 +339,11 @@ func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 			baseKey := strings.ToLower(baseName)
 			unstableByBase[baseKey] = append(unstableByBase[baseKey], rbf)
 		}
+	}
+	for key := range c.byShortName {
+		sort.SliceStable(c.byShortName[key], func(i, j int) bool {
+			return preferRBFBuild(c.byShortName[key][i], c.byShortName[key][j])
+		})
 	}
 	for key := range unstableByBase {
 		sort.SliceStable(unstableByBase[key], func(i, j int) bool {
@@ -433,8 +450,11 @@ func (c *RBFCache) getByMglGlobLocked(canonicalDir, shortNamePattern string) (RB
 	if len(matches) == 0 {
 		return RBFInfo{}, false
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].MglName < matches[j].MglName
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].MglName != matches[j].MglName {
+			return matches[i].MglName < matches[j].MglName
+		}
+		return preferRBFBuild(matches[j], matches[i])
 	})
 	return matches[len(matches)-1], true
 }

@@ -227,25 +227,10 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 }
 
 func launchTempMgl(cfg *config.Instance, system *cores.Core, path string, options []Setting) error {
-	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+	mgl, err := buildLaunchMgl(cfg, cores.GlobalRBFCache, system, path, options)
 	if err != nil {
-		return fmt.Errorf("resolving core RBF: %w", err)
+		return err
 	}
-
-	override, err := cores.RunSystemHook(cfg, system, path)
-	if err != nil {
-		return fmt.Errorf("failed to run system hook: %w", err)
-	}
-	if override != "" {
-		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
-	}
-
-	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override, options...)
-	if err != nil {
-		return fmt.Errorf("failed to generate MGL: %w", err)
-	}
-	log.Debug().Str("system", system.ID).Msg("MGL generated successfully")
-	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
@@ -253,6 +238,33 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string, option
 	}
 
 	return launchGeneratedFile(tmpFile)
+}
+
+// buildLaunchMgl generates the MGL for launching path on system, naming the
+// exact RBF the cache resolved so Main cannot pick another build of it.
+func buildLaunchMgl(
+	cfg *config.Instance, cache *cores.RBFCache, system *cores.Core, path string, options []Setting,
+) (string, error) {
+	rbfInfo, err := cache.Resolve(cfg, system)
+	if err != nil {
+		return "", fmt.Errorf("resolving core RBF: %w", err)
+	}
+
+	override, err := cores.RunSystemHook(cfg, system, path)
+	if err != nil {
+		return "", fmt.Errorf("failed to run system hook: %w", err)
+	}
+	if override != "" {
+		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
+	}
+
+	mgl, err := GenerateMgl(system, rbfInfo.MglExactName(), path, override, options...)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate MGL: %w", err)
+	}
+	log.Debug().Str("system", system.ID).Msg("MGL generated successfully")
+	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
+	return mgl, nil
 }
 
 // LaunchShortCore attempts to launch a core with a short path, as per what's
