@@ -25,11 +25,53 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// A transaction that reads before it writes must not fail because another
+// connection wrote in between. Under a deferred BEGIN the write that lands
+// first leaves the transaction's snapshot stale, and SQLite refuses its write
+// with SQLITE_BUSY straight away, without waiting on the busy timeout. The
+// production connection begins immediately, so the other writer waits instead.
+func TestReadThenWriteTransactionWaitsForConcurrentWriter(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	conn := db.sql.Load()
+	ctx := t.Context()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	var count int
+	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM History").Scan(&count))
+
+	otherWrite := make(chan error, 1)
+	go func() {
+		otherWrite <- db.AddHistory(&database.HistoryEntry{
+			Time: time.Now(), Type: "nfc", TokenID: "other", TokenValue: "other", Success: true,
+		})
+	}()
+	// Give the other write the chance to land first, as it would under a
+	// deferred BEGIN. Under BEGIN IMMEDIATE it waits on this transaction.
+	select {
+	case err = <-otherWrite:
+		require.NoError(t, err)
+		otherWrite <- nil
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO DeviceState (Key, Value, UpdatedAt) VALUES ('read_then_write', '1', 0)")
+	require.NoError(t, err, "read-then-write transaction lost its write to a concurrent writer")
+	require.NoError(t, tx.Commit())
+	require.NoError(t, <-otherWrite)
+}
 
 func TestOpenSQLConnectionDoesNotPublish(t *testing.T) {
 	t.Parallel()

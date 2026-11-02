@@ -218,7 +218,8 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 
 				closeErr := t.db.UserDB.CloseMediaHistory(dbid, endTime, playTime)
 				if closeErr != nil {
-					log.Error().Err(closeErr).Int64("dbid", dbid).Msg("failed to close media history entry")
+					log.WithLevel(database.StorageFailureLevel(closeErr)).Err(closeErr).Int64("dbid", dbid).
+						Msg("failed to close media history entry")
 					t.mu.Lock()
 					if t.closingHistoryDBID == dbid {
 						t.closingHistoryDBID = 0

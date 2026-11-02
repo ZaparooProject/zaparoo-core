@@ -35,6 +35,12 @@ import (
 
 var errScrapeJobRetired = errors.New("scrape job was cancelled or replaced before recovery")
 
+// IsScrapeJobRetired reports whether a scrape resume found its job cancelled or
+// replaced, so there was nothing left to resume.
+func IsScrapeJobRetired(err error) bool {
+	return errors.Is(err, errScrapeJobRetired)
+}
+
 // persistStart rechecks recovery after acquiring the write lease. Cancellation
 // and queue acceptance use the same mutex, so stale recovery cannot revive work.
 func (s *scrapingStatus) persistStart(db database.MediaDBI, operation *database.ScrapingOperation, resume bool) error {

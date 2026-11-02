@@ -43,6 +43,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -905,7 +906,7 @@ func (s *Service) startService() {
 
 	result, err := s.start()
 	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
+		log.WithLevel(api.StartupFailureLevel(err)).Err(err).Msg("error starting service")
 
 		if pidErr := s.removePidFile(); pidErr != nil {
 			log.Error().Err(pidErr).Msg("error removing pid file")

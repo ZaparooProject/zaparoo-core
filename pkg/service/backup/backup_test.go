@@ -5292,3 +5292,106 @@ func TestRemoteQuotaMessageDistinguishesFullFromTooLarge(t *testing.T) {
 	assert.Contains(t, fitBody, "4.0 MB")
 	assert.NotContains(t, fitBody, "is full")
 }
+
+// A backup name from a client that is malformed, or that names a backup since
+// deleted, is the client's request rather than a backup failure, so the API
+// can answer it without reporting an error.
+func TestResolveBackupPathClassifiesClientNames(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+
+	_, err := env.Manager.resolveBackupPath("zzz-f8-probe-does-not-exist")
+	require.ErrorIs(t, err, ErrInvalidBackupName)
+
+	_, err = env.Manager.resolveBackupPath("../backup-x.zip")
+	require.ErrorIs(t, err, ErrInvalidBackupName)
+
+	_, err = env.Manager.resolveBackupPath("backup-20260101-000000-000000000-manual.zip")
+	require.ErrorIs(t, err, ErrBackupNotFound)
+}
+
+// A remote run cut short by shutdown is not a failure the user needs to hear
+// about; the next scheduled run picks it up.
+func TestNotifyRemoteFailureSkipsCancellation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cancelled stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+		env.Manager.notifyRemoteFailure(fmt.Errorf("upload snapshot: %w", context.Canceled))
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+
+	t.Run("other failure adds the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryBackupRemoteFailed
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryBackupRemoteFailed,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+		env.Manager.notifyRemoteFailure(errors.New("upload snapshot: connection reset"))
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+}
+
+// A run cancelled part-way, as when the caller goes away or the service shuts
+// down, posted "Remote backup failed" although nothing failed and the next run
+// retries it.
+func TestManagerRunRemoteCancelledMidRunIsNotAFailure(t *testing.T) {
+	for _, stage := range []string{"me", "check", "backups", "pack"} {
+		t.Run(stage, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// The server only notices the client going away once the body
+			// has been read.
+			hold := func(r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				cancel()
+				<-r.Context().Done()
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+					if stage == "me" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "test", BackupActive: true})
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+					var req remoteCheckRequest
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					if stage == "check" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+					if stage == "backups" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteListResponse{StorageUsedBytes: 0, StorageQuotaBytes: 1 << 40})
+				default:
+					hold(r)
+				}
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
+			env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+			_, err := env.Manager.RunRemote(ctx, RemoteBackupTypeManual)
+			require.ErrorIs(t, err, context.Canceled)
+			env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+		})
+	}
+}

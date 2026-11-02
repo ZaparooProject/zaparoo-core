@@ -75,7 +75,10 @@ func (db *MediaDB) clearOptimizationStampIfEmpty(ctx context.Context) error {
 	if sqlDB == nil {
 		return ErrNullSQL
 	}
+	return sqlClearOptimizationStampIfEmpty(ctx, sqlDB)
+}
 
+func sqlClearOptimizationStampIfEmpty(ctx context.Context, sqlDB *sql.DB) error {
 	status, err := sqlGetOptimizationStatus(ctx, sqlDB)
 	if err != nil {
 		return err

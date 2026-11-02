@@ -314,6 +314,26 @@ func TestUserDBBackupForTransferHonorsCancellation(t *testing.T) {
 	assert.Nil(t, cleanup)
 }
 
+// A remote backup cancelled while its transfer copy was being checked was
+// reported as a backup that failed validation, which posted a "Remote backup
+// failed" notice for a run the caller had simply abandoned.
+func TestBackupInfoQuickCheckCancellationIsNotAFailedValidation(t *testing.T) {
+	t.Parallel()
+	userDB, closeDB := setupTempUserDB(t)
+	defer closeDB()
+	backup, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = backupInfoContext(ctx, backup.Path, true)
+	require.ErrorIs(t, err, context.Canceled)
+
+	info, err := backupInfoContext(context.Background(), backup.Path, true)
+	require.NoError(t, err)
+	assert.True(t, info.Valid)
+}
+
 func TestUserDBRestoreBackupFailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()

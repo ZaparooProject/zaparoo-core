@@ -389,6 +389,20 @@ func discoveryExcludesHidden(tags []zapscript.TagFilter) bool {
 
 // scope says whether the query reads below one directory's own files, and so
 // whether hidden folders have to be excluded from it as well.
+// onlyVisibilityTagFilters reports whether tags holds nothing but the filters
+// discoveryTags adds. Those are plain row predicates that the candidate streams
+// apply in SQL, so a library with something hidden keeps the streaming search
+// instead of falling back to a grouped LIKE scan of every system.
+func onlyVisibilityTagFilters(tagFilters []zapscript.TagFilter) bool {
+	hidden := filters.ExcludeHidden(nil)[0]
+	for _, f := range tagFilters {
+		if f != hidden && f.Type != hiddenDirFilterType {
+			return false
+		}
+	}
+	return true
+}
+
 func discoveryTags(
 	ctx context.Context, db sqlQueryable, tags []zapscript.TagFilter, excludeHidden bool, scope dirScope,
 ) ([]zapscript.TagFilter, error) {

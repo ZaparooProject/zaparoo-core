@@ -71,6 +71,11 @@ func backupMethodError(action string, err error) error {
 	if errors.As(err, &busy) {
 		return models.ClientErrf("backup is busy with %s", busy.Kind)
 	}
+	// A name the client sent that is malformed, or names a backup that has
+	// since been deleted, is the client's request, not a backup failure.
+	if errors.Is(err, backupsvc.ErrInvalidBackupName) || errors.Is(err, backupsvc.ErrBackupNotFound) {
+		return models.ClientErrf("failed to %s: %w", action, err)
+	}
 	return fmt.Errorf("failed to %s: %w", action, err)
 }
 

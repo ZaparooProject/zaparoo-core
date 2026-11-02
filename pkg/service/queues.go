@@ -1513,10 +1513,61 @@ func recordTokenHistory(svc *ServiceContext, he *database.HistoryEntry) {
 		if svc.BackgroundWG != nil {
 			defer svc.BackgroundWG.Done()
 		}
-		if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
-			log.Error().Err(histErr).Msgf("error adding history")
+		ctx := context.Background()
+		if svc.State != nil {
+			ctx = svc.State.GetContext()
+		}
+		if histErr := writeTokenHistory(
+			ctx, svc.DB.UserDB, he, tokenHistoryRetryDelays, sleepContext,
+		); histErr != nil {
+			log.WithLevel(database.StorageFailureLevel(histErr)).Err(histErr).Msg("error adding history")
 		}
 	}()
+}
+
+// tokenHistoryRetryDelays are the waits before each retry of a token history
+// write that lost the user database's write lock. Every attempt has already
+// waited out SQLite's busy timeout, so a long maintenance write is the usual
+// cause, and a short pause lets it finish.
+var tokenHistoryRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+// writeTokenHistory adds a token history entry, retrying when another write
+// held the lock past the busy timeout. Nothing waits on it, so retrying costs
+// no caller anything. Retries stop once ctx is done, but the first attempt
+// always runs so a write queued at shutdown still lands.
+func writeTokenHistory(
+	ctx context.Context,
+	userDB database.UserDBI,
+	he *database.HistoryEntry,
+	retryDelays []time.Duration,
+	sleep func(context.Context, time.Duration) error,
+) error {
+	started := time.Now()
+	for attempt := 0; ; attempt++ {
+		err := userDB.AddHistory(he)
+		sqliteErr, contended := database.LockContention(err)
+		if !contended {
+			return err //nolint:wrapcheck // the caller logs it as the history write failure
+		}
+		if attempt >= len(retryDelays) || sleep(ctx, retryDelays[attempt]) != nil {
+			return fmt.Errorf("token history write [sqlite_code=%d sqlite_extended_code=%d "+
+				"attempts=%d elapsed_ms=%d]: %w",
+				int(sqliteErr.Code), int(sqliteErr.ExtendedCode), attempt+1,
+				time.Since(started).Milliseconds(), err)
+		}
+	}
+}
+
+// sleepContext waits for d, returning ctx's error if it ends first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // bare ctx.Err is the contract
+	case <-timer.C:
+		return nil
+	}
 }
 
 // runTokenZapScriptRecovering runs the token's ZapScript and converts a panic

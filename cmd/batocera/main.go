@@ -172,8 +172,10 @@ func run() error {
 		)
 	})
 	if err != nil {
-		log.Error().Msgf("error running UI: %s", err)
-		return fmt.Errorf("error running UI: %w", err)
+		// Launched without a terminal (no tty or TERM), there is no TUI to
+		// show. The service runs in its own process, so this is not a fault.
+		log.Warn().Err(err).Msg("TUI unavailable, service continues in the background")
+		_, _ = fmt.Fprintf(os.Stderr, "TUI unavailable (%s), service continues in the background.\n", err)
 	}
 
 	return nil

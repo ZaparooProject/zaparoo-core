@@ -87,7 +87,10 @@ func (d *Database) GetMappings() ([]Mapping, error) {
 	err := d.bdb.View(func(txn *bolt.Tx) error {
 		b := txn.Bucket([]byte(BucketMappings))
 		if b == nil {
-			return fmt.Errorf("bucket %q does not exist", BucketMappings)
+			// A database that never stored a mapping has no bucket. There is
+			// nothing to migrate, and failing here would keep the file from
+			// being retired, so the migration would fail on every start.
+			return nil
 		}
 
 		c := b.Cursor()

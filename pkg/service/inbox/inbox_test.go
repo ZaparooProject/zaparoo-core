@@ -20,14 +20,19 @@
 package inbox
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -206,6 +211,33 @@ func TestService_Add_DatabaseError(t *testing.T) {
 		t.Fatal("notification should not be sent on database error")
 	case <-time.After(50 * time.Millisecond):
 		// Expected - no notification
+	}
+}
+
+// Not parallel: it swaps the global logger.
+func TestService_Add_FailureLogLevel(t *testing.T) {
+	tests := []struct {
+		err       error
+		name      string
+		wantLevel string
+	}{
+		{name: "cancelled at shutdown", err: fmt.Errorf("insert: %w", context.Canceled), wantLevel: "debug"},
+		{name: "other failure", err: errors.New("db error"), wantLevel: "warn"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prevLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+			t.Cleanup(func() { log.Logger = prevLogger })
+
+			mockDB := helpers.NewMockUserDBI()
+			mockDB.On("AddInboxMessage", mock.Anything).Return((*database.InboxMessage)(nil), tt.err)
+
+			require.Error(t, NewService(mockDB, make(chan models.Notification, 1)).Add("Test Title"))
+			assert.Contains(t, buf.String(), `"level":"`+tt.wantLevel+`"`)
+			assert.NotContains(t, buf.String(), `"level":"error"`)
+		})
 	}
 }
 

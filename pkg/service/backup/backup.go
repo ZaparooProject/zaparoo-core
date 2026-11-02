@@ -882,13 +882,25 @@ func matchBackupGlob(glob, target string) bool {
 	return err == nil && matched
 }
 
+var (
+	// ErrInvalidBackupName is a client-supplied backup name that is not a
+	// local backup file name.
+	ErrInvalidBackupName = errors.New("invalid backup name")
+	// ErrBackupNotFound is a well-formed backup name with no backup behind it,
+	// such as one deleted after it was listed.
+	ErrBackupNotFound = errors.New("backup not found")
+)
+
 func (m *Manager) resolveBackupPath(name string) (string, error) {
 	base := filepath.Base(name)
 	if base != name || !isBackupZipName(base) {
-		return "", fmt.Errorf("invalid backup name: %s", name)
+		return "", fmt.Errorf("%w: %s", ErrInvalidBackupName, name)
 	}
 	backupPath := filepath.Join(m.backupDir(), base)
 	if _, err := os.Stat(backupPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("%w: %s", ErrBackupNotFound, base)
+		}
 		return "", fmt.Errorf("finding backup ZIP: %w", err)
 	}
 	return backupPath, nil
