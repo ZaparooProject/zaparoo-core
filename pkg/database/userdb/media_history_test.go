@@ -1058,14 +1058,15 @@ func TestSqlGetMediaHistoryTop_MultipleSessionsAggregated(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
 			"Super Nintendo Entertainment System",
-			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc")).
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"), "").
 		AddRow("NES", "Super Mario Bros", 3600, 5, now.Add(-time.Hour).Unix(),
 			"Nintendo Entertainment System",
-			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"))
+			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"),
+			`{"canonical_system_id":"NES","core_slug":"supermariobros"}`)
 
 	mock.ExpectPrepare(`SELECT.*sub\.SystemID.*FROM.*GROUP BY SystemID, MediaName.*ORDER BY sub\.TotalPlayTime DESC`).
 		ExpectQuery().
@@ -1075,6 +1076,9 @@ func TestSqlGetMediaHistoryTop_MultipleSessionsAggregated(t *testing.T) {
 	entries, err := sqlGetMediaHistoryTop(context.Background(), db, nil, nil, 25)
 	require.NoError(t, err)
 	assert.Len(t, entries, 2)
+	assert.Nil(t, entries[0].MediaIdentity)
+	require.NotNil(t, entries[1].MediaIdentity)
+	assert.Equal(t, "supermariobros", entries[1].MediaIdentity.CoreSlug)
 	assert.Equal(t, "SNES", entries[0].SystemID)
 	assert.Equal(t, "Super Mario World", entries[0].MediaName)
 	assert.Equal(t, 7200, entries[0].TotalPlayTime)
@@ -1101,11 +1105,11 @@ func TestSqlGetMediaHistoryTop_SystemFilter(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
 			"Super Nintendo Entertainment System",
-			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"))
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"), "")
 
 	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*GROUP BY`).
 		ExpectQuery().
@@ -1131,7 +1135,7 @@ func TestSqlGetMediaHistoryTop_SinceFilter(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	})
 
 	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND StartTime >= \?.*GROUP BY`).
@@ -1154,7 +1158,7 @@ func TestSqlGetMediaHistoryTop_LimitCap(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	})
 
 	// Limit of 200 should be capped to 100
@@ -1178,7 +1182,7 @@ func TestSqlGetMediaHistoryTop_DefaultLimit(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	})
 
 	// Limit of 0 should default to 25
@@ -1222,10 +1226,10 @@ func TestSqlGetMediaHistoryTop_BothFilters(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	}).
 		AddRow("Genesis", "Sonic", 1800, 3, now.Unix(),
-			"Sega Genesis", filepath.Join(string(filepath.Separator), "games", "gen", "sonic.md"))
+			"Sega Genesis", filepath.Join(string(filepath.Separator), "games", "gen", "sonic.md"), "")
 
 	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \? AND StartTime >= \?.*GROUP BY`).
 		ExpectQuery().
@@ -1251,14 +1255,14 @@ func TestSqlGetMediaHistoryTop_MultipleSystemIDs(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"SystemID", "MediaName", "TotalPlayTime",
 		"SessionCount", "LastPlayedAt",
-		"SystemName", "MediaPath",
+		"SystemName", "MediaPath", "MediaIdentity",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
 			"Super Nintendo Entertainment System",
-			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc")).
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"), "").
 		AddRow("NES", "Super Mario Bros", 3600, 5, now.Add(-time.Hour).Unix(),
 			"Nintendo Entertainment System",
-			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"))
+			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"), "")
 
 	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID IN \(\?, \?\).*GROUP BY`).
 		ExpectQuery().

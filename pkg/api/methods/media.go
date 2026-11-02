@@ -1489,27 +1489,10 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		// Build zapScript with disambiguating tags from MediaDB
-		var zapScriptTags []database.TagInfo
-		if env.Database.MediaDB != nil {
-			tags, tagsErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
-				env.Context, system.ID, activeMedia.Path,
-			)
-			if tagsErr != nil {
-				log.Debug().Err(tagsErr).Msgf("could not get tags for %s:%s", system.ID, activeMedia.Path)
-			} else {
-				zapScriptTags = tags
-			}
-		}
-		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, zapScriptTags)
-		mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
-			SystemID: system.ID,
-			Path:     activeMedia.Path,
-		}})
-		ref := mediaPathRef{SystemID: system.ID, Path: activeMedia.Path}
+		mediaID, zapScript := activeMediaEnrichment(&env, system.ID, activeMedia.Path, activeMedia.Name)
 
 		primaryEntry := models.ActiveMedia{
-			MediaID:          mediaIDs[ref],
+			MediaID:          mediaID,
 			RelPath:          mediaResponseRelativePath(&env, system.ID, activeMedia.Path),
 			Started:          activeMedia.Started,
 			LauncherID:       activeMedia.LauncherID,
@@ -1726,20 +1709,15 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	// Build zapScript with disambiguating tags from MediaDB (primary slot only — background
-	// audio has no media DB entry to look up).
-	var zapScriptTags []database.TagInfo
-	if slot != mediaslot.Background && env.Database.MediaDB != nil {
-		tags, tagsErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
-			env.Context, media.SystemID, media.Path,
-		)
-		if tagsErr != nil {
-			log.Debug().Err(tagsErr).Msgf("could not get tags for %s:%s", media.SystemID, media.Path)
-		} else {
-			zapScriptTags = tags
-		}
+	// Media ID and disambiguated zapScript come from MediaDB for the primary
+	// slot only; background audio has no media DB entry to look up.
+	var mediaID int64
+	var zapScript string
+	if slot == mediaslot.Background {
+		zapScript = database.BuildTitleZapScript(media.SystemID, media.Name, nil)
+	} else {
+		mediaID, zapScript = activeMediaEnrichment(&env, media.SystemID, media.Path, media.Name)
 	}
-	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, zapScriptTags)
 
 	entry := models.ActiveMedia{
 		RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
@@ -1751,16 +1729,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Path:             media.Path,
 		Slot:             slot,
 		LauncherControls: media.LauncherControls,
-	}
-
-	// Populate MediaID only for the primary slot (background audio has no DB entry).
-	if slot != mediaslot.Background {
-		mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
-			SystemID: media.SystemID,
-			Path:     media.Path,
-		}})
-		ref := mediaPathRef{SystemID: media.SystemID, Path: media.Path}
-		entry.MediaID = mediaIDs[ref]
+		MediaID:          mediaID,
 	}
 
 	enrichPlaybackState(&env, &entry, slot)

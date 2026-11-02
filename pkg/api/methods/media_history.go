@@ -100,11 +100,14 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		entries = entries[:limit]
 	}
 	mediaRefs := make([]mediaPathRef, 0, len(entries))
+	identityRefs := make([]identityRef, 0, len(entries))
 	for i := range entries {
-		mediaRefs = append(mediaRefs, mediaPathRef{
+		ref := mediaPathRef{
 			SystemID: entries[i].SystemID,
 			Path:     entries[i].MediaPath,
-		})
+		}
+		mediaRefs = append(mediaRefs, ref)
+		identityRefs = append(identityRefs, identityRef{Ref: ref, Identity: entries[i].MediaIdentity})
 	}
 	enrichStarted := time.Now()
 	mediaIDs := make(map[mediaPathRef]int64)
@@ -123,6 +126,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if enrichErr != nil {
 		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
 	} else {
+		addMediaIdentityMatches(&env, mediaRows, identityRefs)
 		var resolvedRefs []database.MediaRef
 		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
 		if len(resolvedRefs) == 0 {

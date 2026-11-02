@@ -316,7 +316,7 @@ func (t *mediaHistoryTracker) lookupMediaIdentity(
 		return identity, found, err
 	}
 	identity, found = mediascanner.FallbackMediaIdentity(t.cfg, systemID, path)
-	if !found || !mediaDBSettledForIdentitySweep(t.db.MediaDB) {
+	if !found || !mediascanner.MediaDBSettled(t.db.MediaDB) {
 		return database.MediaIdentity{}, false, nil
 	}
 	return identity, true, nil

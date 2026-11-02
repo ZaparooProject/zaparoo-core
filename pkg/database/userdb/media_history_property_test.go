@@ -286,7 +286,8 @@ func TestGetDistinctMediaHistory_UniquePaginationAndSystemScope(t *testing.T) {
 			PlayTime INTEGER NOT NULL,
 			IsDeleted INTEGER DEFAULT 0,
 			SessionSource TEXT NOT NULL DEFAULT 'active_media',
-			SessionConfidence TEXT NOT NULL DEFAULT 'unspecified'
+			SessionConfidence TEXT NOT NULL DEFAULT 'unspecified',
+			MediaIdentity TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	require.NoError(t, err)
@@ -315,11 +316,18 @@ func TestGetDistinctMediaHistory_UniquePaginationAndSystemScope(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	_, err = db.ExecContext(ctx, `UPDATE MediaHistory SET MediaIdentity = ? WHERE DBID = 4`,
+		`{"canonical_system_id":"NES","core_slug":"nesnewest"}`)
+	require.NoError(t, err)
+
 	firstPage, err := sqlGetDistinctMediaHistory(ctx, db, nil, 0, 2)
 	require.NoError(t, err)
 	require.Len(t, firstPage, 2)
 	assert.Equal(t, []int64{5, 4}, []int64{firstPage[0].DBID, firstPage[1].DBID})
 	assert.Equal(t, "NES newest", firstPage[1].MediaName)
+	assert.Nil(t, firstPage[0].MediaIdentity)
+	require.NotNil(t, firstPage[1].MediaIdentity, "distinct rows carry their recorded identity")
+	assert.Equal(t, "nesnewest", firstPage[1].MediaIdentity.CoreSlug)
 
 	secondPage, err := sqlGetDistinctMediaHistory(ctx, db, nil, firstPage[1].DBID, 2)
 	require.NoError(t, err)
