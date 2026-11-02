@@ -518,7 +518,7 @@ func startServiceWithOptions(
 		if startupErr != nil {
 			// No listener means no page to explain anything on, so there is
 			// nothing to stay alive for.
-			log.Error().Err(startupErr).Msg("failed to bind to port")
+			api.LogBindFailure(startupErr)
 			st.StopService()
 			return nil, fmt.Errorf("api startup failed: %w", startupErr)
 		}
@@ -589,7 +589,7 @@ func startServiceWithOptions(
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	restoreReporter()
 	if err != nil {
-		log.Error().Err(err).Msgf("error opening databases")
+		log.WithLevel(database.StartupFailureLevel(err)).Err(err).Msg("error opening databases")
 		headline, detail := describeDatabaseStartupFailure(pl, err)
 		return nil, startupFailure(true, headline, detail, err)
 	}
@@ -748,7 +748,7 @@ func startServiceWithOptions(
 	launchersStarted := time.Now()
 	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
-		if errors.Is(err, config.ErrCustomLauncherUnknownFields) {
+		if errors.Is(err, config.ErrCustomLauncherUnknownFields) || errors.Is(err, config.ErrCustomLauncherInvalid) {
 			log.Warn().Err(err).Msg("error loading custom launchers")
 		} else {
 			log.Error().Err(err).Msg("error loading custom launchers")
@@ -947,26 +947,27 @@ func startServiceWithOptions(
 	// doesn't compete with the launcher's first request for the single
 	// ARM core, the SQLite file lock, or the network. Each of these has a
 	// 300 s hard cap so they still run on a saturated system.
+	//
+	// These all write to the user database, so they run one after another in a
+	// single task: started together they queued on its one write lock along
+	// with token history, and the losers failed with "database is locked".
+	// Pre-warming goes last because it first waits on the network.
 	idleSched.Schedule(
-		st.GetContext(), "zaplink-prewarm",
+		st.GetContext(), "userdb-maintenance",
 		5*time.Second, 300*time.Second,
 		func(ctx context.Context) {
-			zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
-		},
-	)
-	idleSched.Schedule(
-		st.GetContext(), "history-retention-cleanup",
-		5*time.Second, 300*time.Second,
-		func(ctx context.Context) {
-			remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
-			cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
-		},
-	)
-	idleSched.Schedule(
-		st.GetContext(), "zaplink-host-prune",
-		5*time.Second, 300*time.Second,
-		func(_ context.Context) {
-			pruneExpiredZapLinkHosts(db)
+			runInSequence(ctx,
+				func(context.Context) {
+					pruneExpiredZapLinkHosts(db)
+				},
+				func(ctx context.Context) {
+					remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
+					cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
+				},
+				func(ctx context.Context) {
+					zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
+				},
+			)
 		},
 	)
 	playSyncRequests := make(chan struct{}, 1)

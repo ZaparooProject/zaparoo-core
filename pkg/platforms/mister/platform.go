@@ -1850,6 +1850,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
 		createScriptsLauncher(p),
 	)
+	ls = applyNoArchiveExtensions(ls)
 	setCoreAvailability(ls)
 
 	return helpers.CombineLaunchers(cfg, p, prioritizeNGPCCore(cfg, ls))

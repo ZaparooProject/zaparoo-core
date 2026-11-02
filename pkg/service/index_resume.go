@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -969,8 +970,19 @@ func checkAndResumeScraping(
 		}
 		// The starter owns persistence while holding the write lease. A failed
 		// recovery attempt must not delete jobs accepted after that lease ended.
-		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")
+		log.WithLevel(scrapeResumeFailureLevel(err)).Err(err).Str("scraper", operation.ScraperID).
+			Msg("failed to start auto-resume of media scraping")
 	}
+}
+
+// scrapeResumeFailureLevel is the level to log a scrape auto-resume that did
+// not start at. A job cancelled or replaced since it was stored, or a resume
+// cut short by shutdown, left nothing to resume; neither is a failure.
+func scrapeResumeFailureLevel(err error) zerolog.Level {
+	if methods.IsScrapeJobRetired(err) || errors.Is(err, context.Canceled) {
+		return zerolog.InfoLevel
+	}
+	return database.StorageFailureLevel(err)
 }
 
 // checkAndResumeOptimization resumes an interrupted optimization, or flags the database
@@ -1001,7 +1013,8 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 			case checkErr != nil:
 				log.Warn().Err(checkErr).Msg("failed to run quick_check before resuming optimization")
 			case !ok:
-				log.Error().Strs("integrity", db.MediaDB.IntegrityReport()).
+				// Warn: the rebuild this leads to reports the corruption itself.
+				log.Warn().Strs("integrity", db.MediaDB.IntegrityReport()).
 					Msg("media database failed integrity check; marking corrupt, skipping optimization resume")
 				db.MediaDB.MarkCorrupt("quick_check failed before optimization resume")
 				if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
@@ -1038,7 +1051,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 			if database.IsOptimizationCanceled(runErr) {
 				log.Debug().Err(runErr).Msg("optimization auto-resume canceled")
 			} else {
-				log.Error().Err(runErr).Msg("optimization auto-resume failed")
+				log.WithLevel(optimizationFailureLevel(runErr)).Err(runErr).Msg("optimization auto-resume failed")
 			}
 		}
 	} else {

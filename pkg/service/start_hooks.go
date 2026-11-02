@@ -73,7 +73,7 @@ func runServiceHook(svc *ServiceContext, hookName, script string, firstBootStart
 // expected conditions (ZapScript disabled, launch already in progress, and
 // similar) at Warn, everything else at Error.
 func logHookError(err error, hookName string) {
-	if isExpectedLaunchError(err) {
+	if zapscript.IsExpectedRunError(err) {
 		log.Warn().Err(err).Msgf("skipped %s script", hookName)
 		return
 	}

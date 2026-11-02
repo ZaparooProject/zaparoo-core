@@ -24,9 +24,11 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package libnfc
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +38,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag/tagsim"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -438,6 +442,16 @@ func TestWriteTag(t *testing.T) {
 		require.ErrorIs(t, res.Err, context.Canceled)
 	})
 
+	t.Run("reader unplugged while waiting", func(t *testing.T) {
+		t.Parallel()
+		dev := &fakeDevice{pollErr: nfc.Error(nfc.EIO)}
+
+		res := write(testReader(dev), &WriteRequest{Text: "hello"})
+
+		require.ErrorIs(t, res.Err, readers.ErrReaderDisconnected)
+		require.ErrorIs(t, res.Err, nfc.Error(nfc.EIO))
+	})
+
 	t.Run("device closed", func(t *testing.T) {
 		t.Parallel()
 		r := NewACR122Reader(&config.Instance{})
@@ -456,4 +470,41 @@ func TestWriteTag(t *testing.T) {
 
 		require.ErrorContains(t, res.Err, "write already in progress")
 	})
+}
+
+// An unplugged reader is a physical condition and stays out of Sentry, which
+// takes Error-level events. A genuine poll fault stays at Error.
+func TestLogWriteError(t *testing.T) {
+	// Not parallel: captures the global logger.
+	tests := []struct {
+		err   error
+		name  string
+		level string
+	}{
+		{
+			name:  "reader unplugged",
+			err:   fmt.Errorf("%w: failed to poll for tag: %w", readers.ErrReaderDisconnected, nfc.Error(nfc.EIO)),
+			level: "warn",
+		},
+		{name: "no tag presented", err: readers.ErrTagNotDetected, level: "warn"},
+		{name: "unsupported tag", err: readers.ErrUnsupportedTagType, level: "warn"},
+		{
+			name:  "poll fault",
+			err:   fmt.Errorf("failed to poll for tag: %w", nfc.Error(nfc.ECHIP)),
+			level: "error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			logWriteError(tt.err)
+
+			assert.Contains(t, buf.String(), `"level":"`+tt.level+`"`)
+		})
+	}
 }

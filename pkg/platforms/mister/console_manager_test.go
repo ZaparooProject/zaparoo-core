@@ -294,23 +294,32 @@ func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
 	assert.Empty(t, cm.leaseNonce)
 }
 
-func TestMiSTerConsoleManager_Close_ReleaseFailurePreservesRetryState(t *testing.T) {
+// A lease Main never confirms releasing must not leave the console marked
+// active: every later Open would skip console setup and every Close would
+// retry the same dead nonce.
+func TestMiSTerConsoleManager_Close_ReleaseFailureClearsState(t *testing.T) {
 	t.Parallel()
 
-	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	lease := &mockConsoleLeaseController{available: true, releaseErr: context.DeadlineExceeded}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
 	cm.hardware = &mockConsoleHardware{}
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
 	cm.active = true
 	cm.activeVT = "3"
-	cm.leaseNonce = "test-nonce"
+	cm.leaseNonce = "stale-nonce"
 
 	err := cm.Close()
-	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.activeVT)
+	assert.Empty(t, cm.leaseNonce)
+
+	require.NoError(t, cm.Open(context.Background(), "7"))
+	assert.Equal(t, "7", lease.acquiredVT, "the next Open acquires a fresh lease")
 	assert.True(t, cm.active)
-	assert.Equal(t, "3", cm.activeVT)
 	assert.Equal(t, "test-nonce", cm.leaseNonce)
-	assert.Equal(t, "test-nonce", lease.releasedKey)
 }
 
 func TestMiSTerConsoleManager_CleanAndRestoreUseHardwareBoundary(t *testing.T) {

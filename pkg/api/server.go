@@ -690,7 +690,10 @@ func handleRequest(
 		} else if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
 		} else {
-			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")
+			// A database that is failing or being rebuilt fails every read
+			// until recovery finishes; that is reported once by the recovery.
+			log.WithLevel(database.UnavailableLevel(err)).Err(err).Str("method", req.Method).
+				Msg("error handling request")
 		}
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())
@@ -2141,7 +2144,7 @@ func StartWithListener(
 		bound, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
 		if err != nil {
 			bindErr := fmt.Errorf("failed to bind API listener: %w", err)
-			log.Error().Err(bindErr).Msg("failed to bind to port")
+			LogBindFailure(bindErr)
 			notifyReady(bindErr)
 			st.StopService()
 			return bindErr

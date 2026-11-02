@@ -297,23 +297,30 @@ func (m *MiSTerConsoleManager) Close() error {
 		}
 	}
 
+	var closeErr error
 	if leaseNonce != "" {
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		err := m.leaseController.Release(releaseCtx, leaseNonce)
 		releaseCancel()
 		if err != nil {
-			return fmt.Errorf("failed to release Main console lease: %w", err)
+			closeErr = fmt.Errorf("failed to release Main console lease: %w", err)
 		}
 	} else if err := m.platform.KeyboardPress("{f12}"); err != nil {
-		return fmt.Errorf("failed to press F12 key: %w", err)
+		closeErr = fmt.Errorf("failed to press F12 key: %w", err)
 	}
 
+	// Forget the console even when the release failed. Keeping it would make
+	// every later Open skip console setup and every Close retry a lease Main
+	// no longer answers for; the next Open acquires a fresh one instead.
 	m.mu.Lock()
 	m.active = false
 	m.activeVT = ""
 	m.leaseNonce = ""
 	m.mu.Unlock()
 
+	if closeErr != nil {
+		return closeErr
+	}
 	log.Debug().Msg("console closed, returned to FPGA mode")
 	return nil
 }

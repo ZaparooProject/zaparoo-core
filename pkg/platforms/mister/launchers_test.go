@@ -62,6 +62,7 @@ func TestMGLLaunchErrorReporting(t *testing.T) {
 		level string
 	}{
 		{name: "missing requested MGL", err: missingErr, level: "warn"},
+		{name: "MGL inside a zip", err: mgls.ErrLaunchFileInZip, level: "warn"},
 		{name: "missing internal file", err: os.ErrNotExist, level: "error"},
 		{name: "permission failure", err: os.ErrPermission, level: "error"},
 	} {
@@ -1437,6 +1438,25 @@ func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid set_name")
+}
+
+// TestLaunchersExcludeLoadCoreFilesInsideZips verifies every MiSTer launcher,
+// including those added beside CreateLaunchers, marks the files Main loads
+// through load_core as unloadable from inside a zip, so ZipsAsDirs scanning
+// does not index them.
+func TestLaunchersExcludeLoadCoreFilesInsideZips(t *testing.T) {
+	t.Parallel()
+
+	launchers := NewPlatform().Launchers(&config.Instance{})
+	require.NotEmpty(t, launchers)
+	seen := map[string]bool{}
+	for i := range launchers {
+		seen[launchers[i].ID] = true
+		assert.Equal(t, []string{".mgl", ".mra", ".rbf"}, launchers[i].NoArchiveExtensions, launchers[i].ID)
+	}
+	for _, id := range []string{systemdefs.SystemX68000, systemdefs.SystemArcade, systemdefs.SystemNeoGeo} {
+		assert.True(t, seen[id], id)
+	}
 }
 
 // The scan_duplicates opt-in is applied by the launcher matcher, not by the

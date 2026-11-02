@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -91,7 +92,12 @@ func TestWebsocketDialErrorWithoutHandshakeResponse(t *testing.T) {
 	}
 	err := websocketDialError(websocket.ErrBadHandshake, nil)
 	require.ErrorIs(t, err, websocket.ErrBadHandshake)
-	assert.EqualError(t, err, "failed to dial websocket: websocket: bad handshake")
+	require.EqualError(t, err, "failed to dial websocket: websocket: bad handshake")
+	require.NotErrorIs(t, err, ErrServiceUnavailable)
+
+	err = websocketDialError(websocket.ErrBadHandshake, &http.Response{StatusCode: http.StatusServiceUnavailable})
+	require.ErrorIs(t, err, websocket.ErrBadHandshake)
+	require.ErrorIs(t, err, ErrServiceUnavailable)
 }
 
 // testConfigWithPort creates a minimal config with the given port for testing.
@@ -394,6 +400,10 @@ func TestRequestWaitTimeout(t *testing.T) {
 	timeout, bounded = requestWaitTimeout(longCtx, models.MethodVersion)
 	assert.True(t, bounded)
 	assert.Greater(t, timeout, config.APIRequestTimeout)
+
+	timeout, bounded = requestWaitTimeout(context.Background(), models.MethodReadersWrite)
+	assert.True(t, bounded)
+	assert.Equal(t, config.ReaderWriteRequestTimeout, timeout)
 
 	// Backup methods have no whole-operation deadline: without a caller
 	// deadline the wait is unbounded, but an explicit deadline still wins.
@@ -1298,6 +1308,12 @@ func TestWaitNotificationsReadLogLevel(t *testing.T) {
 			expected: zerolog.WarnLevel,
 		},
 		{
+			name:     "stalled local peer",
+			ctx:      context.Background(),
+			err:      &net.OpError{Op: "write", Net: "tcp", Err: os.ErrDeadlineExceeded},
+			expected: zerolog.WarnLevel,
+		},
+		{
 			name:     "protocol failure",
 			ctx:      context.Background(),
 			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
@@ -1350,6 +1366,11 @@ func TestIsExpectedWebsocketClose(t *testing.T) {
 			name:     "protocol error stays visible",
 			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
 			expected: false,
+		},
+		{
+			name:     "stalled local peer",
+			err:      &net.OpError{Op: "write", Net: "tcp", Err: os.ErrDeadlineExceeded},
+			expected: true,
 		},
 		{name: "generic error", err: errors.New("boom"), expected: false},
 	}

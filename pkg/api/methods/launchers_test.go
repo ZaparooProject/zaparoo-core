@@ -101,14 +101,15 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 	mockPlatform.AssertCalled(t, "Launchers", mock.AnythingOfType("*config.Instance"))
 }
 
-func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
+func TestHandleLaunchersRefresh_InvalidFilesAreClientErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, document string
 		clientError    bool
 	}{
 		{name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'", clientError: true},
-		{name: "syntax error", document: "broken {{{", clientError: false},
+		{name: "syntax error", document: "broken {{{", clientError: true},
+		{name: "wrong value type", document: "[[launchers.custom]]\nid = 5", clientError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

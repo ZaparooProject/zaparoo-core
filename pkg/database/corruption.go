@@ -27,9 +27,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -61,6 +64,62 @@ func IsCorruptionError(err error) bool {
 		strings.Contains(msg, "file is not a database")
 }
 
+// IsStorageFailure reports whether err comes from the storage under a database
+// rather than from Core: an I/O error, a full or read-only filesystem, or a
+// damaged file. Core can only recover from these, not prevent them, so callers
+// log them as warnings rather than report them as faults.
+func IsStorageFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsCorruptionError(err) {
+		return true
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrIoErr || sqliteErr.Code == sqlite3.ErrFull
+	}
+	if errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EROFS) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "disk I/O error") ||
+		strings.Contains(msg, "database or disk is full")
+}
+
+// IsUnavailable reports whether a read failed because the database is not
+// usable right now rather than because of the query: its storage is failing,
+// or the handle was closed underneath the reader while a damaged database was
+// being replaced. Both clear once recovery finishes.
+func IsUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsStorageFailure(err) || errors.Is(err, sql.ErrConnDone) {
+		return true
+	}
+	// database/sql does not export the error it returns for a closed DB.
+	return strings.Contains(err.Error(), "sql: database is closed")
+}
+
+// UnavailableLevel is the level to log a failed database read at: Warn when
+// IsUnavailable matches it, Error otherwise.
+func UnavailableLevel(err error) zerolog.Level {
+	if IsUnavailable(err) {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
+}
+
+// StorageFailureLevel is the level to log a database failure at: Warn when
+// IsStorageFailure matches it, Error otherwise.
+func StorageFailureLevel(err error) zerolog.Level {
+	if IsStorageFailure(err) {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
+}
+
 // CorruptMarkerPath returns the sidecar marker path for a database file.
 func CorruptMarkerPath(dbPath string) string {
 	return dbPath + CorruptMarkerSuffix
@@ -73,13 +132,22 @@ func CorruptBackupPath(dbPath string) string {
 	return CorruptMarkerPath(dbPath) + ".bak"
 }
 
+// markerWriteFailureReported limits a failed marker write to one report per
+// process. Storage that cannot take the marker rarely recovers while Core
+// runs, and every later read of the corrupt database tries the write again.
+var markerWriteFailureReported atomic.Bool
+
 // MarkCorrupt writes the corrupt marker sidecar next to dbPath recording that
 // corruption was detected. Best-effort — failures are logged, not returned.
 func MarkCorrupt(dbPath, reason string, now time.Time) {
 	path := CorruptMarkerPath(dbPath)
 	contents := fmt.Sprintf("%s\n%s\n", now.UTC().Format(time.RFC3339Nano), reason)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		log.Error().Err(err).Str("path", path).Msg("failed to write database corrupt marker")
+		level := StorageFailureLevel(err)
+		if !markerWriteFailureReported.CompareAndSwap(false, true) {
+			level = zerolog.DebugLevel
+		}
+		log.WithLevel(level).Err(err).Str("path", path).Msg("failed to write database corrupt marker")
 		return
 	}
 	log.Warn().Str("path", path).Str("reason", reason).Msg("flagged database as corrupt")

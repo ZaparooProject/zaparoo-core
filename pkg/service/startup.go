@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -191,7 +192,7 @@ func makeDatabase(
 		rescued, rescueErr := rescueMediaUserData(ctx, mediaDB)
 		switch {
 		case rescueErr != nil:
-			log.Error().Err(rescueErr).
+			log.WithLevel(database.StorageFailureLevel(rescueErr)).Err(rescueErr).
 				Msg("could not read media user data out of the corrupt media database")
 			reset.userDataLost = true
 		case len(rescued) > 0:
@@ -393,7 +394,8 @@ func backfillMediaHistoryUUIDs(userDB database.UserDBI) (int64, error) {
 	backfilled, err := userDB.BackfillMediaHistoryUUIDs()
 	duration := time.Since(startedAt)
 	if err != nil {
-		log.Error().Err(err).Dur("duration", duration).Msg("failed to backfill media history UUIDs")
+		// Warn, not Error: the backfill watcher retries until a clean pass.
+		log.Warn().Err(err).Dur("duration", duration).Msg("failed to backfill media history UUIDs")
 		return 0, fmt.Errorf("backfill media history UUIDs: %w", err)
 	}
 	if backfilled > 0 {
@@ -647,7 +649,8 @@ func cleanupHistoryRetention(
 		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(playtimeRetention, protectUnsyncedPlayHistory)
 		switch {
 		case cleanupErr != nil:
-			log.Error().Err(cleanupErr).Msg("error cleaning up media history")
+			log.WithLevel(database.StorageFailureLevel(cleanupErr)).Err(cleanupErr).
+				Msg("error cleaning up media history")
 		case rowsDeleted > 0:
 			log.Info().Msgf("deleted %d old media history entries", rowsDeleted)
 		default:
@@ -677,6 +680,17 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 		log.Info().Msgf("pruned %d expired non-supporting zaplink hosts", rowsDeleted)
 	default:
 		log.Debug().Msg("no expired zaplink hosts to prune")
+	}
+}
+
+// runInSequence runs each step in order, each starting only once the one
+// before it has returned, and stops early when ctx is cancelled.
+func runInSequence(ctx context.Context, steps ...func(context.Context)) {
+	for _, step := range steps {
+		if ctx.Err() != nil {
+			return
+		}
+		step(ctx)
 	}
 }
 
@@ -786,8 +800,19 @@ func runMediaDBStartupMaintenanceWork(
 
 	log.Info().Msg("temporary media repair jobs pending; starting background optimization")
 	if runErr := coordinator.RunBackgroundOptimizationWithLease(nil, pauser, lease); runErr != nil {
-		log.Error().Err(runErr).Msg("temporary media repair optimization failed")
+		log.WithLevel(optimizationFailureLevel(runErr)).Err(runErr).Msg("temporary media repair optimization failed")
 	}
+}
+
+// optimizationFailureLevel is the level to log a failed background
+// optimization at. Cancellation at shutdown leaves the checkpoint for the next
+// start, and a storage failure is the device's, so only other failures are
+// errors.
+func optimizationFailureLevel(err error) zerolog.Level {
+	if database.IsOptimizationCanceled(err) {
+		return zerolog.DebugLevel
+	}
+	return database.StorageFailureLevel(err)
 }
 
 // migrationStartupReporter is what the startup page shows while a database is

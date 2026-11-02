@@ -354,6 +354,14 @@ func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
 			contains: "busy with another request or a media launch",
 		},
 		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},
+		{
+			err:      fmt.Errorf("%w: zzz-probe", backupsvc.ErrInvalidBackupName),
+			contains: "invalid backup name: zzz-probe",
+		},
+		{
+			err:      fmt.Errorf("%w: zaparoo-backup.zip", backupsvc.ErrBackupNotFound),
+			contains: "backup not found",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.contains, func(t *testing.T) {

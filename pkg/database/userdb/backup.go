@@ -134,6 +134,11 @@ func backupInfoContext(ctx context.Context, path string, quickCheck bool) (datab
 	}
 	if quickCheck {
 		valid, check, checkErr := quickCheckDBContext(ctx, path)
+		// A caller that went away stopped the check; that says nothing about
+		// the backup, and callers must see the cancellation to treat it as one.
+		if checkErr != nil && ctx.Err() != nil {
+			return database.BackupInfo{}, fmt.Errorf("checking user database backup: %w", ctx.Err())
+		}
 		result.Valid = valid
 		result.QuickCheck = check
 		if checkErr != nil {

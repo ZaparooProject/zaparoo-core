@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -80,7 +81,10 @@ func TestScrapeJobPersistenceFences(t *testing.T) {
 				cancelled := op
 				cancelled.Status = mediadb.IndexingStatusCancelled
 				db.On("GetScrapingOperation").Return(cancelled, true, nil).Once()
-				require.ErrorIs(t, s.persistStart(db, &op, true), errScrapeJobRetired)
+				retiredErr := s.persistStart(db, &op, true)
+				require.ErrorIs(t, retiredErr, errScrapeJobRetired)
+				require.True(t, IsScrapeJobRetired(fmt.Errorf("resume: %w", retiredErr)))
+				require.False(t, IsScrapeJobRetired(context.Canceled))
 			case "manual conflict":
 				db.On("GetScrapingOperation").Return(op, true, nil).Once()
 				request := database.ScrapingOperation{ScraperID: "manual"}

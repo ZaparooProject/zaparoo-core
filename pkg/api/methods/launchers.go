@@ -173,7 +173,7 @@ func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:goc
 	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
 	err = env.Config.LoadCustomLaunchers(launchersDir)
 	if err != nil {
-		if errors.Is(err, config.ErrCustomLauncherUnknownFields) {
+		if errors.Is(err, config.ErrCustomLauncherUnknownFields) || errors.Is(err, config.ErrCustomLauncherInvalid) {
 			return nil, models.ClientErr(errors.New("error loading custom launchers"))
 		}
 		log.Error().Err(err).Msg("error loading custom launchers")

@@ -165,6 +165,15 @@ func (ad *AutoDetector) DetectReaders(
 			continue
 		}
 
+		// A pathless reader is never tracked as connected by path, and a
+		// driver like externaldrive detects itself on every tick. Without
+		// this each tick opened a fresh instance and SetReader closed the
+		// running one to make room for it.
+		if path == "" && readerIDConnected(connectedReaders, reader.ReaderID()) {
+			closeUnused()
+			continue
+		}
+
 		if err := ad.connectReader(reader, driverID, path, detect, st, iq); err != nil {
 			log.Trace().
 				Str("device", detect).
@@ -259,6 +268,15 @@ func (ad *AutoDetector) connectReader(
 	}
 
 	return fmt.Errorf("reader failed to connect: %s", connectionString)
+}
+
+func readerIDConnected(connectedReaders []readers.Reader, readerID string) bool {
+	for _, r := range connectedReaders {
+		if r != nil && r.ReaderID() == readerID {
+			return true
+		}
+	}
+	return false
 }
 
 func (ad *AutoDetector) updateConnectedFromReaders(connectedReaders []readers.Reader) {

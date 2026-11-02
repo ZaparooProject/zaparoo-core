@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -47,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/charlievieth/fastwalk"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -322,14 +324,15 @@ func bestEffortMaintenanceError(err error, msg string) error {
 
 // logMaintenanceError logs an indexing maintenance failure (status writes, cache
 // population). When the failure is just the service context being cancelled
-// mid-index — an expected shutdown condition — it logs at Debug; any other
-// failure logs at Error so genuine problems stay visible in Sentry.
+// mid-index — an expected shutdown condition — it logs at Debug; a failing,
+// read-only or full disk logs at Warn; any other failure logs at Error so
+// genuine problems stay visible in Sentry.
 func logMaintenanceError(err error, msg string) {
 	if errors.Is(err, context.Canceled) {
 		log.Debug().Err(err).Msg(msg)
 		return
 	}
-	log.Error().Err(err).Msg(msg)
+	log.WithLevel(database.StorageFailureLevel(err)).Err(err).Msg(msg)
 }
 
 type PathResult struct {
@@ -1048,7 +1051,7 @@ func getFilesReporting(
 			mu.Lock()
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
-				if matcher.MatchSystemFileForScan(system.ID, abs) {
+				if matcher.MatchSystemArchiveEntryForScan(system.ID, abs) {
 					results = append(results, abs)
 				}
 			}
@@ -1180,7 +1183,13 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 	log.Info().Msg(message)
 	terminalErr := ctx.Err()
 	if rbErr := db.RollbackTransaction(); rbErr != nil {
-		log.Error().Err(rbErr).Msg("failed to rollback transaction after cancellation")
+		// Cancellation can close the writer connection under the transaction
+		// before this rollback reaches it; that is the shutdown, not a fault.
+		level := database.StorageFailureLevel(rbErr)
+		if errors.Is(rbErr, context.Canceled) || errors.Is(rbErr, sql.ErrConnDone) {
+			level = zerolog.DebugLevel
+		}
+		log.WithLevel(level).Err(rbErr).Msg("failed to rollback transaction after cancellation")
 		terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback after cancellation: %w", rbErr))
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
@@ -1870,9 +1879,10 @@ func NewNamesIndexWithSources(
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 				}
-				if errors.Is(scanErr, syscall.ECONNREFUSED) {
-					// The scanner's backing service (e.g. Kodi) isn't running.
-					// Expected on devices without it; keep out of Sentry.
+				if scannerSourceUnavailable(scanErr) {
+					// The scanner's backing service (e.g. Kodi) is not running or
+					// not reachable. Expected on devices without it; keep out of
+					// Sentry.
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
 					continue
 				}
@@ -1900,6 +1910,11 @@ func NewNamesIndexWithSources(
 				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
+				}
+				if scannerSourceUnavailable(scanErr) {
+					log.Warn().Err(scanErr).Msgf("skipping %s 'any' scanner: service unavailable",
+						anyScanners[i].ID)
+					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s",
 					anyScanners[i].ID, systemID)
@@ -2568,4 +2583,10 @@ func NewNamesIndexWithSources(
 		sourceOptions.Completed(sourceCollector.sources)
 	}
 	return indexedFiles, nil
+}
+
+// scannerSourceUnavailable reports a scanner whose backing service is down or
+// unreachable, which is the user's setup rather than a Core fault.
+func scannerSourceUnavailable(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, platforms.ErrScannerSourceUnreachable)
 }

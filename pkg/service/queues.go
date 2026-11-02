@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -45,7 +44,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
@@ -91,36 +89,6 @@ func playlistForLog(pls *playlists.Playlist) any {
 		Truncated:     len(pls.Items) - showing,
 		Items:         pls.Items[:showing],
 	}
-}
-
-// isExpectedLaunchError reports whether a token-launch error is an expected
-// user/operational condition that should be logged at Warn rather than Error
-// (keeping it out of Sentry). These are not bugs: a missing file, a playlist
-// control command with nothing playing, a double-tap during an active launch,
-// a user-supplied system or command that doesn't exist, a script that doesn't
-// parse, or a launch refused by configuration, by a hook, or by the bound the
-// token carries.
-func isExpectedLaunchError(err error) bool {
-	return errors.Is(err, zapscript.ErrFileNotFound) ||
-		errors.Is(err, titles.ErrNoMatch) ||
-		errors.Is(err, titles.ErrLowConfidence) ||
-		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
-		errors.Is(err, zapscript.ErrInvalidScript) ||
-		errors.Is(err, zapscript.ErrInvalidArguments) ||
-		errors.Is(err, zapscript.ErrUnknownCommand) ||
-		errors.Is(err, zapscript.ErrUnsupportedControlAction) ||
-		errors.Is(err, zapscript.ErrCommandBlocked) ||
-		errors.Is(err, zapscript.ErrCommandNotPermitted) ||
-		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
-		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
-		errors.Is(err, zapscript.ErrRemoteSource) ||
-		errors.Is(err, state.ErrLaunchInProgress) ||
-		errors.Is(err, platforms.ErrScriptAlreadyRunning) ||
-		errors.Is(err, state.ErrLaunchBlockedByHook) ||
-		errors.Is(err, state.ErrLaunchRequiresProfile) ||
-		errors.Is(err, playtime.ErrLimitReached) ||
-		errors.Is(err, systemdefs.ErrUnknownSystem) ||
-		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
 
 // reportRunFailure tells every client that a run ended in failure. pls is the
@@ -818,7 +786,7 @@ func launchPlaylistMedia(
 	// fail sound or record a failed history entry.
 	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
 	if err != nil && !disabled {
-		if isExpectedLaunchError(err) {
+		if zapscript.IsExpectedRunError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
 			log.Error().Err(err).Msgf("error launching token")
@@ -1467,7 +1435,7 @@ func launchQueuedToken(
 	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
 	failed := err != nil && !disabled
 	if failed {
-		if isExpectedLaunchError(err) {
+		if zapscript.IsExpectedRunError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
 			log.Error().Err(err).Msgf("error launching token")
@@ -1513,10 +1481,61 @@ func recordTokenHistory(svc *ServiceContext, he *database.HistoryEntry) {
 		if svc.BackgroundWG != nil {
 			defer svc.BackgroundWG.Done()
 		}
-		if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
-			log.Error().Err(histErr).Msgf("error adding history")
+		ctx := context.Background()
+		if svc.State != nil {
+			ctx = svc.State.GetContext()
+		}
+		if histErr := writeTokenHistory(
+			ctx, svc.DB.UserDB, he, tokenHistoryRetryDelays, sleepContext,
+		); histErr != nil {
+			log.WithLevel(database.StorageFailureLevel(histErr)).Err(histErr).Msg("error adding history")
 		}
 	}()
+}
+
+// tokenHistoryRetryDelays are the waits before each retry of a token history
+// write that lost the user database's write lock. Every attempt has already
+// waited out SQLite's busy timeout, so a long maintenance write is the usual
+// cause, and a short pause lets it finish.
+var tokenHistoryRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+// writeTokenHistory adds a token history entry, retrying when another write
+// held the lock past the busy timeout. Nothing waits on it, so retrying costs
+// no caller anything. Retries stop once ctx is done, but the first attempt
+// always runs so a write queued at shutdown still lands.
+func writeTokenHistory(
+	ctx context.Context,
+	userDB database.UserDBI,
+	he *database.HistoryEntry,
+	retryDelays []time.Duration,
+	sleep func(context.Context, time.Duration) error,
+) error {
+	started := time.Now()
+	for attempt := 0; ; attempt++ {
+		err := userDB.AddHistory(he)
+		sqliteErr, contended := database.LockContention(err)
+		if !contended {
+			return err //nolint:wrapcheck // the caller logs it as the history write failure
+		}
+		if attempt >= len(retryDelays) || sleep(ctx, retryDelays[attempt]) != nil {
+			return fmt.Errorf("token history write [sqlite_code=%d sqlite_extended_code=%d "+
+				"attempts=%d elapsed_ms=%d]: %w",
+				int(sqliteErr.Code), int(sqliteErr.ExtendedCode), attempt+1,
+				time.Since(started).Milliseconds(), err)
+		}
+	}
+}
+
+// sleepContext waits for d, returning ctx's error if it ends first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // bare ctx.Err is the contract
+	case <-timer.C:
+		return nil
+	}
 }
 
 // runTokenZapScriptRecovering runs the token's ZapScript and converts a panic
