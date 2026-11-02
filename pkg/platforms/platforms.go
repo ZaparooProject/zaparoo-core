@@ -523,9 +523,14 @@ type LaunchCommand struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	Controls           map[string]Control
-	Scanner            func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
-	Test               func(*config.Instance, string) bool
+	Controls map[string]Control
+	Scanner  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Test     func(*config.Instance, string) bool
+	// VirtualPathExists reports that a path which is not on disk names media
+	// this launcher can play, such as a game in a listing file. Optional. It
+	// must confirm the entry exists, not just that the path has its shape: a
+	// launch of a path that is neither on disk nor vouched for is refused.
+	VirtualPathExists  func(*config.Instance, string) bool
 	Availability       func(*config.Instance) error
 	Preflight          func(*config.Instance, string, *LaunchOptions) error
 	Kill               func(*config.Instance) error

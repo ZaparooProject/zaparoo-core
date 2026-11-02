@@ -413,11 +413,14 @@ func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
 	return roots
 }
 
-// Check all games folders for a relative path to a file
+// Check all games folders for a relative path to a file. A path that is not
+// on disk is still found when one of the platform's launchers vouches for it
+// as a virtual entry, such as a game named in a listing file.
 func findFile(
 	fs afero.Fs,
 	pl platforms.Platform,
 	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
 	path string,
 	pathRoots ...string,
 ) (string, error) {
@@ -457,6 +460,7 @@ func findFile(
 	}
 
 	var firstNonNotExistErr error
+	var missing []string
 	for _, candidate := range candidates {
 		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
 		if err == nil {
@@ -469,12 +473,30 @@ func findFile(
 		if errors.Is(err, errAmbiguousPath) {
 			return "", err
 		}
-		if !errors.Is(err, os.ErrNotExist) && firstNonNotExistErr == nil {
-			firstNonNotExistErr = err
+		if !errors.Is(err, os.ErrNotExist) {
+			if firstNonNotExistErr == nil {
+				firstNonNotExistErr = err
+			}
+			continue
+		}
+		if len(virtualParts) == 0 {
+			missing = append(missing, candidate)
 		}
 	}
 	if firstNonNotExistErr != nil {
 		return "", firstNonNotExistErr
+	}
+
+	if len(missing) > 0 {
+		all := launchers.Get(pl, cfg)
+		for _, candidate := range missing {
+			for i := range all {
+				if all[i].VirtualPathExists != nil && all[i].VirtualPathExists(cfg, candidate) {
+					log.Debug().Str("launcher", all[i].ID).Msgf("found virtual entry: %s", candidate)
+					return candidate, nil
+				}
+			}
+		}
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)

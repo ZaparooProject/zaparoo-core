@@ -936,6 +936,18 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
+	// The bare Minimig core boots without AmigaVision's settings, to a black
+	// screen. With AmigaVision installed, the menu's Amiga entry is its MGL.
+	if system.ID == systemdefs.SystemAmiga {
+		if mglPath, ok := installedAmigaVisionMGL(); ok {
+			if launchErr := p.launchBasicFilePath(mglPath); launchErr != nil {
+				return fmt.Errorf("failed to launch AmigaVision: %w", launchErr)
+			}
+			p.clearTrackedActiveGame()
+			return nil
+		}
+	}
+
 	if err = mgls.LaunchCore(cfg, p, system); err != nil {
 		// The system's own core is not installed, but an alternate
 		// implementation of it may be. Launchers are already ordered by
@@ -1483,6 +1495,16 @@ func amigaVisionListingContainsGame(installPath, listingName, gameName string) b
 	return false
 }
 
+// amigaVisionVirtualEntryExists reports whether a Games or Demos path names a
+// game in the listing beside it, which is how the scanner built the path.
+func amigaVisionVirtualEntryExists(path string) bool {
+	virtualPath, ok := amigaVisionVirtualPathParts(path)
+	if !ok {
+		return false
+	}
+	return amigaVisionListingContainsGame(virtualPath.InstallPath, virtualPath.ListingName, virtualPath.GameName)
+}
+
 func isAmigaVisionVirtualPath(path string) bool {
 	virtualPath, ok := amigaVisionVirtualPathParts(path)
 	if !ok {
@@ -1520,6 +1542,16 @@ func scanAmigaVisionListingFile(path, installPath string, listing amigaVisionLis
 		log.Warn().Err(err).Str("path", path).Msg("unable to scan amiga txt")
 	}
 	return results
+}
+
+// installedAmigaVisionMGL returns the first AmigaVision MGL on the SD card.
+func installedAmigaVisionMGL() (string, bool) {
+	for _, mglPath := range amigaVisionMGLPaths {
+		if _, err := os.Stat(mglPath); err == nil {
+			return mglPath, true
+		}
+	}
+	return "", false
 }
 
 func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platforms.ScanResult {
@@ -1653,6 +1685,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			return isAmigaVisionVirtualPath(path)
+		},
+		VirtualPathExists: func(_ *config.Instance, path string) bool {
+			return isAmigaVisionVirtualMGLPath(path) || amigaVisionVirtualEntryExists(path)
 		},
 		Launch: launchAmiga(p),
 		Scanner: func(

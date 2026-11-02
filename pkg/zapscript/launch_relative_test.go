@@ -333,7 +333,7 @@ func TestFindFile_RelativePathStaysInsideItsRoot(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("RootDirs", cfg).Return([]string{root})
 
-	found, err := findFile(fs.Fs, mockPlatform, cfg, filepath.Join("PSX", "..", "NES", "Game.nes"))
+	found, err := findFile(fs.Fs, mockPlatform, cfg, nil, filepath.Join("PSX", "..", "NES", "Game.nes"))
 	require.NoError(t, err, "a path that stays below the games folder is an ordinary relative path")
 	assert.Equal(t, inside, found)
 
@@ -341,12 +341,12 @@ func TestFindFile_RelativePathStaysInsideItsRoot(t *testing.T) {
 		filepath.Join("..", "zaparoo", "config.toml"),
 		filepath.Join("NES", "..", "..", "zaparoo", "config.toml"),
 	} {
-		_, err = findFile(fs.Fs, mockPlatform, cfg, escape)
+		_, err = findFile(fs.Fs, mockPlatform, cfg, nil, escape)
 		require.ErrorIs(t, err, ErrFileNotFound, escape)
 	}
 
 	// An absolute path is the caller naming the file outright, and is unchanged.
-	found, err = findFile(fs.Fs, mockPlatform, cfg, outside)
+	found, err = findFile(fs.Fs, mockPlatform, cfg, nil, outside)
 	require.NoError(t, err)
 	assert.Equal(t, outside, found)
 }
@@ -403,4 +403,70 @@ func TestIndexedVirtualPath(t *testing.T) {
 		assert.Equal(t, unchanged, indexedVirtualPath(env, unchanged))
 	}
 	assert.Equal(t, "steam://620", indexedVirtualPath(&platforms.CmdEnv{}, "steam://620"))
+}
+
+// virtualListLauncher vouches for the one game its listing names, the way
+// MiSTer's AmigaVision launcher vouches for its listing entries.
+func virtualListLauncher(game string) platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "Amiga",
+		SystemID: systemdefs.SystemAmiga,
+		Test: func(_ *config.Instance, path string) bool {
+			return filepath.Base(filepath.Dir(path)) == "Games"
+		},
+		VirtualPathExists: func(_ *config.Instance, path string) bool {
+			return path == game
+		},
+	}
+}
+
+// A listed game is not a file on disk. The launcher that listed it vouches for
+// it, so an absolute launch of it reaches the launcher instead of failing.
+func TestCmdLaunch_AbsoluteVirtualEntryLaunches(t *testing.T) {
+	t.Parallel()
+
+	game := filepath.Join(launchTestAbsPath("games"), "Amiga", "Games", "Turrican (OCS)[en]")
+	cfg := &config.Instance{}
+	launcher := virtualListLauncher(game)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	mockPlatform.On("LaunchMedia", cfg, game, (*platforms.Launcher)(nil),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", Args: []string{game}},
+		Cfg: cfg,
+	}
+	result, err := cmdLaunchWithFS(helpers.NewMemoryFS().Fs, mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+// Only an entry a launcher vouches for is found: a path with the same shape
+// that no listing names is still missing.
+func TestFindFile_VirtualEntries(t *testing.T) {
+	t.Parallel()
+
+	root := launchTestAbsPath("games")
+	game := filepath.Join(root, "Amiga", "Games", "Turrican (OCS)[en]")
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{virtualListLauncher(game)})
+	fs := helpers.NewMemoryFS().Fs
+
+	found, err := findFile(fs, mockPlatform, cfg, nil, game)
+	require.NoError(t, err)
+	assert.Equal(t, game, found)
+
+	found, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join("Amiga", "Games", "Turrican (OCS)[en]"))
+	require.NoError(t, err, "a relative path resolves to the vouched entry below a games folder")
+	assert.Equal(t, game, found)
+
+	_, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join(root, "Amiga", "Games", "Not Listed"))
+	require.ErrorIs(t, err, ErrFileNotFound)
 }
