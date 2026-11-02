@@ -167,18 +167,22 @@ func FallbackMediaIdentity(cfg *config.Instance, systemID, path string) (databas
 	return identity, true
 }
 
-// MediaDBSettled reports whether the media database is idle: no indexing
-// under way or owed, and no optimization (which includes the disambiguation
-// backfill) under way or owed. Until then a library file may simply not be
-// indexed yet, so a fallback identity must not stand in for its row. Status
-// read failures count as unsettled.
+// MediaDBSettled reports whether the media database is idle: not corrupt or
+// awaiting rebuild, no indexing under way or owed, and no optimization (which
+// includes the disambiguation backfill) under way or owed. Until then a
+// library file may simply not be indexed yet, so a fallback identity must not
+// stand in for its row. Status read failures count as unsettled.
 func MediaDBSettled(mediaDB database.MediaDBI) bool {
+	if mediaDB.IsMarkedCorrupt() {
+		return false
+	}
 	indexingStatus, err := mediaDB.GetIndexingStatus()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to check media database indexing status")
 		return false
 	}
-	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
+	switch indexingStatus {
+	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending, mediadb.IndexingStatusCorrupt:
 		return false
 	}
 	optimizationStatus, err := mediaDB.GetOptimizationStatus()

@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -67,7 +68,11 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 
 // activeMediaEnrichment resolves the media ID and title zapScript for the
 // running primary media. A file played from outside the index, such as an
-// Operator cartridge dump, takes both from the indexed title it matches.
+// Operator cartridge dump, takes both from the indexed title it matches. If
+// the matched title's command cannot be loaded, the command built from the
+// played name is kept: it still launches the title, though the title
+// resolver may pick a different variant than the one the media ID names.
+// A failed path lookup is not a miss, so it never falls back to a slug match.
 func activeMediaEnrichment(
 	env *requests.RequestEnv, systemID, path, name string,
 ) (mediaID int64, zapScript string) {
@@ -81,18 +86,25 @@ func activeMediaEnrichment(
 		}
 	}
 	zapScript = database.BuildTitleZapScript(systemID, name, zapScriptTags)
-
-	ref := mediaPathRef{SystemID: systemID, Path: path}
-	if mediaID = mediaResponseMediaIDs(env, []mediaPathRef{ref})[ref]; mediaID > 0 {
-		return mediaID, zapScript
-	}
-
-	fallback, ok := fallbackIdentityRef(env, ref)
-	if !ok {
+	if env.Database == nil || env.Database.MediaDB == nil {
 		return 0, zapScript
 	}
-	match, ok := resolveMediaIdentityIDs(env, []identityRef{fallback})[ref]
-	if !ok {
+
+	ref := mediaPathRef{SystemID: systemID, Path: path}
+	pathCtx, cancelPath := optionalDBEnrichmentContext(env.Context)
+	rows, err := resolveMediaPathIDs(pathCtx, env.Database.MediaDB, []mediaPathRef{ref})
+	cancelPath()
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve active media ID by path")
+		return 0, zapScript
+	}
+	if row := rows[ref]; row.DBID > 0 {
+		return row.DBID, zapScript
+	}
+
+	addMediaIdentityMatches(env, rows, []identityRef{{Ref: ref}})
+	match, ok := rows[ref]
+	if !ok || match.DBID <= 0 {
 		return 0, zapScript
 	}
 	ctx, cancel := optionalDBEnrichmentContext(env.Context)
@@ -304,9 +316,38 @@ type identityRef struct {
 	Ref      mediaPathRef
 }
 
+// identityKey groups refs that share one match: the same title with the
+// same identity-role tags, which drive the variant pick.
 type identityKey struct {
 	SystemID string
 	CoreSlug string
+	Tags     string
+}
+
+func identityTagFilters(identity *database.MediaIdentity) []zapscript.TagFilter {
+	tagFilters := make([]zapscript.TagFilter, 0, len(identity.Tags))
+	for _, tag := range identity.Tags {
+		if tag.Role != database.MediaIdentityTagRoleIdentity {
+			continue
+		}
+		tagFilters = append(tagFilters, zapscript.TagFilter{
+			Type:     tag.Type,
+			Value:    tag.Value,
+			Operator: zapscript.TagOperatorAND,
+		})
+	}
+	return tagFilters
+}
+
+func newIdentityKey(systemID string, identity *database.MediaIdentity) identityKey {
+	var tags strings.Builder
+	for _, filter := range identityTagFilters(identity) {
+		_, _ = tags.WriteString(filter.Type)
+		_ = tags.WriteByte(':')
+		_, _ = tags.WriteString(filter.Value)
+		_ = tags.WriteByte(',')
+	}
+	return identityKey{SystemID: systemID, CoreSlug: identity.CoreSlug, Tags: tags.String()}
 }
 
 // resolveMediaIdentityIDs matches played files that are not in the index,
@@ -330,7 +371,7 @@ func resolveMediaIdentityIDs(
 		if ref.Identity == nil || ref.Identity.CoreSlug == "" || ref.Ref.SystemID == "" {
 			continue
 		}
-		key := identityKey{SystemID: ref.Ref.SystemID, CoreSlug: ref.Identity.CoreSlug}
+		key := newIdentityKey(ref.Ref.SystemID, ref.Identity)
 		match, seen := matches[key]
 		if !seen {
 			var err error
@@ -367,17 +408,7 @@ func matchMediaIdentity(
 	if len(results) == 0 {
 		return database.MediaPathID{}, nil
 	}
-	tagFilters := make([]zapscript.TagFilter, 0, len(identity.Tags))
-	for _, tag := range identity.Tags {
-		if tag.Role != database.MediaIdentityTagRoleIdentity {
-			continue
-		}
-		tagFilters = append(tagFilters, zapscript.TagFilter{
-			Type:     tag.Type,
-			Value:    tag.Value,
-			Operator: zapscript.TagOperatorAND,
-		})
-	}
+	tagFilters := identityTagFilters(identity)
 	var launchers []platforms.Launcher
 	if env.LauncherCache != nil {
 		launchers = env.LauncherCache.GetLaunchersBySystem(key.SystemID)
@@ -392,16 +423,38 @@ func matchMediaIdentity(
 }
 
 // addMediaIdentityMatches fills rows for refs the path lookup missed with
-// the indexed title their recorded identity matches.
+// the indexed title their identity matches. A ref without a recorded
+// identity, such as a play whose identity snapshot has not landed yet or
+// the running media, gets the identity the indexer would give its file,
+// but only once the media database is settled: mid-index a library file
+// may just not be indexed yet.
 func addMediaIdentityMatches(
 	env *requests.RequestEnv, rows map[mediaPathRef]database.MediaPathID, refs []identityRef,
 ) {
 	missed := make([]identityRef, 0, len(refs))
+	settledKnown, settled := false, false
 	for _, ref := range refs {
-		if ref.Identity == nil || ref.Identity.CoreSlug == "" {
+		if row, ok := rows[ref.Ref]; ok && row.DBID > 0 {
 			continue
 		}
-		if row, ok := rows[ref.Ref]; ok && row.DBID > 0 {
+		if ref.Identity == nil {
+			if env == nil || env.Config == nil || env.Database == nil || env.Database.MediaDB == nil {
+				continue
+			}
+			identity, ok := mediascanner.FallbackMediaIdentity(env.Config, ref.Ref.SystemID, ref.Ref.Path)
+			if !ok {
+				continue
+			}
+			if !settledKnown {
+				settledKnown = true
+				settled = mediascanner.MediaDBSettled(env.Database.MediaDB)
+			}
+			if !settled {
+				continue
+			}
+			ref.Identity = &identity
+		}
+		if ref.Identity.CoreSlug == "" {
 			continue
 		}
 		missed = append(missed, ref)
@@ -412,20 +465,6 @@ func addMediaIdentityMatches(
 	for ref, row := range resolveMediaIdentityIDs(env, missed) {
 		rows[ref] = row
 	}
-}
-
-// fallbackIdentityRef builds the identity the indexer would give a running
-// file that is not in the index. It is only trusted once the media database
-// is settled: mid-index a library file may just not be indexed yet.
-func fallbackIdentityRef(env *requests.RequestEnv, ref mediaPathRef) (identityRef, bool) {
-	if env == nil || env.Config == nil || env.Database == nil || env.Database.MediaDB == nil {
-		return identityRef{}, false
-	}
-	identity, ok := mediascanner.FallbackMediaIdentity(env.Config, ref.SystemID, ref.Path)
-	if !ok || !mediascanner.MediaDBSettled(env.Database.MediaDB) {
-		return identityRef{}, false
-	}
-	return identityRef{Ref: ref, Identity: &identity}, true
 }
 
 // resolvedMediaRefs flattens resolved rows into media IDs keyed by path ref

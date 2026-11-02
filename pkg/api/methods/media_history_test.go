@@ -133,6 +133,10 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 		pathutil.CanonicalMediaPath(missingPath),
 	}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
+	// The missing file is matched by title and no indexed title has it.
+	mockMediaDB.On("GetOptimizationStatus").Return("completed", nil)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "NES", "missing", mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Once()
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),

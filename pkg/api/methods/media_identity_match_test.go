@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -81,7 +82,8 @@ func TestHandleMediaHistory_UnindexedPlayResolvesByIdentity(t *testing.T) {
 	indexedPath := filepath.Join(string(filepath.Separator), "media", "fat", "games", "NES", "smb.nes")
 	dumpPath := operatorDumpPath("SECRET OF MANA.sfc")
 	unknownPath := operatorDumpPath("HOMEBREW.sfc")
-	noIdentityPath := operatorDumpPath("OLD PLAY.sfc")
+	// A virtual path has no identity the indexer could derive.
+	noIdentityPath := "steam://123/Old Play"
 
 	mockUserDB.On("GetDistinctMediaHistory", mock.Anything, []string(nil), int64(0), 26).
 		Return([]database.MediaHistoryEntry{
@@ -141,7 +143,7 @@ func TestHandleMediaHistory_UnindexedPlayResolvesByIdentity(t *testing.T) {
 
 	assert.Zero(t, resp.Entries[2].MediaID, "a title not in the library stays unresolved")
 	assert.False(t, resp.Entries[2].HasCover)
-	assert.Zero(t, resp.Entries[3].MediaID, "a play without an identity stays unresolved")
+	assert.Zero(t, resp.Entries[3].MediaID, "a play with no derivable identity stays unresolved")
 
 	mockMediaDB.AssertNumberOfCalls(t, "SearchMediaBySlug", 2)
 	mockUserDB.AssertExpectations(t)
@@ -338,5 +340,189 @@ func TestHandleActiveMedia_NoIdentityMatchForRelativePath(t *testing.T) {
 	resp, ok := result.(models.ActiveMediaResponse)
 	require.True(t, ok)
 	assert.Zero(t, resp.MediaID)
+	mockMediaDB.AssertNotCalled(t, "SearchMediaBySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// A play whose identity snapshot has not landed yet still matches, through
+// the identity the indexer would give its file.
+func TestHandleMediaHistory_PlayWithoutIdentityUsesFallbackIdentity(t *testing.T) {
+	t.Parallel()
+
+	dumpPath := operatorDumpPath("SECRET OF MANA.sfc")
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{DBID: 1, SystemID: "SNES", MediaPath: dumpPath, MediaName: "SECRET OF MANA", StartTime: time.Now()},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).Return([]database.MediaPathID{}, nil)
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	identity, ok := mediascanner.FallbackMediaIdentity(&config.Instance{}, "SNES", dumpPath)
+	require.True(t, ok)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "SNES", identity.CoreSlug, []zapscript.TagFilter(nil)).
+		Return(secretOfManaVariants(), nil).Once()
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, int64(8), resp.Entries[0].MediaID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_NoFallbackIdentityWhileIndexing(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{DBID: 1, SystemID: "SNES", MediaPath: operatorDumpPath("SECRET OF MANA.sfc"), StartTime: time.Now()},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).Return([]database.MediaPathID{}, nil)
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	assert.Zero(t, resp.Entries[0].MediaID)
+	mockMediaDB.AssertNotCalled(t, "SearchMediaBySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Plays of one title with different region identities each get their own
+// variant rather than sharing the first play's match.
+func TestHandleMediaHistory_IdentityTagsSeparateMatches(t *testing.T) {
+	t.Parallel()
+
+	regionIdentity := func(region string) *database.MediaIdentity {
+		return &database.MediaIdentity{
+			CanonicalSystemID: "SNES",
+			CoreSlug:          "secretofmana",
+			Tags: []database.MediaIdentityTag{
+				{Type: "region", Value: region, Role: database.MediaIdentityTagRoleIdentity},
+			},
+		}
+	}
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{
+			DBID: 2, SystemID: "SNES", MediaPath: operatorDumpPath("MANA JP.sfc"), StartTime: time.Now(),
+			MediaIdentity: regionIdentity("jp"),
+		},
+		{
+			DBID: 1, SystemID: "SNES", MediaPath: operatorDumpPath("MANA US.sfc"), StartTime: time.Now(),
+			MediaIdentity: regionIdentity("us"),
+		},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).Return([]database.MediaPathID{}, nil)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "SNES", "secretofmana", []zapscript.TagFilter(nil)).
+		Return(secretOfManaVariants(), nil).Twice()
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, int64(7), resp.Entries[0].MediaID)
+	assert.Equal(t, int64(8), resp.Entries[1].MediaID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// Identity matching that runs out its deadline must not take the batch
+// lookups for indexed entries down with it.
+func TestHandleMediaHistory_SlowIdentityMatchKeepsIndexedMetadata(t *testing.T) {
+	t.Parallel()
+
+	indexedPath := filepath.Join(string(filepath.Separator), "media", "fat", "games", "NES", "smb.nes")
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{DBID: 2, SystemID: "NES", MediaPath: indexedPath, StartTime: time.Now()},
+		{
+			DBID: 1, SystemID: "SNES", MediaPath: operatorDumpPath("SECRET OF MANA.sfc"), StartTime: time.Now(),
+			MediaIdentity: &database.MediaIdentity{CanonicalSystemID: "SNES", CoreSlug: "secretofmana"},
+		},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: indexedPath, DBID: 42, MediaTitleDBID: 420}}, nil)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "SNES", "secretofmana", []zapscript.TagFilter(nil)).
+		Run(func(args mock.Arguments) {
+			ctx, ok := args.Get(0).(context.Context)
+			if ok {
+				<-ctx.Done()
+			}
+		}).
+		Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded).Once()
+	liveContext := mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil })
+	indexedTags := []database.TagInfo{{Type: "region", Tag: "us"}}
+	mockMediaDB.On("GetMediaTagsByMediaRefs", liveContext, mock.Anything).
+		Return(map[int64][]database.TagInfo{42: indexedTags}, nil).Once()
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, int64(42), resp.Entries[0].MediaID)
+	assert.Equal(t, indexedTags, resp.Entries[0].Tags)
+	assert.Zero(t, resp.Entries[1].MediaID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// A failed path lookup is not a miss: the running file may be indexed, so it
+// must not be swapped for a slug match.
+func TestHandleActiveMedia_PathLookupFailureSkipsIdentityMatch(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(appState.StopService)
+	drainNotifications(t, ns)
+	dumpPath := operatorDumpPath("SECRET OF MANA.sfc")
+	appState.SetActiveMedia(models.NewActiveMedia("SNES", "SNES", dumpPath, "SECRET OF MANA", "operator"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "SNES", dumpPath).
+		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID(nil), errors.New("database is locked"))
+
+	result, err := HandleActiveMedia(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Zero(t, resp.MediaID)
+	assert.Equal(t, "@SNES/SECRET OF MANA", resp.ZapScript)
 	mockMediaDB.AssertNotCalled(t, "SearchMediaBySlug", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

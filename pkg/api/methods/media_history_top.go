@@ -101,10 +101,14 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		log.Debug().Err(enrichErr).Msg("could not enrich media history top from media database")
 	} else {
 		addMediaIdentityMatches(&env, mediaRows, identityRefs)
+		// Identity matching may have used up the path lookup's deadline, so
+		// the batch lookups get their own; indexed entries keep their metadata.
+		batchCtx, cancelBatch := optionalDBEnrichmentContext(env.Context)
+		defer cancelBatch()
 		var resolvedRefs []database.MediaRef
 		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
-		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
-		zapScripts = mediaTitleZapScripts(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		tagsByID, tagsKnown = mediaTagsByRefs(batchCtx, env.Database.MediaDB, resolvedRefs)
+		zapScripts = mediaTitleZapScripts(batchCtx, env.Database.MediaDB, resolvedRefs)
 	}
 
 	responseEntries := make([]models.MediaHistoryTopEntry, 0, len(entries))

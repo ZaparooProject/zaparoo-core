@@ -127,12 +127,16 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
 	} else {
 		addMediaIdentityMatches(&env, mediaRows, identityRefs)
+		// Identity matching may have used up the path lookup's deadline, so
+		// the batch lookups get their own; indexed entries keep their metadata.
+		batchCtx, cancelBatch := optionalDBEnrichmentContext(env.Context)
+		defer cancelBatch()
 		var resolvedRefs []database.MediaRef
 		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
 		if len(resolvedRefs) == 0 {
 			coverStatusesKnown = true
 		} else {
-			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, resolvedRefs)
+			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(batchCtx, resolvedRefs)
 			if coverErr != nil {
 				log.Debug().Err(coverErr).Msg("could not enrich media history cover status")
 			} else {
@@ -140,13 +144,13 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 				coverStatusesKnown = true
 			}
 		}
-		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
-		zapScripts = mediaTitleZapScripts(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		tagsByID, tagsKnown = mediaTagsByRefs(batchCtx, env.Database.MediaDB, resolvedRefs)
+		zapScripts = mediaTitleZapScripts(batchCtx, env.Database.MediaDB, resolvedRefs)
 		coverIDs := make([]int64, 0, len(resolvedRefs))
 		for _, ref := range resolvedRefs {
 			coverIDs = append(coverIDs, ref.MediaDBID)
 		}
-		coverColors = mediaCoverColors(enrichCtx, env.Database.MediaDB, coverIDs)
+		coverColors = mediaCoverColors(batchCtx, env.Database.MediaDB, coverIDs)
 	}
 	enrichElapsed := time.Since(enrichStarted)
 

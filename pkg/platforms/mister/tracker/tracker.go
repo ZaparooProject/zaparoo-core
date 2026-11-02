@@ -777,7 +777,7 @@ func (tr *Tracker) loadGameLocked() {
 
 	// Try to get clean display name from database first, fallback to filename parsing
 	pathInfo := helpers.GetPathInfo(path)
-	name := tags.ParseTitleFromFilename(pathInfo.Name, false)
+	name := tags.ParseTitleFromFilenameForMedia(pathInfo.Name, false, system.GetMediaType())
 	if tr.db != nil && tr.db.MediaDB != nil {
 		systems := []systemdefs.System{{ID: system.ID}}
 		ctx, cancel := tr.mediaLookupContext()
