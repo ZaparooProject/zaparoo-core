@@ -1033,12 +1033,15 @@ type DeckResponse struct {
 	DeckID      string             `json:"deckId"`
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
+	SourceURL   string             `json:"sourceUrl,omitempty"`
+	OwnedBy     string             `json:"ownedBy,omitempty"`
 	Items       []DeckItemResponse `json:"items,omitzero"`
 	CreatedAt   int64              `json:"createdAt"`
 	UpdatedAt   int64              `json:"updatedAt"`
 	ItemCount   int                `json:"itemCount"`
 	Owned       bool               `json:"owned"`
 	Locked      bool               `json:"locked"`
+	Saved       bool               `json:"saved"`
 }
 
 // DecksResponse is the response for the decks RPC method.

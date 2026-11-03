@@ -72,6 +72,10 @@ type DecksResult struct {
 	Pushed    int
 	Conflicts int
 	Rejected  int
+	// Saved counts decks newly kept because the account saved them, and
+	// Unsaved the ones removed because it no longer lists them.
+	Saved   int
+	Unsaved int
 }
 
 // deckContent is what the account and this device agree on for a deck.
@@ -243,9 +247,50 @@ func indexOf(keys []string, key string) int {
 	return -1
 }
 
-// SyncDecks converges owned decks with the account: pull first so the bases
-// are current, then push what changed here.
+// SyncDecks converges owned decks with the account, pulling first so the
+// bases are current and then pushing what changed here, and then keeps the
+// decks the account saved from other accounts in step with its list.
 func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
+	result, ownedErr := s.syncOwnedDecks(ctx)
+	saved, savedErr := s.syncSavedDecks(ctx)
+	result.Saved, result.Unsaved = saved.Saved, saved.Unsaved
+	if err := deckPassError(ownedErr, savedErr); err != nil {
+		return result, err
+	}
+	if result.Pulled > 0 || result.Pushed > 0 || result.Conflicts > 0 || result.Saved > 0 || result.Unsaved > 0 {
+		log.Info().Int("pulled", result.Pulled).Int("pushed", result.Pushed).
+			Int("conflicts", result.Conflicts).Int("rejected", result.Rejected).
+			Int("saved", result.Saved).Int("unsaved", result.Unsaved).
+			Msg("decks synced")
+	}
+	return result, nil
+}
+
+// deckPassError reports the outcome of the owned and saved deck passes, which
+// run apart so a failure in one does not hold up the other. Real failures are
+// joined; an idle error is reported only when neither pass failed, so a pass
+// that had nothing to do never hides one that failed.
+func deckPassError(errs ...error) error {
+	var failures []error
+	var idle error
+	for _, err := range errs {
+		switch {
+		case err == nil:
+		case IsIdleError(err):
+			if idle == nil {
+				idle = err
+			}
+		default:
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	return idle
+}
+
+func (s *Service) syncOwnedDecks(ctx context.Context) (DecksResult, error) {
 	if err := s.lockDecks(ctx); err != nil {
 		return DecksResult{}, err
 	}
@@ -259,11 +304,6 @@ func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
 	}
 	if err := pass.push(ctx); err != nil {
 		return pass.result, err
-	}
-	if pass.result.Pulled > 0 || pass.result.Pushed > 0 || pass.result.Conflicts > 0 {
-		log.Info().Int("pulled", pass.result.Pulled).Int("pushed", pass.result.Pushed).
-			Int("conflicts", pass.result.Conflicts).Int("rejected", pass.result.Rejected).
-			Msg("decks synced")
 	}
 	return pass.result, nil
 }

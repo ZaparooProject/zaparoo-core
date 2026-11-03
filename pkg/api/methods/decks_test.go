@@ -683,3 +683,61 @@ func TestHandleDecksGet_SyncStateReadFailureIsReported(t *testing.T) {
 	_, err := HandleDecksGet(withParams(&env, `{"deckId":"0123456789ab"}`))
 	require.ErrorIs(t, err, readErr)
 }
+
+func TestHandleDecks_SavedDeckFields(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	const link = "https://zpr.au/d$lhm6n9t8"
+	result, err := e.env.Database.UserDB.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: link,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
+	}, 10)
+	require.NoError(t, err)
+	require.NoError(t, e.env.Database.UserDB.SetDeckSaved(result.DeckID, true, "sam"))
+	require.NoError(t, e.env.Database.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true,
+	}))
+
+	got, ok := e.call(t, HandleDecksGet, `{"deckId":"`+result.DeckID+`"}`).(models.DeckResponse)
+	require.True(t, ok)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "sam", got.OwnedBy)
+	assert.Equal(t, link, got.SourceURL)
+
+	list, ok := e.call(t, HandleDecks, `{}`).(models.DecksResponse)
+	require.True(t, ok)
+	require.Len(t, list.Decks, 2)
+	for _, deck := range list.Decks {
+		if deck.Owned {
+			assert.False(t, deck.Saved)
+			assert.Empty(t, deck.SourceURL)
+			assert.Empty(t, deck.OwnedBy)
+			continue
+		}
+		assert.True(t, deck.Saved)
+		assert.Equal(t, "sam", deck.OwnedBy)
+		assert.Equal(t, link, deck.SourceURL)
+	}
+
+	encoded, err := json.Marshal(list)
+	require.NoError(t, err)
+	var wire struct {
+		Decks []map[string]json.RawMessage `json:"decks"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &wire))
+	require.Len(t, wire.Decks, 2)
+	for _, fields := range wire.Decks {
+		var owned bool
+		require.NoError(t, json.Unmarshal(fields["owned"], &owned))
+		require.Contains(t, fields, "saved")
+		if owned {
+			assert.JSONEq(t, `false`, string(fields["saved"]))
+			assert.NotContains(t, fields, "ownedBy")
+			assert.NotContains(t, fields, "sourceUrl")
+			continue
+		}
+		assert.JSONEq(t, `true`, string(fields["saved"]))
+		assert.JSONEq(t, `"sam"`, string(fields["ownedBy"]))
+		assert.JSONEq(t, `"`+link+`"`, string(fields["sourceUrl"]))
+	}
+}

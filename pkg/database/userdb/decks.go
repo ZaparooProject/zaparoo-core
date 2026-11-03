@@ -37,7 +37,7 @@ import (
 )
 
 const deckColumns = `DBID, DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-	PlaylistID`
+	PlaylistID, Saved, OwnerName`
 
 const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID, Scripts, Metadata,
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
@@ -205,7 +205,9 @@ func refuseLockedDeck(ctx context.Context, tx *sql.Tx, deckID string) error {
 
 // UpsertRemoteDeck inserts or fully replaces a deck that arrived from
 // elsewhere (a ZapLink fetch or a sync pull), keeping the stored DBID and
-// creation time. The deck's ID is normalized first. A cached copy of somebody
+// creation time, and whether the copy is saved and by whom, which only
+// SetDeckSaved changes on a stored deck; an inserted deck takes them from
+// deck. The deck's ID is normalized first. A cached copy of somebody
 // else's deck never overwrites an owned deck of the same ID (ErrDeckOwned),
 // so a tap on your own deck's ZapLink opens the editable local copy. A deck
 // fails with ErrDeckItemLimit past DeckMaxItems.
@@ -253,10 +255,12 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 			adoptRemoteDeckItemRows(stored, deck.Items)
 			if _, execErr := tx.ExecContext(ctx, `
 				update Decks set Name = ?, Description = ?, Owned = ?, Metadata = ?, SourceURL = ?,
-					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?
+					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?,
+					Saved = case when ? then 0 else Saved end,
+					OwnerName = case when ? then '' else OwnerName end
 				where DBID = ?;`,
 				deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-				deck.PlaylistID, now, now, existing.DBID); execErr != nil {
+				deck.PlaylistID, now, now, deck.Owned, deck.Owned, existing.DBID); execErr != nil {
 				return false, fmt.Errorf("failed to update remote deck: %w", execErr)
 			}
 		}
@@ -273,8 +277,10 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 // The copy is known by deck.SourceURL alone: a link fetched before updates its
 // stored copy, and any other link gets a deck ID minted on this device, so
 // nothing the source serves can name, replace or hide another deck. At most
-// maxCopies fetched decks are kept; past that the ones fetched longest ago
-// are removed and reported, so their tags can be cleared.
+// maxCopies fetched decks are kept besides saved ones; past that the unsaved
+// ones fetched longest ago are removed and reported, so their tags can be
+// cleared. A new copy is stored saved when deck.Saved is set, so storing a
+// saved deck never makes room by removing another copy.
 func (db *UserDB) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (database.FetchedDeckResult, error) {
 	var result database.FetchedDeckResult
 	if db.sql.Load() == nil {
@@ -340,7 +346,7 @@ func sqlFetchedDecksBeyond(
 	ctx context.Context, q deckQueryable, keep int,
 ) (dbids []int64, deckIDs []string, err error) {
 	rows, err := q.QueryContext(ctx, `
-		select DBID, DeckID from Decks where Owned = 0 and SourceURL != ''
+		select DBID, DeckID from Decks where Owned = 0 and Saved = 0 and SourceURL != ''
 		order by FetchedAt desc, DBID desc limit -1 offset ?;`, keep)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query fetched decks: %w", err)
@@ -496,6 +502,33 @@ func (db *UserDB) CountOwnedDecks() (int, error) {
 	return sqlCountOwnedDecks(db.ctx, db.sql.Load())
 }
 
+// SetDeckSaved marks a deck kept from a link as saved by the linked account,
+// or no longer saved, and records the name the account gave for its owner.
+// An owned deck is never saved and fails with ErrDeckOwned. Fails with
+// ErrDeckNotFound when no deck holds deckID.
+func (db *UserDB) SetDeckSaved(deckID string, saved bool, ownerName string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return db.deckTx(func(ctx context.Context, tx *sql.Tx, _ int64) (bool, error) {
+		deck, err := sqlGetDeck(ctx, tx, deckID)
+		if err != nil {
+			return false, err
+		}
+		if deck.Owned {
+			return false, database.ErrDeckOwned
+		}
+		if deck.Saved == saved && deck.OwnerName == ownerName {
+			return false, nil
+		}
+		if _, err = tx.ExecContext(ctx, `update Decks set Saved = ?, OwnerName = ? where DBID = ?;`,
+			saved, ownerName, deck.DBID); err != nil {
+			return false, fmt.Errorf("failed to set deck saved: %w", err)
+		}
+		return true, nil
+	})
+}
+
 // deckTx runs fn in one transaction. The transaction opens with the write
 // that advances the media preferences revision, because deck membership is a
 // listing-affecting tag and browse cursors must be invalidated like any other
@@ -545,16 +578,26 @@ func sqlCountOwnedDecks(ctx context.Context, q deckQueryable) (int, error) {
 func sqlInsertDeck(ctx context.Context, q deckQueryable, deck *database.Deck) error {
 	err := q.QueryRowContext(ctx, `
 		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-			PlaylistID)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			PlaylistID, Saved, OwnerName)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		returning DBID;`,
 		deck.DeckID, deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID,
+		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID, deck.Saved && !deck.Owned,
+		ownerNameUnlessOwned(deck),
 	).Scan(&deck.DBID)
 	if err != nil {
 		return fmt.Errorf("failed to insert deck: %w", err)
 	}
 	return nil
+}
+
+// ownerNameUnlessOwned is the owner name a deck is inserted with: only a
+// saved copy of somebody else's deck has one.
+func ownerNameUnlessOwned(deck *database.Deck) string {
+	if deck.Owned || !deck.Saved {
+		return ""
+	}
+	return deck.OwnerName
 }
 
 // sqlSaveDeckItems makes items the item list of the deck whose rows are
@@ -663,6 +706,7 @@ func scanDeck(scan func(dest ...any) error) (*database.Deck, error) {
 	if err := scan(
 		&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
 		&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
+		&deck.Saved, &deck.OwnerName,
 	); err != nil {
 		return nil, err
 	}
@@ -714,7 +758,8 @@ func sqlListDecks(ctx context.Context, q deckQueryable) ([]database.Deck, error)
 		var metadata string
 		if scanErr := rows.Scan(
 			&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
-			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID, &deck.ItemCount,
+			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
+			&deck.Saved, &deck.OwnerName, &deck.ItemCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan deck: %w", scanErr)
 		}

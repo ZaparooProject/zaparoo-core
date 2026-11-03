@@ -421,3 +421,61 @@ func TestRunCommand_DeckZapLinkNeverOpensAnOwnedDeck(t *testing.T) {
 	assert.Equal(t, "Imposter", pls.Name)
 	assert.True(t, pls.Unsafe)
 }
+
+// notZapLinkTransport answers every request with 404, so the host never says
+// it serves ZapScript. It counts the requests that were not the probe.
+type notZapLinkTransport struct{ fetched *atomic.Int32 }
+
+func (t notZapLinkTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !strings.HasSuffix(req.URL.Path, WellKnownPath) {
+		t.fetched.Add(1)
+	}
+	return &http.Response{
+		StatusCode: http.StatusNotFound, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader("")),
+	}, nil
+}
+
+// TestFetchDeckLink pins fetching a deck link without a tap: any host that
+// serves ZapScript is fetched alike, and the host is learned so the kept copy
+// refreshes when it opens.
+func TestFetchDeckLink(t *testing.T) {
+	for name, link := range map[string]string{"hosted": hostedDeckLink, "third party": thirdPartyDeckLink} {
+		t.Run(name, func(t *testing.T) {
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			t.Cleanup(cleanup)
+			body := servedDeckBody(t, "party-list", "Theirs", decks.PlaylistArgItem{Name: "B", ZapScript: "**b"})
+			useDeckZapLinkTransport(t, deckZapLinkTransport{body: body})
+
+			arg, err := FetchDeckLink(t.Context(), db, link, "test")
+			require.NoError(t, err)
+			assert.Equal(t, "party-list", arg.ID)
+			assert.Equal(t, "Theirs", arg.Name)
+			require.Len(t, arg.Items, 1)
+			assert.True(t, isKnownZapLinkHost(link, db), "the host is learned for refreshes on open")
+			cached, err := db.UserDB.GetZapLinkCache(link)
+			require.NoError(t, err)
+			assert.Equal(t, body, cached)
+		})
+	}
+}
+
+func TestFetchDeckLink_BodyThatIsNotADeck(t *testing.T) {
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	useDeckZapLinkTransport(t, deckZapLinkTransport{body: "**launch.random:snes"})
+
+	_, err := FetchDeckLink(t.Context(), db, thirdPartyDeckLink, "test")
+	require.ErrorIs(t, err, ErrNotDeckLink)
+}
+
+func TestFetchDeckLink_HostThatServesNoZapLinksIsNotFetched(t *testing.T) {
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	var fetched atomic.Int32
+	useDeckZapLinkTransport(t, notZapLinkTransport{fetched: &fetched})
+
+	_, err := FetchDeckLink(t.Context(), db, thirdPartyDeckLink, "test")
+	require.ErrorIs(t, err, ErrNotDeckLink)
+	assert.Zero(t, fetched.Load(), "only the well-known probe is sent")
+}

@@ -20,9 +20,11 @@
 package librarysync
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func scripts(names ...string) []deckContentItem {
@@ -97,4 +99,25 @@ func TestMergeDeckFields(t *testing.T) {
 	assert.Equal(t, "new there", merged.Description, "a description changed only there is taken")
 	assert.Equal(t, "Renamed here", merged.Items[0].Name)
 	assert.Equal(t, "CARD1", merged.Items[1].CardID)
+}
+
+func TestDeckPassError(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("push failed")
+	other := errors.New("list failed")
+
+	require.NoError(t, deckPassError(nil, nil))
+	require.ErrorIs(t, deckPassError(ErrDisabled, nil), ErrDisabled)
+	require.ErrorIs(t, deckPassError(nil, ErrDisabled), ErrDisabled)
+
+	err := deckPassError(ErrDisabled, failure)
+	require.ErrorIs(t, err, failure)
+	assert.False(t, IsIdleError(err), "an idle pass never hides a failed one")
+	err = deckPassError(failure, ErrNotSettled)
+	require.ErrorIs(t, err, failure)
+	assert.False(t, IsIdleError(err))
+
+	err = deckPassError(failure, other)
+	require.ErrorIs(t, err, failure)
+	assert.ErrorIs(t, err, other)
 }

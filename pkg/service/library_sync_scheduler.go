@@ -36,9 +36,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -113,6 +115,9 @@ func startLibrarySyncScheduler(
 		Pauser:        pauser,
 		SendHeartbeat: manager.SendCapabilityHeartbeat,
 		Launchers:     systemLaunchers(cfg, pl),
+		FetchDeck: func(ctx context.Context, link string) (decks.PlaylistArg, error) {
+			return zapscript.FetchDeckLink(ctx, db, link, pl.ID())
+		},
 		Notifications: st.Notifications,
 	})
 	requests := make(chan struct{}, 1)

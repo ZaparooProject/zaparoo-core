@@ -67,6 +67,38 @@ func adoptZapLinkDeck(db *database.Database, link, body string) string {
 	return cmd.String()
 }
 
+// ErrNotDeckLink reports a link that is not a ZapLink serving a playlist.
+var ErrNotDeckLink = errors.New("link does not serve a deck")
+
+// FetchDeckLink fetches the playlist a ZapLink serves, for keeping it as a
+// deck without a tap. The link is held to the same check a tap is: its host
+// must say through /.well-known/zaparoo that it serves ZapScript, which also
+// lets the kept copy refresh from it when it opens. The body is cached like a
+// tapped link's. It fails with ErrNotDeckLink when the link is not a ZapLink
+// or does not serve a playlist.
+func FetchDeckLink(
+	ctx context.Context, db *database.Database, link, platformID string,
+) (decks.PlaylistArg, error) {
+	if db == nil || db.UserDB == nil {
+		return decks.PlaylistArg{}, decks.ErrNoUserDB
+	}
+	if !isZapLink(link, db) {
+		return decks.PlaylistArg{}, fmt.Errorf("%w: host does not serve zap links", ErrNotDeckLink)
+	}
+	body, err := getRemoteZapScriptContext(ctx, link, platformID)
+	if err != nil {
+		return decks.PlaylistArg{}, fmt.Errorf("fetch deck link: %w", err)
+	}
+	_, arg, ok := decks.ParseServedPlaylist(string(body))
+	if !ok {
+		return decks.PlaylistArg{}, ErrNotDeckLink
+	}
+	if cacheErr := db.UserDB.UpdateZapLinkCache(link, string(body)); cacheErr != nil {
+		log.Debug().Err(cacheErr).Msg("failed to update zap link cache")
+	}
+	return arg, nil
+}
+
 // loadDeckItems reads a deck on this device as a collection, refreshing it
 // from its source first when that is quick.
 //
