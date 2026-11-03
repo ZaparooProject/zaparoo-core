@@ -97,6 +97,8 @@ func TestProfileNameSkipsUnchangedLabel(t *testing.T) {
 	got, err := afero.ReadFile(fs, filepath.Join(dir, profileNameFile))
 	require.NoError(t, err)
 	assert.Equal(t, "Renamed\n", string(got))
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Renamer"})
+	assert.Equal(t, 3, renames, "a same-length label with different text is rewritten")
 }
 
 // fakeMounter simulates the kernel mount table: binds resolve their source

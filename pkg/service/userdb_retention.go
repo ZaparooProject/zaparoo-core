@@ -68,24 +68,47 @@ func startUserDBRetentionScheduler(
 	idleSched *idle.Scheduler,
 	wg *sync.WaitGroup,
 ) {
-	var running atomic.Bool
-	schedule := func(ctx context.Context) {
-		if !running.CompareAndSwap(false, true) {
-			return
-		}
-		idleSched.Schedule(ctx, "userdb-retention",
-			userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
-			func(ctx context.Context) {
-				defer running.Store(false)
-				runUserDBRetention(ctx, cfg, pl, db)
-			},
-		)
-	}
+	scheduleUserDBRetention(ctx, clockwork.NewRealClock(), idleSched, wg, func(ctx context.Context) {
+		runUserDBRetention(ctx, cfg, pl, db)
+	})
+}
+
+// scheduleUserDBRetention runs run through idleSched on every tick of
+// userDBRetentionInterval.
+func scheduleUserDBRetention(
+	ctx context.Context,
+	clock clockwork.Clock,
+	idleSched *idle.Scheduler,
+	wg *sync.WaitGroup,
+	run func(context.Context),
+) {
+	trigger := &userDBRetentionTrigger{idle: idleSched, run: run}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		repeatUserDBRetention(ctx, clockwork.NewRealClock(), schedule)
+		repeatUserDBRetention(ctx, clock, trigger.fire)
 	}()
+}
+
+type userDBRetentionTrigger struct {
+	idle    *idle.Scheduler
+	run     func(context.Context)
+	running atomic.Bool
+}
+
+// fire queues one retention run for the next idle window, unless the
+// previous one is still waiting or working.
+func (r *userDBRetentionTrigger) fire(ctx context.Context) {
+	if !r.running.CompareAndSwap(false, true) {
+		return
+	}
+	r.idle.Schedule(ctx, "userdb-retention",
+		userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
+		func(ctx context.Context) {
+			defer r.running.Store(false)
+			r.run(ctx)
+		},
+	)
 }
 
 func repeatUserDBRetention(ctx context.Context, clock clockwork.Clock, schedule func(context.Context)) {

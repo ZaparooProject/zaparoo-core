@@ -1635,6 +1635,31 @@ func TestOpenServiceStderr_RotatesOversizedCapture(t *testing.T) {
 	assert.Contains(t, string(fresh), "=== service start ")
 }
 
+// A rotation that cannot happen must not cost the capture or its contents.
+func TestOpenServiceStderr_KeepsAppendingWhenRotationFails(t *testing.T) {
+	t.Parallel()
+
+	logDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir})
+	svc := &Service{pl: pl}
+	current := filepath.Join(logDir, config.StderrFile)
+	// A non-empty directory in the way makes the rename fail.
+	blocker := filepath.Join(logDir, config.StderrPreviousFile)
+	require.NoError(t, os.MkdirAll(filepath.Join(blocker, "keep"), 0o750))
+
+	big := bytes.Repeat([]byte("x"), maxServiceStderrSize+1)
+	require.NoError(t, os.WriteFile(current, big, 0o600))
+	f, err := svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	got, err := os.ReadFile(current) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(got, big), "the existing capture must be kept")
+	assert.Contains(t, string(got[len(big):]), "=== service start ")
+}
+
 func TestOpenServiceStderr_RefusesEmptyLogDir(t *testing.T) {
 	t.Parallel()
 

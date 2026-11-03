@@ -1124,8 +1124,10 @@ func (s *Service) openServiceStderr() (*os.File, error) {
 	}
 	path := filepath.Join(logDir, config.StderrFile)
 	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Size() > maxServiceStderrSize {
+		// On failure keep appending: losing the cap is better than losing the
+		// crash output the file holds.
 		if err := os.Rename(path, filepath.Join(logDir, config.StderrPreviousFile)); err != nil {
-			log.Debug().Err(err).Msg("error rotating service stderr file")
+			log.Warn().Err(err).Msg("error rotating service stderr file")
 		}
 	}
 	//nolint:gosec // Path is derived from the configured temp directory and fixed filename.

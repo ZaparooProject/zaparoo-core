@@ -716,14 +716,16 @@ func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
 	return rowsAffected, nil
 }
 
-func sqlPruneInboxMessages(ctx context.Context, db *sql.DB, cutoff time.Time, keep int) (int64, error) {
+func sqlPruneInboxMessages(
+	ctx context.Context, db *sql.DB, cutoff, reliableFrom time.Time, keep int,
+) (int64, error) {
 	result, err := db.ExecContext(ctx, `
 		DELETE FROM Inbox
-		WHERE CreatedAt < ?
+		WHERE (CreatedAt < ? AND CreatedAt >= ?)
 		   OR DBID NOT IN (
 			SELECT DBID FROM Inbox ORDER BY CreatedAt DESC, DBID DESC LIMIT ?
 		   );
-	`, cutoff.Unix(), keep)
+	`, cutoff.Unix(), reliableFrom.Unix(), keep)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prune inbox messages: %w", err)
 	}

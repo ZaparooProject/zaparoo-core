@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
 func (db *UserDB) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
@@ -42,7 +43,10 @@ func (db *UserDB) DeleteAllInboxMessages() (int64, error) {
 }
 
 // PruneInboxMessages deletes messages created before olderThan ago, and all
-// but the newest keep of the rest.
+// but the newest keep of the rest. A message stamped before the clock was set
+// (MiSTer boots without an RTC) has no meaningful age, so only the count limit
+// removes it.
 func (db *UserDB) PruneInboxMessages(olderThan time.Duration, keep int) (int64, error) {
-	return sqlPruneInboxMessages(db.ctx, db.sql.Load(), time.Now().Add(-olderThan), keep)
+	reliableFrom := time.Date(helpers.MinReliableYear, time.January, 1, 0, 0, 0, 0, time.UTC)
+	return sqlPruneInboxMessages(db.ctx, db.sql.Load(), time.Now().Add(-olderThan), reliableFrom, keep)
 }

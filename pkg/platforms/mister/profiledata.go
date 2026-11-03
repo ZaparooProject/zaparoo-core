@@ -460,8 +460,10 @@ func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.Prof
 	}
 	path := filepath.Join(profileDir, profileNameFile)
 	content := []byte(ref.Name + "\n")
-	if existing, err := afero.ReadFile(d.fs, path); err == nil && bytes.Equal(existing, content) {
-		return
+	if info, err := d.fs.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() == int64(len(content)) {
+		if existing, readErr := afero.ReadFile(d.fs, path); readErr == nil && bytes.Equal(existing, content) {
+			return
+		}
 	}
 	if err := pathutil.WriteFileAtomic(d.fs, path, content, 0o644); err != nil {
 		log.Warn().Err(err).Str("path", path).

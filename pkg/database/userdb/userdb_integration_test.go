@@ -417,26 +417,45 @@ func TestInbox_Prune_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	deleted, err := userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	// Raised before NTP set the clock: its age is unknown, so only the count
+	// limit may remove it.
+	_, err = userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Before clock set", CreatedAt: time.Unix(3600, 0),
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(8), deleted, "5 stale plus the 3 oldest recent messages past the cap")
 
-	messages, err := userDB.GetInboxMessages()
+	deleted, err := userDB.PruneInboxMessages(90*24*time.Hour, 20)
 	require.NoError(t, err)
-	require.Len(t, messages, 10)
-	titles := make([]string, 0, len(messages))
-	for _, m := range messages {
-		titles = append(titles, m.Title)
-	}
-	assert.Contains(t, titles, "Ongoing")
-	assert.Contains(t, titles, "Recent 00")
-	assert.Contains(t, titles, "Recent 08")
-	assert.NotContains(t, titles, "Recent 09")
-	assert.NotContains(t, titles, "Stale")
+	assert.Equal(t, int64(5), deleted, "only the stale messages are past the age limit")
+	assert.ElementsMatch(t, append(recentTitles(12), "Ongoing", "Before clock set"), inboxTitles(t, userDB))
+
+	deleted, err = userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), deleted, "the cap removes the oldest, including the unknown-age message")
+	assert.ElementsMatch(t, append(recentTitles(9), "Ongoing"), inboxTitles(t, userDB))
 
 	deleted, err = userDB.PruneInboxMessages(90*24*time.Hour, 10)
 	require.NoError(t, err)
 	assert.Zero(t, deleted)
+}
+
+func recentTitles(n int) []string {
+	titles := make([]string, 0, n)
+	for i := range n {
+		titles = append(titles, fmt.Sprintf("Recent %02d", i))
+	}
+	return titles
+}
+
+func inboxTitles(t *testing.T, userDB *UserDB) []string {
+	t.Helper()
+	messages, err := userDB.GetInboxMessages()
+	require.NoError(t, err)
+	titles := make([]string, 0, len(messages))
+	for _, m := range messages {
+		titles = append(titles, m.Title)
+	}
+	return titles
 }
 
 func TestInbox_CategoryUpsert_Integration(t *testing.T) {

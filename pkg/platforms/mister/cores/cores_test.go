@@ -99,6 +99,22 @@ func TestPatchAmigaCD32SkipsUnchangedDisc(t *testing.T) {
 	assert.Equal(t, 2, renames)
 }
 
+func TestFileHolds(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	want := []byte("Game\n")
+	require.NoError(t, afero.WriteFile(fs, "match", want, 0o600))
+	require.NoError(t, afero.WriteFile(fs, "same-size", []byte("Gamz\n"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, "larger", []byte("Game\nmore"), 0o600))
+	require.NoError(t, fs.MkdirAll("dir", 0o750))
+
+	assert.True(t, fileHolds(fs, "match", want))
+	assert.False(t, fileHolds(fs, "same-size", want))
+	assert.False(t, fileHolds(fs, "larger", want))
+	assert.False(t, fileHolds(fs, "dir", want))
+	assert.False(t, fileHolds(fs, "missing", want))
+}
+
 func TestPatchAmigaCD32RejectsInvalidFile(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()

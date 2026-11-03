@@ -266,8 +266,7 @@ func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 
 	bootFile := filepath.Join(sharedPath, "ags_boot")
 	bootContent := []byte(gameName + "\n")
-	//nolint:gosec // Path is the AmigaVision install's own shared directory.
-	if existing, readErr := os.ReadFile(bootFile); readErr == nil && bytes.Equal(existing, bootContent) {
+	if fileHolds(afero.NewOsFs(), bootFile, bootContent) {
 		log.Debug().Str("boot_file", bootFile).Str("game", gameName).
 			Msg("AmigaVision boot file already set")
 		return "\t<setname>Amiga</setname>\n", nil
@@ -289,6 +288,17 @@ func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 		Msg("AmigaVision boot file written")
 
 	return "\t<setname>Amiga</setname>\n", nil
+}
+
+// fileHolds reports whether path is a regular file containing exactly want.
+// The size is checked first so an unexpected large file is never read.
+func fileHolds(fs afero.Fs, path string, want []byte) bool {
+	info, err := fs.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(want)) {
+		return false
+	}
+	existing, err := afero.ReadFile(fs, path)
+	return err == nil && bytes.Equal(existing, want)
 }
 
 func amigaVisionBootImagePath(path string) string {
