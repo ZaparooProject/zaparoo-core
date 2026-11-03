@@ -265,3 +265,28 @@ func TestSearchMediaTitleGroups_RejectsFilenameSort(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestSearchMediaTitleGroups_FailsWhenRowLimitIsReached(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	insertGroupedTitle(t, mediaDB, system, "Copies",
+		groupedTestFile{path: "/roms/NES/Copies 1.nes"},
+		groupedTestFile{path: "/roms/NES/Copies 2.nes"},
+		groupedTestFile{path: "/roms/NES/Copies 3.nes"},
+	)
+	filters := &database.SearchFilters{Systems: []systemdefs.System{*nes}, Limit: 10}
+
+	groups, err := mediaDB.searchTitleGroupsWithRowLimit(context.Background(), filters, 4)
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	assert.Len(t, groups[0].Rows, 3)
+
+	_, err = mediaDB.searchTitleGroupsWithRowLimit(context.Background(), filters, 3)
+	require.Error(t, err, "a page whose rows fill the limit may have lost rows and must not be returned")
+}

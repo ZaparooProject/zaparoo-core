@@ -22,6 +22,8 @@ package methods
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -33,7 +35,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -79,7 +80,7 @@ func decodeGroupedSearchCursor(cursor, sortOrder string) (*database.SearchCursor
 // Rows keep their input order.
 func foldContainerVersions(
 	ctx context.Context, mediaDB database.MediaDBI, rows []database.SearchResultWithCursor,
-) []database.SearchResultWithCursor {
+) ([]database.SearchResultWithCursor, error) {
 	type dirKey struct {
 		systemID string
 		dir      string
@@ -105,8 +106,7 @@ func foldContainerVersions(
 		}
 		launch, err := mediaDB.FindSingleContainerLaunchMediaBySystemID(ctx, key.systemID, key.dir)
 		if err != nil {
-			log.Debug().Err(err).Str("dir", key.dir).Msg("container lookup failed, keeping versions apart")
-			continue
+			return nil, fmt.Errorf("look up container launch media for %s: %w", key.dir, err)
 		}
 		// A launch row the search filtered out (hidden, or outside the tag
 		// filter) cannot stand for its members, so they stay apart.
@@ -118,7 +118,7 @@ func foldContainerVersions(
 		}
 	}
 	if len(launchByDir) == 0 {
-		return rows
+		return rows, nil
 	}
 
 	folded := make([]database.SearchResultWithCursor, 0, len(rows))
@@ -131,7 +131,7 @@ func foldContainerVersions(
 		}
 		folded = append(folded, rows[i])
 	}
-	return folded
+	return folded, nil
 }
 
 func systemLaunchers(env *requests.RequestEnv, systemID string) []platforms.Launcher {
@@ -145,22 +145,28 @@ func systemLaunchers(env *requests.RequestEnv, systemID string) []platforms.Laun
 // launch would prefer. counts[i] is the number of versions behind results[i].
 func defaultTitleVersions(
 	env *requests.RequestEnv, groups []database.SearchTitleGroup,
-) (results []database.SearchResultWithCursor, counts []int) {
+) (results []database.SearchResultWithCursor, counts []int, err error) {
 	results = make([]database.SearchResultWithCursor, 0, len(groups))
 	counts = make([]int, 0, len(groups))
 	for i := range groups {
-		versions := foldContainerVersions(env.Context, env.Database.MediaDB, groups[i].Rows)
+		versions, foldErr := foldContainerVersions(env.Context, env.Database.MediaDB, groups[i].Rows)
+		if foldErr != nil {
+			return nil, nil, foldErr
+		}
 		chosen := versions[0]
 		if len(versions) > 1 {
 			chosen = titles.SelectDefaultVersion(versions, env.Config, systemLaunchers(env, chosen.SystemID))
 		}
 		if len(versions) > database.SlugSearchLimit {
-			chosen = launchedTitleVersion(env, &chosen, versions)
+			chosen, err = launchedTitleVersion(env, &chosen, versions)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		results = append(results, chosen)
 		counts = append(counts, len(versions))
 	}
-	return results, counts
+	return results, counts, nil
 }
 
 // resolveTitle is the resolver a title launch uses, replaceable in tests.
@@ -170,9 +176,11 @@ var resolveTitle = titles.ResolveTitle
 // launch only weighs the first database.SlugSearchLimit rows of a title, so
 // for a larger title it can settle on a different version than ranking every
 // version does. The default must be the version its zapScript launches.
+// When the zapScript resolves to nothing, a launch of it fails whichever
+// version is shown, so the ranked pick stays.
 func launchedTitleVersion(
 	env *requests.RequestEnv, chosen *database.SearchResultWithCursor, versions []database.SearchResultWithCursor,
-) database.SearchResultWithCursor {
+) (database.SearchResultWithCursor, error) {
 	mediaType := slugs.MediaTypeGame
 	if system, err := systemdefs.GetSystem(chosen.SystemID); err == nil {
 		mediaType = system.GetMediaType()
@@ -185,16 +193,18 @@ func launchedTitleVersion(
 		Launchers: systemLaunchers(env, chosen.SystemID),
 		MediaType: mediaType,
 	})
+	if errors.Is(err, titles.ErrNoMatch) || errors.Is(err, titles.ErrLowConfidence) {
+		return *chosen, nil
+	}
 	if err != nil {
-		log.Debug().Err(err).Str("zapScript", chosen.ZapScript()).Msg("could not resolve title default")
-		return *chosen
+		return database.SearchResultWithCursor{}, fmt.Errorf("resolve title default %q: %w", chosen.ZapScript(), err)
 	}
 	for i := range versions {
 		if versions[i].MediaID == resolved.Result.MediaID {
-			return versions[i]
+			return versions[i], nil
 		}
 	}
-	return *chosen
+	return *chosen, nil
 }
 
 // compareTitleVersions orders one title's versions the way the search SQL

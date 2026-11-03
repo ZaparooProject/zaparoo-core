@@ -225,7 +225,9 @@ func TestFoldContainerVersions(t *testing.T) {
 		mediaDB.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "PSX", discDir).
 			Return(&database.Media{DBID: 99, Path: discDir + "Disc Game.m3u"}, nil)
 		rows := discRows()
-		assert.Len(t, foldContainerVersions(context.Background(), mediaDB, rows), len(rows))
+		folded, err := foldContainerVersions(context.Background(), mediaDB, rows)
+		require.NoError(t, err)
+		assert.Len(t, folded, len(rows))
 	})
 
 	t.Run("no container leaves rows alone", func(t *testing.T) {
@@ -234,14 +236,27 @@ func TestFoldContainerVersions(t *testing.T) {
 		mediaDB.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "PSX", discDir).
 			Return(nil, nil)
 		rows := discRows()
-		assert.Len(t, foldContainerVersions(context.Background(), mediaDB, rows), len(rows))
+		folded, err := foldContainerVersions(context.Background(), mediaDB, rows)
+		require.NoError(t, err)
+		assert.Len(t, folded, len(rows))
+	})
+
+	t.Run("lookup failure fails the fold", func(t *testing.T) {
+		t.Parallel()
+		mediaDB := helpers.NewMockMediaDBI()
+		mediaDB.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "PSX", discDir).
+			Return(nil, errors.New("disk gone"))
+		_, err := foldContainerVersions(context.Background(), mediaDB, discRows())
+		require.Error(t, err)
 	})
 
 	t.Run("lone container member is not looked up", func(t *testing.T) {
 		t.Parallel()
 		mediaDB := helpers.NewMockMediaDBI()
 		rows := discRows()[3:]
-		assert.Equal(t, rows, foldContainerVersions(context.Background(), mediaDB, rows))
+		folded, err := foldContainerVersions(context.Background(), mediaDB, rows)
+		require.NoError(t, err)
+		assert.Equal(t, rows, folded)
 		mediaDB.AssertNotCalled(t, "FindSingleContainerLaunchMediaBySystemID")
 	})
 }
@@ -271,21 +286,29 @@ func TestPageTitleVersions(t *testing.T) {
 // launch resolver, so the shown version is the one its zapScript launches.
 // Not parallel: it replaces the package resolver.
 func TestHandleMediaSearch_GroupedLargeTitleUsesLaunchResolution(t *testing.T) {
+	const rankedID = 130
 	rows := make([]database.SearchResultWithCursor, 0, database.SlugSearchLimit+1)
 	for i := range database.SlugSearchLimit + 1 {
-		rows = append(rows, database.SearchResultWithCursor{
+		row := database.SearchResultWithCursor{
 			SystemID: "SNESMusic", Name: "Big Soundtrack", MediaID: int64(100 + i), MediaTitleID: 7,
 			Path: fmt.Sprintf("/roms/SNESMusic/Big Soundtrack/track %02d.spc", i),
-		})
+		}
+		// The only version in a preferred region, so ranking picks it.
+		if row.MediaID == rankedID {
+			row.Tags = []database.TagInfo{{Type: "region", Tag: "us"}}
+		}
+		rows = append(rows, row)
 	}
 
 	for name, tc := range map[string]struct {
 		resolveErr error
 		resolvedID int64
 		wantID     int64
+		wantErr    bool
 	}{
-		"resolver pick wins":         {resolvedID: 140, wantID: 140},
-		"resolver failure keeps own": {resolveErr: errors.New("boom"), wantID: -1},
+		"resolver pick wins":            {resolvedID: 140, wantID: 140},
+		"no match keeps the ranked one": {resolveErr: titles.ErrNoMatch, wantID: rankedID},
+		"resolver failure fails":        {resolveErr: errors.New("boom"), wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var gotName string
@@ -305,6 +328,10 @@ func TestHandleMediaSearch_GroupedLargeTitleUsesLaunchResolution(t *testing.T) {
 
 			groupBy := "title"
 			result, err := HandleMediaSearch(searchEnv(t, mediaDB, &models.SearchParams{GroupBy: &groupBy}))
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			response, ok := result.(models.SearchResults)
 			require.True(t, ok)
@@ -313,11 +340,39 @@ func TestHandleMediaSearch_GroupedLargeTitleUsesLaunchResolution(t *testing.T) {
 			got := response.Results[0]
 			require.NotNil(t, got.VersionCount)
 			assert.Equal(t, database.SlugSearchLimit+1, *got.VersionCount)
-			if tc.wantID > 0 {
-				assert.Equal(t, tc.wantID, got.MediaID)
-			} else {
-				assert.NotZero(t, got.MediaID)
-			}
+			assert.Equal(t, tc.wantID, got.MediaID)
 		})
 	}
+}
+
+func TestHandleMediaSearch_TitleVersionsIgnoreSystems(t *testing.T) {
+	t.Parallel()
+
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool { return filters.TitleDBID == 10 })).
+		Return([]database.SearchResultWithCursor{regionRow(11, "/roms/NES/Mario (Europe).nes", "eu")}, nil)
+
+	titleID := int64(10)
+	systems := []string{"NotASystem"}
+	result, err := HandleMediaSearch(searchEnv(t, mediaDB, &models.SearchParams{TitleID: &titleID, Systems: &systems}))
+	require.NoError(t, err)
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	assert.Len(t, response.Results, 1)
+}
+
+func TestHandleMediaSearch_TitleVersionsFailAtRowLimit(t *testing.T) {
+	t.Parallel()
+
+	rows := make([]database.SearchResultWithCursor, titleVersionsLimit)
+	for i := range rows {
+		rows[i] = database.SearchResultWithCursor{SystemID: "NES", MediaID: int64(i + 1), MediaTitleID: 10}
+	}
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).Return(rows, nil)
+
+	titleID := int64(10)
+	_, err := HandleMediaSearch(searchEnv(t, mediaDB, &models.SearchParams{TitleID: &titleID}))
+	require.Error(t, err, "a version list cut off at the row limit must not be returned as complete")
 }

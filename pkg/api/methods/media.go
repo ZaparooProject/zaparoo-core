@@ -1244,9 +1244,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if system != nil {
 		systemIDs = *system
 	}
-	systems, resolveErr := resolveSystems(systemIDs, fuzzy)
-	if resolveErr != nil {
-		return nil, resolveErr
+	// A titleId search ignores systems, so it does not validate them either.
+	var systems []systemdefs.System
+	if params.TitleID == nil {
+		var resolveErr error
+		systems, resolveErr = resolveSystems(systemIDs, fuzzy)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 	}
 
 	visibility, err := validateSearchVisibility(
@@ -1283,7 +1288,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if hasNextPage {
 			groups = groups[:maxResults]
 		}
-		searchResults, versionCounts = defaultTitleVersions(&env, groups)
+		searchResults, versionCounts, err = defaultTitleVersions(&env, groups)
+		if err != nil {
+			return nil, fmt.Errorf("error choosing title defaults: %w", err)
+		}
 	case params.TitleID != nil:
 		// Folding container members needs the whole title, so the title's
 		// rows are read in one go and paged here.
@@ -1295,9 +1303,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if err != nil {
 			return nil, fmt.Errorf("error searching title versions: %w", err)
 		}
-		searchResults = pageTitleVersions(
-			foldContainerVersions(ctx, env.Database.MediaDB, searchResults),
-			sortOrder, cursor, sortCursor, limit)
+		if len(searchResults) >= titleVersionsLimit {
+			return nil, fmt.Errorf("title %d has more than %d versions", *params.TitleID, titleVersionsLimit-1)
+		}
+		versions, foldErr := foldContainerVersions(ctx, env.Database.MediaDB, searchResults)
+		if foldErr != nil {
+			return nil, fmt.Errorf("error folding title versions: %w", foldErr)
+		}
+		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
 	default:
 		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
 		if err != nil {

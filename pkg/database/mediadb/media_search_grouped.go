@@ -64,6 +64,14 @@ func (db *MediaDB) SearchMediaTitleGroups(
 	ctx context.Context,
 	filters *database.SearchFilters,
 ) ([]database.SearchTitleGroup, error) {
+	return db.searchTitleGroupsWithRowLimit(ctx, filters, groupedSearchRowLimit)
+}
+
+func (db *MediaDB) searchTitleGroupsWithRowLimit(
+	ctx context.Context,
+	filters *database.SearchFilters,
+	rowLimit int,
+) ([]database.SearchTitleGroup, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
@@ -94,9 +102,17 @@ func (db *MediaDB) SearchMediaTitleGroups(
 		return nil, err
 	}
 
+	// The title page and its rows are read from one snapshot, so a title
+	// cannot lose its rows between the two and shorten the page.
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin grouped search read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	keys := make([]titleGroupKey, 0, filters.Limit)
 	for i := range scopes {
-		scopeKeys, scopeErr := sqlSearchTitleGroupKeys(ctx, db.sql.Load(), &scopes[i], filters)
+		scopeKeys, scopeErr := sqlSearchTitleGroupKeys(ctx, tx, &scopes[i], filters)
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -126,10 +142,13 @@ func (db *MediaDB) SearchMediaTitleGroups(
 	var rows []database.SearchResultWithCursor
 	for start := 0; start < len(titleDBIDs); start += perQuery {
 		chunk, chunkErr := sqlSearchMediaByTitleDBIDsSorted(
-			ctx, db.sql.Load(), titleDBIDs[start:min(start+perQuery, len(titleDBIDs))],
-			filters.PathPrefix, filters.Tags, nil, nil, nil, "", groupedSearchRowLimit)
+			ctx, tx, titleDBIDs[start:min(start+perQuery, len(titleDBIDs))],
+			filters.PathPrefix, filters.Tags, nil, nil, nil, "", rowLimit)
 		if chunkErr != nil {
 			return nil, chunkErr
+		}
+		if len(chunk) >= rowLimit {
+			return nil, fmt.Errorf("grouped search page holds more than %d media rows", rowLimit-1)
 		}
 		rows = append(rows, chunk...)
 	}
@@ -142,7 +161,6 @@ func (db *MediaDB) SearchMediaTitleGroups(
 	for _, key := range keys {
 		titleRows := byTitle[key.titleDBID]
 		if len(titleRows) == 0 {
-			// The title's rows changed between the two statements.
 			continue
 		}
 		groups = append(groups, database.SearchTitleGroup{
