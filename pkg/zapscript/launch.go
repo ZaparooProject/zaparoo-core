@@ -1290,7 +1290,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// zip or virtual list by the archive itself, and resolves case the way a
 	// relative lookup does.
 	if filepath.IsAbs(path) {
-		found, findErr := findFile(fs, pl, env.Cfg, path, env.PathRoot)
+		found, findErr := findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot)
 		if findErr != nil {
 			return platforms.CmdResult{}, findErr
 		}
@@ -1314,7 +1314,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(fs, pl, env.Cfg, path, env.PathRoot); findErr == nil {
+	if p, findErr = findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot); findErr == nil {
 		p = indexedPathSpelling(pl, &env, requestedSystemID, p)
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
@@ -1450,7 +1450,7 @@ func findSystemFile(
 			continue
 		}
 		log.Debug().Msgf("checking system path: %s", systemPath)
-		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
+		fp, findErr := findFile(fs, pl, env.Cfg, env.Launchers, systemPath, env.PathRoot)
 		if findErr == nil {
 			return fp, folderSystemIDs[i], true
 		}
@@ -1637,7 +1637,7 @@ func cmdLaunchLastWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEn
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(fs, pl, env.Cfg, entry.MediaPath, env.PathRoot)
+	path, err := findFile(fs, pl, env.Cfg, env.Launchers, entry.MediaPath, env.PathRoot)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

@@ -2029,7 +2029,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2051,7 +2051,7 @@ func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o700))
 	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
 
-	result, err := findFile(fs, mockPlatform, cfg, absolutePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, absolutePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2074,7 +2074,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, txtPath, []byte("test"), 0o600))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2093,12 +2093,12 @@ func TestFindFile_ResolvesGameInsideDiskImage(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, imagePath, []byte("test"), 0o600))
 
 	inside := filepath.Join(rootDir, "acornelectron", "BOOT.VHD", "Elite")
-	result, err := findFile(fs, mockPlatform, cfg, inside)
+	result, err := findFile(fs, mockPlatform, cfg, nil, inside)
 
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(imagePath, "Elite"), result)
 
-	bare, err := findFile(fs, mockPlatform, cfg, imagePath)
+	bare, err := findFile(fs, mockPlatform, cfg, nil, imagePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, imagePath, bare)
@@ -2118,7 +2118,7 @@ func TestFindFile_ReturnsAmbiguousCaseInsensitivePathError(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(filepath.Join(rootDir, "NeoGeo"), 0o700))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.Error(t, err)
 	assert.Empty(t, result)
