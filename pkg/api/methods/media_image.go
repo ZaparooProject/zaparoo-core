@@ -32,6 +32,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -115,19 +116,27 @@ var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
 const (
 	// mediaThumbMemoMax bounds the in-memory resolved-thumbnail memo.
 	mediaThumbMemoMax = 8192
-	// mediaThumbCacheMaxBytes caps the disk space the cache takes, counted in
-	// allocated blocks (see thumbFileDiskBytes). Past the cap, the reaper
-	// removes the least recently used files until the cache is back down to
-	// mediaThumbCacheTrimPercent of it. On a MiSTer, where every thumbnail
-	// takes a 128 KiB cluster, it holds about 8,000.
+	// mediaThumbCacheMaxBytes is a soft cap on the disk space the cache takes,
+	// counted in allocated blocks (see thumbFileDiskBytes). Past the cap, the
+	// reaper removes the least recently used files until the cache is back down
+	// to mediaThumbCacheTrimPercent of it, but never one used within
+	// mediaThumbCacheMinAge, so a day of heavy browsing can hold it above the
+	// cap. On a MiSTer, where every thumbnail takes a 128 KiB cluster, it holds
+	// about 8,000.
 	mediaThumbCacheMaxBytes    = int64(1 << 30)
 	mediaThumbCacheTrimPercent = 80
 	// mediaThumbCacheMinAge protects recently used files from the reaper. A
 	// hit refreshes a file's mtime once it is older than this, so a file handed
 	// out as a local path is never reaped while a client may still read it.
 	mediaThumbCacheMinAge = 24 * time.Hour
-	// mediaThumbReapInterval is the least time between two orphan reaps.
+	// mediaThumbReapInterval is the least time between two orphan reaps
+	// requested by an index or scrape completing.
 	mediaThumbReapInterval = 24 * time.Hour
+	// mediaThumbCapReapInterval is the least time between two orphan reaps
+	// requested by new thumbnails taking the cache past its cap. A cache held
+	// over the cap by recently used files would otherwise be walked on every
+	// write.
+	mediaThumbCapReapInterval = time.Hour
 	// mediaThumbStartupReapDelay keeps the first orphan reap off startup.
 	mediaThumbStartupReapDelay = 2 * time.Minute
 	// mediaThumbTempMaxAge is the age after which a temporary file that was
@@ -165,16 +174,22 @@ type resolvedThumb struct {
 }
 
 type mediaThumbCache struct {
-	createdAt  time.Time
-	clock      clockwork.Clock
-	fs         afero.Fs
-	reapCtx    context.Context
-	resolved   map[string]resolvedThumb
-	resizeSem  chan struct{}
-	reapDone   chan struct{}
-	dir        string
-	reapWG     sync.WaitGroup
-	maxBytes   int64
+	createdAt time.Time
+	clock     clockwork.Clock
+	fs        afero.Fs
+	reapCtx   context.Context
+	resolved  map[string]resolvedThumb
+	resizeSem chan struct{}
+	reapDone  chan struct{}
+	dir       string
+	reapWG    sync.WaitGroup
+	maxBytes  int64
+	// clusterBytes rounds file sizes up to the volume's allocation unit
+	// where a stat does not report allocated blocks (Windows).
+	clusterBytes int64
+	// cacheBytes is the cache's disk use as of the last reap plus every
+	// file written since, so a write can tell when the cap is passed.
+	cacheBytes atomic.Int64
 	lastReap   atomic.Int64
 	resolvedMu syncutil.RWMutex
 	reapMu     syncutil.Mutex
@@ -253,13 +268,14 @@ func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCac
 	}
 	clock := clockwork.NewRealClock()
 	return &mediaThumbCache{
-		fs:        fs,
-		clock:     clock,
-		dir:       dir,
-		resolved:  make(map[string]resolvedThumb),
-		resizeSem: make(chan struct{}, concurrency),
-		maxBytes:  mediaThumbCacheMaxBytes,
-		createdAt: clock.Now(),
+		fs:           fs,
+		clock:        clock,
+		dir:          dir,
+		resolved:     make(map[string]resolvedThumb),
+		resizeSem:    make(chan struct{}, concurrency),
+		maxBytes:     mediaThumbCacheMaxBytes,
+		clusterBytes: thumbCacheClusterBytes(dir),
+		createdAt:    clock.Now(),
 	}
 }
 
@@ -320,11 +336,11 @@ func isThumbTempFile(name string) bool {
 }
 
 // requestReap starts a background orphan reap unless one ran within
-// mediaThumbReapInterval, one is already running, or the cache was never
-// started with InitMediaThumbCache.
-func (c *mediaThumbCache) requestReap() {
+// interval, one is already running, or the cache was never started with
+// InitMediaThumbCache.
+func (c *mediaThumbCache) requestReap(interval time.Duration) {
 	if last := c.lastReap.Load(); last != 0 &&
-		c.now().Sub(time.Unix(0, last)) < mediaThumbReapInterval {
+		c.now().Sub(time.Unix(0, last)) < interval {
 		return
 	}
 	c.reapMu.Lock()
@@ -394,7 +410,7 @@ func (c *mediaThumbCache) reapOrphans(ctx context.Context) {
 			}
 			return nil
 		}
-		size := thumbFileDiskBytes(info)
+		size := thumbFileDiskBytes(info, c.clusterBytes)
 		files = append(files, thumbCacheFile{path: path, size: size, modTime: info.ModTime()})
 		total += size
 		return nil
@@ -405,6 +421,7 @@ func (c *mediaThumbCache) reapOrphans(ctx context.Context) {
 		}
 		return
 	}
+	defer func() { c.cacheBytes.Store(total) }()
 	if total <= c.maxBytes {
 		log.Debug().Int("files", len(files)).Int64("bytes", total).
 			Msg("media.image: thumb cache: under size cap")
@@ -484,10 +501,14 @@ func (c *mediaThumbCache) clearResolved(systems map[string]struct{}) {
 	}
 }
 
-// fileThumbSourceKey identifies a file-backed image by path, size and
-// modification time, so a replaced file gets a new key without being read.
+// fileThumbSourceKey identifies a file-backed image by path, size,
+// modification time and, where the platform has one, status change time, so
+// a replaced file gets a new key without being read. A replacement that keeps
+// the size and modification time is only told apart by the change time, which
+// exFAT and FAT (and Windows) do not provide.
 func fileThumbSourceKey(path string, info os.FileInfo) string {
-	return fmt.Sprintf("f:%d:%d:%s", info.Size(), info.ModTime().UnixNano(), filepath.ToSlash(filepath.Clean(path)))
+	return fmt.Sprintf("f:%d:%d:%d:%s", info.Size(), info.ModTime().UnixNano(), thumbFileChangeNanos(info),
+		filepath.ToSlash(filepath.Clean(path)))
 }
 
 // dataThumbSourceKey identifies an image by its content, for sources that
@@ -659,7 +680,21 @@ func (c *mediaThumbCache) set(sourceKey string, maxSize int, data []byte, conten
 	if err := c.fs.Rename(tmpPath, path); err != nil {
 		return "", fmt.Errorf("replace thumbnail cache file: %w", err)
 	}
+	c.noteWritten(path)
 	return path, nil
+}
+
+// noteWritten adds a new file to the cache's running size, and requests a
+// reap once that passes the cap, so browsing cannot grow the cache past it
+// for long between index and scrape completions.
+func (c *mediaThumbCache) noteWritten(path string) {
+	info, err := thumbCacheFileInfo(c.fs, path)
+	if err != nil {
+		return
+	}
+	if c.cacheBytes.Add(thumbFileDiskBytes(info, c.clusterBytes)) > c.maxBytes {
+		c.requestReap(mediaThumbCapReapInterval)
+	}
 }
 
 // InitMediaThumbCache creates or replaces the process-wide thumb cache for the
@@ -704,7 +739,7 @@ func InitMediaThumbCache(pl platforms.Platform) (stop func()) {
 func InvalidateMediaThumbMemo() {
 	if cache := mediaThumbCachePointer.Load(); cache != nil {
 		cache.clearResolved(nil)
-		cache.requestReap()
+		cache.requestReap(mediaThumbReapInterval)
 	}
 }
 
@@ -725,7 +760,7 @@ func InvalidateMediaThumbMemoSystems(systemIDs []string) {
 		return
 	}
 	cache.clearResolved(systems)
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 }
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
@@ -956,8 +991,32 @@ func encodeWebPImage(img image.Image) (data []byte, contentType string, err erro
 	return out.Bytes(), "image/webp", nil
 }
 
+// mediaImageMaxPixels bounds the frame a source image may declare. The byte
+// caps only limit the compressed file, and every decoder allocates the whole
+// frame from the header before reading pixels, so a small file declaring a
+// huge frame could otherwise take hundreds of megabytes. 4096x4096 is far past
+// any cover art.
+const mediaImageMaxPixels = 4096 * 4096
+
+// checkImageDimensions reads an image's header and rejects a frame larger
+// than mediaImageMaxPixels before any decoder allocates it.
+func checkImageDimensions(format string, binary []byte, decodeConfig func(io.Reader) (image.Config, error)) error {
+	cfg, err := decodeConfig(bytes.NewReader(binary))
+	if err != nil {
+		return fmt.Errorf("decode %s header for resize: %w", format, err)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > mediaImageMaxPixels {
+		return fmt.Errorf("%s for resize is %dx%d, past the %d pixel limit",
+			format, cfg.Width, cfg.Height, mediaImageMaxPixels)
+	}
+	return nil
+}
+
 func decodeResizableImage(binary []byte, contentType string) (image.Image, error) {
 	decodeJPEG := func() (image.Image, error) {
+		if err := checkImageDimensions("JPEG", binary, jpeg.DecodeConfig); err != nil {
+			return nil, err
+		}
 		img, err := jpeg.Decode(bytes.NewReader(binary))
 		if err != nil {
 			return nil, fmt.Errorf("decode JPEG for resize: %w", err)
@@ -965,6 +1024,9 @@ func decodeResizableImage(binary []byte, contentType string) (image.Image, error
 		return img, nil
 	}
 	decodePNG := func() (image.Image, error) {
+		if err := checkImageDimensions("PNG", binary, png.DecodeConfig); err != nil {
+			return nil, err
+		}
 		// Wuffs decodes cover art several times faster than image/png on ARM.
 		// Anything it rejects still gets image/png's verdict.
 		if img, err := wuffspng.Decode(binary); err == nil {
@@ -979,6 +1041,9 @@ func decodeResizableImage(binary []byte, contentType string) (image.Image, error
 		return img, nil
 	}
 	decodeWebP := func() (image.Image, error) {
+		if err := checkImageDimensions("WebP", binary, webp.DecodeConfig); err != nil {
+			return nil, err
+		}
 		img, err := webp.Decode(bytes.NewReader(binary))
 		if err != nil {
 			return nil, fmt.Errorf("decode WebP for resize: %w", err)

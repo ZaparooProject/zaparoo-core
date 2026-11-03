@@ -23,9 +23,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	byteorder "encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -478,22 +480,22 @@ func TestRequestReap_RunsAtMostOncePerInterval(t *testing.T) {
 	t.Parallel()
 
 	cache, clock := newReapTestCache(t, 100)
+	first := writeReapTestFile(t, cache, "d:first", 300, clock.Now().Add(-10*24*time.Hour))
 	ctx, cancel := context.WithCancel(context.Background())
 	cache.reapCtx = ctx
 	defer cache.stopReaps(cancel)
-	first := writeReapTestFile(t, cache, "d:first", 300, clock.Now().Add(-10*24*time.Hour))
 
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 	cache.reapWG.Wait()
 	assert.False(t, thumbFileExists(t, cache, first))
 
 	second := writeReapTestFile(t, cache, "d:second", 300, clock.Now().Add(-10*24*time.Hour))
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 	cache.reapWG.Wait()
 	assert.True(t, thumbFileExists(t, cache, second), "a reap within the interval is skipped")
 
 	clock.Advance(mediaThumbReapInterval)
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 	cache.reapWG.Wait()
 	assert.False(t, thumbFileExists(t, cache, second))
 }
@@ -503,14 +505,14 @@ func TestRequestReap_NoopWithoutStartedCache(t *testing.T) {
 
 	cache, clock := newReapTestCache(t, 100)
 	old := writeReapTestFile(t, cache, "d:old", 300, clock.Now().Add(-10*24*time.Hour))
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 	cache.reapWG.Wait()
 	assert.True(t, thumbFileExists(t, cache, old))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cache.reapCtx = ctx
 	cache.stopReaps(cancel)
-	cache.requestReap()
+	cache.requestReap(mediaThumbReapInterval)
 	cache.reapWG.Wait()
 	assert.True(t, thumbFileExists(t, cache, old), "a stopped cache starts no reaps")
 }
@@ -2119,18 +2121,41 @@ func TestHandleMediaImage_OversizedBlobReturnsClientError(t *testing.T) {
 
 // The reaper counts what a file takes on disk, which for a small thumbnail is
 // a whole cluster, not its few bytes.
-func TestThumbFileDiskBytes_CountsAllocationNotLength(t *testing.T) {
+func TestThumbFileDiskBytes_FallsBackToSize(t *testing.T) {
 	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "thumb.webp")
-	require.NoError(t, os.WriteFile(path, []byte("tiny"), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, thumbFileDiskBytes(info), info.Size())
 
 	memInfo, err := afero.NewMemMapFs().Stat(".")
 	require.NoError(t, err)
-	assert.Equal(t, memInfo.Size(), thumbFileDiskBytes(memInfo), "without a block count the size stands in")
+	assert.Equal(t, memInfo.Size(), thumbFileDiskBytes(memInfo, 0), "without an allocation to read the size stands in")
+}
+
+// Writing thumbnails past the cap reaps the cache without waiting for an index
+// or scrape, and at most once an hour while recently used files hold it over.
+func TestNoteWritten_ReapsOncePastTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	old := writeReapTestFile(t, cache, "d:old", 600, clock.Now().Add(-10*24*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	defer cache.stopReaps(cancel)
+
+	setMediaThumbCacheForTest(t, cache, "d:new", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old), "under the cap nothing is reaped")
+
+	setMediaThumbCacheForTest(t, cache, "d:newer", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, old), "passing the cap reaps the least recently used file")
+
+	again := writeReapTestFile(t, cache, "d:again", 600, clock.Now().Add(-10*24*time.Hour))
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, again), "a second pass within the hour is not walked")
+
+	clock.Advance(mediaThumbCapReapInterval)
+	setMediaThumbCacheForTest(t, cache, "d:last", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, again))
 }
 
 // PNG covers decode through Wuffs, and a PNG it rejects still gets
@@ -2150,4 +2175,30 @@ func TestDecodeResizableImage_PNGUsesWuffs(t *testing.T) {
 	corrupt[len(corrupt)-20] ^= 0xff
 	_, err = decodeResizableImage(corrupt, "image/png")
 	require.Error(t, err, "both decoders reject a corrupt PNG")
+}
+
+// pngWithDimensions is a valid 1x1 PNG whose header declares another size.
+func pngWithDimensions(t *testing.T, width, height uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))))
+	data := buf.Bytes()
+	const ihdr = 8 // after the signature: length, "IHDR", 13 bytes of data, CRC
+	byteorder.BigEndian.PutUint32(data[ihdr+8:], width)
+	byteorder.BigEndian.PutUint32(data[ihdr+12:], height)
+	byteorder.BigEndian.PutUint32(data[ihdr+8+13:], crc32.ChecksumIEEE(data[ihdr+4:ihdr+8+13]))
+	return data
+}
+
+// A small file declaring a huge frame is refused before any decoder
+// allocates it.
+func TestDecodeResizableImage_RejectsOversizedFrames(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeResizableImage(pngWithDimensions(t, 4097, 4096), "image/png")
+	require.ErrorContains(t, err, "pixel limit")
+
+	_, err = decodeResizableImage(pngWithDimensions(t, 4096, 4096), "image/png")
+	require.Error(t, err, "a 1x1 body does not fill the declared frame")
+	assert.NotContains(t, err.Error(), "pixel limit", "a frame at the limit is let through to the decoder")
 }

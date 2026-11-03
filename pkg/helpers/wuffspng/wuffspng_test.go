@@ -64,7 +64,10 @@ func rgbaOf(t *testing.T, c color.Color) color.RGBA {
 // near reports whether two premultiplied pixels differ by at most one step
 // per channel: premultiplying in 8 and in 16 bits rounds differently.
 func near(got, want color.RGBA) bool {
-	within := func(x, y uint8) bool { return x-y <= 1 || y-x <= 1 }
+	within := func(x, y uint8) bool {
+		d := int(x) - int(y)
+		return d >= -1 && d <= 1
+	}
 	return within(got.R, want.R) && within(got.G, want.G) && within(got.B, want.B) && got.A == want.A
 }
 

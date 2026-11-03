@@ -17,14 +17,18 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-//go:build !unix
+//go:build !unix && !windows
 
 package methods
 
 import "os"
 
-// thumbFileDiskBytes is the space a cache file takes on disk; without a block
-// count to read, the file size stands in for it.
-func thumbFileDiskBytes(info os.FileInfo) int64 {
+func thumbCacheClusterBytes(string) int64 {
+	return 0
+}
+
+// thumbFileDiskBytes is the space a cache file takes on disk; without a way
+// to read the allocation, the file size stands in for it.
+func thumbFileDiskBytes(info os.FileInfo, _ int64) int64 {
 	return info.Size()
 }

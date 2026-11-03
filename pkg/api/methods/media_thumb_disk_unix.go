@@ -26,10 +26,16 @@ import (
 	"syscall"
 )
 
+// thumbCacheClusterBytes is unused on Unix, where every file reports its own
+// allocated blocks.
+func thumbCacheClusterBytes(string) int64 {
+	return 0
+}
+
 // thumbFileDiskBytes is the space a cache file takes on disk. Thumbnails are
 // a few kilobytes, so on a filesystem with large clusters (128 KiB on a MiSTer
 // SD card's exFAT) the allocation, not the file size, is what fills the disk.
-func thumbFileDiskBytes(info os.FileInfo) int64 {
+func thumbFileDiskBytes(info os.FileInfo, _ int64) int64 {
 	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Blocks > 0 {
 		return int64(st.Blocks) * 512 //nolint:unconvert // Blocks is not int64 on every unix
 	}

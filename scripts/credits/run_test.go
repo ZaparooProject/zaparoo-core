@@ -199,7 +199,11 @@ func TestBuildBundleFromFakeCheckout(t *testing.T) {
 	assert.Equal(t, "3fa0751ad58f", byName["libnfc"].Version)
 	assert.Len(t, byName["libnfc"].Files, 2, "libnfc carries the GPL text LGPL-3.0 builds on")
 	assert.Len(t, byName["libusb"].Files, 1)
-	assert.Len(t, byName["Wuffs"].Files, 2, "Wuffs is dual-licensed and ships both texts")
+	wuffs := byName["Wuffs"].Files
+	require.Len(t, wuffs, 2, "Wuffs is dual-licensed and ships both texts")
+	assert.Equal(t, "LICENSE-APACHE", wuffs[0].Name)
+	assert.Equal(t, "LICENSE-MIT", wuffs[1].Name)
+	assert.NotEqual(t, wuffs[0].Text, wuffs[1].Text, "each license keeps its own text")
 	assert.Contains(t, bundle.Texts[byName["SQLite"].Files[0].Text], "May you share freely")
 	assert.True(t, strings.HasPrefix(bundle.Texts[byName["miniaudio"].Files[0].Text], "This software is available"))
 }
