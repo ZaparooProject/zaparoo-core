@@ -582,7 +582,7 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 // TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that terminal
 // scrape handling invalidates systems whose committed image properties changed.
 // Both completion paths are covered: an explicit Done update and channel close.
-func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
+func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance and the
 	// process-wide thumb cache pointer.
 	tests := []struct {
@@ -605,15 +605,16 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 
 			fs := afero.NewMemMapFs()
 			oldCache := &mediaThumbCache{
-				fs:            fs,
-				dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-				resolvedTypes: make(map[string]resolvedThumb),
+				fs:       fs,
+				dir:      filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+				resolved: make(map[string]resolvedThumb),
 			}
 			mediaID := int64(1)
-			setMediaThumbCacheForTest(
-				t, oldCache, mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
-				[]byte("png-data"), "image/png",
-			)
+			ref := mediaRefParam{MediaID: &mediaID}
+			path := setMediaThumbCacheForTest(t, oldCache, "f:1:1:/boxart.png", 100, []byte("png-data"), "image/png")
+			oldCache.setResolvedThumb(ref, nil, 100, resolvedThumb{
+				system: "SNES", typeTag: "property:image-boxart", path: path, contentType: "image/png",
+			})
 			mediaThumbCachePointer.Store(oldCache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
@@ -672,16 +673,11 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 				return !IsScrapingRunning()
 			}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
 
-			newCache := mediaThumbCachePointer.Load()
-			require.NotNil(t, newCache)
-			assert.Equal(t, oldCache.dir, newCache.dir,
-				"wipe keeps the deterministic version dir in place")
-			assert.Equal(t, mediaThumbCacheVersionDir(), filepath.Base(newCache.dir),
-				"live cache stays in the versioned thumbs/v<N> directory")
-			_, _, found := newCache.get(
-				mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
-			)
-			assert.False(t, found, "scrape completion should wipe cached thumbnails")
+			assert.Same(t, oldCache, mediaThumbCachePointer.Load())
+			_, memoOK := oldCache.getResolvedThumb(ref, nil, 100)
+			assert.False(t, memoOK, "scrape completion makes changed covers resolve their source again")
+			_, _, found := oldCache.get("f:1:1:/boxart.png", 100)
+			assert.True(t, found, "cached thumbnails are named by source and survive the scrape")
 		})
 	}
 }
@@ -690,18 +686,19 @@ func TestInvalidateChangedScrapeThumbnails_NoChangesPreservesCache(t *testing.T)
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
 		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	path := setMediaThumbCacheForTest(t, cache, "f:1:1:/boxart.png", 256, []byte("cached"), "image/webp")
+	cache.setResolvedThumb(ref, nil, 256, resolvedThumb{system: "SNES", path: path, contentType: "image/webp"})
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
 	invalidateChangedScrapeThumbnails(testhelpers.NewMockMediaDBI())
 
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
-	assert.True(t, found, "metadata-only scrape must keep existing thumbnails")
+	_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+	assert.True(t, memoOK, "metadata-only scrape must keep resolved thumbnails")
 }
 
 func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
@@ -803,11 +800,12 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
 		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	path := setMediaThumbCacheForTest(t, cache, "f:1:1:/boxart.png", 256, []byte("cached"), "image/webp")
+	cache.setResolvedThumb(ref, nil, 256, resolvedThumb{system: "SNES", path: path, contentType: "image/webp"})
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
@@ -851,8 +849,8 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
-	assert.False(t, found, "failed scrape must invalidate artwork changed before failure")
+	_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+	assert.False(t, memoOK, "failed scrape must re-resolve artwork changed before failure")
 
 	var sawFailure bool
 	for {

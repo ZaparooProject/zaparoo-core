@@ -642,17 +642,23 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 }
 
 // MediaCoverThumb is the recorded cover thumbnail resolution for one media
-// row. TypeTag is the image property type the thumbnail was built from and
-// Color its average colour as 0xRRGGBB, or nil when unknown. SystemID, Path
-// and ParentDir identify the row, and AvailableTypeTags lists the property
-// TypeTags present on the media row and its title so a caller can confirm
-// TypeTag is still the first match for its image preferences.
+// row. TypeTag is the image property type the thumbnail was built from,
+// SourceKey the thumbnail cache's key for that source image ("" when not
+// recorded), and Color its average colour as 0xRRGGBB, or nil when unknown.
+// SystemID, Path and ParentDir identify the row, and AvailableTypeTags lists
+// the property TypeTags present on the media row and its title so a caller can
+// confirm TypeTag is still the first match for its image preferences.
+// SourcePath is the file the TypeTag property currently resolves to (media
+// level before title level), or "" when it is blob-backed or absent, so a
+// caller can confirm SourceKey still names that file.
 type MediaCoverThumb struct {
 	Color             *uint32
 	SystemID          string
 	Path              string
 	ParentDir         string
 	TypeTag           string
+	SourceKey         string
+	SourcePath        string
 	AvailableTypeTags []string
 	MediaDBID         int64
 }
@@ -1524,16 +1530,15 @@ type MediaDBI interface {
 	// or title-level image exists; absent keys mean no cover.
 	GetMediaCoverStatus(ctx context.Context, refs []MediaRef) (map[int64]bool, error)
 
-	// Cover thumbnail records: the image type a media row's thumbnail resolved
-	// to and its average colour. They are disposable and cleared together with
-	// the thumbnail cache.
+	// Cover thumbnail records: the image type and source a media row's
+	// thumbnail resolved to and its average colour. They are disposable: a
+	// record is only trusted while its source key still matches, and a scrape
+	// that changes a row's images drops its record.
 	GetMediaCoverThumb(ctx context.Context, mediaDBID int64) (MediaCoverThumb, bool, error)
-	PutMediaCoverThumb(ctx context.Context, mediaDBID int64, typeTag string, color *uint32) error
+	PutMediaCoverThumb(ctx context.Context, mediaDBID int64, typeTag, sourceKey string, color *uint32) error
 	// GetMediaCoverColors returns the known 0xRRGGBB cover colours keyed by
 	// MediaDBID. Rows with no recorded colour are absent.
 	GetMediaCoverColors(ctx context.Context, mediaDBIDs []int64) (map[int64]uint32, error)
-	ClearMediaCoverThumbs(ctx context.Context) error
-	ClearMediaCoverThumbsForSystems(ctx context.Context, systemIDs []string) error
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)

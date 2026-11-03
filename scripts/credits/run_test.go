@@ -155,6 +155,8 @@ ENV LIBNFC_COMMIT="3fa0751ad58fb0053d3de2e61bbbd4066259104c"
 	}
 	write(filepath.Join(textsDir, "eff-wordlist.txt"), "EFF attribution")
 	write("internal/vdfbinary/LICENSE", mitText)
+	write("pkg/helpers/wuffspng/LICENSE-MIT", mitText)
+	write("pkg/helpers/wuffspng/LICENSE-APACHE", "Apache License Version 2.0")
 	write("pkg/database/gamedatabase/LICENSE", "GameDataBase by PigSaint is licensed under CC BY 4.0")
 	write("mod/sqlite/sqlite3-binding.c", fakeSQLite)
 	write("mod/sqlite/LICENSE", mitText)
@@ -188,7 +190,7 @@ func TestBuildBundleFromFakeCheckout(t *testing.T) {
 	}
 	for _, name := range []string{
 		sqliteModule, malgoModule, "libnfc", "libusb", "libusb-compat-0.1", "SQLite", "miniaudio",
-		"valve-vdf-binary", "EFF Short Wordlist #1", "ArcadeDatabase_MiSTer", "Sound effects",
+		"valve-vdf-binary", "Wuffs", "EFF Short Wordlist #1", "ArcadeDatabase_MiSTer", "Sound effects",
 	} {
 		assert.Contains(t, byName, name)
 	}
@@ -197,6 +199,7 @@ func TestBuildBundleFromFakeCheckout(t *testing.T) {
 	assert.Equal(t, "3fa0751ad58f", byName["libnfc"].Version)
 	assert.Len(t, byName["libnfc"].Files, 2, "libnfc carries the GPL text LGPL-3.0 builds on")
 	assert.Len(t, byName["libusb"].Files, 1)
+	assert.Len(t, byName["Wuffs"].Files, 2, "Wuffs is dual-licensed and ships both texts")
 	assert.Contains(t, bundle.Texts[byName["SQLite"].Files[0].Text], "May you share freely")
 	assert.True(t, strings.HasPrefix(bundle.Texts[byName["miniaudio"].Files[0].Text], "This software is available"))
 }
@@ -264,6 +267,14 @@ func TestExtrasFailWhenInputsAreMissing(t *testing.T) {
 		}},
 		{name: "miniaudio module", want: "is not linked", mutate: func(_ *testing.T, c *fakeCheckout) {
 			delete(c.modules, malgoModule)
+		}},
+		{name: "Wuffs MIT license", want: "wuffspng/LICENSE-MIT", mutate: func(t *testing.T, c *fakeCheckout) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(c.root, "pkg", "helpers", "wuffspng", "LICENSE-MIT")))
+		}},
+		{name: "Wuffs Apache license", want: "wuffspng/LICENSE-APACHE", mutate: func(t *testing.T, c *fakeCheckout) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(c.root, "pkg", "helpers", "wuffspng", "LICENSE-APACHE")))
 		}},
 		{name: "vendored license", want: "internal/vdfbinary/LICENSE", mutate: func(t *testing.T, c *fakeCheckout) {
 			t.Helper()

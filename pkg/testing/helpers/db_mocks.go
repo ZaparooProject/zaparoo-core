@@ -3434,12 +3434,12 @@ func (m *MockMediaDBI) GetMediaCoverThumb(
 
 // PutMediaCoverThumb succeeds silently unless a test sets an expectation.
 func (m *MockMediaDBI) PutMediaCoverThumb(
-	ctx context.Context, mediaDBID int64, typeTag string, color *uint32,
+	ctx context.Context, mediaDBID int64, typeTag, sourceKey string, color *uint32,
 ) error {
 	if !m.hasExpectedCall("PutMediaCoverThumb") {
 		return nil
 	}
-	args := m.Called(ctx, mediaDBID, typeTag, color)
+	args := m.Called(ctx, mediaDBID, typeTag, sourceKey, color)
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
@@ -3478,24 +3478,6 @@ func (m *MockMediaDBI) GetMediaCoverColors(
 		return colors, fmt.Errorf("mock get media cover colors failed: %w", err)
 	}
 	return colors, nil
-}
-
-// ClearMediaCoverThumbs succeeds silently unless a test sets an expectation.
-func (m *MockMediaDBI) ClearMediaCoverThumbs(ctx context.Context) error {
-	if !m.hasExpectedCall("ClearMediaCoverThumbs") {
-		return nil
-	}
-	args := m.Called(ctx)
-	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
-// ClearMediaCoverThumbsForSystems succeeds silently unless a test sets an expectation.
-func (m *MockMediaDBI) ClearMediaCoverThumbsForSystems(ctx context.Context, systemIDs []string) error {
-	if !m.hasExpectedCall("ClearMediaCoverThumbsForSystems") {
-		return nil
-	}
-	args := m.Called(ctx, systemIDs)
-	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func (m *MockMediaDBI) BrowseFileCount(

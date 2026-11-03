@@ -1843,6 +1843,49 @@ LIMIT 1`, systemID, path, typeTagDBID).Scan(&exists)
 	return true, nil
 }
 
+// deleteChangedCoverThumbRecords drops the cover thumbnail records of media
+// whose images, or whose title's images, the write changed. media.image would
+// already refuse such a record, whose source no longer matches, but its colour
+// would keep being served as the placeholder until the cover is rebuilt.
+func deleteChangedCoverThumbRecords(ctx context.Context, writeCtx *scrapeWriteTxContext) error {
+	mediaIDs := make([]int64, 0, len(writeCtx.changedImageMediaIDs))
+	for id := range writeCtx.changedImageMediaIDs {
+		mediaIDs = append(mediaIDs, id)
+	}
+	for chunk := range slices.Chunk(mediaIDs, batchLookupIDsPerQuery) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+		if _, err := writeCtx.tx.ExecContext(ctx,
+			`DELETE FROM MediaCoverThumbs WHERE MediaDBID IN (`+prepareVariadic("?", ",", len(chunk))+`)`,
+			args...,
+		); err != nil {
+			return fmt.Errorf("delete changed media cover thumbs: %w", err)
+		}
+	}
+	titleIDs := make([]int64, 0, len(writeCtx.changedImageMediaTitleIDs))
+	for id := range writeCtx.changedImageMediaTitleIDs {
+		titleIDs = append(titleIDs, id)
+	}
+	for chunk := range slices.Chunk(titleIDs, batchLookupIDsPerQuery) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+		if _, err := writeCtx.tx.ExecContext(ctx, `
+			DELETE FROM MediaCoverThumbs WHERE MediaDBID IN (
+				SELECT DBID FROM Media WHERE MediaTitleDBID IN (`+prepareVariadic("?", ",", len(chunk))+`))`,
+			args...,
+		); err != nil {
+			return fmt.Errorf("delete changed title cover thumbs: %w", err)
+		}
+	}
+	return nil
+}
+
 func (db *MediaDB) requireFullScrapeImageInvalidation(err error, message string) {
 	db.scrapeImageChangesMu.Lock()
 	db.scrapeImageChangesAll = true
@@ -2048,6 +2091,9 @@ func (db *MediaDB) ApplyScrapeResult(
 	if err := applyScrapeWriteTarget(ctx, writeCtx, target); err != nil {
 		return err
 	}
+	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("ApplyScrapeResult: commit: %w", err)
@@ -2108,6 +2154,9 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return err
 	}
 	stats.Begin = beginDuration
+	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {
+		return err
+	}
 
 	commitStart := time.Now()
 	if err := tx.Commit(); err != nil {

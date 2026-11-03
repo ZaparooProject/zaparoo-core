@@ -575,9 +575,12 @@ func WithMediaCounts(resp *models.IndexingStatusResponse, mediaDB database.Media
 	return resp
 }
 
-func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs.System, rebuild bool) {
+// invalidateIndexedThumbnails forgets resolved thumbnails for the indexed
+// systems once an index completes, since an index can move media to new rows.
+// Cached thumbnail files stay: they are named after their source image.
+func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 	if rebuild || len(systems) == 0 {
-		WipeMediaThumbCache(mediaDB)
+		InvalidateMediaThumbMemo()
 		return
 	}
 	requested := make(map[string]struct{}, len(systems))
@@ -594,7 +597,7 @@ func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs
 			}
 		}
 		if allRequested {
-			WipeMediaThumbCache(mediaDB)
+			InvalidateMediaThumbMemo()
 			return
 		}
 	}
@@ -602,7 +605,7 @@ func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs
 	for systemID := range requested {
 		systemIDs = append(systemIDs, systemID)
 	}
-	WipeMediaThumbCacheSystems(mediaDB, systemIDs)
+	InvalidateMediaThumbMemoSystems(systemIDs)
 }
 
 func GenerateMediaDB(
@@ -968,7 +971,7 @@ func startMediaDBGeneration(
 			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
 		}
 		mediaImageNoImages.clear()
-		invalidateIndexedThumbnails(db.MediaDB, systems, rebuild)
+		invalidateIndexedThumbnails(systems, rebuild)
 		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,

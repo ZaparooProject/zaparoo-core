@@ -351,10 +351,10 @@ func scrapeCountStatusContext(parent context.Context) (context.Context, context.
 func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	systems, all := mediaDB.ConsumeScrapeImageChanges()
 	if all {
-		WipeMediaThumbCache(mediaDB)
+		InvalidateMediaThumbMemo()
 		return
 	}
-	WipeMediaThumbCacheSystems(mediaDB, systems)
+	InvalidateMediaThumbMemoSystems(systems)
 }
 
 // refreshScrapedTags makes tags written by a scrape visible to media.tags.

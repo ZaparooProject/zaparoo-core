@@ -41,10 +41,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/wuffspng"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -137,63 +139,58 @@ func fillMediaImageSem() (release func()) {
 func setMediaThumbCacheForTest(
 	t testing.TB,
 	cache *mediaThumbCache,
-	ref mediaRefParam,
-	system string,
-	typeTag string,
+	sourceKey string,
 	maxSize int,
 	data []byte,
 	contentType string,
-) {
+) string {
 	t.Helper()
-	_, err := cache.set(ref, system, typeTag, maxSize, data, contentType)
+	path, err := cache.set(sourceKey, maxSize, data, contentType)
 	require.NoError(t, err)
+	return path
 }
 
-func TestMediaThumbCache_GetSetAndWipe(t *testing.T) {
+func newTestThumbCache(fs afero.Fs, dir string) *mediaThumbCache {
+	return &mediaThumbCache{fs: fs, dir: dir, resolved: make(map[string]resolvedThumb)}
+}
+
+func TestMediaThumbCache_GetSet(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
+	cache := newTestThumbCache(fs, filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	key := "f:10:20:/media/boxart/mario.png"
 
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found := cache.get(key, 100)
 	assert.False(t, found)
 
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 100, []byte("png-data"), "image/png")
-	data, contentType, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	path := setMediaThumbCacheForTest(t, cache, key, 100, []byte("png-data"), "image/png")
+	data, contentType, found := cache.get(key, 100)
 	require.True(t, found)
 	assert.Equal(t, []byte("png-data"), data)
 	assert.Equal(t, "image/png", contentType)
 
-	entries, err := afero.ReadDir(fs, cache.systemDir("SNES"))
+	entries, err := afero.ReadDir(fs, filepath.Dir(path))
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "atomic write must not leave a temporary file")
 
-	cache.wipe()
-	_, _, found = cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found = cache.get(key, 128)
+	assert.False(t, found, "each size tier is its own file")
+	_, _, found = cache.get("f:10:21:/media/boxart/mario.png", 100)
+	assert.False(t, found, "a changed source is a different file")
+	_, _, found = cache.get("", 100)
 	assert.False(t, found)
+	_, err = cache.set("", 100, []byte("png-data"), "image/png")
+	require.Error(t, err)
 }
 
 func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
 	t.Parallel()
 
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
-
-	_, err := cache.set(ref, "SNES", "property:image-boxart", 100, []byte("not an image"), "text/plain")
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	_, err := cache.set("d:abc", 100, []byte("not an image"), "text/plain")
 	require.Error(t, err)
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found := cache.get("d:abc", 100)
 	assert.False(t, found)
 }
 
@@ -201,10 +198,7 @@ func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewOsFs()
-	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
+	cache := newTestThumbCache(fs, filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()))
 	require.NoError(t, fs.MkdirAll(cache.dir, 0o750))
 	inside := filepath.Join(cache.dir, "inside.webp")
 	require.NoError(t, afero.WriteFile(fs, inside, []byte("inside"), 0o600))
@@ -228,100 +222,50 @@ func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
 	assert.False(t, relativeCache.isSafeLocalPath(filepath.Join("relative", "image.webp")))
 }
 
-func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	thumbs := filepath.Join("cache", "thumbs")
-	dir := filepath.Join(thumbs, mediaThumbCacheVersionDir())
-	cache := &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]resolvedThumb)}
-	mediaThumbCachePointer.Store(cache)
-	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
-
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 512, []byte("webp-bytes"), "image/webp")
-	cache.setResolvedThumb(ref, nil, 512, "SNES", "property:image-boxart")
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 512)
-	require.True(t, found)
-
-	WipeMediaThumbCache(nil)
-
-	// The live dir keeps its deterministic name (stable across restarts) rather
-	// than rolling to a new generation directory.
-	live := mediaThumbCachePointer.Load()
-	require.NotNil(t, live)
-	assert.Equal(t, dir, live.dir)
-
-	// Cached contents and the resolved-type memo are cleared.
-	_, _, found = cache.get(ref, "SNES", "property:image-boxart", 512)
-	assert.False(t, found)
-	_, memoOK := cache.getResolvedThumb(ref, nil, 512)
-	assert.False(t, memoOK)
-
-	// No moved-aside stale directory is left behind (removal is synchronous).
-	entries, err := afero.ReadDir(fs, thumbs)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	assert.Equal(t, []string{mediaThumbCacheVersionDir()}, names)
-}
-
-func TestWipeMediaThumbCacheSystems_PreservesOtherSystems(t *testing.T) {
+func TestMediaThumbCache_MemoIsBounded(t *testing.T) {
 	t.Parallel()
 
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+	cache := newTestThumbCache(afero.NewMemMapFs(), "cache")
+	for i := range mediaThumbMemoMax + 10 {
+		id := int64(i)
+		cache.setResolvedThumb(mediaRefParam{MediaID: &id}, nil, 256, resolvedThumb{system: "SNES"})
 	}
-	snesID, genesisID := int64(1), int64(2)
-	snesRef := mediaRefParam{MediaID: &snesID}
-	genesisRef := mediaRefParam{MediaID: &genesisID}
-	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 512, []byte("snes"), "image/webp")
-	setMediaThumbCacheForTest(
-		t, cache, genesisRef, "Genesis", "property:image-boxart", 512, []byte("genesis"), "image/webp",
-	)
-	cache.setResolvedThumb(snesRef, nil, 512, "SNES", "property:image-boxart")
-	cache.setResolvedThumb(genesisRef, nil, 512, "Genesis", "property:image-boxart")
+	assert.Len(t, cache.resolved, mediaThumbMemoMax)
+}
 
-	cache.wipeSystems([]string{"SNES", "SNES"})
-
-	_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 512)
-	assert.False(t, found)
-	_, memoOK := cache.getResolvedThumb(snesRef, nil, 512)
-	assert.False(t, memoOK)
-	data, _, found := cache.get(genesisRef, "Genesis", "property:image-boxart", 512)
-	assert.True(t, found)
-	assert.Equal(t, []byte("genesis"), data)
-	_, memoOK = cache.getResolvedThumb(genesisRef, nil, 512)
-	assert.True(t, memoOK)
+// seedThumbMemo stores one cached file and memo entry per system.
+func seedThumbMemo(t *testing.T, cache *mediaThumbCache, systems ...string) map[string]mediaRefParam {
+	t.Helper()
+	refs := make(map[string]mediaRefParam, len(systems))
+	for i, system := range systems {
+		id := int64(i + 1)
+		ref := mediaRefParam{MediaID: &id}
+		key := "f:1:1:/" + system + ".png"
+		path := setMediaThumbCacheForTest(t, cache, key, 256, []byte(system), "image/webp")
+		cache.setResolvedThumb(ref, nil, 256, resolvedThumb{
+			system: system, typeTag: "property:image-boxart", path: path, contentType: "image/webp",
+		})
+		refs[system] = ref
+	}
+	return refs
 }
 
 func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+	refs := seedThumbMemo(t, cache, "SNES", "Genesis")
 
-	snesID, genesisID := int64(1), int64(2)
-	snesRef := mediaRefParam{MediaID: &snesID}
-	genesisRef := mediaRefParam{MediaID: &genesisID}
-	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
-	setMediaThumbCacheForTest(
-		t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
-	)
+	invalidateIndexedThumbnails([]systemdefs.System{{ID: "SNES"}}, false)
 
-	invalidateIndexedThumbnails(nil, []systemdefs.System{{ID: "SNES"}}, false)
-
-	_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
-	assert.False(t, found)
-	_, _, found = cache.get(genesisRef, "Genesis", "property:image-boxart", 256)
-	assert.True(t, found)
+	_, memoOK := cache.getResolvedThumb(refs["SNES"], nil, 256)
+	assert.False(t, memoOK, "the indexed system is resolved again")
+	_, memoOK = cache.getResolvedThumb(refs["Genesis"], nil, 256)
+	assert.True(t, memoOK, "other systems stay memoized")
+	for _, system := range []string{"SNES", "Genesis"} {
+		_, _, found := cache.get("f:1:1:/"+system+".png", 256)
+		assert.True(t, found, "cached files are kept for %s", system)
+	}
 }
 
 func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
@@ -337,30 +281,21 @@ func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fs := afero.NewMemMapFs()
-			cache := &mediaThumbCache{
-				fs: fs, dir: filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-				resolvedTypes: make(map[string]resolvedThumb),
-			}
+			cache := newTestThumbCache(
+				afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
+			)
 			mediaThumbCachePointer.Store(cache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+			refs := seedThumbMemo(t, cache, "SNES", "Genesis")
 
-			snesID, genesisID := int64(1), int64(2)
-			snesRef := mediaRefParam{MediaID: &snesID}
-			genesisRef := mediaRefParam{MediaID: &genesisID}
-			setMediaThumbCacheForTest(
-				t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp",
-			)
-			setMediaThumbCacheForTest(
-				t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
-			)
+			invalidateIndexedThumbnails(tt.systems, tt.rebuild)
 
-			invalidateIndexedThumbnails(nil, tt.systems, tt.rebuild)
-
-			_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
-			assert.False(t, found)
-			_, _, found = cache.get(genesisRef, "Genesis", "property:image-boxart", 256)
-			assert.False(t, found)
+			for system, ref := range refs {
+				_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+				assert.False(t, memoOK, "%s is resolved again", system)
+				_, _, found := cache.get("f:1:1:/"+system+".png", 256)
+				assert.True(t, found, "cached files are kept for %s", system)
+			}
 		})
 	}
 }
@@ -376,7 +311,8 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(thumbs, "current", "old.png"), []byte("x"), 0o600))
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "gen-3"), 0o750))
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v1"), 0o750))
-	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, mediaThumbCacheVersionDir()+".stale7"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v2"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v2.stale7"), 0o750))
 
 	// The current-version dir already has content that must be preserved — a
 	// version bump invalidates other versions, but restarting on the same
@@ -384,12 +320,12 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	live := filepath.Join(thumbs, mediaThumbCacheVersionDir())
 	require.NoError(t, fs.MkdirAll(live, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(live, "keep.webp"), []byte("y"), 0o600))
-	systemDir := filepath.Join(live, thumbSystemDirName("SNES"))
-	require.NoError(t, fs.MkdirAll(systemDir, 0o750))
-	tmpPath := filepath.Join(systemDir, ".thumb-abandoned.tmp")
+	shardDir := filepath.Join(live, "ab")
+	require.NoError(t, fs.MkdirAll(shardDir, 0o750))
+	tmpPath := filepath.Join(shardDir, ".thumb-abandoned.tmp")
 	require.NoError(t, afero.WriteFile(fs, tmpPath, []byte("partial"), 0o600))
 
-	cache := &mediaThumbCache{fs: fs, dir: live, resolvedTypes: make(map[string]resolvedThumb)}
+	cache := newTestThumbCache(fs, live)
 	cache.reapStaleVersions()
 
 	entries, err := afero.ReadDir(fs, thumbs)
@@ -406,6 +342,177 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	tmpExists, err := afero.Exists(fs, tmpPath)
 	require.NoError(t, err)
 	assert.False(t, tmpExists, "abandoned atomic-write temporary files must be reaped")
+}
+
+// newReapTestCache returns a cache whose files are written with the fake
+// clock's current time as their mtime.
+func newReapTestCache(t *testing.T, maxBytes int64) (*mediaThumbCache, *clockwork.FakeClock) {
+	t.Helper()
+	clock := clockwork.NewFakeClockAt(time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC))
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	cache.clock = clock
+	cache.maxBytes = maxBytes
+	return cache, clock
+}
+
+func writeReapTestFile(t *testing.T, cache *mediaThumbCache, key string, size int, modTime time.Time) string {
+	t.Helper()
+	path := setMediaThumbCacheForTest(t, cache, key, 256, bytes.Repeat([]byte{1}, size), "image/webp")
+	require.NoError(t, cache.fs.Chtimes(path, modTime, modTime))
+	return path
+}
+
+func thumbFileExists(t *testing.T, cache *mediaThumbCache, path string) bool {
+	t.Helper()
+	exists, err := afero.Exists(cache.fs, path)
+	require.NoError(t, err)
+	return exists
+}
+
+func TestReapOrphans_KeepsEverythingUnderTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	old := writeReapTestFile(t, cache, "d:old", 400, clock.Now().Add(-30*24*time.Hour))
+	newer := writeReapTestFile(t, cache, "d:new", 400, clock.Now().Add(-48*time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	assert.True(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, newer))
+}
+
+func TestReapOrphans_RemovesLeastRecentlyUsedPastTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	now := clock.Now()
+	oldest := writeReapTestFile(t, cache, "d:oldest", 300, now.Add(-10*24*time.Hour))
+	older := writeReapTestFile(t, cache, "d:older", 300, now.Add(-5*24*time.Hour))
+	old := writeReapTestFile(t, cache, "d:old", 300, now.Add(-2*24*time.Hour))
+	recent := writeReapTestFile(t, cache, "d:recent", 300, now.Add(-time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	// 1200 bytes against a 1000-byte cap trims to at most 800: the two least
+	// recently used files go, and nothing else is touched.
+	assert.False(t, thumbFileExists(t, cache, oldest))
+	assert.False(t, thumbFileExists(t, cache, older))
+	assert.True(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, recent))
+}
+
+func TestReapOrphans_NeverRemovesRecentlyUsedFiles(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	now := clock.Now()
+	old := writeReapTestFile(t, cache, "d:old", 300, now.Add(-2*24*time.Hour))
+	recent := writeReapTestFile(t, cache, "d:recent", 300, now.Add(-time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	assert.False(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, recent), "a file used within a day may still be read by a client")
+}
+
+func TestReapOrphans_RemovesAbandonedTemporaryFiles(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1<<20)
+	now := clock.Now()
+	shard := filepath.Join(cache.dir, "ab")
+	require.NoError(t, cache.fs.MkdirAll(shard, 0o750))
+	abandoned := filepath.Join(shard, ".thumb-abandoned.tmp")
+	live := filepath.Join(shard, ".thumb-live.tmp")
+	for path, modTime := range map[string]time.Time{
+		abandoned: now.Add(-2 * time.Hour),
+		live:      now.Add(-time.Minute),
+	} {
+		require.NoError(t, afero.WriteFile(cache.fs, path, []byte("partial"), 0o600))
+		require.NoError(t, cache.fs.Chtimes(path, modTime, modTime))
+	}
+
+	cache.reapOrphans(context.Background())
+
+	assert.False(t, thumbFileExists(t, cache, abandoned))
+	assert.True(t, thumbFileExists(t, cache, live), "a write in progress keeps its temporary file")
+}
+
+func TestReapOrphans_StopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	old := writeReapTestFile(t, cache, "d:old", 300, clock.Now().Add(-10*24*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cache.reapOrphans(ctx)
+
+	assert.True(t, thumbFileExists(t, cache, old))
+}
+
+// A hit marks a file as used so the reaper keeps it, writing at most once a day.
+func TestMediaThumbCache_HitRefreshesStaleModTime(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1<<20)
+	now := clock.Now()
+	stale := writeReapTestFile(t, cache, "d:stale", 10, now.Add(-2*24*time.Hour))
+	fresh := writeReapTestFile(t, cache, "d:fresh", 10, now.Add(-time.Hour))
+
+	_, _, found := cache.lookupPath("d:stale", 256)
+	require.True(t, found)
+	_, _, found = cache.lookupPath("d:fresh", 256)
+	require.True(t, found)
+
+	info, err := cache.fs.Stat(stale)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(now))
+	info, err = cache.fs.Stat(fresh)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(now.Add(-time.Hour)), "a recently used file is not rewritten")
+}
+
+func TestRequestReap_RunsAtMostOncePerInterval(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	defer cache.stopReaps(cancel)
+	first := writeReapTestFile(t, cache, "d:first", 300, clock.Now().Add(-10*24*time.Hour))
+
+	cache.requestReap()
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, first))
+
+	second := writeReapTestFile(t, cache, "d:second", 300, clock.Now().Add(-10*24*time.Hour))
+	cache.requestReap()
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, second), "a reap within the interval is skipped")
+
+	clock.Advance(mediaThumbReapInterval)
+	cache.requestReap()
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, second))
+}
+
+func TestRequestReap_NoopWithoutStartedCache(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	old := writeReapTestFile(t, cache, "d:old", 300, clock.Now().Add(-10*24*time.Hour))
+	cache.requestReap()
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	cache.stopReaps(cancel)
+	cache.requestReap()
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old), "a stopped cache starts no reaps")
 }
 
 func TestSnapThumbMaxSize(t *testing.T) {
@@ -461,7 +568,7 @@ func TestResizeImageIfNeeded_TransparentImageOutputsWebPWithAlpha(t *testing.T) 
 	assert.True(t, imageHasTransparency(decoded), "alpha must survive the lossy webp encode")
 }
 
-func TestResizeImageIfNeeded_OpaqueImageOutputsWebP(t *testing.T) {
+func TestResizeImageIfNeeded_OpaqueImageOutputsJPEG(t *testing.T) {
 	t.Parallel()
 
 	const dim = 64
@@ -476,9 +583,9 @@ func TestResizeImageIfNeeded_OpaqueImageOutputsWebP(t *testing.T) {
 	require.NoError(t, png.Encode(&in, src))
 
 	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 16)
-	require.Equal(t, "image/webp", contentType)
+	require.Equal(t, "image/jpeg", contentType)
 
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, 16, decoded.Bounds().Dx())
 	assert.Equal(t, 16, decoded.Bounds().Dy())
@@ -496,24 +603,24 @@ func TestResizeImageIfNeeded_DecodesWebPSource(t *testing.T) {
 			src.Set(x, y, color.RGBA{R: 10, G: 200, B: 90, A: 255})
 		}
 	}
-	webpBytes, _, err := encodeResizedImage(src)
+	webpBytes, _, err := encodeWebPImage(src)
 	require.NoError(t, err)
 
 	resized, contentType := resizeImageIfNeeded(webpBytes, "image/webp", 16)
-	require.Equal(t, "image/webp", contentType)
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.Equal(t, "image/jpeg", contentType)
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, 16, decoded.Bounds().Dx())
 }
 
-func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
+func TestResizeImageIfNeeded_FitsTierReencodes(t *testing.T) {
 	t.Parallel()
 
 	// Source already fits the requested tier (no downscale) but is too large to
-	// pass through, so it must still be re-encoded to WebP at native dimensions:
-	// a request snapped to a tier at or above native size gets the format win.
-	// High-frequency content that PNG cannot compress but lossy WebP can
-	// guarantees the WebP comes out smaller.
+	// pass through, so it must still be re-encoded at native dimensions: a
+	// request snapped to a tier at or above native size gets the format win.
+	// High-frequency content that PNG cannot compress but a lossy encode can
+	// guarantees the re-encode comes out smaller.
 	const dim = 250
 	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
 	for y := range dim {
@@ -532,10 +639,10 @@ func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
 	require.Greater(t, in.Len(), thumbPassthroughMaxBytes, "source must be past the passthrough limit")
 
 	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/png", 256)
-	require.Equal(t, "image/webp", contentType)
+	require.Equal(t, "image/jpeg", contentType)
 	assert.NotNil(t, avgColor)
-	assert.Less(t, len(resized), in.Len(), "lossy webp should beat the high-entropy png")
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	assert.Less(t, len(resized), in.Len(), "a lossy encode should beat the high-entropy png")
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, dim, decoded.Bounds().Dx(), "native dimensions preserved when no downscale")
 	assert.Equal(t, dim, decoded.Bounds().Dy())
@@ -569,7 +676,7 @@ func TestResizeImageWithColor_SmallSourceThatFitsSkipsEncode(t *testing.T) {
 	var pngBytes, jpegBytes bytes.Buffer
 	require.NoError(t, png.Encode(&pngBytes, src))
 	require.NoError(t, jpeg.Encode(&jpegBytes, src, &jpeg.Options{Quality: 90}))
-	webpBytes, webpType, err := encodeResizedImage(src)
+	webpBytes, webpType, err := encodeWebPImage(src)
 	require.NoError(t, err)
 	require.Less(t, len(webpBytes), pngBytes.Len())
 
@@ -614,9 +721,9 @@ func TestResizeImageWithColor_SmallSourceNeedingDownscaleStillEncodes(t *testing
 	require.LessOrEqual(t, in.Len(), thumbPassthroughMaxBytes)
 
 	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/jpeg", 32)
-	require.Equal(t, "image/webp", contentType)
+	require.Equal(t, "image/jpeg", contentType)
 	assert.NotNil(t, avgColor)
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, 32, decoded.Bounds().Dx())
 	assert.Equal(t, 32, decoded.Bounds().Dy())
@@ -634,7 +741,7 @@ func TestResizeImageWithColor_SmallSourceTheCacheCannotStoreStillEncodes(t *test
 	require.Empty(t, thumbCacheExtension("application/octet-stream", in.Bytes()))
 
 	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "application/octet-stream", 128)
-	assert.Equal(t, "image/webp", contentType)
+	assert.Equal(t, "image/jpeg", contentType)
 	assert.NotNil(t, avgColor)
 	assert.Less(t, len(resized), in.Len())
 }
@@ -645,7 +752,7 @@ func TestHandleMediaImage_SmallSourceThatFitsIsCachedInItsOwnFormat(t *testing.T
 	// Not parallel: installs process-wide thumbnail cache pointer.
 	cache := &mediaThumbCache{
 		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -766,7 +873,7 @@ func TestDecodeResizableImage(t *testing.T) {
 	require.NoError(t, png.Encode(&pngBytes, src))
 	var jpegBytes bytes.Buffer
 	require.NoError(t, jpeg.Encode(&jpegBytes, src, nil))
-	webpBytes, _, err := encodeResizedImage(src)
+	webpBytes, _, err := encodeWebPImage(src)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -1020,15 +1127,15 @@ func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs:       fs,
+		dir:      filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
 	// A high-entropy source larger than the snapped tier (256), so the handler
-	// both downscales it and re-encodes to a smaller WebP than the source PNG.
+	// both downscales it and re-encodes to a smaller JPEG than the source PNG.
 	const dim = 300
 	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
 	for y := range dim {
@@ -1054,20 +1161,20 @@ func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blob.Bytes()},
 		}, nil)
 
-	// First request: loads the original, resizes to a 256px WebP, caches it.
+	// First request: loads the original, resizes to a 256px JPEG, caches it.
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, "image/webp", resp.ContentType)
+	assert.Equal(t, "image/jpeg", resp.ContentType)
 	assert.Equal(t, "property:image-boxart", resp.TypeTag)
 	firstData, err := base64.StdEncoding.DecodeString(resp.Data)
 	require.NoError(t, err)
-	decoded, err := webp.Decode(bytes.NewReader(firstData))
+	decoded, err := jpeg.Decode(bytes.NewReader(firstData))
 	require.NoError(t, err)
 	assert.Equal(t, 256, decoded.Bounds().Dx(), "downscaled to the snapped tier")
-	assert.Less(t, len(firstData), blob.Len(), "resized webp is smaller than the source png")
+	assert.Less(t, len(firstData), blob.Len(), "resized jpeg is smaller than the source png")
 
 	// Second request: the pre-semaphore fast path must serve it from the disk
 	// thumb cache and the resolved-type memo without touching the database. A
@@ -1096,7 +1203,7 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 	// Not parallel: installs process-wide thumbnail cache pointer.
 	cache := &mediaThumbCache{
 		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -1139,9 +1246,9 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 func TestHandleMediaImage_LocalPathCacheWriteFailureFallsBackInline(t *testing.T) {
 	// Not parallel: installs process-wide thumbnail cache pointer.
 	cache := &mediaThumbCache{
-		fs:            afero.NewReadOnlyFs(afero.NewMemMapFs()),
-		dir:           filepath.Join(string(filepath.Separator), "cache", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs:       afero.NewReadOnlyFs(afero.NewMemMapFs()),
+		dir:      filepath.Join(string(filepath.Separator), "cache", mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -2008,4 +2115,39 @@ func TestHandleMediaImage_OversizedBlobReturnsClientError(t *testing.T) {
 	require.ErrorAs(t, err, &clientErr)
 	assert.Contains(t, err.Error(), "image blob too large")
 	mockDB.AssertExpectations(t)
+}
+
+// The reaper counts what a file takes on disk, which for a small thumbnail is
+// a whole cluster, not its few bytes.
+func TestThumbFileDiskBytes_CountsAllocationNotLength(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "thumb.webp")
+	require.NoError(t, os.WriteFile(path, []byte("tiny"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, thumbFileDiskBytes(info), info.Size())
+
+	memInfo, err := afero.NewMemMapFs().Stat(".")
+	require.NoError(t, err)
+	assert.Equal(t, memInfo.Size(), thumbFileDiskBytes(memInfo), "without a block count the size stands in")
+}
+
+// PNG covers decode through Wuffs, and a PNG it rejects still gets
+// image/png's verdict.
+func TestDecodeResizableImage_PNGUsesWuffs(t *testing.T) {
+	t.Parallel()
+
+	var valid bytes.Buffer
+	require.NoError(t, png.Encode(&valid, noisyTestImage(16)))
+	img, err := decodeResizableImage(valid.Bytes(), "image/png")
+	require.NoError(t, err)
+	if _, wuffsErr := wuffspng.Decode(valid.Bytes()); !errors.Is(wuffsErr, wuffspng.ErrUnavailable) {
+		assert.IsType(t, &image.RGBA{}, img, "decoded by Wuffs")
+	}
+
+	corrupt := bytes.Clone(valid.Bytes())
+	corrupt[len(corrupt)-20] ^= 0xff
+	_, err = decodeResizableImage(corrupt, "image/png")
+	require.Error(t, err, "both decoders reject a corrupt PNG")
 }

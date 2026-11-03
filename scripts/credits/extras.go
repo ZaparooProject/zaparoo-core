@@ -148,6 +148,24 @@ func extras(root string, modules map[string]*linkedModule) ([]extraComponent, er
 		files: []extraFile{{name: "LICENSE", text: miniaudio}},
 	})
 
+	wuffsMIT, err := read("pkg/helpers/wuffspng/LICENSE-MIT")
+	if err != nil {
+		return nil, err
+	}
+	wuffsApache, err := read("pkg/helpers/wuffspng/LICENSE-APACHE")
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, extraComponent{
+		component: credits.Component{
+			Name: "Wuffs", Version: "0.4.0-alpha.12", URL: "https://github.com/google/wuffs",
+			License: "Apache-2.0 OR MIT",
+			Note: "Its PNG decoder is vendored in pkg/helpers/wuffspng from release/c/wuffs-v0.4.c at " +
+				"https://github.com/google/wuffs/tree/7f70dda95c77b10c087c0908790837b5e9c15713.",
+		},
+		files: []extraFile{{name: "LICENSE-APACHE", text: wuffsApache}, {name: "LICENSE-MIT", text: wuffsMIT}},
+	})
+
 	vdf, err := read("internal/vdfbinary/LICENSE")
 	if err != nil {
 		return nil, err
