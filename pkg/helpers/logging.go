@@ -154,6 +154,7 @@ func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
 		{DataDir(pl), crashdump.CurrentFile, false},
 		{DataDir(pl), crashdump.PreviousFile, false},
 		{pl.Settings().LogDir, config.StderrFile, true},
+		{pl.Settings().LogDir, config.StderrPreviousFile, true},
 	} {
 		if capture.dir == "" {
 			continue

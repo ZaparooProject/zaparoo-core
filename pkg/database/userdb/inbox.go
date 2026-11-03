@@ -20,6 +20,8 @@
 package userdb
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
@@ -37,4 +39,10 @@ func (db *UserDB) DeleteInboxMessage(id int64) error {
 
 func (db *UserDB) DeleteAllInboxMessages() (int64, error) {
 	return sqlDeleteAllInboxMessages(db.ctx, db.sql.Load())
+}
+
+// PruneInboxMessages deletes messages created before olderThan ago, and all
+// but the newest keep of the rest.
+func (db *UserDB) PruneInboxMessages(olderThan time.Duration, keep int) (int64, error) {
+	return sqlPruneInboxMessages(db.ctx, db.sql.Load(), time.Now().Add(-olderThan), keep)
 }

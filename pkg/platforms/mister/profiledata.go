@@ -22,6 +22,7 @@
 package mister
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -451,13 +452,18 @@ func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
 
 // writeNameFile labels the profile pool directory with the profile's
 // display name so the UUID directories are decodable by a human browsing
-// the storage outside Zaparoo. Best-effort.
+// the storage outside Zaparoo. Best-effort. Reconcile runs on every mount
+// table change, so a label that is already correct is left alone.
 func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.ProfileRef) {
 	if ref.Name == "" {
 		return
 	}
 	path := filepath.Join(profileDir, profileNameFile)
-	if err := pathutil.WriteFileAtomic(d.fs, path, []byte(ref.Name+"\n"), 0o644); err != nil {
+	content := []byte(ref.Name + "\n")
+	if existing, err := afero.ReadFile(d.fs, path); err == nil && bytes.Equal(existing, content) {
+		return
+	}
+	if err := pathutil.WriteFileAtomic(d.fs, path, content, 0o644); err != nil {
 		log.Warn().Err(err).Str("path", path).
 			Msg("profiles: failed to write profile name file")
 	}

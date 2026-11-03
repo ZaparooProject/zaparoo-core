@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -381,6 +382,61 @@ func TestInbox_Limit_Integration(t *testing.T) {
 	messages, err := userDB.GetInboxMessages()
 	require.NoError(t, err)
 	assert.Len(t, messages, 100, "Should return at most 100 messages due to LIMIT")
+}
+
+func TestInbox_Prune_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	for i := range 5 {
+		_, err := userDB.AddInboxMessage(&database.InboxMessage{
+			Title:     "Stale",
+			CreatedAt: now.Add(-100*24*time.Hour - time.Duration(i)*time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	for i := range 12 {
+		_, err := userDB.AddInboxMessage(&database.InboxMessage{
+			Title:     fmt.Sprintf("Recent %02d", i),
+			CreatedAt: now.Add(-time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	// A categorized message refreshed today survives even though it was
+	// first raised long ago.
+	_, err := userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Ongoing", Category: "ongoing", CreatedAt: now.Add(-200 * 24 * time.Hour),
+	})
+	require.NoError(t, err)
+	_, err = userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Ongoing", Category: "ongoing", CreatedAt: now,
+	})
+	require.NoError(t, err)
+
+	deleted, err := userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8), deleted, "5 stale plus the 3 oldest recent messages past the cap")
+
+	messages, err := userDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 10)
+	titles := make([]string, 0, len(messages))
+	for _, m := range messages {
+		titles = append(titles, m.Title)
+	}
+	assert.Contains(t, titles, "Ongoing")
+	assert.Contains(t, titles, "Recent 00")
+	assert.Contains(t, titles, "Recent 08")
+	assert.NotContains(t, titles, "Recent 09")
+	assert.NotContains(t, titles, "Stale")
+
+	deleted, err = userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
 }
 
 func TestInbox_CategoryUpsert_Integration(t *testing.T) {

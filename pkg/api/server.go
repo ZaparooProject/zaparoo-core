@@ -2288,7 +2288,7 @@ func StartWithListener(
 	encGateway.StartCleanup(st.GetContext())
 
 	// LastSeen tracker batches paired-client activity in memory and
-	// flushes to Clients.LastSeenAt every 30 seconds. A final flush runs
+	// flushes to Clients.LastSeenAt every few minutes. A final flush runs
 	// on graceful shutdown via StartFlushLoop's ctx.Done() branch.
 	lastSeenTracker := apimiddleware.NewLastSeenTracker(db.UserDB)
 	lastSeenDone := lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)

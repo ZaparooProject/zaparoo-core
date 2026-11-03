@@ -107,6 +107,22 @@ func TestReadLogBundle_AppendsStderr(t *testing.T) {
 	assert.Contains(t, string(data), config.StderrFile, "the appended section should be labelled")
 }
 
+func TestReadLogBundle_AppendsRotatedStderr(t *testing.T) {
+	t.Parallel()
+
+	pl := bundlePlatform(t, "{\"msg\":\"one\"}\n", "=== service start ===\n")
+	logDir := pl.Settings().LogDir
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, config.StderrPreviousFile),
+		[]byte("panic: before rotation\n"), 0o600))
+
+	data, err := helpers.ReadLogBundle(pl, 0)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), config.StderrPreviousFile)
+	assert.Contains(t, string(data), "panic: before rotation",
+		"a crash rotated out at the last start still has to travel with the log")
+}
+
 func TestReadLogBundle_OmitsEmptyStderr(t *testing.T) {
 	t.Parallel()
 

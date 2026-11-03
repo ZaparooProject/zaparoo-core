@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -67,6 +68,35 @@ func TestPatchAmigaCD32PreservesOtherBytes(t *testing.T) {
 	files, err := afero.ReadDir(fs, ".")
 	require.NoError(t, err)
 	require.Len(t, files, 1)
+}
+
+type countingCD32RenameFS struct {
+	afero.Fs
+	renames *int
+}
+
+func (c countingCD32RenameFS) Rename(oldname, newname string) error {
+	*c.renames++
+	return c.Fs.Rename(oldname, newname) //nolint:wrapcheck // test passthrough
+}
+
+func TestPatchAmigaCD32SkipsUnchangedDisc(t *testing.T) {
+	t.Parallel()
+	renames := 0
+	fs := countingCD32RenameFS{Fs: afero.NewMemMapFs(), renames: &renames}
+	path := "AmigaCD32.cfg"
+	require.NoError(t, afero.WriteFile(fs, path, bytes.Repeat([]byte{0x5a}, 4096), 0o640))
+
+	_, err := patchAmigaCD32(fs, path, "/media/fat/games/test.chd")
+	require.NoError(t, err)
+	require.Equal(t, 1, renames)
+	result, err := patchAmigaCD32(fs, path, "/media/fat/games/test.chd")
+	require.NoError(t, err)
+	assert.Contains(t, result, "<setname>AmigaCD32</setname>")
+	assert.Equal(t, 1, renames, "relaunching the same disc must not rewrite the config")
+	_, err = patchAmigaCD32(fs, path, "/media/fat/games/other.chd")
+	require.NoError(t, err)
+	assert.Equal(t, 2, renames)
 }
 
 func TestPatchAmigaCD32RejectsInvalidFile(t *testing.T) {
@@ -122,6 +152,33 @@ func writeAmigaVisionTestInstall(t *testing.T, path, game string, withImage bool
 		err = os.WriteFile(filepath.Join(path, "AmigaVision.hdf"), []byte("test"), 0o600)
 		require.NoError(t, err)
 	}
+}
+
+func TestHookAmiga_LeavesMatchingBootFileAlone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionTestInstall(t, validPath, "Valid Game", true)
+	bootPath := filepath.Join(validPath, "shared", "ags_boot")
+	require.NoError(t, os.WriteFile(bootPath, []byte("Valid Game\n"), 0o600))
+	old := time.Unix(1_000_000, 0)
+	require.NoError(t, os.Chtimes(bootPath, old, old))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{IndexRoot: []string{filepath.Join(root, "games")}},
+	})
+	require.NoError(t, err)
+
+	override, err := hookAmiga(cfg, nil, filepath.Join(validPath, "listings", "games.txt", "Valid Game"))
+	require.NoError(t, err)
+	assert.Equal(t, "\t<setname>Amiga</setname>\n", override)
+	info, err := os.Stat(bootPath)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(old), "an unchanged boot file must not be rewritten")
+
+	_, err = hookAmiga(cfg, nil, filepath.Join(validPath, "listings", "games.txt", "Valid Game"))
+	require.NoError(t, err)
 }
 
 func TestHookAmiga_WritesBootFileForVirtualBrowsePath(t *testing.T) {

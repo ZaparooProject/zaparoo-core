@@ -68,6 +68,37 @@ func TestProfileNameAtomicReplacement(t *testing.T) {
 	assert.Equal(t, "Replacement\n", string(got))
 }
 
+type countingRenameFS struct {
+	afero.Fs
+	renames *int
+}
+
+func (c countingRenameFS) Rename(oldname, newname string) error {
+	*c.renames++
+	return c.Fs.Rename(oldname, newname) //nolint:wrapcheck // test passthrough
+}
+
+// Reconcile runs on every mount table change, so an unchanged label must not
+// be rewritten each time.
+func TestProfileNameSkipsUnchangedLabel(t *testing.T) {
+	t.Parallel()
+	renames := 0
+	fs := countingRenameFS{Fs: afero.NewMemMapFs(), renames: &renames}
+	dir := "profile"
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	d := profileDataManager{fs: fs}
+
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Player"})
+	require.Equal(t, 1, renames)
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Player"})
+	assert.Equal(t, 1, renames, "an unchanged label must not be rewritten")
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Renamed"})
+	assert.Equal(t, 2, renames)
+	got, err := afero.ReadFile(fs, filepath.Join(dir, profileNameFile))
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed\n", string(got))
+}
+
 // fakeMounter simulates the kernel mount table: binds resolve their source
 // through the current table (so a bind of a path inside a cifs mount
 // carries the cifs identity, exactly like the kernel), and unmount removes

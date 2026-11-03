@@ -29,6 +29,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1599,6 +1600,39 @@ func TestStart_CapturesServiceStderr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "=== service start ",
 		"each start should be stamped so repeated crashes stay distinguishable")
+}
+
+func TestOpenServiceStderr_RotatesOversizedCapture(t *testing.T) {
+	t.Parallel()
+
+	logDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir})
+	svc := &Service{pl: pl}
+	current := filepath.Join(logDir, config.StderrFile)
+	previous := filepath.Join(logDir, config.StderrPreviousFile)
+
+	small := []byte("panic: small\n")
+	require.NoError(t, os.WriteFile(current, small, 0o600))
+	f, err := svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.NoFileExists(t, previous, "a small capture keeps appending")
+
+	big := bytes.Repeat([]byte("x"), maxServiceStderrSize+1)
+	require.NoError(t, os.WriteFile(current, big, 0o600))
+	require.NoError(t, os.WriteFile(previous, []byte("older"), 0o600))
+	f, err = svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	rotated, err := os.ReadFile(previous) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Equal(t, big, rotated, "the oversized capture replaces the previous generation")
+	fresh, err := os.ReadFile(current) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Less(t, len(fresh), 100)
+	assert.Contains(t, string(fresh), "=== service start ")
 }
 
 func TestOpenServiceStderr_RefusesEmptyLogDir(t *testing.T) {
