@@ -275,6 +275,9 @@ When multiple results match, they get filtered and scored:
 6. File type priority based on launcher extension order
 7. Quality tie-breaking: numeric suffix penalty, path depth, character density, filename length
 
+`media.search` with `groupBy: "title"` picks each title's default version with the same
+filtering, steps 2 to 7, over the title's media that match the search.
+
 ### Container promotion
 
 Every file in a disc folder shares one title: `Game.cue` and its `Game (Track 01).bin`

@@ -36,6 +36,8 @@ type SearchParams struct {
 	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
 	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 	Query         *string   `json:"query"`
+	GroupBy       *string   `json:"groupBy,omitempty" validate:"omitempty,oneof=title"`
+	TitleID       *int64    `json:"titleId,omitempty" validate:"omitempty,gt=0"`
 	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 

@@ -944,6 +944,10 @@ type SearchResultWithCursor struct {
 	HasCover            bool
 }
 
+// SlugSearchLimit is the most media rows a slug search returns, which bounds
+// the candidates a title launch chooses from.
+const SlugSearchLimit = 50
+
 // TagTypeDisplayPriority orders the eligible disambiguation tag types from most to least
 // important for display. Clients render the emitted disambiguating tags left-to-right and
 // truncate when space runs out, so the most decisive distinctions come first: variant
@@ -1123,8 +1127,19 @@ type SearchFilters struct {
 	Systems    []systemdefs.System   `json:"systems,omitempty"`
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 	Limit      int                   `json:"limit"`
+	// TitleDBID limits the search to the media rows of one title. Query,
+	// Systems and Letter are ignored when it is set.
+	TitleDBID int64 `json:"-"`
 	// ExcludeHidden is set only for discovery, never explicit launch resolution.
 	ExcludeHidden bool `json:"-"`
+}
+
+// SearchTitleGroup is one title of a grouped media search: the title's sort
+// position and every present media row of it that matched the filters.
+type SearchTitleGroup struct {
+	SortValue string
+	Rows      []SearchResultWithCursor
+	TitleDBID int64
 }
 
 // ScanStagedTag is one tag derived from a scanned file, staged for set-based
@@ -1497,6 +1512,7 @@ type MediaDBI interface {
 
 	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
+	SearchMediaTitleGroups(ctx context.Context, filters *SearchFilters) ([]SearchTitleGroup, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)

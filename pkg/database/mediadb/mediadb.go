@@ -86,7 +86,7 @@ const (
 )
 
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
-const defaultSlugSearchLimit = 50
+const defaultSlugSearchLimit = database.SlugSearchLimit
 
 // maxSelectiveInvalidationSystems avoids huge per-commit IN clauses and debug
 // logs during full-library indexing while preserving selective reindexing wins.
@@ -3598,6 +3598,12 @@ func (db *MediaDB) SearchMediaWithFilters(
 		return nil, visibilityErr
 	}
 	filters = &scoped
+
+	if filters.TitleDBID != 0 {
+		return sqlSearchMediaByTitleDBIDsSorted(
+			ctx, db.sql.Load(), []int64{filters.TitleDBID}, filters.PathPrefix, filters.Tags,
+			nil, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit)
+	}
 
 	qWords := strings.Fields(filters.Query)
 	if len(qWords) == 0 || len(filters.Systems) == 0 {

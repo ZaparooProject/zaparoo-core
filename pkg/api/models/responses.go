@@ -59,18 +59,24 @@ type UIStateResponse struct {
 }
 
 type SearchResultMedia struct {
-	RelPath   *string `json:"relativePath,omitempty"`
-	System    System  `json:"system"`
-	Name      string  `json:"name"`
-	Path      string  `json:"path"`
-	ZapScript string  `json:"zapScript"`
+	RelPath *string `json:"relativePath,omitempty"`
+	// VersionCount is set by a search grouped by title: how many versions of
+	// the title matched, across the whole search rather than this page.
+	VersionCount *int   `json:"versionCount,omitempty"`
+	System       System `json:"system"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	ZapScript    string `json:"zapScript"`
 	// CoverColor is the cover thumbnail's average colour as "#rrggbb", for a
 	// placeholder while the image loads. Omitted until a thumbnail was built.
 	CoverColor         string             `json:"coverColor,omitempty"`
 	Tags               []database.TagInfo `json:"tags"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
-	HasCover           bool               `json:"hasCover"`
+	// TitleID identifies the media's title for a titleId search, which lists
+	// its versions. Valid until the next media index.
+	TitleID  int64 `json:"titleId,omitempty"`
+	HasCover bool  `json:"hasCover"`
 }
 
 type PaginationInfo struct {

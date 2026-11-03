@@ -663,6 +663,16 @@ An object:
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
 | sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, or `filename-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| groupBy    | string   | No       | `title` returns one result per title and system instead of one per media file. See [Grouped search](#grouped-search). Only `name-asc` and `name-desc` sorts apply. Cannot be combined with `titleId`. |
+| titleId    | number   | No       | List the versions of one title: its media matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. |
+
+#### Grouped search
+
+With `groupBy: "title"`, each result stands for one title on one system. Regional releases, revisions and copies in other folders are one title. The same name on two systems gives two results. `maxResults`, `hasNextPage` and cursors count titles rather than files.
+
+A title's media that launch through one container (a `.cue` and its `.bin` tracks, or a folder of discs) count as one version, the file the container launches.
+
+Each result carries the fields of the version Core prefers for the title, chosen the same way a title launch chooses: main releases before variants, then your preferred regions and languages, then the launcher's file type order. Its `zapScript` launches that version. `versionCount` is the number of versions matching the search's tags, `pathPrefix` and visibility, across the whole search rather than the page. A search with the result's `titleId` lists the same versions.
 
 #### Result
 
@@ -677,6 +687,8 @@ An object:
 | Key       | Type                     | Required | Description                                                                                                 |
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
 | mediaId   | number                   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests.                |
+| titleId   | number                   | No       | Opaque title ID for a `titleId` search listing this title's versions. Changes when media is re-indexed. |
+| versionCount | number                | No       | Grouped searches only. Number of versions of this title that match the search. |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
