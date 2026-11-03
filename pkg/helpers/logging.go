@@ -133,7 +133,8 @@ func LogWriter() io.Writer {
 }
 
 // ReadLogBundle includes persistent crash evidence and captured stderr with
-// the log. Crash files get budget first, then stderr, then routine logs.
+// the log. Crash files get budget first, then stderr (current and rotated),
+// then routine logs.
 // maxBytes of zero or less means no limit.
 func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
 	logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
@@ -145,21 +146,35 @@ func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
 
 	unlimited := maxBytes <= 0
 	remaining := maxBytes
+	logDir := pl.Settings().LogDir
+	// A rotated stderr capture holds whatever crashed before the last
+	// rotation, so the current one may only spend half the budget left when
+	// there is a rotated one to ship after it.
+	var rotatedStderr bool
+	if logDir != "" {
+		info, statErr := os.Stat(filepath.Join(logDir, config.StderrPreviousFile))
+		rotatedStderr = statErr == nil && info.Size() > 0
+	}
 	var captures bytes.Buffer
 	for _, capture := range []struct {
-		dir  string
-		name string
-		tail bool
+		dir   string
+		name  string
+		tail  bool
+		share bool
 	}{
-		{DataDir(pl), crashdump.CurrentFile, false},
-		{DataDir(pl), crashdump.PreviousFile, false},
-		{pl.Settings().LogDir, config.StderrFile, true},
+		{DataDir(pl), crashdump.CurrentFile, false, false},
+		{DataDir(pl), crashdump.PreviousFile, false, false},
+		{logDir, config.StderrFile, true, rotatedStderr},
+		{logDir, config.StderrPreviousFile, true, false},
 	} {
 		if capture.dir == "" {
 			continue
 		}
 		label := fmt.Sprintf("\n===== %s =====\n", capture.name)
 		budget := remaining - len(label) - 1 // reserve the log's final newline
+		if capture.share {
+			budget /= 2
+		}
 		if !unlimited && budget <= 0 {
 			continue
 		}

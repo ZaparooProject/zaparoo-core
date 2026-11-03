@@ -698,6 +698,18 @@ func (m *MockUserDBI) DeleteInboxMessage(id int64) error {
 	return nil
 }
 
+func (m *MockUserDBI) PruneInboxMessages(olderThan time.Duration, keep int) (int64, error) {
+	args := m.Called(olderThan, keep)
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock UserDBI prune inbox messages failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
 func (m *MockUserDBI) DeleteAllInboxMessages() (int64, error) {
 	args := m.Called()
 	rowsDeleted, ok := args.Get(0).(int64)

@@ -253,6 +253,11 @@ type Mapping struct {
 	Enabled  bool  `json:"enabled"`
 }
 
+// InboxMessageLimit is how many inbox messages are listed, and so how many
+// are worth keeping: older ones can never be seen. GetInboxMessages applies
+// the same limit.
+const InboxMessageLimit = 100
+
 type InboxMessage struct {
 	CreatedAt time.Time `json:"createdAt"`
 	Title     string    `json:"title"`
@@ -1326,6 +1331,7 @@ type UserDBI interface {
 	GetInboxMessages() ([]InboxMessage, error)
 	DeleteInboxMessage(id int64) error
 	DeleteAllInboxMessages() (int64, error)
+	PruneInboxMessages(olderThan time.Duration, keep int) (int64, error)
 	CreateClient(c *Client) error
 	GetClientByToken(authToken string) (*Client, error)
 	ListClients() ([]Client, error)

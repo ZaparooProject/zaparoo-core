@@ -104,6 +104,10 @@ func prepareCDTVConfig(fs afero.Fs, configPath, mediaPath string) error {
 
 	filename := make([]byte, minimigCDPathSize)
 	copy(filename, mediaPath)
+	// Relaunching the same disc leaves the config as it is.
+	if bytes.Equal(data[minimigCDTVPathOffset:minimigCDTVPathOffset+minimigCDPathSize], filename) {
+		return nil
+	}
 	// Change only the CDTV filename, retaining the user's BIOS, chipset, and
 	// display configuration. Zero padding clears any previous longer filename.
 	n, err := file.WriteAt(filename, minimigCDTVPathOffset)

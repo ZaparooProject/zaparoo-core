@@ -952,17 +952,16 @@ func startServiceWithOptions(
 	// single task: started together they queued on its one write lock along
 	// with token history, and the losers failed with "database is locked".
 	// Pre-warming goes last because it first waits on the network.
+	//
+	// Retention then repeats daily so devices that stay up for weeks don't
+	// grow their history and inbox tables until the next restart.
 	idleSched.Schedule(
 		st.GetContext(), "userdb-maintenance",
-		5*time.Second, 300*time.Second,
+		userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
 		func(ctx context.Context) {
 			runInSequence(ctx,
-				func(context.Context) {
-					pruneExpiredZapLinkHosts(db)
-				},
 				func(ctx context.Context) {
-					remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
-					cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
+					runUserDBRetention(ctx, cfg, pl, db)
 				},
 				func(ctx context.Context) {
 					zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
@@ -970,6 +969,7 @@ func startServiceWithOptions(
 			)
 		},
 	)
+	startUserDBRetentionScheduler(st.GetContext(), cfg, pl, db, idleSched, backgroundWG)
 	playSyncRequests := make(chan struct{}, 1)
 	requestPlaySync := func() {
 		select {

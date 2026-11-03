@@ -76,6 +76,60 @@ func TestSchemaProvenance_LeavesTheDatabaseAlone(t *testing.T) {
 	assert.Equal(t, before, fileState(t, dbPath))
 }
 
+// Every open records provenance, so an unchanged version must not be written
+// again; only a different build moves UpdatedAt.
+func TestRecordSchemaProvenance_OnlyWritesWhenTheVersionChanges(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), config.UserDbFile)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, sqlMigrateUp(db, dbPath))
+
+	_, err = db.ExecContext(t.Context(), `
+		create table SchemaMetaWrites (N integer not null);
+		insert into SchemaMetaWrites values (0);
+		create trigger count_schema_meta_writes after update on SchemaMeta
+		begin update SchemaMetaWrites set N = N + 1; end;`)
+	require.NoError(t, err)
+	writes := func() int {
+		var n int
+		require.NoError(t, db.QueryRowContext(t.Context(), `select N from SchemaMetaWrites`).Scan(&n))
+		return n
+	}
+
+	const sentinel = int64(1)
+	readMeta := func() (string, int64) {
+		var value string
+		var updatedAt int64
+		require.NoError(t, db.QueryRowContext(t.Context(),
+			`select Value, UpdatedAt from SchemaMeta where Key = ?`, schemaMetaAppVersion,
+		).Scan(&value, &updatedAt))
+		return value, updatedAt
+	}
+
+	_, err = db.ExecContext(t.Context(), `update SchemaMeta set UpdatedAt = ? where Key = ?`,
+		sentinel, schemaMetaAppVersion)
+	require.NoError(t, err)
+	before := writes()
+	recordSchemaProvenance(t.Context(), db)
+	value, updatedAt := readMeta()
+	assert.Equal(t, config.AppVersion, value)
+	assert.Equal(t, sentinel, updatedAt, "an unchanged version must not be rewritten")
+	assert.Equal(t, before, writes(), "an unchanged version must not update the row at all")
+
+	_, err = db.ExecContext(t.Context(), `update SchemaMeta set Value = ? where Key = ?`,
+		"0.0.0-older", schemaMetaAppVersion)
+	require.NoError(t, err)
+	before = writes()
+	recordSchemaProvenance(t.Context(), db)
+	value, updatedAt = readMeta()
+	assert.Equal(t, config.AppVersion, value)
+	assert.NotEqual(t, sentinel, updatedAt, "a different build has to be recorded")
+	assert.Equal(t, before+1, writes())
+}
+
 // Every database written before this was recorded answers this way, which is
 // every database in the field on the day it ships. The caller has to read well
 // without an answer, so it must say "unknown" rather than guess.
