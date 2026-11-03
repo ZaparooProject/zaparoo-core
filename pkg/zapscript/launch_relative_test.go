@@ -20,7 +20,9 @@
 package zapscript
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -32,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -469,4 +472,40 @@ func TestFindFile_VirtualEntries(t *testing.T) {
 
 	_, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join(root, "Amiga", "Games", "Not Listed"))
 	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+// lockedRootFs refuses to stat anything below one root, as an unreadable
+// mount does.
+type lockedRootFs struct {
+	afero.Fs
+	locked string
+}
+
+func (f lockedRootFs) Stat(name string) (os.FileInfo, error) {
+	if strings.HasPrefix(name, f.locked) {
+		return nil, os.ErrPermission
+	}
+	return f.Fs.Stat(name) //nolint:wrapcheck // test double passes the error through
+}
+
+// An unreadable games folder does not hide an entry another folder's launcher
+// vouches for. With nothing vouched for, the read error is still reported.
+func TestFindFile_VirtualEntryWinsOverUnreadableRoot(t *testing.T) {
+	t.Parallel()
+
+	locked := launchTestAbsPath("locked")
+	root := launchTestAbsPath("games")
+	game := filepath.Join(root, "Amiga", "Games", "Turrican (OCS)[en]")
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{locked, root})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{virtualListLauncher(game)})
+	fs := lockedRootFs{Fs: helpers.NewMemoryFS().Fs, locked: locked}
+
+	found, err := findFile(fs, mockPlatform, cfg, nil, filepath.Join("Amiga", "Games", "Turrican (OCS)[en]"))
+	require.NoError(t, err)
+	assert.Equal(t, game, found)
+
+	_, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join("Amiga", "Games", "Not Listed"))
+	require.ErrorIs(t, err, os.ErrPermission)
 }

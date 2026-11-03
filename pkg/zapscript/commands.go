@@ -483,10 +483,6 @@ func findFile(
 			missing = append(missing, candidate)
 		}
 	}
-	if firstNonNotExistErr != nil {
-		return "", firstNonNotExistErr
-	}
-
 	if len(missing) > 0 {
 		all := launchers.Get(pl, cfg)
 		for _, candidate := range missing {
@@ -497,6 +493,9 @@ func findFile(
 				}
 			}
 		}
+	}
+	if firstNonNotExistErr != nil {
+		return "", firstNonNotExistErr
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)

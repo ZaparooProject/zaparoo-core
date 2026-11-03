@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -524,6 +525,8 @@ func TestAmigaLauncher_VirtualPathExistsRequiresListedGame(t *testing.T) {
 	noListing := filepath.Join(t.TempDir(), "games", "Amiga")
 	require.NoError(t, os.MkdirAll(noListing, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(noListing, "AmigaVision.hdf"), []byte("test"), 0o600))
+	noBootImage := filepath.Join(t.TempDir(), "games", "Amiga")
+	writeAmigaListings(t, noBootImage, "Turrican (OCS)[en]")
 
 	p := NewPlatform()
 	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
@@ -533,6 +536,8 @@ func TestAmigaLauncher_VirtualPathExistsRequiresListedGame(t *testing.T) {
 	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Games", "Not Listed")))
 	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Demos", "Turrican (OCS)[en]")))
 	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(noListing, "Games", "Turrican (OCS)[en]")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(noBootImage, "Games", "Turrican (OCS)[en]")),
+		"a listing without a boot image is not an install that can boot the game")
 	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Turrican (OCS)[en]")))
 }
 
@@ -580,17 +585,22 @@ func TestLaunchSystem_AmigaWithoutAmigaVisionLoadsCore(t *testing.T) {
 	amigaVisionMGLPaths = []string{filepath.Join(t.TempDir(), "Amiga.mgl")}
 	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
 
-	var launched bool
-	p := &Platform{launchBasicFile: func(string) error {
-		launched = true
-		return nil
-	}}
+	var launchedMGL bool
+	var loaded string
+	p := &Platform{
+		launchBasicFile: func(string) error {
+			launchedMGL = true
+			return nil
+		},
+		launchSystemCore: func(_ *config.Instance, _ platforms.Platform, system *cores.Core) error {
+			loaded = system.ID
+			return nil
+		},
+	}
 
-	// Off-device the core load fails; what matters is that the MGL route
-	// was not taken.
-	err := p.LaunchSystem(&config.Instance{}, systemdefs.SystemAmiga)
-	require.Error(t, err)
-	assert.False(t, launched)
+	require.NoError(t, p.LaunchSystem(&config.Instance{}, systemdefs.SystemAmiga))
+	assert.False(t, launchedMGL)
+	assert.Equal(t, systemdefs.SystemAmiga, loaded)
 }
 
 func writeAmigaVisionInstall(t *testing.T, path, game string) {

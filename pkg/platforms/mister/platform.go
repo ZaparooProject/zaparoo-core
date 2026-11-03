@@ -125,6 +125,7 @@ type Platform struct {
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
 	launchCoreAtRBF     func(cores.RBFInfo) error
+	launchSystemCore    func(*config.Instance, platforms.Platform, *cores.Core) error
 	closeConsole        func() error
 	coreLoads           coreLoadStops
 	lastLauncher        platforms.Launcher
@@ -138,11 +139,12 @@ type Platform struct {
 
 func NewPlatform() *Platform {
 	p := &Platform{
-		platformMu:      syncutil.Mutex{},
-		fs:              afero.NewOsFs(),
-		launchShortCore: mgls.LaunchShortCore,
-		launchBasicFile: mgls.LaunchBasicFile,
-		launchCoreAtRBF: mgls.LaunchCoreAtRBF,
+		platformMu:       syncutil.Mutex{},
+		fs:               afero.NewOsFs(),
+		launchShortCore:  mgls.LaunchShortCore,
+		launchBasicFile:  mgls.LaunchBasicFile,
+		launchCoreAtRBF:  mgls.LaunchCoreAtRBF,
+		launchSystemCore: mgls.LaunchCore,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
@@ -948,7 +950,11 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		}
 	}
 
-	if err = mgls.LaunchCore(cfg, p, system); err != nil {
+	launchCore := p.launchSystemCore
+	if launchCore == nil {
+		launchCore = mgls.LaunchCore
+	}
+	if err = launchCore(cfg, p, system); err != nil {
 		// The system's own core is not installed, but an alternate
 		// implementation of it may be. Launchers are already ordered by
 		// preference, so the first core-backed one that resolves is the one a
@@ -1496,10 +1502,11 @@ func amigaVisionListingContainsGame(installPath, listingName, gameName string) b
 }
 
 // amigaVisionVirtualEntryExists reports whether a Games or Demos path names a
-// game in the listing beside it, which is how the scanner built the path.
+// game in the listing of an install with a boot image, which is how the
+// scanner built the path.
 func amigaVisionVirtualEntryExists(path string) bool {
 	virtualPath, ok := amigaVisionVirtualPathParts(path)
-	if !ok {
+	if !ok || !hasAmigaVisionImage(virtualPath.InstallPath) {
 		return false
 	}
 	return amigaVisionListingContainsGame(virtualPath.InstallPath, virtualPath.ListingName, virtualPath.GameName)
