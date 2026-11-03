@@ -1729,7 +1729,7 @@ func loadRawMediaImageSinglePath(
 		return loadRawMediaImageRow(env, row, prefs, maxBytes, probe)
 	}
 
-	raw, err := loadRawMediaImageDirectory(env, system, ref.Path, prefs, maxBytes, probe)
+	raw, directoryFileBacked, err := loadRawMediaImageDirectory(env, system, ref.Path, prefs, maxBytes, probe)
 	if raw != nil || err != nil {
 		return raw, err
 	}
@@ -1738,11 +1738,14 @@ func loadRawMediaImageSinglePath(
 	if err != nil {
 		return nil, err
 	}
-	return loadRawMediaImageRow(env, row, prefs, maxBytes, probe)
+	raw, err = loadRawMediaImageRow(env, row, prefs, maxBytes, probe)
+	return raw, markFileBackedCandidatesChecked(err, directoryFileBacked)
 }
 
 // loadRawMediaImageDirectory loads a directory's own artwork. It returns nil
-// and no error when the directory has none of the requested types.
+// and no error when the directory has none of the requested types, and
+// reports whether that lookup checked file-backed candidates, so the caller's
+// final no-image result stays out of the no-image cache.
 func loadRawMediaImageDirectory(
 	env *requests.RequestEnv,
 	system database.System,
@@ -1750,14 +1753,14 @@ func loadRawMediaImageDirectory(
 	prefs []string,
 	maxBytes int64,
 	probe mediaImageCacheProbe,
-) (*rawMediaImage, error) {
+) (raw *rawMediaImage, fileBackedCandidatesChecked bool, err error) {
 	db := env.Database.MediaDB
 	directoryProps, err := db.GetDirectoryProperties(env.Context, system.DBID, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get directory properties: %w", err)
+		return nil, false, fmt.Errorf("failed to get directory properties: %w", err)
 	}
 	if len(directoryProps) == 0 {
-		return nil, nil //nolint:nilnil // no directory artwork
+		return nil, false, nil
 	}
 	directoryRow := &database.MediaFullRow{
 		Path: path,
@@ -1765,13 +1768,26 @@ func loadRawMediaImageDirectory(
 			DBID: system.DBID, SystemID: system.SystemID, Name: system.Name,
 		},
 	}
-	raw, err := selectRawMediaImageFromSources(
+	raw, err = selectRawMediaImageFromSources(
 		env.Context, afero.NewOsFs(), env.Platform, db, directoryRow, nil, directoryProps, prefs, maxBytes, probe,
 	)
-	if notFound, _ := mediaImageNotFound(err); notFound {
-		return nil, nil //nolint:nilnil // no directory artwork of a requested type
+	if notFound, fileBacked := mediaImageNotFound(err); notFound {
+		return nil, fileBacked, nil
 	}
-	return raw, err
+	return raw, false, err
+}
+
+// markFileBackedCandidatesChecked marks a no-image result as having checked
+// file-backed candidates when an earlier lookup for the same request did.
+func markFileBackedCandidatesChecked(err error, checked bool) error {
+	if !checked {
+		return err
+	}
+	var noImage *mediaImageNotFoundError
+	if errors.As(err, &noImage) {
+		noImage.fileBackedCandidatesChecked = true
+	}
+	return err
 }
 
 // loadRawMediaImageDirectoryRef loads the image for a directory entry and the
@@ -1796,7 +1812,7 @@ func loadRawMediaImageDirectoryRef(
 	}
 	row := resolved[0].Row
 
-	raw, err := loadRawMediaImageDirectory(env, row.System, ref.Path, prefs, maxBytes, probe)
+	raw, directoryFileBacked, err := loadRawMediaImageDirectory(env, row.System, ref.Path, prefs, maxBytes, probe)
 	if raw != nil || err != nil {
 		return raw, err
 	}
@@ -1806,7 +1822,8 @@ func loadRawMediaImageDirectoryRef(
 	if !notFound {
 		return raw, err
 	}
-	notFoundErr := err
+	fileBacked = fileBacked || directoryFileBacked
+	notFoundErr := markFileBackedCandidatesChecked(err, fileBacked)
 
 	pathRow, pathErr := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
 	if pathErr != nil {

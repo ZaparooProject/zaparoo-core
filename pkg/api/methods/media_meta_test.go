@@ -869,3 +869,58 @@ func TestHandleMediaMeta_BatchDirectoryMediaRef(t *testing.T) {
 	assert.Contains(t, *resp.Items[1].Error, "media not in path")
 	mockDB.AssertExpectations(t)
 }
+
+func TestHandleMediaMeta_DirectoryPropertiesDBError(t *testing.T) {
+	t.Parallel()
+
+	f := newDirectoryMediaRefFixture()
+	expectMediaIDMeta := func(mockDB *testhelpers.MockMediaDBI) {
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.TagInfo{}, nil)
+		mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.TagInfo{}, nil)
+		mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.MediaProperty{}, nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+	}
+
+	for name, params := range map[string]string{
+		"single": string(f.request(f.disc2, "")),
+		"batch":  fmt.Sprintf(`{"items":[%s]}`, f.request(f.disc2, "")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mockDB := testhelpers.NewMockMediaDBI()
+			expectMediaIDMeta(mockDB)
+			_, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, params))
+			require.ErrorIs(t, err, assert.AnError)
+		})
+	}
+
+	t.Run("path", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc1.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+		mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, f.disc1.DBID).Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, f.disc1.Title.DBID).
+			Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+
+		_, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, fmt.Sprintf(
+			`{"system":%q,"path":%q}`, f.system.SystemID, f.directoryPath)))
+		require.ErrorIs(t, err, assert.AnError)
+	})
+}

@@ -1315,6 +1315,111 @@ func TestHandleMediaImage_DirectoryMediaRef(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
+	t.Run("missing folder artwork file is not cached as no image", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		missing := filepath.Join(t.TempDir(), "gone.png")
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: missing}}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		ref, _, err := parseMediaImageRequest(request)
+		require.NoError(t, err)
+		cached, _ := mediaImageNoImages.get(mediaImageNoImageRequestKey(ref, imagePrefs(nil, ref.ImageTypes)))
+		assert.False(t, cached, "a restored folder artwork file must be found on the next request")
+		mockDB.AssertExpectations(t)
+	})
+
+	// expectDisc2Miss sets up a request for disc 2 that finds no folder, disc
+	// or title artwork, so the path fallback runs next.
+	expectDisc2Miss := func(mockDB *testhelpers.MockMediaDBI) {
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+	}
+
+	t.Run("path resolving to the given disc is not loaded twice", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc2.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc2.DBID).Return(f.disc2, nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		mockDB.AssertNumberOfCalls(t, "GetMediaProperties", 1)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("no artwork on either disc names the given disc", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc1.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		assert.Equal(t, f.disc2.Path, noImage.path)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("database error in the path fallback is returned, not cached", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), assert.AnError)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+		var noImage *mediaImageNotFoundError
+		require.NotErrorAs(t, err, &noImage)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("database errors are returned", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{f.disc2.DBID}).
+			Return(map[int64]database.MediaFullRow(nil), assert.AnError)
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+
+		mockDB = testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+		_, err = HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+		mockDB.AssertNotCalled(t, "GetMediaProperties", mock.Anything, mock.Anything)
+	})
+
 	t.Run("media outside the path is rejected", func(t *testing.T) {
 		mediaImageNoImages.clear()
 		other := makeMediaFullRow(40, 41)
@@ -1327,6 +1432,37 @@ func TestHandleMediaImage_DirectoryMediaRef(t *testing.T) {
 		mockDB.AssertNotCalled(t, "GetDirectoryProperties", mock.Anything, mock.Anything, mock.Anything)
 		mockDB.AssertExpectations(t)
 	})
+}
+
+// A path request whose folder artwork file is missing keeps its final
+// no-image result out of the no-image cache, so the restored file is found.
+func TestHandleMediaImage_DirectoryPathMissingFolderArtworkNotCached(t *testing.T) {
+	// Not parallel: resets process-wide no-image cache.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	f := newDirectoryMediaRefFixture()
+	missing := filepath.Join(t.TempDir(), "gone.png")
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+		Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: missing}}, nil)
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+		Return(&f.disc1.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+		Return([]database.MediaProperty{}, nil)
+
+	request := json.RawMessage(fmt.Sprintf(`{"system":%q,"path":%q}`, f.system.SystemID, f.directoryPath))
+	_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+	var noImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &noImage)
+	cached, _ := mediaImageNoImages.get(mediaImageNoImagePathKey(f.system.SystemID, f.directoryPath, defaultImageTypes))
+	assert.False(t, cached)
+	mockDB.AssertExpectations(t)
 }
 
 // The resolved-thumbnail memo keys a directory media ref by its disc, so
