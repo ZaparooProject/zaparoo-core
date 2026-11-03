@@ -212,18 +212,10 @@ func encodeSearchCursor(lastID int64, visibility searchVisibility) (string, erro
 func encodeSortedSearchCursor(
 	result *database.SearchResultWithCursor, sortOrder string, visibility searchVisibility,
 ) (string, error) {
-	sortValue := result.SortValue
-	if sortValue == "" {
-		if strings.HasPrefix(sortOrder, "filename-") {
-			sortValue = result.Path
-		} else {
-			sortValue = result.Name
-		}
-	}
 	return encodeMediaSearchCursorData(cursorData{
 		Version:             sortedSearchCursorVersion,
 		Sort:                sortOrder,
-		SortValue:           sortValue,
+		SortValue:           result.SortValue,
 		LastID:              result.MediaID,
 		IncludeHidden:       &visibility.IncludeHidden,
 		PreferencesRevision: visibility.Revision,

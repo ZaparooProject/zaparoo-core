@@ -863,7 +863,7 @@ func browseSystemRootContents(
 			return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
 		}
 		files, next, pageErr := paginateFiles(
-			files, remaining, totalFiles, totalDirs, sortOrder, scope,
+			files, remaining, totalFiles, totalDirs, scope,
 		)
 		if pageErr != nil {
 			return nil, pageErr
@@ -899,7 +899,7 @@ func browseSystemRootContents(
 		}
 	}
 	files, next, pageErr := paginateFiles(
-		files, maxResults, totalFiles, totalDirs, sortOrder, scope,
+		files, maxResults, totalFiles, totalDirs, scope,
 	)
 	if pageErr != nil {
 		return nil, pageErr
@@ -1390,7 +1390,7 @@ func browsePathPrefix(
 		if err != nil {
 			return nil, fmt.Errorf("error browsing files: %w", err)
 		}
-		files, next, encErr := paginateFiles(files, remaining, totalFiles, totalDirs, sort, nil)
+		files, next, encErr := paginateFiles(files, remaining, totalFiles, totalDirs, nil)
 		if encErr != nil {
 			return nil, encErr
 		}
@@ -1430,7 +1430,7 @@ func browsePathPrefix(
 		}
 	}
 
-	files, next, encErr := paginateFiles(files, maxResults, totalFiles, totalDirs, sort, nil)
+	files, next, encErr := paginateFiles(files, maxResults, totalFiles, totalDirs, nil)
 	if encErr != nil {
 		return nil, encErr
 	}
@@ -1517,11 +1517,15 @@ func browseTotalFileCount(
 
 // paginateFiles trims an over-fetched file slice to the page limit and, when
 // more rows remain, encodes the keyset cursor for the next page.
+//
+// SortValue is encoded as-is, even when empty: it is selected from the same
+// expression the cursor condition compares, and rows indexed before SortName
+// existed really do sort as the empty string. Substituting the display name
+// would seek past every one of them (#1733).
 func paginateFiles(
 	files []database.SearchResultWithCursor,
 	limit int,
 	totalFiles, totalDirs int,
-	sort string,
 	scope *browseCursorScope,
 ) (page []database.SearchResultWithCursor, next *string, err error) {
 	if len(files) <= limit {
@@ -1529,17 +1533,8 @@ func paginateFiles(
 	}
 	files = files[:limit]
 	last := files[len(files)-1]
-	sortValue := last.SortValue
-	if sortValue == "" {
-		switch sort {
-		case "filename-asc", "filename-desc":
-			sortValue = last.Path
-		default:
-			sortValue = last.Name
-		}
-	}
 	encoded, encErr := encodeFileCursor(
-		last.MediaID, sortValue, last.SortMode, totalFiles, totalDirs, scope,
+		last.MediaID, last.SortValue, last.SortMode, totalFiles, totalDirs, scope,
 	)
 	if encErr != nil {
 		return nil, nil, fmt.Errorf("failed to encode cursor: %w", encErr)
@@ -1592,7 +1587,7 @@ func browseVirtual(
 		}
 	}
 
-	files, next, encErr := paginateFiles(files, maxResults, totalFiles, 0, sort, nil)
+	files, next, encErr := paginateFiles(files, maxResults, totalFiles, 0, nil)
 	if encErr != nil {
 		return nil, encErr
 	}
