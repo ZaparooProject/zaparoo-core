@@ -206,7 +206,8 @@ func refuseLockedDeck(ctx context.Context, tx *sql.Tx, deckID string) error {
 // UpsertRemoteDeck inserts or fully replaces a deck that arrived from
 // elsewhere (a ZapLink fetch or a sync pull), keeping the stored DBID and
 // creation time, and whether the copy is saved and by whom, which only
-// SetDeckSaved changes. The deck's ID is normalized first. A cached copy of somebody
+// SetDeckSaved changes on a stored deck; an inserted deck takes them from
+// deck. The deck's ID is normalized first. A cached copy of somebody
 // else's deck never overwrites an owned deck of the same ID (ErrDeckOwned),
 // so a tap on your own deck's ZapLink opens the editable local copy. A deck
 // fails with ErrDeckItemLimit past DeckMaxItems.
@@ -255,10 +256,11 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 			if _, execErr := tx.ExecContext(ctx, `
 				update Decks set Name = ?, Description = ?, Owned = ?, Metadata = ?, SourceURL = ?,
 					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?,
-					Saved = case when ? then 0 else Saved end
+					Saved = case when ? then 0 else Saved end,
+					OwnerName = case when ? then '' else OwnerName end
 				where DBID = ?;`,
 				deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-				deck.PlaylistID, now, now, deck.Owned, existing.DBID); execErr != nil {
+				deck.PlaylistID, now, now, deck.Owned, deck.Owned, existing.DBID); execErr != nil {
 				return false, fmt.Errorf("failed to update remote deck: %w", execErr)
 			}
 		}
@@ -277,7 +279,8 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 // nothing the source serves can name, replace or hide another deck. At most
 // maxCopies fetched decks are kept besides saved ones; past that the unsaved
 // ones fetched longest ago are removed and reported, so their tags can be
-// cleared.
+// cleared. A new copy is stored saved when deck.Saved is set, so storing a
+// saved deck never makes room by removing another copy.
 func (db *UserDB) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (database.FetchedDeckResult, error) {
 	var result database.FetchedDeckResult
 	if db.sql.Load() == nil {
@@ -575,16 +578,26 @@ func sqlCountOwnedDecks(ctx context.Context, q deckQueryable) (int, error) {
 func sqlInsertDeck(ctx context.Context, q deckQueryable, deck *database.Deck) error {
 	err := q.QueryRowContext(ctx, `
 		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-			PlaylistID)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			PlaylistID, Saved, OwnerName)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		returning DBID;`,
 		deck.DeckID, deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID,
+		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID, deck.Saved && !deck.Owned,
+		ownerNameUnlessOwned(deck),
 	).Scan(&deck.DBID)
 	if err != nil {
 		return fmt.Errorf("failed to insert deck: %w", err)
 	}
 	return nil
+}
+
+// ownerNameUnlessOwned is the owner name a deck is inserted with: only a
+// saved copy of somebody else's deck has one.
+func ownerNameUnlessOwned(deck *database.Deck) string {
+	if deck.Owned || !deck.Saved {
+		return ""
+	}
+	return deck.OwnerName
 }
 
 // sqlSaveDeckItems makes items the item list of the deck whose rows are

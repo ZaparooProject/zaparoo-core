@@ -718,4 +718,26 @@ func TestHandleDecks_SavedDeckFields(t *testing.T) {
 		assert.Equal(t, "sam", deck.OwnedBy)
 		assert.Equal(t, link, deck.SourceURL)
 	}
+
+	encoded, err := json.Marshal(list)
+	require.NoError(t, err)
+	var wire struct {
+		Decks []map[string]json.RawMessage `json:"decks"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &wire))
+	require.Len(t, wire.Decks, 2)
+	for _, fields := range wire.Decks {
+		var owned bool
+		require.NoError(t, json.Unmarshal(fields["owned"], &owned))
+		require.Contains(t, fields, "saved")
+		if owned {
+			assert.JSONEq(t, `false`, string(fields["saved"]))
+			assert.NotContains(t, fields, "ownedBy")
+			assert.NotContains(t, fields, "sourceUrl")
+			continue
+		}
+		assert.JSONEq(t, `true`, string(fields["saved"]))
+		assert.JSONEq(t, `"sam"`, string(fields["ownedBy"]))
+		assert.JSONEq(t, `"`+link+`"`, string(fields["sourceUrl"]))
+	}
 }

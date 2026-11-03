@@ -700,6 +700,7 @@ func TestUpsertRemoteDeckOwnedNeverStaysSaved(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.Owned)
 	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
 }
 
 // The saved deck migration adds columns with defaults, so decks kept before
@@ -724,4 +725,42 @@ func TestDeckSavedMigrationKeepsDecks(t *testing.T) {
 	assert.Len(t, got.Items, 1)
 	assert.False(t, got.Saved)
 	assert.Empty(t, got.OwnerName)
+}
+
+// A deck stored saved from the start is not counted among the copies kept
+// from links, so storing it when they are full removes none of them.
+func TestUpsertFetchedDeckStoresASavedDeckWithoutEvicting(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	for i := range 2 {
+		_, err := db.UpsertFetchedDeck(&database.Deck{
+			Name: "Theirs", SourceURL: fmt.Sprintf("https://decks.example/%d", i),
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}, 2)
+		require.NoError(t, err)
+	}
+
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Saved", SourceURL: "https://zpr.au/d$lhm6n9t8", Saved: true, OwnerName: "sam",
+		Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 2)
+	require.NoError(t, err)
+	assert.Empty(t, result.Evicted)
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "sam", got.OwnerName)
+	all, err := db.ListDecks()
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+
+	// Created decks are owned, and an owned deck is never stored saved.
+	require.NoError(t, db.CreateDeck(&database.Deck{
+		DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true, Saved: true, OwnerName: "x",
+	}))
+	mine, err := db.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err)
+	assert.False(t, mine.Saved)
+	assert.Empty(t, mine.OwnerName)
 }

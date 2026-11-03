@@ -65,6 +65,7 @@ type fakeOnline struct {
 	mu            syncutil.Mutex
 	resolveStatus int
 	savedStatus   int
+	deckPullFail  int
 	limitFirst    int
 	stateRevision int64
 	stateFloor    int64
@@ -149,6 +150,12 @@ func (f *fakeOnline) saveDecks(items ...fakeSavedDeck) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.savedDecks = items
+}
+
+func (f *fakeOnline) failDeckPull(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckPullFail = status
 }
 
 func (f *fakeOnline) failSavedDecks(status int) {
@@ -831,6 +838,10 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
+	if f.deckPullFail != 0 {
+		writeFakeError(w, f.deckPullFail, "internal_error")
+		return
+	}
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 500 {

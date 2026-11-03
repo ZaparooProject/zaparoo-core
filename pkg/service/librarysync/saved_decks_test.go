@@ -176,6 +176,9 @@ func TestSyncDecks_SavedDecksArriveFollowTheListAndLeave(t *testing.T) {
 	kept = f.fetchedDecks(t)
 	assert.Equal(t, "sam-renamed", kept[savedOnlineLink].OwnerName)
 	assert.Equal(t, online.DeckID, kept[savedOnlineLink].DeckID)
+	assert.Equal(t, []models.DecksChangedNotification{
+		{DeckID: online.DeckID, Action: models.DecksChangedUpdated},
+	}, f.changes(t), "clients hear about the new owner name")
 
 	// A deck the list stops naming is removed.
 	f.online.saveDecks(fakeSavedDeck{DeckID: "x", Link: savedOtherLink})
@@ -283,4 +286,19 @@ func TestSyncDecks_SavedDecksStayOutOfOwnedSync(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, mine.Owned)
 	assert.False(t, mine.Saved)
+}
+
+// The saved pass runs apart from the owned one, so an account whose owned
+// decks fail to sync still has its saved decks kept.
+func TestSyncDecks_OwnedFailureDoesNotHoldUpSavedDecks(t *testing.T) {
+	f := newSavedDeckFixture(t)
+	f.fetcher.served[savedOnlineLink] = servedDeck("Online deck", "**a")
+	f.online.saveDecks(fakeSavedDeck{DeckID: "lhm6n9t8", Link: savedOnlineLink})
+	f.online.failDeckPull(http.StatusInternalServerError)
+
+	result, err := f.svc.SyncDecks(f.ctx)
+	require.Error(t, err, "the owned failure is still reported")
+	assert.False(t, librarysync.IsIdleError(err))
+	assert.Equal(t, 1, result.Saved)
+	assert.True(t, f.fetchedDecks(t)[savedOnlineLink].Saved)
 }

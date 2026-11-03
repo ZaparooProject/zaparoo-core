@@ -137,9 +137,9 @@ func (s *Service) syncSavedDecks(ctx context.Context) (DecksResult, error) {
 				return result, fmt.Errorf("mark deck %s saved: %w", deck.DeckID, saveErr)
 			}
 			if !deck.Saved {
-				s.notifyDecks(deck.DeckID, models.DecksChangedUpdated)
 				result.Saved++
 			}
+			s.notifyDecks(deck.DeckID, models.DecksChangedUpdated)
 			continue
 		}
 		if s.fetchDeck == nil {
@@ -166,11 +166,13 @@ func (s *Service) keepSavedDeck(ctx context.Context, item *savedDeckLink, owner 
 	if strings.TrimSpace(arg.Name) == "" && item.Name != nil {
 		arg.Name = *item.Name
 	}
-	deckID, err := decks.StoreFetchedDeck(s.db, item.Link, &arg)
+	deckID, err := decks.StoreSavedDeck(s.db, item.Link, &arg, owner)
 	if err != nil {
 		log.Warn().Err(err).Str("link", item.Link).Msg("failed to keep saved deck; trying again next pass")
 		return false
 	}
+	// A copy of the link kept by a tap since the list was read is updated
+	// rather than inserted, and marked saved here.
 	if err := s.db.UserDB.SetDeckSaved(deckID, true, owner); err != nil {
 		log.Warn().Err(err).Str("deck", deckID).Msg("failed to mark deck saved; trying again next pass")
 		return false
