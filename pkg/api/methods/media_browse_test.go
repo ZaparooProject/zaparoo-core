@@ -2474,9 +2474,9 @@ func TestHandleMediaBrowse_Pagination(t *testing.T) {
 		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
-			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/Alpha.sfc", MediaID: 1},
-			{SystemID: "snes", Name: "Beta", Path: "/roms/SNES/Beta.sfc", MediaID: 2},
-			{SystemID: "snes", Name: "Gamma", Path: "/roms/SNES/Gamma.sfc", MediaID: 3},
+			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/Alpha.sfc", MediaID: 1, SortValue: "Alpha"},
+			{SystemID: "snes", Name: "Beta", Path: "/roms/SNES/Beta.sfc", MediaID: 2, SortValue: "Beta"},
+			{SystemID: "snes", Name: "Gamma", Path: "/roms/SNES/Gamma.sfc", MediaID: 3, SortValue: "Gamma"},
 		}, nil)
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
 		Return(5, nil)
@@ -2879,9 +2879,9 @@ func TestHandleMediaBrowse_FilenameSortCursor(t *testing.T) {
 		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
-			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/alpha.sfc", MediaID: 1},
-			{SystemID: "snes", Name: "Beta", Path: "/roms/SNES/beta.sfc", MediaID: 2},
-			{SystemID: "snes", Name: "Gamma", Path: "/roms/SNES/gamma.sfc", MediaID: 3},
+			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/alpha.sfc", MediaID: 1, SortValue: "alpha.sfc"},
+			{SystemID: "snes", Name: "Beta", Path: "/roms/SNES/beta.sfc", MediaID: 2, SortValue: "beta.sfc"},
+			{SystemID: "snes", Name: "Gamma", Path: "/roms/SNES/gamma.sfc", MediaID: 3, SortValue: "gamma.sfc"},
 		}, nil)
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
 		Return(5, nil)
@@ -2905,12 +2905,12 @@ func TestHandleMediaBrowse_FilenameSortCursor(t *testing.T) {
 	require.NotNil(t, browseResults.Pagination)
 	require.NotNil(t, browseResults.Pagination.NextCursor)
 
-	// Filename sort cursor should encode Path, not Name
+	// Filename sort cursor carries the row's filename keyset, not its Name
 	cursor, decErr := decodeBrowseCursor(*browseResults.Pagination.NextCursor)
 	require.NoError(t, decErr)
 	require.NotNil(t, cursor)
 	assert.Equal(t, int64(2), cursor.LastID)
-	assert.Equal(t, "/roms/SNES/beta.sfc", cursor.SortValue)
+	assert.Equal(t, "beta.sfc", cursor.SortValue)
 
 	mockMediaDB.AssertExpectations(t)
 }
@@ -2932,9 +2932,9 @@ func TestHandleMediaBrowse_NameDescSort(t *testing.T) {
 		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
-			{SystemID: "snes", Name: "Zelda", Path: "/roms/SNES/Zelda.sfc", MediaID: 3},
-			{SystemID: "snes", Name: "Mario", Path: "/roms/SNES/Mario.sfc", MediaID: 2},
-			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/Alpha.sfc", MediaID: 1},
+			{SystemID: "snes", Name: "Zelda", Path: "/roms/SNES/Zelda.sfc", MediaID: 3, SortValue: "Zelda"},
+			{SystemID: "snes", Name: "Mario", Path: "/roms/SNES/Mario.sfc", MediaID: 2, SortValue: "Mario"},
+			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/Alpha.sfc", MediaID: 1, SortValue: "Alpha"},
 		}, nil)
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
 		Return(5, nil)
@@ -2958,7 +2958,7 @@ func TestHandleMediaBrowse_NameDescSort(t *testing.T) {
 	require.NotNil(t, browseResults.Pagination)
 	require.NotNil(t, browseResults.Pagination.NextCursor)
 
-	// Name-desc sort cursor should encode Name (not Path)
+	// Name-desc sort cursor should encode the title sort value (not Path)
 	cursor, decErr := decodeBrowseCursor(*browseResults.Pagination.NextCursor)
 	require.NoError(t, decErr)
 	require.NotNil(t, cursor)
