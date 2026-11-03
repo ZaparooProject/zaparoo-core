@@ -666,6 +666,15 @@ func TestHandlePlaylist_PickerGotoThenPlayLaunchesOnce(t *testing.T) {
 	t.Parallel()
 	env := setupRunFailedEnv(t)
 	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
+	// The goto's launch writes history last, while it still holds the launch
+	// reservation. Holding it there keeps the launch under way when the play
+	// arrives, as a launch loading real media would be; if it finished first,
+	// the play would rightly retry the failed item and launch again.
+	release := make(chan time.Time)
+	env.userDB.ExpectedCalls = nil
+	env.userDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	env.userDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
+	env.userDB.On("AddHistory", mock.Anything).WaitUntil(release).Return(nil).Maybe()
 
 	stored := failingPlaylist("deck://abc", 0)
 	env.svc.State.SetActivePlaylist(stored)
@@ -674,6 +683,7 @@ func TestHandlePlaylist_PickerGotoThenPlayLaunchesOnce(t *testing.T) {
 	moved := playlists.Goto(*env.svc.State.GetActivePlaylist(), 2)
 	handlePlaylist(env.svc, moved, env.player)
 	handlePlaylist(env.svc, playlists.Play(*moved), env.player)
+	close(release)
 	env.svc.BackgroundWG.Wait()
 
 	failed := env.runFailed(t)

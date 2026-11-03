@@ -853,12 +853,12 @@ func checkAndHealBrowseCache(
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
-func invalidateInterruptedScrapeThumbnails(mediaDB database.MediaDBI, systems []string) {
+func invalidateInterruptedScrapeThumbnails(systems []string) {
 	if len(systems) == 0 {
-		methods.WipeMediaThumbCache(mediaDB)
+		methods.InvalidateMediaThumbMemo()
 		return
 	}
-	methods.WipeMediaThumbCacheSystems(mediaDB, systems)
+	methods.InvalidateMediaThumbMemoSystems(systems)
 }
 
 // markInterruptedScrapeTags flags the tag cache of an interrupted scrape's
@@ -902,7 +902,7 @@ func checkAndResumeScraping(
 			return
 		}
 		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
-		invalidateInterruptedScrapeThumbnails(db.MediaDB, nil)
+		invalidateInterruptedScrapeThumbnails(nil)
 		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, nil, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark incomplete scraping as failed")
@@ -927,7 +927,7 @@ func checkAndResumeScraping(
 
 	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok && len(operation.Pending) == 0 && operation.Version == 0 {
 		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
-		invalidateInterruptedScrapeThumbnails(db.MediaDB, operation.Systems)
+		invalidateInterruptedScrapeThumbnails(operation.Systems)
 		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark unavailable scraper as failed")
@@ -937,7 +937,7 @@ func checkAndResumeScraping(
 
 	// Writes commit incrementally, so artwork may have changed before the
 	// interruption even though no terminal invalidation ran.
-	invalidateInterruptedScrapeThumbnails(db.MediaDB, operation.Systems)
+	invalidateInterruptedScrapeThumbnails(operation.Systems)
 	markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, false)
 	// A scrape queued behind an index waits here as pending and has not run
 	// yet; only one that was running when Core stopped was interrupted.

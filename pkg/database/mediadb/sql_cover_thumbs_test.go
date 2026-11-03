@@ -31,6 +31,9 @@ import (
 // mediaCoverThumbsVersion is 20260930120000_media_cover_thumbs.
 const mediaCoverThumbsVersion = 20260930120000
 
+// mediaCoverThumbSourceVersion is 20261103120000_media_cover_thumb_source.
+const mediaCoverThumbSourceVersion = 20261103120000
+
 func TestMediaCoverThumbsMigrationUpgrade(t *testing.T) {
 	db, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -47,7 +50,31 @@ func TestMediaCoverThumbsMigrationUpgrade(t *testing.T) {
 	var media int
 	require.NoError(t, sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&media))
 	assert.Equal(t, 1, media, "existing media rows survive the upgrade")
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", nil))
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:/a.png", nil))
+}
+
+// A record written before source keys existed survives the upgrade with its
+// colour and no key, so media.image re-records it rather than trusting it.
+func TestMediaCoverThumbSourceMigrationKeepsExistingRecords(t *testing.T) {
+	db, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	sqlDB := db.sql.Load()
+
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", mediaCoverThumbSourceVersion-1))
+	_, err := sqlDB.ExecContext(ctx,
+		"INSERT INTO MediaCoverThumbs (MediaDBID, TypeTag, Color) VALUES (1, 'property:image-boxart', 1193046)")
+	require.NoError(t, err)
+
+	require.NoError(t, goose.Up(sqlDB, "migrations"))
+	thumb, found, err := db.GetMediaCoverThumb(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Empty(t, thumb.SourceKey)
+	require.NotNil(t, thumb.Color)
+	assert.Equal(t, uint32(0x123456), *thumb.Color)
 }
 
 func TestMediaCoverThumbsRoundTrip(t *testing.T) {
@@ -72,40 +99,40 @@ func TestMediaCoverThumbsRoundTrip(t *testing.T) {
 	assert.False(t, found, "no record yet")
 
 	color := uint32(0x123456)
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", &color))
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:/b.png", &color))
 	thumb, found, err := db.GetMediaCoverThumb(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "NES", thumb.SystemID)
 	assert.Equal(t, "roms/mario.nes", thumb.Path)
 	assert.Equal(t, "property:image-boxart", thumb.TypeTag)
+	assert.Equal(t, "f:1:2:/b.png", thumb.SourceKey)
+	assert.Equal(t, "/b.png", thumb.SourcePath, "the title-level boxart is the only one")
 	require.NotNil(t, thumb.Color)
 	assert.Equal(t, color, *thumb.Color)
 	assert.ElementsMatch(t, []string{"property:image-boxart", "property:image-screenshot"}, thumb.AvailableTypeTags)
 
-	// Same type without a colour keeps the known colour; a new type drops it.
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", nil))
+	// Same type and source without a colour keeps the known colour; a new
+	// source or a new type drops it.
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:/b.png", nil))
 	colors, err := db.GetMediaCoverColors(ctx, []int64{1, 2, 99})
 	require.NoError(t, err)
 	assert.Equal(t, map[int64]uint32{1: color}, colors)
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-screenshot", nil))
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:3:/b.png", nil))
+	colors, err = db.GetMediaCoverColors(ctx, []int64{1})
+	require.NoError(t, err)
+	assert.Empty(t, colors)
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:3:/b.png", &color))
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-screenshot", "f:1:3:/b.png", nil))
 	colors, err = db.GetMediaCoverColors(ctx, []int64{1})
 	require.NoError(t, err)
 	assert.Empty(t, colors)
 
 	// A missing media row is ignored rather than violating the foreign key.
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 99, "property:image-boxart", &color))
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 99, "property:image-boxart", "", &color))
 	_, found, err = db.GetMediaCoverThumb(ctx, 99)
 	require.NoError(t, err)
 	assert.False(t, found)
-
-	other := uint32(0xabcdef)
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", &color))
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 2, "property:image-boxart", &other))
-	require.NoError(t, db.ClearMediaCoverThumbsForSystems(ctx, []string{"SNES"}))
-	colors, err = db.GetMediaCoverColors(ctx, []int64{1, 2})
-	require.NoError(t, err)
-	assert.Equal(t, map[int64]uint32{1: color}, colors)
 
 	// Deleting media cascades to its record.
 	_, err = sqlDB.ExecContext(ctx, "DELETE FROM Media WHERE DBID = 1")
@@ -113,9 +140,39 @@ func TestMediaCoverThumbsRoundTrip(t *testing.T) {
 	var remaining int
 	require.NoError(t, sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaCoverThumbs").Scan(&remaining))
 	assert.Zero(t, remaining)
+}
 
-	require.NoError(t, db.PutMediaCoverThumb(ctx, 2, "property:image-boxart", &other))
-	require.NoError(t, db.ClearMediaCoverThumbs(ctx))
-	require.NoError(t, sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaCoverThumbs").Scan(&remaining))
-	assert.Zero(t, remaining)
+// SourcePath follows media.image's order: the media row's own property beats
+// its title's, and a blob-backed winner has no path.
+func TestGetMediaCoverThumb_SourcePathPrecedence(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	sqlDB := db.sql.Load()
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text) VALUES (1, 2, '/title.png');
+		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES (1, 2, '');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:/title.png", nil))
+
+	thumb, found, err := db.GetMediaCoverThumb(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "/title.png", thumb.SourcePath, "an empty media-level property falls through to the title")
+
+	_, err = sqlDB.ExecContext(ctx, "UPDATE MediaProperties SET Text = '/media.png' WHERE MediaDBID = 1")
+	require.NoError(t, err)
+	thumb, _, err = db.GetMediaCoverThumb(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "/media.png", thumb.SourcePath)
+
+	blobID, err := db.UpsertMediaBlob(ctx, "image/png", []byte("png"))
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, "UPDATE MediaProperties SET BlobDBID = ? WHERE MediaDBID = 1", blobID)
+	require.NoError(t, err)
+	thumb, _, err = db.GetMediaCoverThumb(ctx, 1)
+	require.NoError(t, err)
+	assert.Empty(t, thumb.SourcePath, "a blob-backed winner has no file to check")
 }
