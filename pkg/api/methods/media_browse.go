@@ -1934,8 +1934,9 @@ func preferLastPlayedDiscs(
 	}
 	for i := range preferred {
 		if index, ok := multiDisc[preferred[i].ChildDir]; ok {
-			// The folder's image is requested by its path, which serves the
-			// first disc's artwork when the launch target has none.
+			// The folder's image is requested by its path, alone or with the
+			// launch target's mediaId, and both serve the first disc's artwork
+			// when the launch target has none.
 			preferred[i].HasCover = preferred[i].HasCover || aliases[index].HasCover
 			aliases[index] = preferred[i]
 		}

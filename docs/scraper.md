@@ -228,6 +228,27 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
 
+### Media Subfolders
+
+Both the `gamelist.xml` filesystem fallback and `media-folder` search these subfolders of `<systemRootPath>/media/`, in order, for each image type. Folder names match case-insensitively, and each file is tried as `.png`, `.jpg`, `.jpeg`, then `.webp`. The list is `ArtworkDirCandidates` in `pkg/platforms/shared/esmedia/artwork.go`.
+
+| `media.image` type | Property | Subfolders searched |
+| :-- | :-- | :-- |
+| `image` | `property:image-image` | `image`, `images`, `miximages`, `custom` |
+| `boxart` | `property:image-boxart` | `boxart`, `boxart2d`, `box2d`, `boxart2dfront`, `box2dfront`, `cover`, `covers`, `boxarts`, `box`, `named_boxarts` |
+| `boxart3d` | `property:image-boxart3d` | `boxart3d`, `3dbox`, `3dboxes` |
+| `boxartside` | `property:image-boxartside` | `boxart2dside` |
+| `boxartback` | `property:image-boxartback` | `boxart2dback`, `backcover`, `backcovers` |
+| `screenshot` | `property:image-screenshot` | `screenshot`, `screenshots`, `snap`, `snaps`, `named_snaps` |
+| `thumbnail` | `property:image-thumbnail` | `thumbnail`, `thumbnails`, `box2dfront`, `boxart2dfront`, `supporttexture` |
+| `marquee` | `property:image-marquee` | `marquee`, `marquees` |
+| `wheel` | `property:image-wheel` | `wheel`, `wheels`, `logo`, `logos` |
+| `fanart` | `property:image-fanart` | `fanart`, `fanarts` |
+| `titleshot` | `property:image-titleshot` | `titleshot`, `titleshots`, `titlescreen`, `titlescreens`, `screenshottitle`, `title`, `titles`, `named_titles` |
+| `map` | `property:image-map` | `map`, `maps` |
+
+A directory's own `image` artwork is searched in `folders` and `folder` before the `image` subfolders above. Those two are only used for directories, never for a game file.
+
 ### Directory Entries
 
 Both `<folder>` entries and `<game>` entries whose `<path>` resolves to a directory are matched to the single media row that directory collapses to, using the same rule browse uses to show a disc folder as one game. A directory qualifies when it has no nested media and its direct contents are one file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive `MediaTitleDBID`. Supported shared-title disc extensions are `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title IDs or other extensions remain ambiguous.

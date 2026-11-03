@@ -21,12 +21,14 @@ package methods
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -107,10 +109,14 @@ func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
 				return nil, metaErr
 			}
 		}
+		directoryProps, metaErr := mediaMetaDirectoryProps(&env, params.Items[0], resolved[0].Row)
+		if metaErr != nil {
+			return nil, metaErr
+		}
 		return buildMediaMetaResponse(
 			&env, resolved[0].Row, zapScripts[resolved[0].Row.DBID],
 			mediaTags, titleTags[resolved[0].Row.Title.DBID],
-			mediaProps, titleProps[resolved[0].Row.Title.DBID],
+			mediaProps, titleProps[resolved[0].Row.Title.DBID], directoryProps,
 		), nil
 	}
 
@@ -133,10 +139,14 @@ func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
 				return nil, metaErr
 			}
 		}
+		directoryProps, metaErr := mediaMetaDirectoryProps(&env, params.Items[i], item.Row)
+		if metaErr != nil {
+			return nil, metaErr
+		}
 		response := buildMediaMetaResponse(
 			&env, item.Row, zapScripts[item.Row.DBID],
 			mediaTags, titleTags[item.Row.Title.DBID],
-			mediaProps, titleProps[item.Row.Title.DBID],
+			mediaProps, titleProps[item.Row.Title.DBID], directoryProps,
 		)
 		items[i].Media = &response.Media
 	}
@@ -248,10 +258,32 @@ func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media zapscripts: %w", err)
 	}
+	directoryProps, err := mediaMetaDirectoryProps(env, ref, row)
+	if err != nil {
+		return nil, err
+	}
 
 	return buildMediaMetaResponse(
-		env, row, zapScripts[row.DBID], mediaTags, titleTags, mediaProps, titleProps,
+		env, row, zapScripts[row.DBID], mediaTags, titleTags, mediaProps, titleProps, directoryProps,
 	), nil
+}
+
+// mediaMetaDirectoryProps returns the directory's own properties when ref
+// names a directory rather than the media row it resolved to, so the image
+// types media.image serves for that directory are listed.
+func mediaMetaDirectoryProps(
+	env *requests.RequestEnv,
+	ref mediaRefParam,
+	row *database.MediaFullRow,
+) ([]database.MediaProperty, error) {
+	if ref.Path == "" || pathutil.CanonicalMediaPath(row.Path) == pathutil.CanonicalMediaPath(ref.Path) {
+		return nil, nil
+	}
+	props, err := env.Database.MediaDB.GetDirectoryProperties(env.Context, row.System.DBID, ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get directory properties: %w", err)
+	}
+	return props, nil
 }
 
 func buildMediaMetaResponse(
@@ -262,6 +294,7 @@ func buildMediaMetaResponse(
 	titleTags []database.TagInfo,
 	mediaProps []database.MediaProperty,
 	titleProps []database.MediaProperty,
+	directoryProps []database.MediaProperty,
 ) models.MediaMetaResponse {
 	var secondarySlug *string
 	if row.Title.SecondarySlug.Valid {
@@ -289,7 +322,7 @@ func buildMediaMetaResponse(
 		Tags:                mediaTags,
 		Properties:          properties,
 		LauncherOverride:    launcherOverride,
-		AvailableImageTypes: availableImageTypes(mediaProps),
+		AvailableImageTypes: availableImageTypes(slices.Concat(mediaProps, directoryProps)),
 		Title: models.MediaMetaTitleResponse{
 			Slug:                row.Title.Slug,
 			SecondarySlug:       secondarySlug,

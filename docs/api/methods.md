@@ -860,9 +860,9 @@ Set `rootView` to `contents` with exactly one system to replace its filesystem r
 
 A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. Display names leave out set markers such as `(Disc 1)`; the disc number is reported in `tags` instead. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
 
-A directory that collapsed because it holds several disc images of one game is marked `multiDisc: true`. Its launch fields point at the disc most recently played from that folder, or at the first disc when none of them appears in the system's recent play history, and its `tags` carry that disc's number. Its `disambiguatingTags` omit the disc number, since the entry stands for the whole set. To offer the other discs, browse the entry's `path`. Only `media.browse` follows play history: `media.meta` and `media.image` resolve the folder's path to the first disc.
+A directory that collapsed because it holds several disc images of one game is marked `multiDisc: true`. Its launch fields point at the disc most recently played from that folder, or at the first disc when none of them appears in the system's recent play history, and its `tags` carry that disc's number. Its `disambiguatingTags` omit the disc number, since the entry stands for the whole set. To offer the other discs, browse the entry's `path`. Only `media.browse` reads play history: `media.meta` and `media.image` given the folder's path alone resolve it to the first disc.
 
-Request a `directory` entry's image from `media.image` with its `(system, path)`, not its `mediaId`. The path form returns the folder's own artwork first and falls back to the launch target's artwork; the `mediaId` form only ever returns the launch target's.
+Request a collapsed `directory` entry's image and metadata with its `mediaId`, `system`, and `path` together, so they describe the disc the entry launches. `media.image` then returns the folder's own artwork first, then the launch target's, then the first disc's; `media.meta` returns the launch target's metadata and also lists the folder's own image types. A plain directory has no `mediaId`; request its image with `(system, path)`. The `mediaId` form alone only ever returns the launch target's artwork.
 
 Plain directories may also have artwork imported by the `media-folder` scraper. This does not make them launchable or hide their children; it only sets `hasCover` and lets clients request the image with the directory's `(system, path)`.
 
@@ -2053,10 +2053,14 @@ An object:
 
 | Key    | Type   | Required | Description                         |
 | :----- | :----- | :------- | :---------------------------------- |
-| mediaId | number | No      | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| mediaId | number | No      | Opaque media database row ID from search, browse, or lookup. With `system` and `path`, the media a directory entry launches; see below. |
 | system | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
-| path   | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
-| items  | object[] | No     | Batch request items. Each item uses either `mediaId` or `system`/`path`. Maximum 100 items. Cannot be mixed with top-level media ref fields. |
+| path   | string | No       | Canonical indexed media path, or a directory path. Required when `mediaId` is omitted. |
+| items  | object[] | No     | Batch request items. Each item uses `mediaId`, `system`/`path`, or all three. Maximum 100 items. Cannot be mixed with top-level media ref fields. |
+
+A collapsed `directory` entry from `media.browse` is requested with its `mediaId`, `system`, and `path` together. The result describes that `mediaId`, which must be the path itself or a file directly inside it; otherwise the request fails with `media not in path`. Given a directory path alone, Core resolves it to the media it collapses to, which for a multi-disc folder is the first disc.
+
+When `path` names a directory, `media.availableImageTypes` also lists the image types of the directory's own artwork, which `media.image` serves for the same request ahead of the media's. That artwork is not included in `media.properties`.
 
 Single requests return the existing single `media` response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `media` or `error`, so one missing media row does not fail the whole batch.
 
@@ -2078,6 +2082,7 @@ Single requests return the existing single `media` response shape. Batch request
 | tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
 | properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
 | launcherOverride | string                            | No       | Launcher ID stored for this media row, mirrored from `property:launcher-override` in `properties`. When present, Core uses it for title, search, path, random, and history launches unless ZapScript includes an explicit `launcher` argument. |
+| availableImageTypes | string[]                       | No       | Image types `media.image` can return from this media row, plus the requested directory's own artwork types. Omitted when there are none. |
 | title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
 
 ##### Media meta title object
@@ -2092,6 +2097,7 @@ Single requests return the existing single `media` response shape. Batch request
 | system        | object                       | Yes      | Stored system object with `id` and `name`.       |
 | tags          | [TagInfo](#taginfo-object)[] | Yes      | Title-level tags shared by matching media rows.  |
 | properties    | object                       | Yes      | Title-level properties keyed by canonical type tag. |
+| availableImageTypes | string[]               | No       | Image types `media.image` can return from title-level properties. Omitted when there are none. |
 
 ##### Media meta property object
 
@@ -2362,22 +2368,22 @@ An object identifying a media row by `mediaId` or by `(system, path)`.
 
 Return the best matching image for one indexed media row or indexed directory. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
-For path requests, `media.image` preserves exact-media behavior first, then checks path-keyed directory properties, then tries existing launcher-relative and singleton media fallbacks. Within media results it checks each requested image type against media-level properties before title-level properties. Directory properties follow the same requested type order. If a stored media file path no longer exists, the stale property is removed and lookup continues; stale directory paths remain until the next completed `media-folder` snapshot.
+For path requests, `media.image` preserves exact-media behavior first, then checks path-keyed directory properties, then tries existing launcher-relative and singleton media fallbacks. A request with `mediaId`, `system`, and `path` together names a collapsed directory entry and the media it launches: Core checks the directory's own properties, then that media's and its title's, then the media the path alone resolves to, such as a multi-disc folder's first disc. The `mediaId` must be the path itself or a file directly inside it; otherwise the request fails with `media not in path`. Within media results it checks each requested image type against media-level properties before title-level properties. Directory properties follow the same requested type order. If a stored media file path no longer exists, the stale property is removed and lookup continues; stale directory paths remain until the next completed `media-folder` snapshot.
 
 #### Parameters
 
-An object identifying a media row by `mediaId` or identifying media/directory content by `(system, path)`. Canonical indexed paths are preferred. Directory artwork requires the directory's exact indexed path. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+An object identifying a media row by `mediaId`, media/directory content by `(system, path)`, or a directory entry and its launch target by all three. Canonical indexed paths are preferred. Directory artwork requires the directory's exact indexed path. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
-| mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. With `system` and `path`, the media a directory entry launches. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media or directory path. Required when `mediaId` is omitted. |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 | maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
 | delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |
 
-Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `boxartside`, `boxartback`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
 Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source**: when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output that had to be scaled down is re-encoded as WebP (lossy, alpha preserved) regardless of source format, and cached on disk so repeat requests are cheap. A source that already fits the box is re-encoded as WebP too when it is larger than 64 KiB, so a near-native request for large art still gets the smaller WebP. The original bytes and content type are returned instead when the source already fits the box and is at most 64 KiB (the encode costs far more than the few kilobytes it would save on constrained devices), when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded. A resized request can therefore return `image/jpeg` or `image/png` as well as `image/webp`: read `contentType` rather than assuming WebP. The same applies to `localPath` delivery, where the cached file keeps the original's extension.
 
