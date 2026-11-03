@@ -501,6 +501,8 @@ func TestHintNeedsPull(t *testing.T) {
 	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindState, cursor+1), "a newer write needs a pull")
 	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindState, 0), "a hint with no revision cannot be ruled out")
 	assert.True(t, f.svc.HintNeedsPull("collections", 1), "a kind this build does not know is worth a pass")
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindSavedDecks, cursor),
+		"the saved deck list has no cursor, so every hint reads it again")
 
 	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindDecks, 1), "decks keep their own cursor")
 	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyDecksSince, "40"))

@@ -600,3 +600,128 @@ func TestUpsertFetchedDeckEvictsTheLongestUnfetched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, all, 4)
 }
+
+func TestSetDeckSaved(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
+	const link = "https://zpr.au/d$lhm6n9t8"
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: link, Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "someone", got.OwnerName)
+	list, err := db.ListDecks()
+	require.NoError(t, err)
+	for i := range list {
+		if list[i].DeckID == result.DeckID {
+			assert.True(t, list[i].Saved, "the list reads the flag too")
+			assert.Equal(t, "someone", list[i].OwnerName)
+		}
+	}
+
+	// A refresh from the link keeps the deck saved and its owner.
+	refreshed, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs, renamed", SourceURL: link, Items: []database.DeckItem{scriptItem("B", "**b")},
+	}, 10)
+	require.NoError(t, err)
+	require.True(t, refreshed.Changed)
+	got, err = db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, "Theirs, renamed", got.Name)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "someone", got.OwnerName)
+
+	require.NoError(t, db.SetDeckSaved(result.DeckID, false, ""))
+	got, err = db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
+
+	require.ErrorIs(t, db.SetDeckSaved("aaaaaaaaaaaa", true, "x"), database.ErrDeckOwned,
+		"an owned deck is never saved")
+	require.ErrorIs(t, db.SetDeckSaved("bbbbbbbbbbbb", true, "x"), database.ErrDeckNotFound)
+}
+
+func TestUpsertFetchedDeckNeverEvictsSavedDecks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+
+	ids := make([]string, 0, 3)
+	for i := range 3 {
+		result, err := db.UpsertFetchedDeck(&database.Deck{
+			Name: "Theirs", SourceURL: fmt.Sprintf("https://decks.example/%d", i),
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}, 2)
+		require.NoError(t, err)
+		require.Empty(t, result.Evicted)
+		ids = append(ids, result.DeckID)
+		_, err = db.sql.Load().ExecContext(t.Context(),
+			`update Decks set FetchedAt = ? where DeckID = ?;`, 100+i, result.DeckID)
+		require.NoError(t, err)
+		if i == 0 {
+			// The oldest copy is saved, so it neither goes nor takes a place.
+			require.NoError(t, db.SetDeckSaved(result.DeckID, true, ""))
+		}
+	}
+
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/new",
+		Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ids[1]}, result.Evicted, "the oldest unsaved copy makes room")
+	_, err = db.GetDeck(ids[0])
+	require.NoError(t, err, "a saved deck is never evicted")
+}
+
+func TestUpsertRemoteDeckOwnedNeverStaysSaved(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/1", Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+
+	_, err = db.UpsertRemoteDeck(&database.Deck{
+		DeckID: result.DeckID, Name: "Mine now", Owned: true, Items: []database.DeckItem{scriptItem("A", "**a")},
+	})
+	require.NoError(t, err)
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Owned)
+	assert.False(t, got.Saved)
+}
+
+// The saved deck migration adds columns with defaults, so decks kept before
+// it come back unsaved and keep everything else.
+func TestDeckSavedMigrationKeepsDecks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/1", Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+
+	require.NoError(t, database.MigrateDownTo(db.sql.Load(), migrationFiles, "migrations", 20261103120000-1))
+	require.NoError(t, sqlMigrateUp(db.sql.Load(), ""))
+
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, "Theirs", got.Name)
+	assert.Equal(t, "https://decks.example/1", got.SourceURL)
+	assert.Len(t, got.Items, 1)
+	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
+}

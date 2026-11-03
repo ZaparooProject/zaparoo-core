@@ -1326,6 +1326,7 @@ type UserDBI interface {
 	DeleteDeck(deckID string) (bool, error)
 	UpsertRemoteDeck(deck *Deck) (bool, error)
 	UpsertFetchedDeck(deck *Deck, maxCopies int) (FetchedDeckResult, error)
+	SetDeckSaved(deckID string, saved bool, ownerName string) error
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	CountOwnedDecks() (int, error)
 	RenameDeck(oldID, newID string) error

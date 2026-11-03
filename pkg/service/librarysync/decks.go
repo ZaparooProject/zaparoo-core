@@ -72,6 +72,10 @@ type DecksResult struct {
 	Pushed    int
 	Conflicts int
 	Rejected  int
+	// Saved counts decks newly kept because the account saved them, and
+	// Unsaved the ones removed because it no longer lists them.
+	Saved   int
+	Unsaved int
 }
 
 // deckContent is what the account and this device agree on for a deck.
@@ -243,9 +247,29 @@ func indexOf(keys []string, key string) int {
 	return -1
 }
 
-// SyncDecks converges owned decks with the account: pull first so the bases
-// are current, then push what changed here.
+// SyncDecks converges owned decks with the account, pulling first so the
+// bases are current and then pushing what changed here, and then keeps the
+// decks the account saved from other accounts in step with its list.
 func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
+	result, err := s.syncOwnedDecks(ctx)
+	if err != nil {
+		return result, err
+	}
+	saved, err := s.syncSavedDecks(ctx)
+	result.Saved, result.Unsaved = saved.Saved, saved.Unsaved
+	if err != nil {
+		return result, err
+	}
+	if result.Pulled > 0 || result.Pushed > 0 || result.Conflicts > 0 || result.Saved > 0 || result.Unsaved > 0 {
+		log.Info().Int("pulled", result.Pulled).Int("pushed", result.Pushed).
+			Int("conflicts", result.Conflicts).Int("rejected", result.Rejected).
+			Int("saved", result.Saved).Int("unsaved", result.Unsaved).
+			Msg("decks synced")
+	}
+	return result, nil
+}
+
+func (s *Service) syncOwnedDecks(ctx context.Context) (DecksResult, error) {
 	if err := s.lockDecks(ctx); err != nil {
 		return DecksResult{}, err
 	}
@@ -259,11 +283,6 @@ func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
 	}
 	if err := pass.push(ctx); err != nil {
 		return pass.result, err
-	}
-	if pass.result.Pulled > 0 || pass.result.Pushed > 0 || pass.result.Conflicts > 0 {
-		log.Info().Int("pulled", pass.result.Pulled).Int("pushed", pass.result.Pushed).
-			Int("conflicts", pass.result.Conflicts).Int("rejected", pass.result.Rejected).
-			Msg("decks synced")
 	}
 	return pass.result, nil
 }

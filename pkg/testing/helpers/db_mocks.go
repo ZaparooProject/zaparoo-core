@@ -372,6 +372,13 @@ func (m *MockUserDBI) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (dat
 	return database.FetchedDeckResult{}, nil
 }
 
+func (m *MockUserDBI) SetDeckSaved(deckID string, saved bool, ownerName string) error {
+	if err := m.Called(deckID, saved, ownerName).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set deck saved failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {
 	if err := m.Called(itemDBID, anchor).Error(0); err != nil {
 		return fmt.Errorf("mock UserDBI set deck item anchor failed: %w", err)

@@ -61,8 +61,10 @@ type fakeOnline struct {
 	deckPushHook  func(*fakeOnline)
 	statePushes   [][]fakeStatePushItem
 	deckPushes    [][]fakeDeckPushRecord
+	savedDecks    []fakeSavedDeck
 	mu            syncutil.Mutex
 	resolveStatus int
+	savedStatus   int
 	limitFirst    int
 	stateRevision int64
 	stateFloor    int64
@@ -129,6 +131,30 @@ type fakeDeck struct {
 	ItemCount   int             `json:"item_count"`
 	IsLocked    bool            `json:"is_locked"`
 	Deleted     bool            `json:"deleted"`
+}
+
+// fakeSavedDeck is one deck the fake account saved from another account.
+//
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeSavedDeck struct {
+	Name    *string `json:"name,omitempty"`
+	OwnedBy *string `json:"owned_by,omitempty"`
+	DeckID  string  `json:"deck_id"`
+	Link    string  `json:"link"`
+	SavedAt string  `json:"saved_at"`
+}
+
+// saveDecks replaces the account's saved deck list.
+func (f *fakeOnline) saveDecks(items ...fakeSavedDeck) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.savedDecks = items
+}
+
+func (f *fakeOnline) failSavedDecks(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.savedStatus = status
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -290,6 +316,16 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleDeckPush(w, r)
 	case "GET /v1/device/decks":
 		f.handleDeckPull(w, r)
+	case "GET /v1/device/saved-decks":
+		if f.savedStatus != 0 {
+			writeFakeError(w, f.savedStatus, "internal_error")
+			return
+		}
+		items := f.savedDecks
+		if items == nil {
+			items = []fakeSavedDeck{}
+		}
+		writeFakeJSON(w, map[string]any{"items": items})
 	default:
 		f.t.Errorf("unexpected request %s", key)
 		w.WriteHeader(http.StatusTeapot)

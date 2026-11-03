@@ -119,14 +119,20 @@ type Deck struct {
 	// verbatim so the local copy and the served playlist are one playlist.
 	// Empty for a deck that was not fetched from a link.
 	PlaylistID string
-	Metadata   json.RawMessage
-	Items      []DeckItem
-	DBID       int64
-	CreatedAt  int64
-	UpdatedAt  int64
-	FetchedAt  int64
-	ItemCount  int
-	Owned      bool
+	// OwnerName is the name the linked account gave for the owner of a deck
+	// it saved, empty when it gave none or the deck is not saved.
+	OwnerName string
+	Metadata  json.RawMessage
+	Items     []DeckItem
+	DBID      int64
+	CreatedAt int64
+	UpdatedAt int64
+	FetchedAt int64
+	ItemCount int
+	Owned     bool
+	// Saved marks a deck kept from a link because the linked account saved
+	// it from another account. It is kept while the account lists it.
+	Saved bool
 }
 
 // FetchedDeckResult reports what keeping a deck fetched from a link did.

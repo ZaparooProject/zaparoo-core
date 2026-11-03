@@ -540,7 +540,7 @@ func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.D
 
 // deckSummary is a deck as the decks list shows it, without items.
 func deckSummary(deck *database.Deck) models.DeckResponse {
-	return models.DeckResponse{
+	resp := models.DeckResponse{
 		Metadata:    deck.Metadata,
 		DeckID:      deck.DeckID,
 		Name:        deck.Name,
@@ -549,7 +549,13 @@ func deckSummary(deck *database.Deck) models.DeckResponse {
 		UpdatedAt:   deck.UpdatedAt,
 		ItemCount:   deck.ItemCount,
 		Owned:       deck.Owned,
+		Saved:       deck.Saved,
 	}
+	if !deck.Owned {
+		resp.SourceURL = deck.SourceURL
+		resp.OwnedBy = deck.OwnerName
+	}
+	return resp
 }
 
 // deckResponse is a deck with its items, which are never omitted: an empty
