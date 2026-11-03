@@ -1178,13 +1178,29 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		sortOrder = *params.Sort
 	}
 
+	grouped := params.GroupBy != nil && *params.GroupBy == searchGroupByTitle
+	if grouped && params.TitleID != nil {
+		return nil, models.ClientErrf("groupBy cannot be combined with titleId")
+	}
+	if grouped && (sortOrder == "filename-asc" || sortOrder == "filename-desc") {
+		return nil, models.ClientErrf("sort %q is not supported when grouping by title", sortOrder)
+	}
+
 	// Handle cursor-based pagination. Legacy unsorted requests keep their
 	// DBID-only cursor; explicit sorts use a compound sort-value/DBID cursor.
+	// Grouped searches page titles, so their cursor holds a title position.
 	var cursorStr string
 	if params.Cursor != nil {
 		cursorStr = *params.Cursor
 	}
-	cursor, sortCursor, err := decodeMediaSearchCursor(cursorStr, sortOrder)
+	var cursor *int64
+	var sortCursor *database.SearchCursor
+	var err error
+	if grouped {
+		sortCursor, err = decodeGroupedSearchCursor(cursorStr, sortOrder)
+	} else {
+		cursor, sortCursor, err = decodeMediaSearchCursor(cursorStr, sortOrder)
+	}
 	if err != nil {
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
@@ -1254,16 +1270,48 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	searchStarted := time.Now()
-	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
-	searchDuration := time.Since(searchStarted)
-	if err != nil {
-		return nil, fmt.Errorf("error searching media with filters: %w", err)
+	var groups []database.SearchTitleGroup
+	var versionCounts []int
+	var hasNextPage bool
+	switch {
+	case grouped:
+		groups, err = env.Database.MediaDB.SearchMediaTitleGroups(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching media title groups: %w", err)
+		}
+		hasNextPage = len(groups) > maxResults
+		if hasNextPage {
+			groups = groups[:maxResults]
+		}
+		searchResults, versionCounts = defaultTitleVersions(&env, groups)
+	case params.TitleID != nil:
+		// Folding container members needs the whole title, so the title's
+		// rows are read in one go and paged here.
+		searchFilters.TitleDBID = *params.TitleID
+		searchFilters.Cursor = nil
+		searchFilters.SortCursor = nil
+		searchFilters.Limit = titleVersionsLimit
+		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching title versions: %w", err)
+		}
+		searchResults = pageTitleVersions(
+			foldContainerVersions(ctx, env.Database.MediaDB, searchResults),
+			sortOrder, cursor, sortCursor, limit)
+	default:
+		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching media with filters: %w", err)
+		}
 	}
+	searchDuration := time.Since(searchStarted)
 
 	// Check if there are more results
-	hasNextPage := len(searchResults) > maxResults
-	if hasNextPage {
-		searchResults = searchResults[:maxResults]
+	if !grouped {
+		hasNextPage = len(searchResults) > maxResults
+		if hasNextPage {
+			searchResults = searchResults[:maxResults]
+		}
 	}
 
 	coverStarted := time.Now()
@@ -1335,8 +1383,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if coverStatusesKnown {
 			hasCover = coverStatuses[result.MediaID]
 		}
+		var versionCount *int
+		if versionCounts != nil {
+			versionCount = &versionCounts[i]
+		}
 		results = append(results, models.SearchResultMedia{
 			MediaID:            result.MediaID,
+			TitleID:            result.MediaTitleID,
+			VersionCount:       versionCount,
 			RelPath:            relPath,
 			HasCover:           hasCover,
 			System:             resultSystem,
@@ -1368,9 +1422,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			lastResult := searchResults[len(searchResults)-1]
 			var cursorStr string
 			var err error
-			if sortOrder == "" {
+			switch {
+			case grouped:
+				cursorStr, err = encodeGroupedSearchCursor(&groups[len(groups)-1], sortOrder, visibility)
+			case sortOrder == "":
 				cursorStr, err = encodeSearchCursor(lastResult.MediaID, visibility)
-			} else {
+			default:
 				cursorStr, err = encodeSortedSearchCursor(&lastResult, sortOrder, visibility)
 			}
 			if err != nil {

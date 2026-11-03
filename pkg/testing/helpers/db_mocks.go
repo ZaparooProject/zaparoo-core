@@ -1511,6 +1511,20 @@ func (m *MockMediaDBI) SearchMediaPathExact(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SearchMediaTitleGroups(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.SearchTitleGroup, error) {
+	args := m.Called(ctx, filters)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if groups, ok := args.Get(0).([]database.SearchTitleGroup); ok {
+		return groups, nil
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) SearchMediaWithFilters(
 	ctx context.Context,
 	filters *database.SearchFilters,

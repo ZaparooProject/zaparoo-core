@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,12 +44,36 @@ func SelectBestResult(
 	matchQuality float64,
 	launchers []platforms.Launcher,
 ) (result database.SearchResultWithCursor, confidence float64) {
+	return pickBestResult(&log.Logger, results, tagFilters, cfg, matchQuality, launchers)
+}
+
+// SelectDefaultVersion picks the version of one title a bare title launch
+// would prefer, using the same priorities as SelectBestResult. It does not log
+// each decision, so it suits callers that pick for many titles at once.
+func SelectDefaultVersion(
+	results []database.SearchResultWithCursor,
+	cfg *config.Instance,
+	launchers []platforms.Launcher,
+) database.SearchResultWithCursor {
+	nop := zerolog.Nop()
+	result, _ := pickBestResult(&nop, results, nil, cfg, 1.0, launchers)
+	return result
+}
+
+func pickBestResult(
+	logger *zerolog.Logger,
+	results []database.SearchResultWithCursor,
+	tagFilters []zapscript.TagFilter,
+	cfg *config.Instance,
+	matchQuality float64,
+	launchers []platforms.Launcher,
+) (result database.SearchResultWithCursor, confidence float64) {
 	if len(results) == 1 {
 		// If there's only ONE match, that's what the user searched for - return it
 		// Variant exclusion only decides between a variant and a main release
 		tagConfidence := CalculateTagMatchConfidence(&results[0], tagFilters)
 		confidence = matchQuality * tagConfidence
-		log.Info().Msgf("single result, confidence: %.2f (match: %.2f, tags: %.2f)",
+		logger.Info().Msgf("single result, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return results[0], confidence
 	}
@@ -62,7 +87,7 @@ func SelectBestResult(
 	ambiguousTitles := titlesSpanDifferentIDs(results)
 
 	initialCount := len(results)
-	log.Info().Msgf("multiple results found (%d), picking best match", initialCount)
+	logger.Info().Msgf("multiple results found (%d), picking best match", initialCount)
 
 	// Priority 1: If user provided specific tags, filter by those first
 	if len(tagFilters) > 0 {
@@ -70,12 +95,13 @@ func SelectBestResult(
 		if len(filtered) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&filtered[0], tagFilters)
 			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-			log.Info().Msgf("selected result based on user-specified tags, confidence: %.2f (match: %.2f, tags: %.2f)",
+			logger.Info().Msgf(
+				"selected result based on user-specified tags, confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return filtered[0], confidence
 		}
 		if len(filtered) > 0 {
-			log.Info().Msgf("tag filtering reduced candidates from %d to %d", len(results), len(filtered))
+			logger.Info().Msgf("tag filtering reduced candidates from %d to %d", len(results), len(filtered))
 			results = filtered
 		}
 	}
@@ -89,14 +115,14 @@ func SelectBestResult(
 		if len(mainGames) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&mainGames[0], tagFilters)
 			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-			log.Info().Msgf("selected main game (filtered out variants), confidence: %.2f (match: %.2f, tags: %.2f)",
+			logger.Info().Msgf("selected main game (filtered out variants), confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return mainGames[0], confidence
 		}
 		if len(mainGames) > 0 {
 			results = mainGames
 		} else {
-			log.Info().Msgf("all %d results are variants, choosing among them", len(results))
+			logger.Info().Msgf("all %d results are variants, choosing among them", len(results))
 		}
 	}
 
@@ -105,7 +131,7 @@ func SelectBestResult(
 	if len(originals) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&originals[0], tagFilters)
 		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-		log.Info().Msgf("selected original release, confidence: %.2f (match: %.2f, tags: %.2f)",
+		logger.Info().Msgf("selected original release, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return originals[0], confidence
 	}
@@ -118,7 +144,7 @@ func SelectBestResult(
 	if len(preferredRegions) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&preferredRegions[0], tagFilters)
 		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-		log.Info().Msgf("selected preferred region, confidence: %.2f (match: %.2f, tags: %.2f)",
+		logger.Info().Msgf("selected preferred region, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return preferredRegions[0], confidence
 	}
@@ -131,7 +157,7 @@ func SelectBestResult(
 	if len(preferredLanguages) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&preferredLanguages[0], tagFilters)
 		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-		log.Info().Msgf("selected preferred language, confidence: %.2f (match: %.2f, tags: %.2f)",
+		logger.Info().Msgf("selected preferred language, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return preferredLanguages[0], confidence
 	}
@@ -146,7 +172,7 @@ func SelectBestResult(
 		if len(preferredFiles) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&preferredFiles[0], tagFilters)
 			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-			log.Info().Msgf("selected by file type priority, confidence: %.2f (match: %.2f, tags: %.2f)",
+			logger.Info().Msgf("selected by file type priority, confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return preferredFiles[0], confidence
 		}
@@ -160,7 +186,7 @@ func SelectBestResult(
 	selected := selectByQualityScore(results)
 	tagConfidence := CalculateTagMatchConfidence(&selected, tagFilters)
 	confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
-	log.Info().Msgf(
+	logger.Info().Msgf(
 		"multiple results (%d), selecting by quality score, confidence: %.2f (match: %.2f, tags: %.2f)",
 		len(results), confidence, matchQuality, tagConfidence)
 	return selected, confidence
