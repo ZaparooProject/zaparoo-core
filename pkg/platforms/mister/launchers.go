@@ -491,25 +491,6 @@ func launchDB9Core(
 	return launchAltCore(launcherID, systemID, "_Console/"+rbfName+"_<date>_<hash>_DB9")
 }
 
-func launchAltCoreWithSetName(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-	setName string,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, true)
-}
-
-func launchAltCoreWithSetNameSameDir(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-	setName string,
-	sameDir bool,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, sameDir)
-}
-
 func retroAchievementsSetName(launcherID string) (string, bool) {
 	switch launcherID {
 	case "RAAtari2600", "RAAtari7800":
@@ -681,23 +662,22 @@ func launchRetroAchievementsCore(
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	setName, ok := retroAchievementsSetName(launcherID)
-	if !ok {
-		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
-	}
-	return launchAltCoreWithSetName(launcherID, systemID, rbfPath, setName)
+	return launchAltCoreWithDefinition(retroAchievementsCore(launcherID, systemID, rbfPath))
 }
 
-func launchRetroAchievementsCoreNoSameDir(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+// retroAchievementsCore keeps the RA core's settings and saves under its own
+// set name. same_dir is required even for systems sharing another core's RBF:
+// without it Main's home folder becomes games/<set name>, which does not
+// exist, and the relative MGL file path cannot be resolved through it.
+func retroAchievementsCore(launcherID, systemID, rbfPath string) *cores.Core {
 	setName, ok := retroAchievementsSetName(launcherID)
 	if !ok {
 		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
 	}
-	return launchAltCoreWithSetNameSameDir(launcherID, systemID, rbfPath, setName, false)
+	return &cores.Core{
+		ID: systemID, LauncherID: launcherID, RBF: rbfPath,
+		SetName: setName, SetNameSameDir: true,
+	}
 }
 
 func configureAltCoreWithDefaultSetName(
@@ -1468,7 +1448,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAFDS",
 			SystemID: systemdefs.SystemFDS,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAFDS", systemdefs.SystemFDS, "_RA_Cores/Cores/NES",
 			),
 		},
@@ -1513,7 +1493,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGameboyColor",
 			SystemID: systemdefs.SystemGameboyColor,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAGameboyColor", systemdefs.SystemGameboyColor, "_RA_Cores/Cores/Gameboy",
 			),
 		},
@@ -1539,7 +1519,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGameGear",
 			SystemID: systemdefs.SystemGameGear,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAGameGear", systemdefs.SystemGameGear, "_RA_Cores/Cores/SMS",
 			),
 		},
@@ -1770,7 +1750,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RANeoGeoCD",
 			SystemID: systemdefs.SystemNeoGeoCD,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RANeoGeoCD", systemdefs.SystemNeoGeoCD, "_RA_Cores/Cores/NeoGeo",
 			),
 		},
@@ -1989,7 +1969,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RASuperGameboy",
 			SystemID: systemdefs.SystemSuperGameboy,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RASuperGameboy", systemdefs.SystemSuperGameboy, "_RA_Cores/Cores/Gameboy",
 			),
 		},
@@ -2129,7 +2109,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RATurboGrafx16CD",
 			SystemID: systemdefs.SystemTurboGrafx16CD,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RATurboGrafx16CD", systemdefs.SystemTurboGrafx16CD, "_RA_Cores/Cores/TurboGrafx16",
 			),
 		},

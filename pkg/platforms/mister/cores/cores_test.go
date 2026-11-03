@@ -639,3 +639,29 @@ func TestHookNeoGeo(t *testing.T) {
 		})
 	}
 }
+
+func TestHookFDSCopiesBiosOnlyForOwnSetNameFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	nesDir := filepath.Join(root, "NES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(nesDir, "boot0.rom"), []byte("bios"), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{IndexRoot: []string{root}},
+	})
+	require.NoError(t, err)
+
+	// Without same_dir, Main loads the BIOS from games/<set name>.
+	_, err = hookFDS(cfg, &Core{ID: systemdefs.SystemFDS, SetName: "FDS"}, "")
+	require.NoError(t, err)
+	copied, err := os.ReadFile(filepath.Join(root, "FDS", "boot0.rom")) //nolint:gosec // test temp dir
+	require.NoError(t, err)
+	assert.Equal(t, []byte("bios"), copied)
+
+	// With same_dir, Main stays in games/NES, so no folder is created.
+	_, err = hookFDS(cfg, &Core{ID: systemdefs.SystemFDS, SetName: "RA_FDS", SetNameSameDir: true}, "")
+	require.NoError(t, err)
+	assert.NoDirExists(t, filepath.Join(root, "RA_FDS"))
+}

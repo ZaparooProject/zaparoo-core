@@ -48,6 +48,12 @@ type amigaVisionLaunchTarget struct {
 }
 
 func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string) error {
+	// With same_dir, Main keeps the original core's folder, which already
+	// holds the BIOS.
+	if newCore.SetName == "" || newCore.SetNameSameDir {
+		return nil
+	}
+
 	var biosPath string
 
 	// TODO: this will not work on 100% of cores anymore because some core IDs
@@ -61,7 +67,7 @@ func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string)
 		}
 	}
 
-	if biosPath == "" || newCore.SetName == "" {
+	if biosPath == "" {
 		return nil
 	}
 
