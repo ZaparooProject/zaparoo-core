@@ -45,6 +45,12 @@ func TestParseStem(t *testing.T) {
 		{name: "date full", stem: "1991-06-23 - Sonic", kind: KindDate, rest: "Sonic"},
 		{name: "date dotted", stem: "1991.06.23 Sonic", kind: KindDate, rest: "Sonic"},
 		{name: "date year", stem: "1991 - Sonic", kind: KindDate, rest: "Sonic"},
+		{name: "date year period", stem: "1991. Sonic", kind: KindDate, rest: "Sonic"},
+		{name: "date year month space", stem: "1989-01 Bomberman (USA)", kind: KindDate, rest: "Bomberman (USA)"},
+		// MiSTer, 2026-11-03: a year that starts the title is not a date prefix.
+		{name: "year title", stem: "1943 The Battle of Midway (US)", kind: KindNone},
+		{name: "year title short", stem: "2020 Super Baseball", kind: KindNone},
+		{name: "year title hyphen", stem: "1999-Nights", kind: KindNone},
 		{name: "bare numeric title", stem: "1942", kind: KindNone, rest: ""},
 		{name: "number plus letter title", stem: "3D Worldrunner", kind: KindNone, rest: ""},
 		{name: "invalid date", stem: "1991-13-01 - Sonic", kind: KindNone, rest: ""},
