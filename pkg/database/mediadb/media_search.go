@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -54,8 +55,20 @@ func buildMediaSearchTypeGroups(
 		groups[groupIndex].systems = append(groups[groupIndex].systems, systems[i])
 	}
 
+	query := strings.Join(queryWords, " ")
 	for i := range groups {
 		mediaType := groups[i].systems[0].GetMediaType()
+		// Titles are slugged whole, so the query is too: a word's slug can
+		// depend on its neighbours ("The ...", "Ghosts'n ...", "... Edition").
+		if words := slugs.SlugifyQueryWords(mediaType, query); len(words) > 0 && !slices.Contains(words, "") {
+			groups[i].variantGroups = make([][]string, len(words))
+			for wordIndex, word := range words {
+				groups[i].variantGroups[wordIndex] = []string{word}
+			}
+			continue
+		}
+		// The slug cannot represent some of the query, so match word by word
+		// and let unslugged words fall back to the raw title name.
 		groups[i].variantGroups = make([][]string, len(queryWords))
 		for wordIndex, word := range queryWords {
 			variant := slugs.Slugify(mediaType, word)

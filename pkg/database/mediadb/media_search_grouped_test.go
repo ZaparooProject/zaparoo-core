@@ -290,3 +290,56 @@ func TestSearchMediaTitleGroups_FailsWhenRowLimitIsReached(t *testing.T) {
 	_, err = mediaDB.searchTitleGroupsWithRowLimit(context.Background(), filters, 3)
 	require.Error(t, err, "a page whose rows fill the limit may have lost rows and must not be returned")
 }
+
+// MiSTer, 2026-11-03: searching a game's own title found nothing when a word of
+// it slugs differently alone than inside the title: a leading "The", a glued
+// "'n", a trailing "Edition". Each title must be found by its full name, by
+// rows and by title groups, through SQL and through the slug cache.
+func TestSearchMedia_FullTitleFindsItself(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "Arcade", Name: "Arcade"})
+	require.NoError(t, err)
+	arcade, err := systemdefs.GetSystem("Arcade")
+	require.NoError(t, err)
+
+	names := []string{
+		"The King of Dragons",
+		"Ghosts'n Goblins",
+		"Street Fighter II' Champion Edition",
+		"Roc'n Rope",
+		"Up'n Down",
+		"The Tower of Druaga",
+	}
+	titleIDs := make(map[string]int64, len(names))
+	for _, name := range names {
+		titleIDs[name] = insertGroupedTitle(t, mediaDB, system, name,
+			groupedTestFile{path: "/roms/Arcade/" + name + ".mra"})
+	}
+	insertGroupedTitle(t, mediaDB, system, "Street Fighter II",
+		groupedTestFile{path: "/roms/Arcade/Street Fighter II.mra"})
+
+	for _, cached := range []bool{false, true} {
+		if cached {
+			require.NoError(t, mediaDB.RebuildSlugSearchCache())
+			require.True(t, mediaDB.slugSearchCache.Load().CanServeSystems([]string{"Arcade"}))
+		}
+		for _, name := range names {
+			label := fmt.Sprintf("cached=%v query=%q", cached, name)
+			filters := &database.SearchFilters{Query: name, Systems: []systemdefs.System{*arcade}, Limit: 10}
+
+			rows, searchErr := mediaDB.SearchMediaWithFilters(ctx, filters)
+			require.NoError(t, searchErr, label)
+			require.Len(t, rows, 1, label)
+			assert.Equal(t, titleIDs[name], rows[0].MediaTitleID, label)
+
+			groups, searchErr := mediaDB.SearchMediaTitleGroups(ctx, filters)
+			require.NoError(t, searchErr, label)
+			assert.Equal(t, []int64{titleIDs[name]}, groupTitleIDs(groups), label)
+		}
+	}
+}
