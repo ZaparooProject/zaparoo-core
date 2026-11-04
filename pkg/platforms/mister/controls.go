@@ -104,15 +104,17 @@ func (c *coreControls) controls() map[string]platforms.Control {
 			return nil
 		}},
 	}
-	// The cheat and save controls need the Zaparoo Main fork. They are only
-	// listed when the running Main says it has them, and each call checks
-	// again in case Main changed since the launchers were built.
+	// The cheat and save controls need the Zaparoo Main fork. Launchers are
+	// built once, possibly before Main has started, so whether the running
+	// Main has them is asked each time the controls are listed or called.
 	if c.main != nil {
-		if c.main.supports(mainCommandCheat) {
-			controls[platforms.ControlCheat] = platforms.Control{Func: c.cheat}
+		controls[platforms.ControlCheat] = platforms.Control{
+			Func:      c.cheat,
+			Available: func() bool { return c.main.supports(mainCommandCheat) },
 		}
-		if c.main.supports(mainCommandSave) {
-			controls[platforms.ControlSaveRAM] = platforms.Control{Func: c.saveRAM}
+		controls[platforms.ControlSaveRAM] = platforms.Control{
+			Func:      c.saveRAM,
+			Available: func() bool { return c.main.supports(mainCommandSave) },
 		}
 	}
 	return controls

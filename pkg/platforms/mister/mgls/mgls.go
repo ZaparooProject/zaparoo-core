@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"sync/atomic"
 	"syscall"
 	"unicode"
 
@@ -70,6 +71,17 @@ func (e missingRequestedFileError) Unwrap() error {
 
 type commandInterfaceWriter struct {
 	open func() (io.WriteCloser, error)
+	sent *atomic.Uint64
+}
+
+// loadsSent counts launch commands written to Main's command interface.
+var loadsSent atomic.Uint64
+
+// LoadsSent returns how many launch commands have reached Main's command
+// interface. A launch that fails with the count unchanged never asked Main
+// to load anything.
+func LoadsSent() uint64 {
+	return loadsSent.Load()
 }
 
 // MRA represents the structure of a MiSTer Arcade ROM file.
@@ -92,6 +104,7 @@ func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
 		open: func() (io.WriteCloser, error) {
 			return fs.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 		},
+		sent: &loadsSent,
 	}
 }
 
@@ -109,6 +122,9 @@ func (w commandInterfaceWriter) Write(p []byte) (int, error) {
 	n, err := cmd.Write(p)
 	if err != nil {
 		return n, fmt.Errorf("write command interface: %w", err)
+	}
+	if w.sent != nil {
+		w.sent.Add(1)
 	}
 	return n, nil
 }

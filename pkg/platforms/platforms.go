@@ -205,8 +205,13 @@ type ControlFunc func(context.Context, *config.Instance, ControlParams) error
 // built-in launchers) or Script (zapscript string for custom launchers)
 // should be set, not both.
 type Control struct {
-	Func   ControlFunc // Native Go implementation
-	Script string      // ZapScript string executed via RunControlScript
+	Func ControlFunc // Native Go implementation
+	// Available reports whether the control can be offered right now, for a
+	// control that depends on something outside Core that can come and go.
+	// A nil Available means always. ControlNames leaves out an unavailable
+	// control; Func still checks for itself when it is called.
+	Available func() bool
+	Script    string // ZapScript string executed via RunControlScript
 }
 
 // MediaLaunchAccess is the state publication capability held for one launch.

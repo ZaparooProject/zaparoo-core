@@ -47,14 +47,21 @@ var (
 	ErrInvalidControlArg = errors.New("invalid control argument")
 )
 
-// ControlNames returns the sorted action names a launcher defines controls for.
+// ControlNames returns the sorted action names a launcher defines controls
+// for, leaving out controls that report themselves unavailable.
 func ControlNames(l *Launcher) []string {
 	if l == nil || len(l.Controls) == 0 {
 		return nil
 	}
 	names := make([]string, 0, len(l.Controls))
-	for action := range l.Controls {
+	for action, control := range l.Controls {
+		if control.Available != nil && !control.Available() {
+			continue
+		}
 		names = append(names, action)
+	}
+	if len(names) == 0 {
+		return nil
 	}
 	sort.Strings(names)
 	return names
