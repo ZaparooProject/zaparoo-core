@@ -767,3 +767,56 @@ func TestLauncherMatcher_ScanDuplicatesReachesEverySharingLauncher(t *testing.T)
 	assert.True(t, matcher.MatchSystemFileForScan("Shared", filepath.Join(generated, "dupe.chd")),
 		"the launcher that did not opt in indexes the reopened directory too")
 }
+
+func TestDirLauncherMatcherBestLauncher(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "fat")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{root})
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+
+	// The explicit list is matched instead of the global cache, and the
+	// folder-bound system launcher wins over the folderless generic one.
+	launchers := []platforms.Launcher{
+		{ID: "Generic", Extensions: []string{".mgl", ".mra"}},
+		{ID: "Arcade", SystemID: "Arcade", Folders: []string{"_Arcade"}, Extensions: []string{".mra"}},
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}, Extensions: []string{".sfc", ".mgl"}},
+		{
+			ID: "Tested", SystemID: "PC", Folders: []string{"PC"},
+			Test: func(_ *config.Instance, path string) bool { return strings.HasSuffix(path, ".run") },
+		},
+		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+	}
+	matcher := NewLauncherMatcherForLaunchers(&config.Instance{}, mockPlatform, launchers)
+
+	tests := []struct {
+		dir, name, want string
+	}{
+		{dir: filepath.Join(root, "_Arcade", "_Organized"), name: "Pac-Man.mra", want: "Arcade"},
+		{dir: filepath.Join(root, "_Chronological"), name: "Game.mgl", want: "Generic"},
+		{dir: filepath.Join(root, "_Chronological"), name: "Game.mra", want: "Generic"},
+		{dir: filepath.Join(root, "SNES"), name: "Game.mgl", want: "SNES"},
+		{dir: filepath.Join(root, "SNES", "USA"), name: "Game.sfc", want: "SNES"},
+		{dir: filepath.Join(root, "PC"), name: "Game.run", want: "Tested"},
+		{dir: filepath.Join(root, "PC"), name: "Game.txt"},
+		{dir: filepath.Join(root, "_Chronological"), name: "notes.txt"},
+		{dir: filepath.Join(root, "_Chronological"), name: ".hidden.mgl"},
+		{dir: filepath.Join(root, "SNES-Hacks"), name: "Game.sfc"},
+	}
+	for _, tt := range tests {
+		path := filepath.Join(tt.dir, tt.name)
+		best, ok := matcher.ForDirectory(tt.dir).BestLauncher(path)
+
+		// The per-directory result must agree with matching the whole path.
+		full := matcher.PathToLaunchers(path)
+		require.Equal(t, len(full) > 0, ok, path)
+		if tt.want == "" {
+			assert.False(t, ok, path)
+			continue
+		}
+		require.True(t, ok, path)
+		assert.Equal(t, tt.want, best.ID, path)
+		bestFull, _ := mostSpecificLauncher(full)
+		assert.Equal(t, full[bestFull].ID, best.ID, path)
+	}
+}

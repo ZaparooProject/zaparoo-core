@@ -302,6 +302,10 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	if params.Live {
+		return browseLive(&env, &params)
+	}
+
 	tagFilters, err := parseBrowseTagFilters(params.Tags)
 	if err != nil {
 		return nil, err

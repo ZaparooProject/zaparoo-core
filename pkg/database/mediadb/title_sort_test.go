@@ -92,7 +92,7 @@ func TestCompareBrowseTitles(t *testing.T) {
 	assert.Negative(t, compareBrowseTitles("Alpha", "alpha"),
 		"raw title must provide a stable tiebreaker after case folding")
 	assert.Negative(t,
-		compareBrowseDirectoryNames("Pandemonium! (USA) (Rev 1)", "Pandemonium 2 (USA)"),
+		CompareBrowseDirectoryNames("Pandemonium! (USA) (Rev 1)", "Pandemonium 2 (USA)"),
 		"directory metadata must not outrank the punctuated base title")
 }
 

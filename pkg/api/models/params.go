@@ -52,6 +52,9 @@ type BrowseParams struct {
 	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
 	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 	IncludeHidden bool      `json:"includeHidden,omitempty"`
+	// Live lists Path straight from disk instead of from the media index,
+	// for folders the index does not cover.
+	Live bool `json:"live,omitempty"`
 }
 
 type SystemsParams struct {
