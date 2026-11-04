@@ -1042,6 +1042,34 @@ func TestRunCommandUnboundedTokenRunsAnyCommand(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
 }
 
+// TestRunCommandWriteNotAlone pins that a write sharing a script with other
+// commands says why it can't run instead of reporting an unknown command.
+func TestRunCommandWriteNotAlone(t *testing.T) {
+	t.Parallel()
+
+	script, err := zapscript.NewParser("**write:hello||**stop").ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 2)
+
+	_, err = RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		script.Cmds[0],
+		len(script.Cmds),
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrWriteNotAlone)
+	require.NotErrorIs(t, err, ErrUnknownCommand)
+	assert.True(t, IsExpectedRunError(err))
+}
+
 // TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
 // which insists on being alone on the token sees the expanded script, not the
 // single command printed on the card. A ZapLink resolving to
