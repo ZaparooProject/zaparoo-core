@@ -67,14 +67,13 @@ func TestLegacyAdmissionMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			auth := apimiddleware.NewAuthConfig(func() []string { return tt.keys })
-			handler := apimiddleware.HTTPAuthMiddleware(auth)(
-				legacyAdmissionMiddleware(tt.platformID)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if tt.key != "" {
-						assert.True(t, apimiddleware.APIKeyAuthenticated(r))
-					}
-					w.WriteHeader(http.StatusNoContent)
-				})),
-			)
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.key != "" {
+					assert.True(t, apimiddleware.APIKeyAuthenticated(r))
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			handler := apimiddleware.HTTPAuthMiddleware(auth)(legacyAdmissionMiddleware(tt.platformID, nil)(next))
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.key != "" {
