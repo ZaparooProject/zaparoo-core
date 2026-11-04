@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -408,10 +409,13 @@ func TestCommandInterfaceWriter(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, misterconfig.CmdInterface, nil, 0o600))
 		command := []byte("load_core " + filepath.Join("media", "fat", "game.mgl") + "\n")
 
+		before := LoadsSent()
 		n, err := newCommandInterfaceWriter(fs).Write(command)
 
 		require.NoError(t, err)
 		require.Equal(t, len(command), n)
+		// Other tests can launch at the same time, so only growth is certain.
+		require.Greater(t, LoadsSent(), before)
 		got, err := afero.ReadFile(fs, misterconfig.CmdInterface)
 		require.NoError(t, err)
 		require.Equal(t, command, got)
@@ -420,15 +424,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("open failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return nil, assert.AnError
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed open sends nothing")
 		require.ErrorContains(t, err, "failed to open command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})
@@ -436,15 +443,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("write failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return errorWriteCloser{err: assert.AnError}, nil
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed write sends nothing")
 		require.ErrorContains(t, err, "write command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})

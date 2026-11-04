@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,7 @@ type readyHarness struct {
 	written   time.Time // when the core name file was last written
 	names     []string
 	writtenMu syncutil.Mutex
+	sent      atomic.Uint64 // launch commands the fake Main has received
 }
 
 // setCore has Main report core, written at at.
@@ -88,9 +90,10 @@ func newReadyHarness(t *testing.T) *readyHarness {
 		files:  map[string]int64{},
 	}
 	h.r = &coreReadiness{
-		clock:    h.clock,
-		launches: gamehandoff.NewLaunchLog(h.clock),
-		watch:    func(context.Context, string) (<-chan gamehandoff.Kind, error) { return h.events, nil },
+		clock:     h.clock,
+		launches:  gamehandoff.NewLaunchLog(h.clock),
+		loadsSent: h.sent.Load,
+		watch:     func(context.Context, string) (<-chan gamehandoff.Kind, error) { return h.events, nil },
 		stat: func(path string) (os.FileInfo, error) {
 			size, ok := h.files[path]
 			if !ok {
@@ -936,7 +939,8 @@ func TestCoreReadiness_GenericMGLKeptWhenFailureFollowsLoad(t *testing.T) {
 	}
 	errActive := errors.New("write active game")
 	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-		return nil, fmt.Errorf("launch: %w", &mgls.LoadSentError{Err: errActive})
+		h.sent.Add(1) // the load reached Main before the failure
+		return nil, fmt.Errorf("launch: %w", errActive)
 	})
 	_, err := launch(nil, "/media/fat/game.mgl", nil)
 	require.ErrorIs(t, err, errActive)
@@ -960,7 +964,8 @@ func TestCoreReadiness_NoteLaunchesKeepsLaunchWhenFailureFollowsLoad(t *testing.
 	h := newReadyHarness(t)
 	errActive := errors.New("write active game")
 	launch := h.r.noteLaunches(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-		return nil, fmt.Errorf("launch: %w", &mgls.LoadSentError{Err: errActive})
+		h.sent.Add(1) // the load reached Main before the failure
+		return nil, fmt.Errorf("launch: %w", errActive)
 	})
 	_, err := launch(nil, genesisGame, nil)
 	require.ErrorIs(t, err, errActive)

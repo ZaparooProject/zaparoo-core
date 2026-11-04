@@ -38,7 +38,6 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -129,7 +128,10 @@ type coreReadiness struct {
 	watch    func(ctx context.Context, path string) (<-chan gamehandoff.Kind, error)
 	stat     func(path string) (os.FileInfo, error)
 	readMGL  func(path string) (mgls.MGL, error)
-	coreName func() (string, time.Time, error)
+	// loadsSent counts launch commands written to Main, so a failed launch
+	// can be told apart from one Main was already loading.
+	loadsSent func() uint64
+	coreName  func() (string, time.Time, error)
 	// coreUp signals when the launched core is up; nil uses waitCoreUp.
 	coreUp   func(ctx context.Context, launchedAt time.Time) <-chan struct{}
 	pressKey func(string) error
@@ -151,11 +153,12 @@ var launchReadiness = newCoreReadiness()
 func newCoreReadiness() *coreReadiness {
 	clock := clockwork.NewRealClock()
 	return &coreReadiness{
-		clock:    clock,
-		launches: gamehandoff.NewLaunchLog(clock),
-		watch:    gamehandoff.Watch,
-		stat:     os.Stat,
-		readMGL:  mgls.ReadMgl,
+		clock:     clock,
+		launches:  gamehandoff.NewLaunchLog(clock),
+		watch:     gamehandoff.Watch,
+		stat:      os.Stat,
+		readMGL:   mgls.ReadMgl,
+		loadsSent: mgls.LoadsSent,
 		coreName: func() (string, time.Time, error) {
 			data, err := os.ReadFile(misterconfig.CoreNameFile)
 			if err != nil {
@@ -256,29 +259,16 @@ func (r *coreReadiness) noteLaunches(
 		// Noted before launching, since the tracker can publish the game
 		// before launch returns.
 		r.launches.Note(path)
+		sentBefore := r.loadsSent()
 		proc, err := launch(cfg, path, opts)
-		if err != nil && !loadWasSent(err) {
+		if err != nil && r.loadsSent() == sentBefore {
+			// Main was never asked to load it. A failure after the load
+			// was sent, such as writing the active game, keeps the note
+			// because Main loads the game anyway.
 			r.launches.Forget(path)
 		}
 		return proc, err
 	}
-}
-
-// setLaunchedActiveGame names path as the active game once Main has been told
-// to load it. Main loads the game whether or not this works, so a failure is
-// marked as coming after the load was sent.
-func setLaunchedActiveGame(path string) error {
-	if err := activegame.SetActiveGame(path); err != nil {
-		return &mgls.LoadSentError{Err: fmt.Errorf("failed to set active game: %w", err)}
-	}
-	return nil
-}
-
-// loadWasSent reports whether a launch error came after Main was told to load
-// the game, so the game loads anyway and its launch stays noted.
-func loadWasSent(err error) bool {
-	var sent *mgls.LoadSentError
-	return errors.As(err, &sent)
 }
 
 // noteMGLGames wraps a launcher that loads arbitrary MGL files. The tracker
@@ -300,8 +290,9 @@ func (r *coreReadiness) noteMGLGames(
 				r.launches.Note(game)
 			}
 		}
+		sentBefore := r.loadsSent()
 		proc, err := launch(cfg, path, opts)
-		if err != nil && game != "" && !loadWasSent(err) {
+		if err != nil && game != "" && r.loadsSent() == sentBefore {
 			r.launches.Forget(game)
 		}
 		return proc, err
