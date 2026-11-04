@@ -66,6 +66,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/gorilla/websocket"
+	"github.com/jonboulle/clockwork"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -565,7 +566,10 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 // legacyAdmissionMiddleware rejects unauthenticated remote API transports on
 // platforms without an explicit compatibility policy. It runs after API-key
 // middleware so a valid key is recognized as admin authority.
-func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handler {
+func legacyAdmissionMiddleware(
+	platformID string,
+	rejections *remoteRejectionLog,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if apimiddleware.IsLocalRequest(r) ||
@@ -573,6 +577,7 @@ func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handle
 				next.ServeHTTP(w, r)
 				return
 			}
+			rejections.record(r, rejectReasonUnencrypted)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 		})
 	}
@@ -2215,11 +2220,14 @@ func StartWithListener(
 	}
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
+	log.Info().Bool("encryption", cfg.EncryptionEnabled()).Msg("API remote connection encryption")
 
 	// Create origin validator that checks static origins + dynamic local IP/custom origins.
 	originValidator := makeOriginValidator(staticOrigins, localIPsProvider, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
+
+	remoteRejections := newRemoteRejectionLog(clockwork.NewRealClock())
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
@@ -2389,11 +2397,15 @@ func StartWithListener(
 	wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
 		if !cfg.EncryptionEnabled() {
 			if !apimiddleware.WebSocketAuthHandler(authConfig, r) {
+				if !apimiddleware.IsLocalRequest(r) {
+					remoteRejections.record(r, rejectReasonAPIKey)
+				}
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
 			if !apimiddleware.IsLocalRequest(r) &&
 				!apimiddleware.APIKeyAuthenticated(r) && !permissions.LegacyEnabled(platform.ID()) {
+				remoteRejections.record(r, rejectReasonUnencrypted)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
@@ -2482,7 +2494,7 @@ func StartWithListener(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
-		r.Use(legacyAdmissionMiddleware(platform.ID()))
+		r.Use(legacyAdmissionMiddleware(platform.ID(), remoteRejections))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 
