@@ -30,6 +30,14 @@ import (
 // save_state and load_state.
 const ControlArgSlot = "slot"
 
+// ControlArgName and ControlArgMode are the arguments of the cheat control:
+// the cheat to change, and whether to turn it on, off, toggle it, or clear
+// every enabled cheat.
+const (
+	ControlArgName = "name"
+	ControlArgMode = "mode"
+)
+
 var (
 	// ErrControlUnavailable reports a control the launcher defines but the
 	// running core or emulator cannot perform right now.

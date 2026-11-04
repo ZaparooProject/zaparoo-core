@@ -127,6 +127,7 @@ type coreReadiness struct {
 	launches *gamehandoff.LaunchLog
 	watch    func(ctx context.Context, path string) (<-chan gamehandoff.Kind, error)
 	stat     func(path string) (os.FileInfo, error)
+	readMGL  func(path string) (mgls.MGL, error)
 	coreName func() (string, time.Time, error)
 	// coreUp signals when the launched core is up; nil uses waitCoreUp.
 	coreUp   func(ctx context.Context, launchedAt time.Time) <-chan struct{}
@@ -153,6 +154,7 @@ func newCoreReadiness() *coreReadiness {
 		launches: gamehandoff.NewLaunchLog(clock),
 		watch:    gamehandoff.Watch,
 		stat:     os.Stat,
+		readMGL:  mgls.ReadMgl,
 		coreName: func() (string, time.Time, error) {
 			data, err := os.ReadFile(misterconfig.CoreNameFile)
 			if err != nil {
@@ -251,6 +253,25 @@ func (r *coreReadiness) noteLaunches(
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		r.launches.Note(path)
+		return launch(cfg, path, opts)
+	}
+}
+
+// noteMGLGames wraps a launcher that loads arbitrary MGL files. The tracker
+// publishes such a launch as the game the MGL loads, under that game's own
+// launcher, so the launch is noted by the MGL's game path for that
+// launcher's probe to find. Without it the probe would treat the game as
+// already running and controls would reach Main while it is still loading
+// the core, where they are lost.
+func (r *coreReadiness) noteMGLGames(
+	launch func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error),
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		if strings.EqualFold(filepath.Ext(path), ".mgl") {
+			if mgl, err := r.readMGL(path); err == nil && mgl.File.Path != "" {
+				r.launches.Note(mgl.File.Path)
+			}
+		}
 		return launch(cfg, path, opts)
 	}
 }

@@ -190,6 +190,7 @@ const (
 	ControlNext        = "next"
 	ControlPrevious    = "previous"
 	ControlToggleTray  = "toggle_tray"
+	ControlCheat       = "cheat"
 )
 
 // ControlParams contains parameters for a control action.
