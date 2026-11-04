@@ -44,6 +44,8 @@ func ApplyDirectoryHidden(ctx context.Context, db *Database, systemID, path stri
 	if err := EnsureMediaWritable(db.MediaDB); err != nil {
 		return false, err
 	}
+	reportFlags := db.watchMediaUserFlags(systemID, path)
+	defer reportFlags()
 	if err := db.UserDB.SetMediaUserHidden(systemID, path, hidden); err != nil {
 		return false, fmt.Errorf("failed to set hidden directory: %w", err)
 	}

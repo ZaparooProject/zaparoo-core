@@ -1227,6 +1227,22 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	var addedFlag database.MediaUserFlag
+	if sortOrder == searchSortAddedDesc {
+		if grouped || params.TitleID != nil {
+			return nil, models.ClientErrf("sort %q cannot be combined with groupBy or titleId", sortOrder)
+		}
+		flag, ok := addedSortFlag(tagFilters)
+		if !ok {
+			return nil, models.ClientErrf(
+				"sort %q needs a user:favorite, user:liked, user:disliked or user:playlater tag", sortOrder)
+		}
+		if env.Database == nil || env.Database.UserDB == nil {
+			return nil, errors.New("user database is not available")
+		}
+		addedFlag = flag
+	}
+
 	// Normalize letter parameter (validation already done by struct tag)
 	var validatedLetter *string
 	if params.Letter != nil && *params.Letter != "" {
@@ -1311,6 +1327,11 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			return nil, fmt.Errorf("error folding title versions: %w", foldErr)
 		}
 		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
+	case addedFlag != "":
+		searchResults, err = searchByAdded(ctx, env.Database, addedFlag, &searchFilters, sortCursor, limit)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
 		if err != nil {

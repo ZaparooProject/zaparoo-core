@@ -299,13 +299,23 @@ None.
 | kind            | string    | Yes      | `notice`, `loader`, `picker`, or `confirm`. |
 | title           | string    | No       | Optional heading. |
 | message         | string    | No       | Optional body text. |
-| choices         | object[]  | No       | Picker choices containing opaque `id` and display `label`. |
+| choices         | [UI choice](#ui-choice-object)[] | No | Picker choices. |
 | selectedChoiceId | string   | No       | Initially selected picker choice. |
 | dismissible     | boolean   | Yes      | Whether `dismiss` is accepted. |
 | createdAt       | string    | Yes      | RFC3339 creation timestamp. |
 | expiresAt       | string    | No       | Authoritative RFC3339 expiry. Omitted for producer-controlled events such as loaders. |
 
+##### UI choice object
+
+| Key   | Type   | Required | Description |
+| :---- | :----- | :------- | :---------- |
+| id    | string | Yes      | Opaque choice ID used by `ui.respond`. |
+| label | string | Yes      | Display label. |
+| media | object | No       | The local game the choice launches: `system` (system ID), `path` and `name`. Pass `system` and `path` to [`media.image`](#mediaimage) for its art. Present for playlist and deck items that resolve to an indexed game on this device, and for any other choice that is a game. |
+
 Choice IDs are presentation-safe. Executable ZapScript and private choice values remain inside Core.
+
+On MiSTer, Main_MiSTer records in `/tmp/zaparoo/frontend_status.json` whether the Zaparoo frontend runs in place of the stock menu. While it does, Core shows no UI event through its own menu widgets and leaves every event to API clients, as long as the frontend is running or a game is; at the menu before the frontend has started, the widgets show it as before. An event raised while a game runs, which the widgets would have ended the game to show, instead returns to the menu so Main starts the frontend, and stays open for at least 60 seconds from then, or for its own timeout when that is longer. Events the widgets never show over a running game, such as the auto-advance switch countdown, are unchanged. When the file is missing, unreadable, reports the frontend inactive, or names a Main process that is no longer running (a stock Main started in its place), Core shows events as before.
 
 #### Example
 
@@ -661,10 +671,14 @@ An object:
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
 | tags       | string[] | No       | Filter results by case-sensitive tags. Maximum 50 tags, each up to 128 characters. Default and `+` filters require matches, `-` excludes matches, and `~` joins alternatives. Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
-| sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, or `filename-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. Omitted preserves legacy database order. |
+| sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, `filename-desc` or `added-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. `added-desc` orders by when each game got a flag; see [Sorting by date added](#sorting-by-date-added). Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | groupBy    | string   | No       | `title` returns one result per title and system instead of one per media file. See [Grouped search](#grouped-search). Only `name-asc` and `name-desc` sorts apply. Cannot be combined with `titleId`. |
 | titleId    | number   | No       | List the versions of one title: its media matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. |
+
+#### Sorting by date added
+
+`added-desc` lists the games of one user flag list by when each got the flag, newest first. It needs a positive `user:favorite`, `user:liked`, `user:disliked` or `user:playlater` filter in `tags` (no `-` or `~` operator); when several are given, the first one names the order. Games flagged before Core recorded when flags are set have no date: they come after every dated game, ordered by name ascending. Setting a flag that is already set keeps its date, and clearing a flag clears it. Cursors work as for the other sorts. Any other use of `added-desc`, including with `groupBy` or `titleId`, is a client error.
 
 #### Grouped search
 
@@ -1283,7 +1297,7 @@ Hidden entries disappear from normal discovery and random selection, but remain 
 
 A folder is hidden by sending its `system` and `path` with `user:hidden` as the only tag. The path must name no indexed file and hold indexed media for that system. The hide is one preference stored against the folder's path, not a tag on each file under it, so it also covers files indexed later and its cost does not grow with the folder. The folder leaves its parent's `media.browse` listing and `media.browse.index`, and its media leave `media.search`, system counts and random selection, until `includeHidden` is set. Browsing or searching the folder's own path still works, so a client can keep a shortcut to a hidden folder. The result's `tags` holds `user:hidden` while the folder is hidden and is empty otherwise. Any other tag sent with a folder's path keeps its earlier meaning: it applies to the folder's single launch target when it has one.
 
-All flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer any preference; the old path's preferences remain stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
+All flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer any preference; the old path's preferences remain stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors. Every update that changes a flag emits [`media.tags.changed`](notifications.md#mediatagschanged) with the item's flags afterwards.
 
 #### Parameters
 
@@ -4388,7 +4402,9 @@ A deck item is either a `script` (a name and the ZapScript it runs) or a `card` 
 
 Every indexed file a deck's game items resolve to carries the tag `user:deck:<id>`, so a deck can be browsed, searched and picked from with the ordinary tag filters, for example `**launch.random:SNES?tags=user:deck:0k3v9x2rq7bm`. An item resolves by the file it is linked to, or by its title when it has no linked file on this device or that file is no longer indexed, in which case it is linked to the file it matched. A title match only counts when it is a confident one. When the linked file is still indexed but was not found by the last scan, such as a file on a drive that was unplugged, the item keeps its link and its title match carries the tag until the file is found again. Tags are updated in the background shortly after a deck is created, edited or deleted, so `decks.new` and `decks.update` return before they are in place, and a title item is linked once its title has been matched; Core sends `decks.changed` with `updated` when it links items. The tags are also rebuilt after every reindex, after `media.clean.orphans` removes files and after a backup is restored. Deck tags cannot be set through `media.tags.update`.
 
-Decks work with no account. With Library sync on, the decks this device owns sync with the linked Zaparoo Online account: a deck made on either side appears on the other, an edit on one side is taken by the other, and when both sides edited a deck the changes are merged, with a name or description changed on the device kept. A deck deleted on the account is deleted here. Decks the account saved from other accounts are kept on the device as read-only copies of their links, marked `saved`, and are not counted toward the 200 decks kept from links; a saved deck is removed when the account no longer lists it. Creating, editing and deleting decks is open to every accepted client, like favorites.
+A deck can have a cover image. Set one with `decks.update` `cover`, from a game's art or an image file on the Core host; Core stores it with the user's data, not in the thumbnail cache. A deck synced with the account, or a card in a deck, may also have an image held online. Clients ask Core for any of these with [`decks.image`](#decksimage) and never fetch them themselves: Core fetches online images (https only, at most 10 MiB) and keeps them in its thumbnail cache.
+
+Decks work with no account. With Library sync on, the decks this device owns sync with the linked Zaparoo Online account: a deck made on either side appears on the other, an edit on one side is taken by the other, and when both sides edited a deck the changes are merged, with a name or description changed on the device kept. A deck deleted on the account is deleted here. Decks the account saved from other accounts are kept on the device as read-only copies of their links, marked `saved`, and are not counted toward the 200 decks kept from links; a saved deck is removed when the account no longer lists it. A cover set or removed on the device is sent to the account with the deck; a deck created on the device sends its cover once the account has created the deck. An image the account sends for a deck replaces the cover stored here, unless a cover change made here is still waiting to be sent. A deck the account locked keeps the account's image, and a cover change made here before the lock is dropped. Creating, editing and deleting decks is open to every accepted client, like favorites.
 
 ### Deck object
 
@@ -4403,6 +4419,8 @@ Decks work with no account. With Library sync on, the decks this device owns syn
 | ownedBy     | string                           | No       | The owner's name as the account gave it, for a saved deck. Omitted when the account gave none. |
 | sourceUrl   | string                           | No       | The link a deck that is not owned was fetched from. Omitted for owned decks. |
 | itemCount   | number                           | Yes      | Number of items in the deck.                                         |
+| hasImage    | boolean                          | Yes      | True when the deck has a cover [`decks.image`](#decksimage) can serve: one stored on the device, or the account's image. |
+| containsItemIds | number[]                     | No       | Only from `decks` given a game's `system` and `path`: the IDs of the items linked to exactly that file, `[]` when none. |
 | items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order, `[]` when empty. Omitted by `decks`.    |
 | metadata    | object                           | No       | Display metadata as received from the account, verbatim.             |
 | createdAt   | number                           | Yes      | Unix timestamp of creation.                                          |
@@ -4420,7 +4438,8 @@ Decks work with no account. With Library sync on, the decks this device owns syn
 | cardId    | string   | No       | The online card a `card` item names.                                                        |
 | scripts   | object[] | No       | A `card` item's scripts, each `{name, zapscript}`.                                          |
 | metadata  | object   | No       | A `card` item's display metadata, verbatim.                                                 |
-| media     | object   | No       | The local file a game item is linked to: `system`, `path`, `name`, `tags` and `available` (whether the path is currently indexed). Absent for cards and for items added elsewhere that have not been resolved on this device. |
+| hasImage  | boolean  | Yes      | True when a `card` item has art [`decks.image`](#decksimage) can serve (an https `rendered_url` or `image_url` in its metadata). Always false for other items; for a game item, ask [`media.image`](#mediaimage) with its `media.system` and `media.path`. |
+| media     | object   | No       | The local file a game item is linked to: `system`, `path`, `name`, `tags`, `available` (whether the path is currently indexed) and `userTags`, the file's current user flags as [TagInfo](#taginfo-object)[] (any of `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`, `[]` when none is set, always present with `media`). Absent for cards and for items added elsewhere that have not been resolved on this device. |
 
 ### Deck item input
 
@@ -4443,11 +4462,18 @@ Items are supplied to `decks.new` and `decks.update` in this shape. A deck holds
 
 **Access:** All clients.
 
-List every deck without its items.
+List every deck without its items. Given a game, every deck also says which of its items are linked to it, so a client can show which decks hold the game.
 
 #### Parameters
 
-None.
+Optional. An object:
+
+| Key    | Type   | Required | Description                                                         |
+| :----- | :----- | :------- | :------------------------------------------------------------------ |
+| system | string | No       | System ID of a game. Required with `path`.                          |
+| path   | string | No       | Path of the game's file. Required with `system`.                    |
+
+With `system` and `path`, every deck in the result carries `containsItemIds`: the items whose linked file is exactly that system and path. One without the other is an error.
 
 #### Result
 
@@ -4566,10 +4592,44 @@ Edit an owned deck. A cached copy of somebody else's deck, and a deck the accoun
 | items         | [DeckItemInput](#deck-item-input)[]  | No       | Replaces the whole item list, in order. Entries given as `{"id": …}` keep that existing item and its ID, so a reorder is `items` listing the current IDs in the new order; any other entry is a new item. An ID the deck does not hold, or one listed twice, is an error. |
 | addItems      | [DeckItemInput](#deck-item-input)[]  | No       | Items to append.                                               |
 | removeItemIds | number[]                             | No       | Item IDs to remove. An ID not in the deck is ignored.          |
+| cover         | object                               | No       | Sets or removes the deck's cover; see below.                   |
+
+`cover` is one of:
+
+| Value                                              | Effect                                                                                       |
+| :------------------------------------------------- | :------------------------------------------------------------------------------------------- |
+| `{"kind": "media", "system": "…", "path": "…"}`    | The game's art, chosen the way `media.image` chooses it by default.                         |
+| `{"kind": "file", "path": "…"}`                    | An image file on the Core host, by absolute path. It must be a JPEG, PNG, GIF or WebP image of at most 10 MiB that decodes. |
+| `{"kind": "none"}`                                 | Removes the cover.                                                                           |
+
+A cover change works with no account and updates `updatedAt`. With Library sync on it is sent to the account; `none` removes the account's image.
 
 #### Result
 
 The updated [Deck](#deck-object) with `items`.
+
+### decks.image
+
+**Access:** All clients.
+
+Return a deck's cover, or the art of one of its `card` items. A game item's art comes from [`media.image`](#mediaimage) with the item's `media.system` and `media.path`.
+
+The cover is the one stored on the device, or else the account's image for the deck. A card's art is its `rendered_url`, or else its `image_url`. Online images are fetched by Core over https only, at most 10 MiB, and kept in Core's thumbnail cache by URL, so a second request does not fetch again.
+
+#### Parameters
+
+| Key      | Type   | Required | Description                                                                 |
+| :------- | :----- | :------- | :-------------------------------------------------------------------------- |
+| deckId   | string | Yes      | The deck ID.                                                                |
+| itemId   | number | No       | A `card` item of the deck. Omit for the deck's cover.                       |
+| maxSize  | number | No       | As in [`media.image`](#mediaimage): snapped to the same size tiers and resized the same way. Omit for the full image. |
+| delivery | string | No       | `inline` (default) or `localPath`, as in [`media.image`](#mediaimage); `localPath` needs a positive `maxSize`. |
+
+#### Result
+
+The [`media.image`](#mediaimage) result: `delivery`, `contentType`, `extension`, `data` or `localPath`, and `typeTag`, which is `deck:cover` for a cover and `deck:card` for card art.
+
+When there is no image, the request fails with the client error `image not found`. An `itemId` the deck does not hold fails with `deck item not found`.
 
 ### decks.delete
 

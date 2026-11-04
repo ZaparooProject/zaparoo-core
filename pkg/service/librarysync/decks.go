@@ -305,6 +305,7 @@ func (s *Service) syncOwnedDecks(ctx context.Context) (DecksResult, error) {
 	if err := pass.push(ctx); err != nil {
 		return pass.result, err
 	}
+	s.pruneDeckCovers()
 	return pass.result, nil
 }
 
@@ -348,6 +349,7 @@ type deckPass struct {
 	svc    *Service
 	client *backup.OnlineClient
 	rows   map[string]*database.DeckSyncRow
+	covers coverPass
 	result DecksResult
 }
 
@@ -359,7 +361,7 @@ func (s *Service) newDeckPass() (*deckPass, error) {
 	if err != nil {
 		return nil, err
 	}
-	pass := &deckPass{svc: s, client: client}
+	pass := &deckPass{svc: s, client: client, covers: newCoverPass()}
 	if linkErr := pass.checkLink(); linkErr != nil {
 		return nil, linkErr
 	}
@@ -508,6 +510,12 @@ func (p *deckPass) applyPulled(remote *deckSync) error {
 	if err := p.writeLocal(deckID, remote, &target, local); err != nil {
 		return err
 	}
+	if remote.IsLocked && local != nil && local.CoverPending != "" {
+		// A locked deck takes no change from here, its cover included.
+		if err := p.discardCoverChange(deckID, remote); err != nil {
+			return err
+		}
+	}
 	next := &database.DeckSyncRow{
 		DeckID: deckID, Snapshot: server.encode(), Revision: remote.Revision, Locked: remote.IsLocked,
 	}
@@ -577,6 +585,9 @@ func (p *deckPass) writeLocal(
 		Metadata:    remote.Metadata,
 		Items:       items,
 	}
+	if remote.ImageURL != nil {
+		deck.ImageURL = *remote.ImageURL
+	}
 	changed, err := p.userDB().UpsertRemoteDeck(deck)
 	if err != nil {
 		return fmt.Errorf("store deck %s: %w", deckID, err)
@@ -629,7 +640,7 @@ func (p *deckPass) deleteLocal(deckID string) error {
 // deck deleted here that the account still holds.
 func (p *deckPass) push(ctx context.Context) error {
 	for range deckPushMaxRounds {
-		records, err := p.dirtyRecords()
+		records, err := p.dirtyRecords(ctx)
 		if err != nil {
 			return err
 		}
@@ -669,10 +680,16 @@ type pendingDeck struct {
 	content *deckContent
 	deckID  string
 	name    string
-	record  deckPushRecord
+	// coverPending and coverFile are the deck's cover change as it stood
+	// when the record was built, and coverSent whether the record carries
+	// it. A change not sent with a create goes in the next round.
+	coverPending string
+	coverFile    string
+	record       deckPushRecord
+	coverSent    bool
 }
 
-func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
+func (p *deckPass) dirtyRecords(ctx context.Context) ([]pendingDeck, error) {
 	list, err := p.userDB().ListDecks()
 	if err != nil {
 		return nil, fmt.Errorf("list decks: %w", err)
@@ -694,10 +711,16 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 			return nil, fmt.Errorf("read deck %s: %w", deckID, getErr)
 		}
 		content := localDeckContent(deck)
-		if row != nil && content.encode() == row.Snapshot {
+		coverPending, settleErr := p.settleUnneededRemoval(deck)
+		if settleErr != nil {
+			return nil, settleErr
+		}
+		contentClean := row != nil && content.encode() == row.Snapshot
+		if contentClean && coverPending == "" {
 			continue
 		}
-		if row != nil && row.RejectedHash != "" && row.RejectedHash == content.hash() {
+		if !contentClean && row != nil && row.RejectedHash != "" && row.RejectedHash == content.hash() &&
+			coverPending == "" {
 			continue
 		}
 		if pushIsCreate(row) && !database.IsMintedDeckID(deckID) {
@@ -719,7 +742,16 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 		if row != nil {
 			record.BaseRevision = row.Revision
 		}
-		pending = append(pending, pendingDeck{deckID: deckID, name: deck.Name, content: &content, record: record})
+		next := pendingDeck{
+			deckID: deckID, name: deck.Name, content: &content, record: record,
+			coverPending: coverPending, coverFile: deck.CoverFile,
+		}
+		p.attachCover(ctx, &next)
+		if contentClean && !next.coverSent {
+			// Only the cover changed, and it cannot go this round.
+			continue
+		}
+		pending = append(pending, next)
 	}
 	for deckID, row := range p.rows {
 		if owned[deckID] {
@@ -777,11 +809,19 @@ func (p *deckPass) handlePushResults(batch []pendingDeck, response *deckPushResp
 		case statusApplied:
 			p.result.Pushed++
 			err = p.handleApplied(pending, result.Deck)
+			if err == nil && pending.coverPending != "" && !pending.coverSent && !p.covers.held[pending.deckID] {
+				// A create carries no image: send the cover now the deck exists.
+				retry = true
+			}
 		case statusConflict:
 			p.result.Conflicts++
 			retry = true
 			err = p.handleConflict(pending, result.Deck)
 		case statusRejected:
+			if again, handled := p.handleCoverRejected(pending, &result); handled {
+				retry = retry || again
+				continue
+			}
 			var again bool
 			again, err = p.handleRejected(pending, &result)
 			retry = retry || again
@@ -825,7 +865,10 @@ func (p *deckPass) handleApplied(pending *pendingDeck, remote *deckSync) error {
 	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
-	return p.saveRow(row)
+	if err := p.saveRow(row); err != nil {
+		return err
+	}
+	return p.settleCover(pending, remote)
 }
 
 func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error {
@@ -904,6 +947,9 @@ func (p *deckPass) handleRejected(pending *pendingDeck, result *deckPushResult) 
 		}
 		server := serverDeckContent(result.Deck)
 		if err := p.writeLocal(pending.deckID, result.Deck, &server, local); err != nil {
+			return false, err
+		}
+		if err := p.discardCoverChange(pending.deckID, result.Deck); err != nil {
 			return false, err
 		}
 		p.svc.notifyInbox("Deck locked on Zaparoo Online", fmt.Sprintf(
@@ -986,12 +1032,16 @@ type deckPushRequest struct {
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckPushRecord struct {
-	Name         *string              `json:"name,omitempty"`
-	Description  *string              `json:"description,omitempty"`
-	Items        *[]deckPushItemInput `json:"items,omitempty"`
-	DeckID       string               `json:"deck_id"`
-	BaseRevision int64                `json:"base_revision"`
-	Deleted      bool                 `json:"deleted,omitempty"`
+	Name        *string              `json:"name,omitempty"`
+	Description *string              `json:"description,omitempty"`
+	Items       *[]deckPushItemInput `json:"items,omitempty"`
+	DeckID      string               `json:"deck_id"`
+	// ImageUploadID commits an image staged for the deck as its image, and
+	// RemoveImage clears the deck's image. At most one is set.
+	ImageUploadID string `json:"image_upload_id,omitempty"`
+	BaseRevision  int64  `json:"base_revision"`
+	Deleted       bool   `json:"deleted,omitempty"`
+	RemoveImage   bool   `json:"remove_image,omitempty"`
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -1024,6 +1074,7 @@ type deckPullResponse struct {
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckSync struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ImageURL    *string         `json:"image_url,omitempty"`
 	DeckID      string          `json:"deck_id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`

@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
@@ -95,6 +96,9 @@ type Options struct {
 	// Notifications receives decks.changed when a sync pass changes a deck.
 	// Optional.
 	Notifications chan<- models.Notification
+	// DeckCovers holds deck cover images, which a deck pass sends to the
+	// account. Optional; without it cover changes stay on the device.
+	DeckCovers *decks.Covers
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -111,6 +115,7 @@ type Service struct {
 	now           func() time.Time
 	launchers     func(systemID string) []platforms.Launcher
 	fetchDeck     DeckFetcher
+	deckCovers    *decks.Covers
 	notifications chan<- models.Notification
 	deckSem       chan struct{}
 	savedSem      chan struct{}
@@ -133,6 +138,7 @@ func New(opts *Options) *Service {
 		launchers:     opts.Launchers,
 		resolvePace:   opts.ResolvePace,
 		fetchDeck:     opts.FetchDeck,
+		deckCovers:    opts.DeckCovers,
 		notifications: opts.Notifications,
 		deckSem:       make(chan struct{}, 1),
 		savedSem:      make(chan struct{}, 1),

@@ -72,6 +72,8 @@ func ApplyMediaUserFlags(
 			return nil, err
 		}
 	}
+	reportFlags := db.watchMediaUserFlags(systemID, path)
+	defer reportFlags()
 
 	// The two stores are separate files, so nothing makes the pair of writes
 	// atomic. The marker is what a kill between them leaves behind. One that
@@ -149,6 +151,38 @@ func ApplyMediaUserFlags(
 	return written, nil
 }
 
+// watchMediaUserFlags reads a path's flags before an edit and returns the
+// function that reads them after it and tells OnMediaUserFlagsChanged when
+// they differ. It reads nothing when nobody listens. A read that fails is
+// taken as a change, so a listener is never left with a stale view.
+func (db *Database) watchMediaUserFlags(systemID, path string) func() {
+	if db == nil || db.OnMediaUserFlagsChanged == nil || db.UserDB == nil {
+		return func() {}
+	}
+	before, _, beforeErr := db.UserDB.GetMediaUserData(systemID, path)
+	return func() {
+		after, _, err := db.UserDB.GetMediaUserData(systemID, path)
+		if err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("failed to read media user flags after an edit")
+			return
+		}
+		if beforeErr == nil && sameMediaUserFlags(&before, &after) {
+			return
+		}
+		after.SystemID, after.Path = systemID, path
+		db.OnMediaUserFlagsChanged(systemID, path, &after)
+	}
+}
+
+func sameMediaUserFlags(a, b *MediaUserData) bool {
+	for _, flag := range MediaUserFlags {
+		if a.Flag(flag) != b.Flag(flag) {
+			return false
+		}
+	}
+	return true
+}
+
 // setFlag sets one flag to true, reporting false for an unknown flag.
 func (d *MediaUserData) setFlag(flag MediaUserFlag) bool {
 	switch flag {
@@ -166,4 +200,16 @@ func (d *MediaUserData) setFlag(flag MediaUserFlag) bool {
 		return false
 	}
 	return true
+}
+
+// UserTags returns the user utility tags the row holds, in MediaUserFlags
+// order, as media.tags.update reports them.
+func (d *MediaUserData) UserTags() []TagInfo {
+	out := make([]TagInfo, 0, len(MediaUserFlags))
+	for _, flag := range MediaUserFlags {
+		if d.Flag(flag) {
+			out = append(out, TagInfo{Type: string(mediatags.TagTypeUser), Tag: string(flag)})
+		}
+	}
+	return out
 }

@@ -36,6 +36,7 @@ const (
 	NotificationMediaScraping        = "media.scraping"
 	NotificationMediaVisibility      = "media.visibility"
 	NotificationMediaHistoryChanged  = "media.history.changed"
+	NotificationMediaTagsChanged     = "media.tags.changed"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
@@ -173,6 +174,7 @@ const (
 	MethodDecksUpdate                 = "decks.update"
 	MethodDecksDelete                 = "decks.delete"
 	MethodDecksOpen                   = "decks.open"
+	MethodDecksImage                  = "decks.image"
 	MethodProfilesVerify              = "profiles.verify"
 	MethodSystems                     = "systems"
 	MethodLaunchers                   = "launchers"

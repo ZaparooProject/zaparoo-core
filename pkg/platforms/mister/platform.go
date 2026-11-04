@@ -127,8 +127,15 @@ type Platform struct {
 	launchCoreAtRBF     func(cores.RBFInfo) error
 	launchSystemCore    func(*config.Instance, platforms.Platform, *cores.Core) error
 	closeConsole        func() error
-	coreLoads           coreLoadStops
-	lastLauncher        platforms.Launcher
+	// uiReturnToMenu ends running media so the frontend can draw a UI
+	// event; nil stops the active launcher for the menu.
+	uiReturnToMenu func() error
+	// uiFrontendRunning reports whether the frontend process is up and
+	// holding its activity lease; nil means probe the lease file. Tests
+	// replace it.
+	uiFrontendRunning func() bool
+	coreLoads         coreLoadStops
+	lastLauncher      platforms.Launcher
 	shared.InputManager
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
@@ -1976,9 +1983,13 @@ func (p *Platform) PresentUI(
 			selected = 0
 		} else {
 			for i, choice := range event.Choices {
+				name := choice.Label
+				if choice.Current {
+					name = "> " + name
+				}
 				items = append(items, widgetmodels.PickerItem{
 					ID:     choice.ID,
-					Name:   choice.Label,
+					Name:   name,
 					Action: models.UIResponseActionSelect,
 				})
 				if choice.ID == event.SelectedChoiceID {

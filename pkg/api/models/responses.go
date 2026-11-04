@@ -29,9 +29,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// UIChoiceMedia names the local game a picker choice stands for, so a client
+// can show the choice as that game.
+type UIChoiceMedia struct {
+	System string `json:"system"`
+	Path   string `json:"path"`
+	Name   string `json:"name"`
+}
+
 type UIChoice struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	Media *UIChoiceMedia `json:"media,omitempty"`
+	ID    string         `json:"id"`
+	Label string         `json:"label"`
+	// Current marks the choice standing for what is open now, such as the
+	// playing item of a playlist. Host widgets mark it; API clients get the
+	// initial selection from selectedChoiceId instead.
+	Current bool `json:"-"`
 }
 
 type UIEvent struct {
@@ -1006,11 +1019,13 @@ type ProfilesDataNotification struct {
 // DeckItemMedia is the local file a deck's game item is linked to on this
 // device, and whether that file is currently indexed.
 type DeckItemMedia struct {
-	System    string   `json:"system"`
-	Path      string   `json:"path"`
-	Name      string   `json:"name"`
-	Tags      []string `json:"tags,omitempty"`
-	Available bool     `json:"available"`
+	System string   `json:"system"`
+	Path   string   `json:"path"`
+	Name   string   `json:"name"`
+	Tags   []string `json:"tags,omitempty"`
+	// UserTags is the linked file's user utility tags, [] when none is set.
+	UserTags  []database.TagInfo `json:"userTags"`
+	Available bool               `json:"available"`
 }
 
 // DeckItemResponse is one member of a deck.
@@ -1024,6 +1039,8 @@ type DeckItemResponse struct {
 	Scripts   []DeckCardScriptInput `json:"scripts,omitempty"`
 	ID        int64                 `json:"id"`
 	Position  int                   `json:"position"`
+	// HasImage reports card art decks.image can serve for a card item.
+	HasImage bool `json:"hasImage"`
 }
 
 // DeckResponse is a deck. Items is present, as [] for an empty deck, on
@@ -1036,12 +1053,17 @@ type DeckResponse struct {
 	SourceURL   string             `json:"sourceUrl,omitempty"`
 	OwnedBy     string             `json:"ownedBy,omitempty"`
 	Items       []DeckItemResponse `json:"items,omitzero"`
-	CreatedAt   int64              `json:"createdAt"`
-	UpdatedAt   int64              `json:"updatedAt"`
-	ItemCount   int                `json:"itemCount"`
-	Owned       bool               `json:"owned"`
-	Locked      bool               `json:"locked"`
-	Saved       bool               `json:"saved"`
+	// ContainsItemIDs lists the items linked to the game the decks list was
+	// asked about, and is omitted when it was asked about none.
+	ContainsItemIDs []int64 `json:"containsItemIds,omitzero"`
+	CreatedAt       int64   `json:"createdAt"`
+	UpdatedAt       int64   `json:"updatedAt"`
+	ItemCount       int     `json:"itemCount"`
+	Owned           bool    `json:"owned"`
+	Locked          bool    `json:"locked"`
+	Saved           bool    `json:"saved"`
+	// HasImage reports a cover decks.image can serve.
+	HasImage bool `json:"hasImage"`
 }
 
 // DecksResponse is the response for the decks RPC method.
@@ -1056,6 +1078,14 @@ const (
 	DecksChangedDeleted   = "deleted"
 	DecksChangedRefreshed = "refreshed"
 )
+
+// MediaTagsChangedNotification is the payload for the media.tags.changed
+// notification: an item's full set of user utility tags after a change.
+type MediaTagsChangedNotification struct {
+	System string             `json:"system"`
+	Path   string             `json:"path"`
+	Tags   []database.TagInfo `json:"tags"`
+}
 
 // DecksChangedNotification is the payload for the decks.changed
 // notification.

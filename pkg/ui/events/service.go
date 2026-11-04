@@ -101,6 +101,18 @@ func RendersOverMedia(r Renderer) bool {
 	return true
 }
 
+// HandoffRenderer is optionally implemented by a Renderer that at times
+// leaves events to API clients drawing on the same screen, such as a
+// frontend that runs in place of the host's own UI. HandOffUI is asked in
+// place of PresentUI. handled reports that the event is left to clients and
+// must not be presented. When the clients first need the screen, as when
+// running media has to give way to them, HandOffUI does that and returns the
+// least time the event must stay open from now so a client can start and
+// draw it; otherwise minOpen is zero.
+type HandoffRenderer interface {
+	HandOffUI(ctx context.Context, event *models.UIEvent) (handled bool, minOpen time.Duration)
+}
+
 // UpdatingRenderer optionally applies producer updates to an existing host UI.
 type UpdatingRenderer interface {
 	UpdateUI(context.Context, *models.UIEvent) error
@@ -119,7 +131,13 @@ type Publisher func(models.UIStateResponse)
 // is returned only to producer and is never serialized into public event.
 type Choice struct {
 	Value any
+	// Media names the local game the choice stands for, nil when it is not
+	// a game. It is public and copied into the event.
+	Media *models.UIChoiceMedia
 	Label string
+	// Current marks the choice standing for what is open now. Only host
+	// widgets show it; it is not part of the public event.
+	Current bool
 }
 
 // Request describes one transient UI interaction. A positive Timeout creates
@@ -268,7 +286,9 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 	minimumDisplay := time.Duration(0)
 	if !entry.skipHostRenderer {
 		event := cloneEvent(&entry.event)
-		s.present(ctx, eventID, &event)
+		if !s.handOff(ctx, eventID, &event) {
+			s.present(ctx, eventID, &event)
+		}
 		if timedRenderer, ok := s.renderer.(TimedRenderer); ok {
 			minimumDisplay = timedRenderer.MinimumUIDisplay(entry.event.Kind)
 		}
@@ -571,6 +591,51 @@ func (s *Service) resolveTimeout(id string, generation uint64) {
 	s.deliverResult(entry, Result{Resolution: resolution})
 }
 
+// handOff offers an event to a HandoffRenderer and reports whether the
+// renderer left it to API clients. A handed-off event is never shown or
+// updated through the host renderer, and its expiry is pushed out to the
+// least open time the renderer asked for. An event without an expiry keeps
+// none.
+func (s *Service) handOff(ctx context.Context, id string, event *models.UIEvent) bool {
+	handoff, ok := s.renderer.(HandoffRenderer)
+	if !ok {
+		return false
+	}
+	handled, minOpen := handoff.HandOffUI(ctx, event)
+	if !handled {
+		return false
+	}
+
+	s.mu.Lock()
+	entry := s.active
+	if entry == nil || entry.event.ID != id {
+		s.mu.Unlock()
+		return true
+	}
+	entry.skipHostRenderer = true
+	floor := s.clock.Now().Add(minOpen)
+	if minOpen <= 0 || entry.event.ExpiresAt == nil || !entry.event.ExpiresAt.Before(floor) {
+		s.mu.Unlock()
+		return true
+	}
+	entry.timerGeneration++
+	if entry.timer != nil {
+		entry.timer.Stop()
+		entry.timer = nil
+	}
+	entry.event.ExpiresAt = &floor
+	generation := entry.timerGeneration
+	s.revision++
+	state := s.stateLocked(nil)
+	s.mu.Unlock()
+
+	log.Debug().Str("event_id", id).Dur("min_open", minOpen).
+		Msg("UI event left to API clients; expiry extended")
+	s.publishState(state)
+	s.attachTimer(id, generation, minOpen)
+	return true
+}
+
 func (s *Service) present(ctx context.Context, id string, event *models.UIEvent) {
 	if s.renderer == nil {
 		return
@@ -626,7 +691,10 @@ func newActiveEvent(request *Request, now time.Time) *activeEvent {
 
 	for i, choice := range request.Choices {
 		choiceID := uuid.NewString()
-		publicChoices = append(publicChoices, models.UIChoice{ID: choiceID, Label: choice.Label})
+		publicChoices = append(publicChoices, models.UIChoice{
+			ID: choiceID, Label: choice.Label, Media: cloneChoiceMedia(choice.Media),
+			Current: choice.Current,
+		})
 		privateChoices[choiceID] = choice
 		if i == request.SelectedChoice {
 			selectedChoiceID = choiceID
@@ -780,7 +848,18 @@ func cloneEvent(event *models.UIEvent) models.UIEvent {
 		cloned.ExpiresAt = &expiresAt
 	}
 	cloned.Choices = append([]models.UIChoice(nil), event.Choices...)
+	for i := range cloned.Choices {
+		cloned.Choices[i].Media = cloneChoiceMedia(cloned.Choices[i].Media)
+	}
 	return cloned
+}
+
+func cloneChoiceMedia(media *models.UIChoiceMedia) *models.UIChoiceMedia {
+	if media == nil {
+		return nil
+	}
+	copied := *media
+	return &copied
 }
 
 func resolutionSlice(resolution *models.UIResolution) []models.UIResolution {

@@ -41,19 +41,36 @@ const mediaUserDataColumns = `
 const mediaUserNoIntent = `IsFavorite = 0 and IsHidden = 0 and IsLiked = 0 and IsDisliked = 0` +
 	` and IsPlayLater = 0 and LauncherOverride = ''`
 
-// mediaUserFlagColumn maps a preference flag to its column and the columns a
+// mediaUserFlagColumn maps a preference flag to its column, the column that
+// records when it was set (empty for a flag without one), and the flags a
 // true value clears, so an exclusive pair can never be written together.
 type mediaUserFlagColumn struct {
-	column string
-	clears []string
+	column   string
+	atColumn string
+	clears   []database.MediaUserFlag
 }
 
 var mediaUserFlagColumns = map[database.MediaUserFlag]mediaUserFlagColumn{
-	database.MediaUserFlagFavorite:  {column: "IsFavorite", clears: []string{"IsDisliked"}},
-	database.MediaUserFlagHidden:    {column: "IsHidden"},
-	database.MediaUserFlagLiked:     {column: "IsLiked", clears: []string{"IsDisliked"}},
-	database.MediaUserFlagDisliked:  {column: "IsDisliked", clears: []string{"IsLiked", "IsFavorite"}},
-	database.MediaUserFlagPlayLater: {column: "IsPlayLater"},
+	database.MediaUserFlagFavorite: {
+		column: "IsFavorite", atColumn: "FavoriteAt", clears: []database.MediaUserFlag{database.MediaUserFlagDisliked},
+	},
+	database.MediaUserFlagHidden: {column: "IsHidden"},
+	database.MediaUserFlagLiked: {
+		column: "IsLiked", atColumn: "LikedAt", clears: []database.MediaUserFlag{database.MediaUserFlagDisliked},
+	},
+	database.MediaUserFlagDisliked: {
+		column: "IsDisliked", atColumn: "DislikedAt",
+		clears: []database.MediaUserFlag{database.MediaUserFlagLiked, database.MediaUserFlagFavorite},
+	},
+	database.MediaUserFlagPlayLater: {column: "IsPlayLater", atColumn: "PlayLaterAt"},
+}
+
+// mediaUserFlagAtUpdate is the upsert assignment for a flag's set time: kept
+// while the flag stays set, the write's time when it becomes set, and cleared
+// with the flag.
+func mediaUserFlagAtUpdate(column, atColumn string) string {
+	return atColumn + " = case when excluded." + column + " = 1 then (case when MediaUserData." + column +
+		" = 1 then MediaUserData." + atColumn + " else excluded.UpdatedAt end) else null end"
 }
 
 // GetMediaUserData returns the user-data row for a media path. The bool is false
@@ -94,20 +111,112 @@ func (db *UserDB) SetMediaUserFlag(systemID, path string, flag database.MediaUse
 	if !ok {
 		return fmt.Errorf("unknown media user flag %q", flag)
 	}
+	// Numbered parameters: ?1 system, ?2 path, ?3 value, ?4 created, ?5 updated.
 	var sb strings.Builder
 	_, _ = sb.WriteString("insert into MediaUserData(SystemID, Path, ")
 	_, _ = sb.WriteString(spec.column)
-	_, _ = sb.WriteString(", LauncherOverride, CreatedAt, UpdatedAt) values (?, ?, ?, '', ?, ?)\n")
+	if spec.atColumn != "" {
+		_, _ = sb.WriteString(", " + spec.atColumn)
+	}
+	_, _ = sb.WriteString(", LauncherOverride, CreatedAt, UpdatedAt) values (?1, ?2, ?3")
+	if spec.atColumn != "" {
+		_, _ = sb.WriteString(", case when ?3 then ?5 else null end")
+	}
+	_, _ = sb.WriteString(", '', ?4, ?5)\n")
 	_, _ = sb.WriteString("on conflict(SystemID, Path) do update set\n\t")
 	_, _ = sb.WriteString(spec.column + " = excluded." + spec.column + ",\n")
-	for _, cleared := range spec.clears {
-		_, _ = sb.WriteString("\t" + cleared + " = case when excluded." + spec.column +
-			" = 1 then 0 else MediaUserData." + cleared + " end,\n")
+	if spec.atColumn != "" {
+		_, _ = sb.WriteString("\t" + mediaUserFlagAtUpdate(spec.column, spec.atColumn) + ",\n")
+	}
+	for _, clearedFlag := range spec.clears {
+		cleared := mediaUserFlagColumns[clearedFlag]
+		_, _ = sb.WriteString("\t" + cleared.column + " = case when excluded." + spec.column +
+			" = 1 then 0 else MediaUserData." + cleared.column + " end,\n")
+		if cleared.atColumn != "" {
+			_, _ = sb.WriteString("\t" + cleared.atColumn + " = case when excluded." + spec.column +
+				" = 1 then null else MediaUserData." + cleared.atColumn + " end,\n")
+		}
 	}
 	_, _ = sb.WriteString("\tUpdatedAt = excluded.UpdatedAt;")
 	return mediaUserDataColumnWrite(
 		db.ctx, db.sql.Load(), sb.String(), systemID, pathutil.CanonicalMediaPath(path), value, time.Now().Unix(),
 	)
+}
+
+// GetMediaUserDataForPaths returns the user-data rows of the given paths in
+// one query, keyed by MediaUserKey. Paths with no row are absent.
+func (db *UserDB) GetMediaUserDataForPaths(
+	refs []database.MediaUserRef,
+) (map[database.MediaUserRef]database.MediaUserData, error) {
+	out := make(map[database.MediaUserRef]database.MediaUserData, len(refs))
+	if len(refs) == 0 {
+		return out, nil
+	}
+	conn := db.sql.Load()
+	if conn == nil {
+		return nil, ErrNullSQL
+	}
+	args := make([]any, 0, len(refs)*2)
+	for _, ref := range refs {
+		args = append(args, ref.SystemID, pathutil.CanonicalMediaPath(ref.Path))
+	}
+	values := strings.TrimSuffix(strings.Repeat("(?, ?),", len(refs)), ",")
+	//nolint:gosec // only placeholders are concatenated
+	rows, err := conn.QueryContext(db.ctx, `select`+mediaUserDataColumns+`
+		from MediaUserData where (SystemID, Path) in (values `+values+`);`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media user data for paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		row, scanErr := scanMediaUserData(rows.Scan)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan media user data row: %w", scanErr)
+		}
+		out[database.MediaUserRef{SystemID: row.SystemID, Path: row.Path}] = row
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate media user data rows: %w", err)
+	}
+	return out, nil
+}
+
+// ListMediaUserFlagTimes returns every path with flag set and when it was
+// set. SetAt is 0 for a flag set before set times were recorded, and for a
+// flag that records none (hidden).
+func (db *UserDB) ListMediaUserFlagTimes(flag database.MediaUserFlag) ([]database.MediaUserFlagTime, error) {
+	spec, ok := mediaUserFlagColumns[flag]
+	if !ok {
+		return nil, fmt.Errorf("unknown media user flag %q", flag)
+	}
+	conn := db.sql.Load()
+	if conn == nil {
+		return nil, ErrNullSQL
+	}
+	at := "0"
+	if spec.atColumn != "" {
+		at = "coalesce(" + spec.atColumn + ", 0)"
+	}
+	//nolint:gosec // column names come from mediaUserFlagColumns, never from input
+	rows, err := conn.QueryContext(db.ctx,
+		`select SystemID, Path, `+at+` from MediaUserData where `+spec.column+` = 1`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media user flag times: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]database.MediaUserFlagTime, 0)
+	for rows.Next() {
+		var row database.MediaUserFlagTime
+		if scanErr := rows.Scan(&row.SystemID, &row.Path, &row.SetAt); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan media user flag time: %w", scanErr)
+		}
+		row.Path = pathutil.CanonicalMediaPath(row.Path)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate media user flag times: %w", err)
+	}
+	return out, nil
 }
 
 // SetMediaUserFavorite records (or clears) the favourite flag for a media path.
@@ -215,28 +324,45 @@ func sqlGetMediaUserData(
 	return row, true, nil
 }
 
-// sqlUpsertMediaUserData writes every flag and the override for one row, and
-// keeps the stored identity snapshot when the new one is empty.
-func sqlUpsertMediaUserData(
-	ctx context.Context, tx *sql.Tx, data *database.MediaUserData, now int64,
-) error {
-	_, err := tx.ExecContext(ctx, `
+// sqlUpsertMediaUserDataQuery writes a whole row; see sqlUpsertMediaUserData.
+// The set time assignments follow mediaUserFlagAtUpdate.
+const sqlUpsertMediaUserDataQuery = `
 		insert into MediaUserData(
 			SystemID, Path, IsFavorite, IsHidden, IsLiked, IsDisliked, IsPlayLater,
+			FavoriteAt, LikedAt, DislikedAt, PlayLaterAt,
 			LauncherOverride, MediaName, Slug, Tags, CreatedAt, UpdatedAt
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(SystemID, Path) do update set
 			IsFavorite = excluded.IsFavorite,
 			IsHidden = excluded.IsHidden,
 			IsLiked = excluded.IsLiked,
 			IsDisliked = excluded.IsDisliked,
 			IsPlayLater = excluded.IsPlayLater,
+			FavoriteAt = case when excluded.IsFavorite = 0 then null
+				when MediaUserData.IsFavorite = 1 then MediaUserData.FavoriteAt
+				else excluded.UpdatedAt end,
+			LikedAt = case when excluded.IsLiked = 0 then null
+				when MediaUserData.IsLiked = 1 then MediaUserData.LikedAt
+				else excluded.UpdatedAt end,
+			DislikedAt = case when excluded.IsDisliked = 0 then null
+				when MediaUserData.IsDisliked = 1 then MediaUserData.DislikedAt
+				else excluded.UpdatedAt end,
+			PlayLaterAt = case when excluded.IsPlayLater = 0 then null
+				when MediaUserData.IsPlayLater = 1 then MediaUserData.PlayLaterAt
+				else excluded.UpdatedAt end,
 			LauncherOverride = excluded.LauncherOverride,
 			MediaName = case when excluded.MediaName != '' then excluded.MediaName else MediaUserData.MediaName end,
 			Slug = case when excluded.Slug != '' then excluded.Slug else MediaUserData.Slug end,
 			Tags = case when excluded.Tags != '' then excluded.Tags else MediaUserData.Tags end,
 			UpdatedAt = excluded.UpdatedAt;
-	`,
+	`
+
+// sqlUpsertMediaUserData writes every flag and the override for one row, and
+// keeps the stored identity snapshot when the new one is empty.
+func sqlUpsertMediaUserData(
+	ctx context.Context, tx *sql.Tx, data *database.MediaUserData, now int64,
+) error {
+	_, err := tx.ExecContext(ctx, sqlUpsertMediaUserDataQuery,
 		data.SystemID,
 		data.Path,
 		data.IsFavorite,
@@ -244,6 +370,10 @@ func sqlUpsertMediaUserData(
 		data.IsLiked,
 		data.IsDisliked,
 		data.IsPlayLater,
+		flagSetAt(data.IsFavorite, now),
+		flagSetAt(data.IsLiked, now),
+		flagSetAt(data.IsDisliked, now),
+		flagSetAt(data.IsPlayLater, now),
 		data.LauncherOverride,
 		data.MediaName,
 		data.Slug,
@@ -253,6 +383,14 @@ func sqlUpsertMediaUserData(
 	)
 	if err != nil {
 		return fmt.Errorf("failed to execute media user data upsert: %w", err)
+	}
+	return nil
+}
+
+// flagSetAt is the set time a newly inserted row records for a flag.
+func flagSetAt(set bool, now int64) any {
+	if set {
+		return now
 	}
 	return nil
 }

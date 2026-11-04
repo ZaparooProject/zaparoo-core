@@ -119,6 +119,7 @@ func startLibrarySyncScheduler(
 			return zapscript.FetchDeckLink(ctx, db, link, pl.ID())
 		},
 		Notifications: st.Notifications,
+		DeckCovers:    decks.NewCovers(pl),
 	})
 	requests := make(chan struct{}, 1)
 	stateRequests := make(chan struct{}, 1)

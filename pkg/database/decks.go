@@ -56,6 +56,12 @@ const (
 	DeckNameMaxLen        = 100
 	DeckDescriptionMaxLen = 1000
 	DeckZapScriptMaxLen   = 5000
+
+	// DeckCoverPendingSet marks a local cover still to be sent to the
+	// account, and DeckCoverPendingRemove a cover removed here whose removal
+	// is still to be sent.
+	DeckCoverPendingSet    = "set"
+	DeckCoverPendingRemove = "remove"
 )
 
 var (
@@ -122,17 +128,69 @@ type Deck struct {
 	// OwnerName is the name the linked account gave for the owner of a deck
 	// it saved, empty when it gave none or the deck is not saved.
 	OwnerName string
-	Metadata  json.RawMessage
-	Items     []DeckItem
-	DBID      int64
-	CreatedAt int64
-	UpdatedAt int64
-	FetchedAt int64
-	ItemCount int
-	Owned     bool
+	// CoverFile names the cover image this device stores for the deck in
+	// its deck covers folder, empty when it stores none.
+	CoverFile string
+	// ImageURL is the image the linked account or the deck's source holds
+	// for the deck, empty when it holds none.
+	ImageURL string
+	// CoverPending is a cover change made here still to reach the account:
+	// DeckCoverPendingSet or DeckCoverPendingRemove, empty when none.
+	CoverPending string
+	Metadata     json.RawMessage
+	Items        []DeckItem
+	DBID         int64
+	CreatedAt    int64
+	UpdatedAt    int64
+	FetchedAt    int64
+	ItemCount    int
+	Owned        bool
 	// Saved marks a deck kept from a link because the linked account saved
 	// it from another account. It is kept while the account lists it.
 	Saved bool
+}
+
+// RemoteImageURL is the image the account or the deck's source holds for
+// the deck: ImageURL, or for a deck stored before ImageURL was kept, the
+// image_url of its metadata. It is empty when there is none, and while a
+// removal made here is still waiting to reach the account.
+func (d *Deck) RemoteImageURL() string {
+	if d.CoverPending == DeckCoverPendingRemove {
+		return ""
+	}
+	if d.ImageURL != "" {
+		return d.ImageURL
+	}
+	return metadataImageURL(d.Metadata, "image_url")
+}
+
+// CardImageURL is a card item's art from its metadata: the rendered card
+// when there is one, else its image. Empty for any other item.
+func (i *DeckItem) CardImageURL() string {
+	if i.Kind != DeckItemKindCard {
+		return ""
+	}
+	if rendered := metadataImageURL(i.Metadata, "rendered_url"); rendered != "" {
+		return rendered
+	}
+	return metadataImageURL(i.Metadata, "image_url")
+}
+
+// metadataImageURL reads one string field of a metadata object, empty when
+// the metadata is not an object or the field is not a string.
+func metadataImageURL(metadata json.RawMessage, field string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(metadata, &fields) != nil {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(fields[field], &value) != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 // FetchedDeckResult reports what keeping a deck fetched from a link did.
