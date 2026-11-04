@@ -20,6 +20,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"time"
 
@@ -94,9 +95,14 @@ func (l *remoteRejectionLog) record(r *http.Request, reason string) {
 	if l == nil {
 		return
 	}
+	// A scoped IPv6 peer such as [fe80::1%eth0]:50123 does not parse as an
+	// IP. Key it on the host so each reconnect's new source port does not
+	// get logged again.
 	ip := r.RemoteAddr
 	if parsed := apimiddleware.ParseRemoteIP(r.RemoteAddr); parsed != nil {
 		ip = parsed.String()
+	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = host
 	}
 	if !l.allow(ip, reason) {
 		return

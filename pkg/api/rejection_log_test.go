@@ -88,5 +88,18 @@ func TestLegacyAdmissionMiddlewareLogsRemoteRejection(t *testing.T) {
 	assert.Contains(t, output, `"remote_ip":"198.51.100.7"`)
 	assert.Contains(t, output, `"path":"/api/events"`)
 	assert.Contains(t, output, `"reason":"`+rejectReasonUnencrypted+`"`)
+	assert.Contains(t, output, `"hint":"`+rejectHint+`"`)
 	assert.Contains(t, output, "rejected remote API connection")
+}
+
+func TestRemoteRejectionLogKeysScopedIPv6OnHost(t *testing.T) {
+	t.Parallel()
+	rejections := newRemoteRejectionLog(clockwork.NewFakeClock())
+	for _, addr := range []string{"[fe80::1%eth0]:50123", "[fe80::1%eth0]:50124"} {
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api", http.NoBody)
+		request.RemoteAddr = addr
+		rejections.record(request, rejectReasonUnencrypted)
+	}
+	assert.Len(t, rejections.last, 1, "a new source port is the same client")
+	assert.False(t, rejections.allow("fe80::1%eth0", rejectReasonUnencrypted))
 }
