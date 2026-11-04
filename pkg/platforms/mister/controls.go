@@ -25,10 +25,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -40,6 +42,12 @@ const (
 	// MiSTer's savestate hotkeys address four slots.
 	minSavestateSlot = 1
 	maxSavestateSlot = 4
+
+	// Modes of the cheat control. Main resets every cheat on each game load.
+	cheatModeOn     = "on"
+	cheatModeOff    = "off"
+	cheatModeToggle = "toggle"
+	cheatModeClear  = "clear"
 )
 
 // savestateCores holds the names of cores that declare savestate support, as
@@ -67,10 +75,15 @@ var errNoSavestates = errors.New("the running core does not support save states"
 type coreControls struct {
 	pl          platforms.Platform
 	readRBFName func() (string, error)
+	main        *mainCommands
 }
 
 func newCoreControls(pl platforms.Platform) *coreControls {
-	return &coreControls{pl: pl, readRBFName: mistermain.ReadRBFName}
+	return &coreControls{
+		pl:          pl,
+		readRBFName: mistermain.ReadRBFName,
+		main:        newMainCommands(afero.NewOsFs()),
+	}
 }
 
 func (c *coreControls) controls() map[string]platforms.Control {
@@ -79,7 +92,7 @@ func (c *coreControls) controls() map[string]platforms.Control {
 			return c.pl.KeyboardPress(key)
 		}
 	}
-	return map[string]platforms.Control{
+	controls := map[string]platforms.Control{
 		platforms.ControlToggleMenu: {Func: press(misterMenuKey)},
 		platforms.ControlReset:      {Func: press(misterUserButtonKey)},
 		platforms.ControlSaveState:  {Func: c.savestate(misterSaveStateKey)},
@@ -91,6 +104,68 @@ func (c *coreControls) controls() map[string]platforms.Control {
 			return nil
 		}},
 	}
+	// The cheat and save controls need the Zaparoo Main fork. They are only
+	// listed when the running Main says it has them, and each call checks
+	// again in case Main changed since the launchers were built.
+	if c.main != nil {
+		if c.main.supports(mainCommandCheat) {
+			controls[platforms.ControlCheat] = platforms.Control{Func: c.cheat}
+		}
+		if c.main.supports(mainCommandSave) {
+			controls[platforms.ControlSaveRAM] = platforms.Control{Func: c.saveRAM}
+		}
+	}
+	return controls
+}
+
+// cheat changes one of the running game's cheats, by the name of its file in
+// the cheat zip (the extension may be left off), or turns all of them off. Main
+// reports a name it cannot match, and a game with no cheats, only in its own
+// log. Hardcore RetroAchievements mode blocks cheats inside Main.
+func (c *coreControls) cheat(_ context.Context, _ *config.Instance, params platforms.ControlParams) error {
+	mode := strings.ToLower(strings.TrimSpace(params.Args[platforms.ControlArgMode]))
+	if mode == "" {
+		mode = cheatModeOn
+	}
+	rawName, hasName := params.Args[platforms.ControlArgName]
+
+	var args []string
+	switch mode {
+	case cheatModeClear:
+		if strings.TrimSpace(rawName) != "" {
+			return fmt.Errorf("%w: cheat mode %q takes no name", platforms.ErrInvalidControlArg, mode)
+		}
+		args = []string{cheatModeClear}
+	case cheatModeOn, cheatModeOff, cheatModeToggle:
+		if !hasName {
+			return fmt.Errorf("%w: cheat needs a name", platforms.ErrInvalidControlArg)
+		}
+		name, err := mainCommandArg(rawName)
+		if err != nil {
+			return fmt.Errorf("%w: cheat name: %w", platforms.ErrInvalidControlArg, err)
+		}
+		args = []string{mode, name}
+	default:
+		return fmt.Errorf("%w: cheat mode %q must be on, off, toggle or clear",
+			platforms.ErrInvalidControlArg, mode)
+	}
+	return c.sendMain(mainCommandCheat, args...)
+}
+
+// saveRAM makes the running core write its save, such as battery RAM or a
+// memory card, to the SD card without opening the OSD.
+func (c *coreControls) saveRAM(context.Context, *config.Instance, platforms.ControlParams) error {
+	return c.sendMain(mainCommandSave)
+}
+
+func (c *coreControls) sendMain(command string, args ...string) error {
+	if err := c.main.send(command, args...); err != nil {
+		if errors.Is(err, errMainCommandUnsupported) {
+			return fmt.Errorf("%w: %w", err, platforms.ErrControlUnavailable)
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *coreControls) savestate(keyFormat string) platforms.ControlFunc {

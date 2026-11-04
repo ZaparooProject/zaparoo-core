@@ -3045,7 +3045,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:         "Generic",
 			Extensions: []string{".mgl", ".rbf", ".mra"},
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			Launch: launchReadiness.noteMGLGames(func(
+				_ *config.Instance, path string, _ *platforms.LaunchOptions,
+			) (*os.Process, error) {
 				err := mgls.LaunchBasicFile(path)
 				if err != nil {
 					return nil, fmt.Errorf("failed to launch generic file: %w", err)
@@ -3056,7 +3058,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 					return nil, fmt.Errorf("failed to set active game: %w", err)
 				}
 				return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
-			},
+			}),
 		},
 	}
 

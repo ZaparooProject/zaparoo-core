@@ -2895,6 +2895,8 @@ On Batocera, `fast_forward` holds the emulator's fast-forward key for `seconds` 
 
 On Batocera, `fast_forward` holds the emulator's fast-forward key for `seconds` seconds (default 5, maximum 30), because its RetroArch binds fast forward as a held key. An action that a launcher defines but the running core or emulator cannot perform, such as `save_state` on a MiSTer core without save states, fails with an error.
 
+On MiSTer with the Zaparoo Main fork, cores also offer `cheat` and `save_ram`. `cheat` takes `name`, the cheat's file name in the game's cheat zip (the extension can be left off), and `mode`: `on` (default), `off`, `toggle`, or `clear` to turn every cheat off, which takes no name. Main resets cheats on every game load, and blocks them in RetroAchievements hardcore mode. A name Main cannot match, or a game with no cheats, does not return an error. `save_ram` writes the core's save, such as battery RAM or a memory card, to the SD card.
+
 ```json
 {
   "jsonrpc": "2.0",

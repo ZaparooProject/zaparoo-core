@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -845,4 +846,59 @@ func TestCoreReadiness_OpenWindowWaitsForTheCore(t *testing.T) {
 	h.events <- gamehandoff.Open
 	h.events <- gamehandoff.Close
 	require.NoError(t, h.advanceUntilDone(t, done))
+}
+
+// A bare MGL launched through the Generic launcher is published as the game it
+// loads, under that game's launcher. Its probe must still wait for Main to
+// load the game, or controls sent with the launch reach Main mid-load and are
+// lost.
+func TestCoreReadiness_GenericMGLLaunchWaitsForItsGame(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.files[genesisGame] = 4 << 20
+	mglPath := "/media/fat/game.mgl"
+	h.r.readMGL = func(path string) (mgls.MGL, error) {
+		require.Equal(t, mglPath, path)
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+
+	var launchedPath string
+	launch := h.r.noteMGLGames(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		launchedPath = path
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	})
+	_, err := launch(nil, mglPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, mglPath, launchedPath)
+
+	done := make(chan error, 1)
+	probe := h.r.waitForReady(mustCore(t, "Genesis"), "")
+	go func() { done <- probe(t.Context(), nil, probeMedia(genesisGame)) }()
+
+	// A probe that did not find the launch returns at once instead of
+	// watching the game file.
+	select {
+	case h.events <- gamehandoff.Open:
+	case err := <-done:
+		t.Fatalf("probe finished before Main opened the game: %v", err)
+	}
+	h.events <- gamehandoff.Close
+	require.NoError(t, h.advanceUntilDone(t, done))
+}
+
+func TestCoreReadiness_GenericNonMGLLaunchNotesNothing(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		t.Fatal("only MGL files are read")
+		return mgls.MGL{}, nil
+	}
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	})
+	_, err := launch(nil, "/media/fat/_Console/SNES.rbf", nil)
+	require.NoError(t, err)
+	assert.False(t, h.r.launches.Recent("SNES.rbf", time.Minute))
 }
