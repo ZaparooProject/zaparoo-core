@@ -64,7 +64,8 @@ const (
 // Phase selects the stream the cursor resumes ("dirs" or "files"; absent means a
 // legacy file-only cursor). DirName is the dirs-phase keyset; SortValue/SortMode/
 // LastID are the files-phase keyset. TotalFiles/TotalDirs carry the first-page
-// counts forward so cursor pages do not rerun the count queries.
+// counts forward so cursor pages do not rerun the count queries. Path and
+// Letter scope a live browse cursor to the request it came from.
 type browseCursorData struct {
 	IncludeHidden       *bool                `json:"includeHidden,omitempty"`
 	PreferencesRevision string               `json:"preferencesRevision,omitempty"`
@@ -73,6 +74,8 @@ type browseCursorData struct {
 	Phase               string               `json:"phase,omitempty"`
 	DirName             string               `json:"dirName,omitempty"`
 	RootView            string               `json:"rootView,omitempty"`
+	Path                string               `json:"path,omitempty"`
+	Letter              string               `json:"letter,omitempty"`
 	Sources             []browseCursorSource `json:"sources,omitempty"`
 	LastID              int64                `json:"lastId"`
 	TotalFiles          int                  `json:"totalFiles,omitempty"`
@@ -284,6 +287,20 @@ func parseBrowseTagFilters(rawTags *[]string) ([]zapscript.TagFilter, error) {
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMedia(env requests.RequestEnv) (any, error) {
+	var params models.BrowseParams
+	if len(env.Params) > 0 {
+		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+			log.Warn().Err(err).Msg("invalid browse params")
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
+	}
+
+	// A live browse reads the disk rather than SQLite, so it takes its own
+	// concurrency slots instead of browseSem.
+	if params.Live {
+		return browseLiveLimited(&env, &params)
+	}
+
 	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
 	defer endSlot()
 	select {
@@ -293,14 +310,6 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 		return nil, env.Context.Err()
 	}
 	endSlot()
-
-	var params models.BrowseParams
-	if len(env.Params) > 0 {
-		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-			log.Warn().Err(err).Msg("invalid browse params")
-			return nil, models.ClientErrf("invalid params: %w", err)
-		}
-	}
 
 	tagFilters, err := parseBrowseTagFilters(params.Tags)
 	if err != nil {
