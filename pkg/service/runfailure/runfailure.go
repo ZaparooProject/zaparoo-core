@@ -114,6 +114,7 @@ func Classify(err error) (category, message string) {
 		errors.Is(err, zapscript.ErrInvalidArguments),
 		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, zapscript.ErrWriteNotAlone),
+		errors.Is(err, zapscript.ErrWriteUnsupported),
 		errors.Is(err, zapscript.ErrUnsupportedControlAction),
 		errors.Is(err, zapscript.ErrInvalidRotation),
 		errors.Is(err, zapscript.ErrInvalidPlaylistStart),

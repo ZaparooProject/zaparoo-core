@@ -447,6 +447,7 @@ func TestIsSensitiveCommand(t *testing.T) {
 		zapscript.ZapScriptCmdInputKeyboard,
 		zapscript.ZapScriptCmdInputGamepad,
 		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdWrite,
 		zapscript.ZapScriptCmdInputKey, // deprecated
 		zapscript.ZapScriptCmdKey,      // deprecated
 		zapscript.ZapScriptCmdGet,      // deprecated
@@ -1067,6 +1068,31 @@ func TestRunCommandWriteNotAlone(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrWriteNotAlone)
 	require.NotErrorIs(t, err, ErrUnknownCommand)
+	assert.True(t, IsExpectedRunError(err))
+}
+
+// TestRunCommandWriteOutsideToken pins that a write which is a script's only
+// command, but reaches the runner because nothing armed it (a control script),
+// is not blamed on other commands.
+func TestRunCommandWriteOutsideToken(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceControl},
+		zapscript.Command{Name: zapscript.ZapScriptCmdWrite, Args: []string{"hello"}},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrWriteUnsupported)
+	require.NotErrorIs(t, err, ErrWriteNotAlone)
 	assert.True(t, IsExpectedRunError(err))
 }
 

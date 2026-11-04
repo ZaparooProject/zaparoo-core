@@ -95,7 +95,11 @@ var (
 	// commands. A write arms the next card scanned, which only works when it
 	// is the token's whole script.
 	ErrWriteNotAlone = errors.New("write must be the only command on a token")
-	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
+	// ErrWriteUnsupported is returned when a write that is a script's only
+	// command reaches the runner anyway, as it does from a control script.
+	// Only a scanned token or a run request arms writes.
+	ErrWriteUnsupported = errors.New("write can only run from a scanned token or run request")
+	errAmbiguousPath    = errors.New("ambiguous case-insensitive path")
 )
 
 // IsExpectedRunError reports whether a failed command or token run is an
@@ -127,6 +131,7 @@ var expectedRunErrors = []error{
 	ErrRequiredArgs,
 	ErrUnknownCommand,
 	ErrWriteNotAlone,
+	ErrWriteUnsupported,
 	// Refusals by configuration are the setting working, not a bug.
 	ErrCommandBlocked,
 	ErrCommandNotPermitted,
@@ -321,8 +326,11 @@ func IsValidCommand(cmdName string) bool {
 // does not arm writes.
 //
 //nolint:gocritic // single-use parameter in command handler
-func cmdWrite(_ platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
-	return platforms.CmdResult{}, ErrWriteNotAlone
+func cmdWrite(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.TotalCommands != 1 {
+		return platforms.CmdResult{}, ErrWriteNotAlone
+	}
+	return platforms.CmdResult{}, ErrWriteUnsupported
 }
 
 //nolint:gocritic // single-use parameter in command handler
