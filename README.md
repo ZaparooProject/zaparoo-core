@@ -1,3 +1,9 @@
+# Zaparoo Core
+
+[![Lint and Test](https://github.com/ZaparooProject/zaparoo-core/actions/workflows/lint-and-test.yml/badge.svg)](https://github.com/ZaparooProject/zaparoo-core/actions/workflows/lint-and-test.yml)
+[![codecov](https://codecov.io/gh/ZaparooProject/zaparoo-core/graph/badge.svg)](https://codecov.io/gh/ZaparooProject/zaparoo-core)
+[![License](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 This is the development repository for Zaparoo Core.
 
 Visit [Zaparoo.org](https://zaparoo.org/) for more information about the Zaparoo project or the [Downloads](https://zaparoo.org/downloads/#zaparoo-core) page to download Zaparoo Core for your platform.
