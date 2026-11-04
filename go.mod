@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.27.2
+go 1.27.3
 
 require (
 	fyne.io/systray v1.12.2
@@ -19,7 +19,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
-	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
+	github.com/cloudsoda/go-smb2 v0.0.0-20261103071945-eb7a6cfa5657
 	github.com/creativeprojects/go-selfupdate v1.7.0
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -61,7 +61,7 @@ require (
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.11.0
 	golang.org/x/image v0.47.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
@@ -139,7 +139,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org v0.0.0-20200411211856-f5505b9728dd // indirect
 	golang.design/x/x11 v0.2.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
@@ -158,4 +158,4 @@ require (
 replace github.com/ZaparooProject/zaparoo-core/mister => ./mister
 
 // Preserve Expr semantics while enabling the validated static method profile.
-replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261011230659-306590b14ef8
+replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261104080414-1ac911627a96
