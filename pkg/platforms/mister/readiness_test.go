@@ -902,3 +902,24 @@ func TestCoreReadiness_GenericNonMGLLaunchNotesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, h.r.launches.Recent("SNES.rbf", time.Minute))
 }
+
+func TestCoreReadiness_FailedGenericMGLLaunchIsForgotten(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+	errLaunch := errors.New("command interface not accessible")
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, errLaunch
+	})
+	_, err := launch(nil, "/media/fat/game.mgl", nil)
+	require.ErrorIs(t, err, errLaunch)
+
+	// The same game started outside Core must not wait for a load that
+	// was never sent.
+	assert.False(t, h.r.launches.Recent(genesisGame, time.Minute))
+	require.NoError(t, h.r.waitForReady(mustCore(t, "Genesis"), "")(t.Context(), nil, probeMedia(genesisGame)))
+}

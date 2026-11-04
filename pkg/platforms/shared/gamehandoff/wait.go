@@ -160,6 +160,16 @@ func (l *LaunchLog) Note(path string) {
 	l.path, l.at = path, l.clock.Now()
 }
 
+// Forget drops the launch of path, for a launch that failed. A later launch
+// that has since replaced it is kept.
+func (l *LaunchLog) Forget(path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.path == path {
+		l.path = ""
+	}
+}
+
 // Recent reports whether path is the game Core launched within the last
 // within.
 func (l *LaunchLog) Recent(path string, within time.Duration) bool {

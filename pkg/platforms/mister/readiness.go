@@ -267,12 +267,20 @@ func (r *coreReadiness) noteMGLGames(
 	launch func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error),
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		// Noted before launching, since the tracker can publish the game
+		// before launch returns.
+		var game string
 		if strings.EqualFold(filepath.Ext(path), ".mgl") {
 			if mgl, err := r.readMGL(path); err == nil && mgl.File.Path != "" {
-				r.launches.Note(mgl.File.Path)
+				game = mgl.File.Path
+				r.launches.Note(game)
 			}
 		}
-		return launch(cfg, path, opts)
+		proc, err := launch(cfg, path, opts)
+		if err != nil && game != "" {
+			r.launches.Forget(game)
+		}
+		return proc, err
 	}
 }
 

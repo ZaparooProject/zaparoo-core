@@ -146,24 +146,44 @@ func newForkCoreControls(t *testing.T, capabilities string) (*coreControls, *mai
 	return cc, m, fs
 }
 
+func listedControls(cc *coreControls) []string {
+	return platforms.ControlNames(&platforms.Launcher{Controls: cc.controls()})
+}
+
 func TestCoreControls_ForkControlsListedOnlyWithCapability(t *testing.T) {
 	t.Parallel()
 
 	cc, _, _ := newForkCoreControls(t, forkCapabilities(testMainPID))
-	controls := cc.controls()
-	assert.Contains(t, controls, platforms.ControlCheat)
-	assert.Contains(t, controls, platforms.ControlSaveRAM)
+	listed := listedControls(cc)
+	assert.Contains(t, listed, platforms.ControlCheat)
+	assert.Contains(t, listed, platforms.ControlSaveRAM)
 
 	cc, _, _ = newForkCoreControls(t, "1 4242 save\n")
-	controls = cc.controls()
-	assert.NotContains(t, controls, platforms.ControlCheat)
-	assert.Contains(t, controls, platforms.ControlSaveRAM)
+	listed = listedControls(cc)
+	assert.NotContains(t, listed, platforms.ControlCheat)
+	assert.Contains(t, listed, platforms.ControlSaveRAM)
 
 	cc, _, _ = newForkCoreControls(t, "")
-	controls = cc.controls()
-	assert.NotContains(t, controls, platforms.ControlCheat)
-	assert.NotContains(t, controls, platforms.ControlSaveRAM)
-	assert.Contains(t, controls, platforms.ControlToggleMenu)
+	listed = listedControls(cc)
+	assert.NotContains(t, listed, platforms.ControlCheat)
+	assert.NotContains(t, listed, platforms.ControlSaveRAM)
+	assert.Contains(t, listed, platforms.ControlToggleMenu)
+}
+
+// Core can build its launchers before Main has started and written the
+// capability file, so the controls must appear once it does.
+func TestCoreControls_ForkControlsListedOnceMainStarts(t *testing.T) {
+	t.Parallel()
+
+	cc, m, fs := newForkCoreControls(t, "")
+	l := &platforms.Launcher{Controls: cc.controls()}
+	assert.NotContains(t, platforms.ControlNames(l), platforms.ControlCheat)
+
+	require.NoError(t, afero.WriteFile(fs, m.capabilitiesPath, []byte(forkCapabilities(testMainPID)), 0o600))
+	assert.Contains(t, platforms.ControlNames(l), platforms.ControlCheat)
+	assert.Contains(t, platforms.ControlNames(l), platforms.ControlSaveRAM)
+	require.NoError(t, l.Controls[platforms.ControlSaveRAM].Func(context.Background(), nil, platforms.ControlParams{}))
+	assert.Equal(t, "zaparoo_save\n", sentMainCommand(t, m, fs))
 }
 
 func TestCoreControls_Cheat(t *testing.T) {
@@ -242,4 +262,14 @@ func TestCoreControls_ForkControlUnavailableAfterMainExits(t *testing.T) {
 	)
 	require.ErrorIs(t, err, platforms.ErrControlUnavailable)
 	assert.Empty(t, sentMainCommand(t, m, fs))
+}
+
+func TestCoreControls_SaveRAMReportsMissingCommandInterface(t *testing.T) {
+	t.Parallel()
+
+	cc, m, fs := newForkCoreControls(t, forkCapabilities(testMainPID))
+	require.NoError(t, fs.Remove(m.commandPath))
+	err := cc.controls()[platforms.ControlSaveRAM].Func(context.Background(), nil, platforms.ControlParams{})
+	require.ErrorContains(t, err, "open Main command interface")
+	require.NotErrorIs(t, err, platforms.ErrControlUnavailable)
 }
