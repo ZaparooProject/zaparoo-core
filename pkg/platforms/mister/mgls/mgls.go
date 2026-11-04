@@ -446,12 +446,22 @@ func LaunchBasicFile(path string) error {
 	if activegame.ActiveGameEnabled() && isGame {
 		err := activegame.SetActiveGame(path)
 		if err != nil {
-			return fmt.Errorf("failed to set active game: %w", err)
+			return &LoadSentError{Err: fmt.Errorf("failed to set active game: %w", err)}
 		}
 	}
 
 	return nil
 }
+
+// LoadSentError wraps a launch failure that came after Main was told to load
+// the file, so Main loads it anyway.
+type LoadSentError struct {
+	Err error
+}
+
+func (e *LoadSentError) Error() string { return e.Err.Error() }
+
+func (e *LoadSentError) Unwrap() error { return e.Err }
 
 type MGLFile struct {
 	XMLName xml.Name `xml:"file"`

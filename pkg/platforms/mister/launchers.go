@@ -23,7 +23,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
@@ -257,9 +256,9 @@ func launchWithOptions(
 				logMGLLaunchError(err)
 				return nil, fmt.Errorf("failed to launch generic file: %w", err)
 			}
-			err = activegame.SetActiveGame(path)
+			err = setLaunchedActiveGame(path)
 			if err != nil {
-				return nil, fmt.Errorf("failed to set active game: %w", err)
+				return nil, err
 			}
 			return nil, nil
 		}
@@ -285,9 +284,9 @@ func launchWithOptions(
 		}
 
 		log.Debug().Msgf("setting active game: %s", path)
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -370,9 +369,9 @@ func launchSinden(
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -403,9 +402,9 @@ func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions)
 		return nil, fmt.Errorf("failed to launch game: %w", err)
 	}
 
-	err = activegame.SetActiveGame(path)
+	err = setLaunchedActiveGame(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to set active game: %w", err)
+		return nil, err
 	}
 	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 }
@@ -758,9 +757,9 @@ func launchAltCoreWithDefinition(
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -784,9 +783,9 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 				logMGLLaunchError(err)
 				return nil, fmt.Errorf("failed to launch generic file: %w", err)
 			}
-			err = activegame.SetActiveGame(path)
+			err = setLaunchedActiveGame(path)
 			if err != nil {
-				return nil, fmt.Errorf("failed to set active game: %w", err)
+				return nil, err
 			}
 			return nil, nil
 		}
@@ -804,9 +803,9 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 		}
 
 		log.Debug().Msgf("setting active game: %s", path)
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -882,9 +881,9 @@ func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) 
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -913,9 +912,9 @@ func launchAtari2600AltCore(
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = activegame.SetActiveGame(path)
+		err = setLaunchedActiveGame(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
+			return nil, err
 		}
 		return nil, nil
 	}
@@ -3053,9 +3052,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 					return nil, fmt.Errorf("failed to launch generic file: %w", err)
 				}
 				log.Debug().Msgf("setting active game: %s", path)
-				err = activegame.SetActiveGame(path)
+				err = setLaunchedActiveGame(path)
 				if err != nil {
-					return nil, fmt.Errorf("failed to set active game: %w", err)
+					return nil, err
 				}
 				return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 			}),

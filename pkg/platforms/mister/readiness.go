@@ -38,6 +38,7 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -252,9 +253,32 @@ func (r *coreReadiness) noteLaunches(
 	launch func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error),
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		// Noted before launching, since the tracker can publish the game
+		// before launch returns.
 		r.launches.Note(path)
-		return launch(cfg, path, opts)
+		proc, err := launch(cfg, path, opts)
+		if err != nil && !loadWasSent(err) {
+			r.launches.Forget(path)
+		}
+		return proc, err
 	}
+}
+
+// setLaunchedActiveGame names path as the active game once Main has been told
+// to load it. Main loads the game whether or not this works, so a failure is
+// marked as coming after the load was sent.
+func setLaunchedActiveGame(path string) error {
+	if err := activegame.SetActiveGame(path); err != nil {
+		return &mgls.LoadSentError{Err: fmt.Errorf("failed to set active game: %w", err)}
+	}
+	return nil
+}
+
+// loadWasSent reports whether a launch error came after Main was told to load
+// the game, so the game loads anyway and its launch stays noted.
+func loadWasSent(err error) bool {
+	var sent *mgls.LoadSentError
+	return errors.As(err, &sent)
 }
 
 // noteMGLGames wraps a launcher that loads arbitrary MGL files. The tracker
@@ -277,7 +301,7 @@ func (r *coreReadiness) noteMGLGames(
 			}
 		}
 		proc, err := launch(cfg, path, opts)
-		if err != nil && game != "" {
+		if err != nil && game != "" && !loadWasSent(err) {
 			r.launches.Forget(game)
 		}
 		return proc, err

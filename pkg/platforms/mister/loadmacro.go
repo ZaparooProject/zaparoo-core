@@ -37,7 +37,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
 )
 
@@ -308,8 +307,8 @@ func launchPlanned(
 		// The core was launched with the image or file; name the game inside it
 		// as the active one, so media and history carry the game's own path.
 		if path != resolved.target {
-			if setErr := activegame.SetActiveGame(path); setErr != nil {
-				return nil, fmt.Errorf("failed to set active game: %w", setErr)
+			if setErr := setLaunchedActiveGame(path); setErr != nil {
+				return nil, setErr
 			}
 		}
 		return proc, nil

@@ -24,6 +24,7 @@ package mister
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -386,16 +387,15 @@ func TestCoreReadiness_OtherGameThanLaunchedIsReadyImmediately(t *testing.T) {
 func TestCoreReadiness_NoteLaunchesRecordsAndPassesThrough(t *testing.T) {
 	t.Parallel()
 	h := newReadyHarness(t)
-	boom := errors.New("launch failed")
 	var got string
 	launch := h.r.noteLaunches(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		got = path
-		return nil, boom
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 	})
 
 	_, err := launch(nil, genesisGame, nil)
 
-	require.ErrorIs(t, err, boom)
+	require.NoError(t, err)
 	assert.Equal(t, genesisGame, got)
 	assert.True(t, h.r.launches.Recent(genesisGame, readyLaunchFreshness))
 	assert.False(t, h.r.launches.Recent("/other.md", readyLaunchFreshness))
@@ -922,4 +922,47 @@ func TestCoreReadiness_FailedGenericMGLLaunchIsForgotten(t *testing.T) {
 	// was never sent.
 	assert.False(t, h.r.launches.Recent(genesisGame, time.Minute))
 	require.NoError(t, h.r.waitForReady(mustCore(t, "Genesis"), "")(t.Context(), nil, probeMedia(genesisGame)))
+}
+
+// The Generic launcher sends the load before setting the active game, so a
+// failure there still loads the game and the probe must keep waiting for it.
+func TestCoreReadiness_GenericMGLKeptWhenFailureFollowsLoad(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+	errActive := errors.New("write active game")
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, fmt.Errorf("launch: %w", &mgls.LoadSentError{Err: errActive})
+	})
+	_, err := launch(nil, "/media/fat/game.mgl", nil)
+	require.ErrorIs(t, err, errActive)
+	assert.True(t, h.r.launches.Recent(genesisGame, time.Minute))
+}
+
+func TestCoreReadiness_NoteLaunchesForgetsLaunchThatNeverReachedMain(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	errOpen := errors.New("failed to open command interface")
+	launch := h.r.noteLaunches(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, errOpen
+	})
+	_, err := launch(nil, genesisGame, nil)
+	require.ErrorIs(t, err, errOpen)
+	assert.False(t, h.r.launches.Recent(genesisGame, time.Minute))
+}
+
+func TestCoreReadiness_NoteLaunchesKeepsLaunchWhenFailureFollowsLoad(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	errActive := errors.New("write active game")
+	launch := h.r.noteLaunches(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, fmt.Errorf("launch: %w", &mgls.LoadSentError{Err: errActive})
+	})
+	_, err := launch(nil, genesisGame, nil)
+	require.ErrorIs(t, err, errActive)
+	assert.True(t, h.r.launches.Recent(genesisGame, time.Minute))
 }
