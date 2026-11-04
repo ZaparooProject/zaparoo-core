@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -84,11 +85,12 @@ func liveBrowseDisplayName(fileName string) string {
 	return fileName
 }
 
-// liveBrowseRoots checks paths against the browse roots both as written and
-// with symlinks resolved, so a resolved path is accepted when a root itself
-// sits behind a symlink.
+// liveBrowseRoots holds the browse roots with symlinks resolved. A live
+// browse checks every symlink-resolved path against them, comparing case
+// exactly: the lexical root check folds case, which would let a
+// differently cased sibling of a root through on a case-sensitive
+// filesystem.
 type liveBrowseRoots struct {
-	roots    []string
 	resolved []string
 }
 
@@ -99,13 +101,48 @@ func newLiveBrowseRoots(roots []string) liveBrowseRoots {
 		if err != nil {
 			continue
 		}
-		resolved = append(resolved, filepath.ToSlash(realRoot))
+		resolved = append(resolved, realRoot)
 	}
-	return liveBrowseRoots{roots: roots, resolved: resolved}
+	return liveBrowseRoots{resolved: resolved}
 }
 
-func (r liveBrowseRoots) contains(path string) bool {
-	return isPathUnderRoots(path, r.roots) || isPathUnderRoots(path, r.resolved)
+// find returns the deepest resolved root holding realPath, a path with
+// symlinks already resolved, and realPath relative to it.
+func (r liveBrowseRoots) find(realPath string) (root, rel string, ok bool) {
+	for _, candidate := range r.resolved {
+		candidateRel, err := filepath.Rel(candidate, realPath)
+		if err != nil || candidateRel == ".." ||
+			strings.HasPrefix(candidateRel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if !ok || len(candidate) > len(root) {
+			root, rel, ok = candidate, candidateRel, true
+		}
+	}
+	return root, rel, ok
+}
+
+func (r liveBrowseRoots) contains(realPath string) bool {
+	_, _, ok := r.find(realPath)
+	return ok
+}
+
+// liveBrowseSem bounds concurrent live browses. A directory read cannot be
+// cancelled, so a stalled mount holds its slot until the read returns. Live
+// browses get their own slots so a stalled read never blocks indexed browse.
+var liveBrowseSem = make(chan struct{}, 2)
+
+func browseLiveLimited(env *requests.RequestEnv, params *models.BrowseParams) (any, error) {
+	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
+	defer endSlot()
+	select {
+	case liveBrowseSem <- struct{}{}:
+		defer func() { <-liveBrowseSem }()
+	case <-env.Context.Done():
+		return nil, fmt.Errorf("live browse cancelled: %w", env.Context.Err())
+	}
+	endSlot()
+	return browseLive(env, params)
 }
 
 // browseLive lists a directory straight from disk instead of from MediaDB.
@@ -135,10 +172,11 @@ func browseLive(env *requests.RequestEnv, params *models.BrowseParams) (any, err
 	if cleaned != filepath.ToSlash(path) && cleaned+"/" != filepath.ToSlash(path) {
 		return nil, models.ClientErrf("invalid path: contains disallowed components")
 	}
-	roots := newLiveBrowseRoots(browseRootDirs(env))
-	if !roots.contains(cleaned) {
+	rootDirs := browseRootDirs(env)
+	if !isPathUnderRoots(cleaned, rootDirs) {
 		return nil, models.ClientErrf("path is not within an allowed root directory")
 	}
+	roots := newLiveBrowseRoots(rootDirs)
 
 	maxResults := defaultMaxResults
 	if params.MaxResults != nil && *params.MaxResults > 0 {
@@ -152,7 +190,7 @@ func browseLive(env *requests.RequestEnv, params *models.BrowseParams) (any, err
 	if params.Letter != nil {
 		letter = strings.ToUpper(*params.Letter)
 	}
-	cursor, err := decodeLiveBrowseCursor(params.Cursor, sortMode)
+	cursor, err := decodeLiveBrowseCursor(params.Cursor, cleaned, letter, sortMode)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +249,7 @@ func browseLive(env *requests.RequestEnv, params *models.BrowseParams) (any, err
 
 	var pagination *models.PaginationInfo
 	if end < len(ordered) {
-		next, encErr := encodeLiveBrowseCursor(&page[len(page)-1], sortMode)
+		next, encErr := encodeLiveBrowseCursor(&page[len(page)-1], cleaned, letter, sortMode)
 		if encErr != nil {
 			return nil, encErr
 		}
@@ -270,12 +308,23 @@ func readLiveBrowseDir(
 		}
 		return nil, nil, fmt.Errorf("error resolving browse path: %w", err)
 	}
-	if !roots.contains(filepath.ToSlash(realDir)) {
+	rootPath, rel, ok := roots.find(realDir)
+	if !ok {
 		return nil, nil, models.ClientErrf("path is not within an allowed root directory")
 	}
 
-	//nolint:gosec // dir is cleaned and confined to the browse roots above.
-	f, err := os.Open(dir)
+	// Open the resolved directory through its root, so a path component
+	// swapped for a symlink after the check above cannot lead outside it.
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error opening browse root: %w", err)
+	}
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Str("path", rootPath).Msg("error closing live browse root")
+		}
+	}()
+	f, err := root.Open(rel)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error opening browse path: %w", err)
 	}
@@ -327,10 +376,10 @@ func readLiveBrowseDir(
 			if linkErr != nil {
 				continue
 			}
-			target = filepath.ToSlash(target)
 			if !roots.contains(target) {
 				continue
 			}
+			target = filepath.ToSlash(target)
 			targetInfo, statErr := os.Stat(entry.path)
 			if statErr != nil {
 				continue
@@ -344,7 +393,7 @@ func readLiveBrowseDir(
 			entry.isDir = true
 			dirs = append(dirs, entry)
 		case mode.IsRegular():
-			launcher, ok := matcher.BestLauncher(entry.path)
+			launcher, ok := liveBrowseLauncher(env, matcher, entry.path)
 			if !ok {
 				continue
 			}
@@ -353,6 +402,26 @@ func readLiveBrowseDir(
 		}
 	}
 	return dirs, files, nil
+}
+
+// liveBrowseLauncher picks the launcher a file would launch with, applying
+// the same scan-only resolution and allow-list check as a launch, so a file
+// that cannot launch is not listed.
+func liveBrowseLauncher(
+	env *requests.RequestEnv, matcher *helpers.DirLauncherMatcher, path string,
+) (platforms.Launcher, bool) {
+	best, ok := matcher.BestLauncher(path)
+	if !ok {
+		return platforms.Launcher{}, false
+	}
+	launcher, err := helpers.ResolveLaunchableLauncher(&best, path)
+	if err != nil {
+		return platforms.Launcher{}, false
+	}
+	if launcher.AllowListOnly && (env.Config == nil || !env.Config.IsLauncherFileAllowed(path)) {
+		return platforms.Launcher{}, false
+	}
+	return launcher, true
 }
 
 // liveMediaMatch is the indexed media row a live file entry resolved to.
@@ -459,8 +528,11 @@ func matchLiveBrowseMedia(env *requests.RequestEnv, page []liveBrowseEntry) map[
 		}
 		for _, candidate := range []string{page[i].path, page[i].target} {
 			canonical := pathutil.CanonicalMediaPath(candidate)
+			if ambiguous[canonical] {
+				break
+			}
 			row, ok := byPath[canonical]
-			if !ok || ambiguous[canonical] {
+			if !ok {
 				continue
 			}
 			matches[page[i].path] = liveMediaMatch{row: row}
@@ -484,7 +556,10 @@ func matchLiveBrowseMedia(env *requests.RequestEnv, page []liveBrowseEntry) map[
 	return matches
 }
 
-func encodeLiveBrowseCursor(last *liveBrowseEntry, sortMode string) (string, error) {
+// encodeLiveBrowseCursor builds the cursor after last. It records the path,
+// letter and sort it was built for, since resuming a name keyset under any
+// other scope would silently skip entries.
+func encodeLiveBrowseCursor(last *liveBrowseEntry, path, letter, sortMode string) (string, error) {
 	phase := browsePhaseLiveFiles
 	if last.isDir {
 		phase = browsePhaseLiveDirs
@@ -493,10 +568,12 @@ func encodeLiveBrowseCursor(last *liveBrowseEntry, sortMode string) (string, err
 		Phase:    phase,
 		DirName:  last.name,
 		SortMode: sortMode,
+		Path:     path,
+		Letter:   letter,
 	})
 }
 
-func decodeLiveBrowseCursor(raw *string, sortMode string) (*browseCursorData, error) {
+func decodeLiveBrowseCursor(raw *string, path, letter, sortMode string) (*browseCursorData, error) {
 	if raw == nil || *raw == "" {
 		return nil, nil //nolint:nilnil // empty cursor is valid
 	}
@@ -515,6 +592,12 @@ func decodeLiveBrowseCursor(raw *string, sortMode string) (*browseCursorData, er
 	}
 	if data.SortMode != sortMode {
 		return nil, models.ClientErrf("cursor does not match sort %q", sortMode)
+	}
+	if data.Path != path {
+		return nil, models.ClientErrf("cursor does not match path %q", path)
+	}
+	if data.Letter != letter {
+		return nil, models.ClientErrf("cursor does not match letter %q", letter)
 	}
 	return &data, nil
 }

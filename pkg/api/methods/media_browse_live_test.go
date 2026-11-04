@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,6 +46,8 @@ func liveBrowseLaunchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{ID: "Generic", Extensions: []string{".mgl", ".mra", ".rbf"}},
 		{ID: "Arcade", SystemID: "Arcade", Folders: []string{"_Arcade"}, Extensions: []string{".mra", ".mgl"}},
+		{ID: "Locked", SystemID: "PC", Extensions: []string{".lck"}, AllowListOnly: true},
+		{ID: "ScanOnly", SystemID: "PC", Extensions: []string{".scn"}, ScanOnly: true},
 	}
 }
 
@@ -70,6 +73,8 @@ func newLiveBrowseFixture(t *testing.T) (root, outside string, pl *mocks.MockPla
 	write(filepath.Join(chrono, "2 Early Game.mgl"))
 	write(filepath.Join(chrono, "1 First Game.mgl"))
 	write(filepath.Join(chrono, "notes.txt"))
+	write(filepath.Join(chrono, "locked.lck"))
+	write(filepath.Join(chrono, "scan.scn"))
 	write(filepath.Join(chrono, "Odd, Name || [x].mgl"))
 	write(filepath.Join(chrono, ".hidden.mgl"))
 	require.NoError(t, os.MkdirAll(filepath.Join(chrono, "1980s"), 0o750))
@@ -135,7 +140,8 @@ func TestHandleMediaBrowse_LiveListsCollectionFolder(t *testing.T) {
 
 	// Folders first, then launchable files, both in natural order. Dot
 	// files, non-launchable files, broken links and links leaving the root
-	// are hidden.
+	// are hidden, as are files whose only launcher is allow-list only or
+	// scan only, since launching them would fail.
 	assert.Equal(t, []string{
 		"2 Eighties", "10 Nineties", "1980s",
 		"1 First Game", "2 Early Game", "10 Later Game", "Odd, Name || [x]",
@@ -223,6 +229,63 @@ func TestHandleMediaBrowse_LiveAmbiguousPathStaysUnmatched(t *testing.T) {
 	}
 }
 
+func TestHandleMediaBrowse_LiveAmbiguousOwnPathIgnoresTarget(t *testing.T) {
+	t.Parallel()
+	root, _, pl := newLiveBrowseFixture(t)
+	db := helpers.NewMockMediaDBI()
+
+	realArcade, err := filepath.EvalSymlinks(filepath.Join(root, "_Arcade"))
+	require.NoError(t, err)
+	link := root + "/_Arcade/_Organized/_1 A-E/Pac-Man.mra"
+	target := filepath.ToSlash(filepath.Join(realArcade, "Pac-Man.mra"))
+	db.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).Return([]database.MediaPathID{
+		{SystemID: "Arcade", Path: link, DBID: 1},
+		{SystemID: "Other", Path: link, DBID: 2},
+		{SystemID: "Arcade", Path: target, DBID: 3},
+	}, nil)
+
+	results, err := runLiveBrowse(t, db, pl, map[string]any{"path": root + "/_Arcade/_Organized/_1 A-E"})
+	require.NoError(t, err)
+	for _, entry := range results.Entries {
+		assert.Zero(t, entry.MediaID, entry.Name)
+	}
+}
+
+func TestHandleMediaBrowse_LiveRejectsCaseVariantOfRoot(t *testing.T) {
+	t.Parallel()
+	root, _, pl := newLiveBrowseFixture(t)
+
+	// The lexical root check folds case; the resolved check must not, or a
+	// differently cased sibling of a root is listed on a case-sensitive
+	// filesystem.
+	variant := filepath.Join(filepath.Dir(root), "FAT")
+	if err := os.Mkdir(variant, 0o750); err != nil {
+		require.ErrorIs(t, err, fs.ErrExist)
+	}
+	_, err := runLiveBrowse(t, helpers.NewMockMediaDBI(), pl, map[string]any{"path": filepath.ToSlash(variant)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not within an allowed root")
+}
+
+//nolint:paralleltest // fills the global indexed browse semaphore
+func TestHandleMediaBrowse_LiveDoesNotWaitForIndexedBrowseSlots(t *testing.T) {
+	root, _, pl := newLiveBrowseFixture(t)
+	for range cap(browseSem) {
+		browseSem <- struct{}{}
+	}
+	defer func() {
+		for range cap(browseSem) {
+			<-browseSem
+		}
+	}()
+
+	db := helpers.NewMockMediaDBI()
+	noLiveMatches(db)
+	results, err := runLiveBrowse(t, db, pl, map[string]any{"path": root + "/_Arcade"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, results.Entries)
+}
+
 func TestHandleMediaBrowse_LiveDatabaseErrorKeepsEntries(t *testing.T) {
 	t.Parallel()
 	root, _, pl := newLiveBrowseFixture(t)
@@ -288,7 +351,7 @@ func TestHandleMediaBrowse_LiveRejectsBadRequests(t *testing.T) {
 	dbCursor, err := encodeDirCursor("x", 0, 0, nil)
 	require.NoError(t, err)
 	liveCursor := base64.StdEncoding.EncodeToString(mustJSON(t, browseCursorData{
-		Phase: browsePhaseLiveFiles, DirName: "x",
+		Phase: browsePhaseLiveFiles, DirName: "x", Path: root,
 	}))
 
 	tests := []struct {
@@ -314,6 +377,16 @@ func TestHandleMediaBrowse_LiveRejectsBadRequests(t *testing.T) {
 			name:   "indexed cursor",
 			params: map[string]any{"path": root, "cursor": dbCursor},
 			want:   "not a live browse cursor",
+		},
+		{
+			name:   "path mismatch",
+			params: map[string]any{"path": root + "/_Arcade", "cursor": liveCursor},
+			want:   "does not match path",
+		},
+		{
+			name:   "letter mismatch",
+			params: map[string]any{"path": root, "cursor": liveCursor, "letter": "A"},
+			want:   "does not match letter",
 		},
 		{
 			name:   "sort mismatch",
