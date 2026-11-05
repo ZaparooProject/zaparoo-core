@@ -140,6 +140,23 @@ func TestPathToMGLDef(t *testing.T) {
 	}
 }
 
+// The Apple-II core mounts WOZ images in its first floppy drive (S0).
+func TestAppleIIWOZUsesFirstDrive(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("AppleII")
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := catalog.PathToMGLDef(core, "Game.WOZ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params == nil || params.Method != "s" || params.Index != 0 {
+		t.Fatalf("unexpected params: %#v", params)
+	}
+}
+
 // A slot with no mgl block is how the catalog says "this extension launches
 // directly", and that has to stay distinguishable from an extension no slot
 // claims: reporting Arcade's .mra as unmatched would fail every arcade launch.

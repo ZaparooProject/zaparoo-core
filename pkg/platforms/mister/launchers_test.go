@@ -747,6 +747,11 @@ func TestRecentMediaLaunchers(t *testing.T) {
 		extensions []string
 	}{
 		{
+			name: "Apple II", id: systemdefs.SystemAppleII, systemID: systemdefs.SystemAppleII,
+			folders:    []string{"Apple-II"},
+			extensions: []string{".dsk", ".do", ".po", ".nib", ".woz", ".hdv"},
+		},
+		{
 			name: "Apple IIGS", id: systemdefs.SystemAppleIIGS, systemID: systemdefs.SystemAppleIIGS,
 			folders:    []string{"Apple-IIgs"},
 			extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
