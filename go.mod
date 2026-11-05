@@ -12,7 +12,7 @@ require (
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.26.1
 	github.com/ZaparooProject/go-zapscript v0.22.1
-	github.com/ZaparooProject/zaparoo-core/mister v0.1.0
+	github.com/ZaparooProject/zaparoo-core/mister v0.1.1
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
