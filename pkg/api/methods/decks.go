@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/rs/zerolog/log"
 )
@@ -42,7 +44,8 @@ const (
 	errDecksNoUserDB  = "user database is not available"
 )
 
-// HandleDecks lists every deck without its items.
+// HandleDecks lists every deck without its items. Given a game's system and
+// path, every deck also lists which of its items are linked to that game.
 //
 //nolint:gocritic // single-use parameter in API handler
 func HandleDecks(env requests.RequestEnv) (any, error) {
@@ -50,7 +53,26 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	if env.Database == nil || env.Database.UserDB == nil {
 		return nil, errors.New(errDecksNoUserDB)
 	}
-	env.State.NotifyLibraryDecksAccessed()
+	var params models.DecksParams
+	if len(env.Params) > 0 && !bytes.Equal(bytes.TrimSpace(env.Params), []byte("null")) {
+		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
+	}
+	if (params.System == nil) != (params.Path == nil) {
+		return nil, models.ClientErrf("invalid params: system and path go together")
+	}
+	var contains map[string][]int64
+	if params.System != nil {
+		var err error
+		contains, err = env.Database.UserDB.FindDeckItemsByAnchor(*params.System, *params.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find deck items for the game: %w", err)
+		}
+	}
+	if env.State != nil {
+		env.State.NotifyLibraryDecksAccessed()
+	}
 	list, err := env.Database.UserDB.ListDecks()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list decks: %w", err)
@@ -61,8 +83,14 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
-		deck := deckSummary(&list[i])
+		deck := deckSummary(&env, &list[i])
 		deck.Locked = locked[deck.DeckID]
+		if params.System != nil {
+			deck.ContainsItemIDs = contains[deck.DeckID]
+			if deck.ContainsItemIDs == nil {
+				deck.ContainsItemIDs = []int64{}
+			}
+		}
 		resp.Decks = append(resp.Decks, deck)
 	}
 	return resp, nil
@@ -121,7 +149,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	env.Database.QueueDeckTags(deck.DeckID)
 	notifyDecksChanged(&env, deck.DeckID, models.DecksChangedCreated)
 	env.State.NotifyLibraryDecksChanged()
-	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
+	return deckResponse(&env, deck, anchorAvailability(&env, deck.Items)), nil
 }
 
 // HandleDecksUpdate edits an owned deck's name, description or items. The
@@ -140,7 +168,8 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if params.Name == nil && params.Description == nil && params.Items == nil &&
+	cover := trimmedCoverInput(params.Cover)
+	if params.Name == nil && params.Description == nil && params.Items == nil && cover == nil &&
 		len(params.AddItems) == 0 && len(params.RemoveItemIDs) == 0 {
 		return lockedDeckResponse(&env, deck)
 	}
@@ -170,6 +199,11 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Stored last, so a request that fails validation leaves no file behind.
+	coverFile, err := storeDeckCover(&env, deck.DeckID, cover)
+	if err != nil {
+		return nil, err
+	}
 
 	updated, err := env.Database.UserDB.UpdateDeck(deck.DeckID, func(stored *database.Deck) error {
 		if !stored.Owned {
@@ -186,15 +220,25 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 			return editErr
 		}
 		stored.Items = items
+		if cover != nil {
+			stored.CoverFile = coverFile
+			stored.CoverPending = database.DeckCoverPendingSet
+			if cover.Kind == models.DeckCoverKindNone {
+				stored.CoverPending = database.DeckCoverPendingRemove
+			}
+		}
 		return nil
 	})
+	if cover != nil {
+		pruneDeckCovers(&env)
+	}
 	if err != nil {
 		return nil, deckError(err)
 	}
 	env.Database.QueueDeckTags(updated.DeckID)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
 	env.State.NotifyLibraryDecksChanged()
-	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
+	return deckResponse(&env, updated, anchorAvailability(&env, updated.Items)), nil
 }
 
 // HandleDecksDelete removes a deck, owned or cached.
@@ -220,6 +264,7 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	if !existed {
 		return nil, models.ClientErr(database.ErrDeckNotFound)
 	}
+	pruneDeckCovers(&env)
 	env.Database.QueueDeckTags(deckID)
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
 	env.State.NotifyLibraryDecksChanged()
@@ -251,6 +296,41 @@ func HandleDecksOpen(env requests.RequestEnv) (any, error) {
 	}
 	env.Params = runParams
 	return HandleRun(env)
+}
+
+// storeDeckCover reads and stores the image a decks.update cover names, and
+// returns the file name the deck keeps: empty for a removal or no cover
+// change. A locked deck is refused before anything is read or written.
+func storeDeckCover(env *requests.RequestEnv, deckID string, cover *models.DeckCoverInput) (string, error) {
+	if cover == nil {
+		return "", nil
+	}
+	if cover.Kind == models.DeckCoverKindNone && (cover.System != "" || cover.Path != "") {
+		return "", models.ClientErrf("invalid params: a none cover takes no system or path")
+	}
+	locked, err := isDeckLocked(env, deckID)
+	if err != nil {
+		return "", err
+	}
+	if locked {
+		return "", models.ClientErr(database.ErrDeckReadOnly)
+	}
+	if cover.Kind == models.DeckCoverKindNone {
+		return "", nil
+	}
+	data, err := deckCoverBytes(env, cover)
+	if err != nil {
+		return "", err
+	}
+	covers, err := deckCovers(env)
+	if err != nil {
+		return "", err
+	}
+	name, err := covers.Save(deckID, data)
+	if err != nil {
+		return "", fmt.Errorf("failed to store deck cover: %w", err)
+	}
+	return name, nil
 }
 
 func loadDeck(env *requests.RequestEnv, rawID string) (*database.Deck, error) {
@@ -499,6 +579,33 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 	return available
 }
 
+// anchorUserData reads the user flags of every linked file in one query. A
+// failed read is logged and leaves the flags empty.
+func anchorUserData(
+	env *requests.RequestEnv, items []database.DeckItem,
+) map[database.MediaUserRef]database.MediaUserData {
+	if env.Database == nil || env.Database.UserDB == nil {
+		return nil
+	}
+	refs := make([]database.MediaUserRef, 0, len(items))
+	for i := range items {
+		if items[i].HasAnchor() {
+			refs = append(refs, database.MediaUserRef{
+				SystemID: items[i].Anchor.SystemID, Path: pathutil.CanonicalMediaPath(items[i].Anchor.Path),
+			})
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	found, err := env.Database.UserDB.GetMediaUserDataForPaths(refs)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read user flags for deck items")
+		return nil
+	}
+	return found
+}
+
 // isDeckLocked reports whether the linked account locked a deck, which keeps
 // it read-only here. A sync row that cannot be read is an error rather than
 // an unlocked deck, so a failure never opens a locked deck up to edits.
@@ -529,7 +636,7 @@ func lockedDecks(env *requests.RequestEnv) (map[string]bool, error) {
 
 // lockedDeckResponse is a deck with its items and its lock state.
 func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.DeckResponse, error) {
-	resp := deckResponse(deck, anchorAvailability(env, deck.Items))
+	resp := deckResponse(env, deck, anchorAvailability(env, deck.Items))
 	locked, err := isDeckLocked(env, deck.DeckID)
 	if err != nil {
 		return models.DeckResponse{}, err
@@ -539,7 +646,7 @@ func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.D
 }
 
 // deckSummary is a deck as the decks list shows it, without items.
-func deckSummary(deck *database.Deck) models.DeckResponse {
+func deckSummary(env *requests.RequestEnv, deck *database.Deck) models.DeckResponse {
 	resp := models.DeckResponse{
 		Metadata:    deck.Metadata,
 		DeckID:      deck.DeckID,
@@ -550,6 +657,7 @@ func deckSummary(deck *database.Deck) models.DeckResponse {
 		ItemCount:   deck.ItemCount,
 		Owned:       deck.Owned,
 		Saved:       deck.Saved,
+		HasImage:    deckHasImage(env, deck),
 	}
 	if !deck.Owned {
 		resp.SourceURL = deck.SourceURL
@@ -560,8 +668,9 @@ func deckSummary(deck *database.Deck) models.DeckResponse {
 
 // deckResponse is a deck with its items, which are never omitted: an empty
 // deck has an empty list.
-func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResponse {
-	resp := deckSummary(deck)
+func deckResponse(env *requests.RequestEnv, deck *database.Deck, available map[int64]bool) models.DeckResponse {
+	userData := anchorUserData(env, deck.Items)
+	resp := deckSummary(env, deck)
 	resp.ItemCount = len(deck.Items)
 	resp.Items = make([]models.DeckItemResponse, 0, len(deck.Items))
 	for i := range deck.Items {
@@ -569,6 +678,7 @@ func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResp
 		out := models.DeckItemResponse{
 			Metadata: item.Metadata, Kind: item.Kind, Name: item.Name, ZapScript: item.ZapScript,
 			CardID: item.CardID, ID: item.DBID, Position: item.Position,
+			HasImage: usableImageURL(item.CardImageURL()),
 		}
 		for _, s := range item.Scripts {
 			out.Scripts = append(out.Scripts, models.DeckCardScriptInput{Name: s.Name, ZapScript: s.ZapScript})
@@ -578,6 +688,10 @@ func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResp
 				System: item.Anchor.SystemID, Path: item.Anchor.Path, Name: item.Anchor.MediaName,
 				Tags: item.Anchor.Tags, Available: available[item.DBID],
 			}
+			stored := userData[database.MediaUserRef{
+				SystemID: item.Anchor.SystemID, Path: pathutil.CanonicalMediaPath(item.Anchor.Path),
+			}]
+			out.Media.UserTags = stored.UserTags()
 		}
 		resp.Items = append(resp.Items, out)
 	}

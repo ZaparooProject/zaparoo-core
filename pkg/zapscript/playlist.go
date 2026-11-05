@@ -1012,6 +1012,10 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 
 	choices := make([]uievents.Choice, 0, len(pls.Items))
+	var media []*apimodels.UIChoiceMedia
+	if env.UI != nil {
+		media = playlistChoiceMedia(&env, pls.Items)
+	}
 	for i, m := range pls.Items {
 		var name string
 
@@ -1027,16 +1031,17 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 			name = m.Name
 		}
 
-		if i == pls.Index {
-			name = "> " + name
-		}
-
 		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "?slot=" + slot + "||**playlist.play?slot=" + slot
 
-		choices = append(choices, uievents.Choice{
-			Label: name,
-			Value: zapscript,
-		})
+		choice := uievents.Choice{
+			Label:   name,
+			Value:   zapscript,
+			Current: i == pls.Index,
+		}
+		if i < len(media) {
+			choice.Media = media[i]
+		}
+		choices = append(choices, choice)
 	}
 
 	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("open playlist: %s", env.Cmd.Args)

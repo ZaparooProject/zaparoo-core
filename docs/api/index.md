@@ -387,6 +387,7 @@ Notifications let a server or client know an event has occurred. See the [API No
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.history.changed  | Play history was recorded outside the media started and stopped lifecycle.        |
+| media.tags.changed     | An item's user flags (favorite, liked, disliked, play later, hidden) changed.     |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |
 | media.scraping         | Progress updates emitted during media scraping (includes progress/status details). |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |

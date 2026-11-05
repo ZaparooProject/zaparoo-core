@@ -177,6 +177,12 @@ func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesD
 	sendNotification(ns, models.NotificationProfilesData, payload)
 }
 
+// MediaTagsChanged broadcasts an item's user utility tags after they changed,
+// so clients update what they show for it without searching again.
+func MediaTagsChanged(ns chan<- models.Notification, payload models.MediaTagsChangedNotification) {
+	sendNotification(ns, models.NotificationMediaTagsChanged, payload)
+}
+
 // DecksChanged broadcasts that a deck was created, updated, deleted or
 // refreshed from its source, so clients refresh their deck lists.
 func DecksChanged(ns chan<- models.Notification, payload models.DecksChangedNotification) {

@@ -305,6 +305,30 @@ func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) ListMediaUserFlagTimes(flag database.MediaUserFlag) ([]database.MediaUserFlagTime, error) {
+	args := m.Called(flag)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list media user flag times failed: %w", err)
+	}
+	if data, ok := args.Get(0).([]database.MediaUserFlagTime); ok && data != nil {
+		return data, nil
+	}
+	return []database.MediaUserFlagTime{}, nil
+}
+
+func (m *MockUserDBI) GetMediaUserDataForPaths(
+	refs []database.MediaUserRef,
+) (map[database.MediaUserRef]database.MediaUserData, error) {
+	args := m.Called(refs)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get media user data for paths failed: %w", err)
+	}
+	if data, ok := args.Get(0).(map[database.MediaUserRef]database.MediaUserData); ok && data != nil {
+		return data, nil
+	}
+	return map[database.MediaUserRef]database.MediaUserData{}, nil
+}
+
 func (m *MockUserDBI) CreateDeck(deck *database.Deck) error {
 	if err := m.Called(deck).Error(0); err != nil {
 		return fmt.Errorf("mock UserDBI create deck failed: %w", err)
@@ -377,6 +401,31 @@ func (m *MockUserDBI) SetDeckSaved(deckID string, saved bool, ownerName string) 
 		return fmt.Errorf("mock UserDBI set deck saved failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockUserDBI) SettleDeckCoverPush(deckID, pushedPending, pushedCoverFile, imageURL string) error {
+	if err := m.Called(deckID, pushedPending, pushedCoverFile, imageURL).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI settle deck cover push failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DiscardDeckCover(deckID, imageURL string) error {
+	if err := m.Called(deckID, imageURL).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI discard deck cover failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) FindDeckItemsByAnchor(systemID, path string) (map[string][]int64, error) {
+	args := m.Called(systemID, path)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI find deck items by anchor failed: %w", err)
+	}
+	if found, ok := args.Get(0).(map[string][]int64); ok && found != nil {
+		return found, nil
+	}
+	return map[string][]int64{}, nil
 }
 
 func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {
@@ -3210,6 +3259,9 @@ func NewMockUserDBI() *MockUserDBI {
 	// projection. Default to an empty list so tests exercising NewNamesIndex
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	m.On("ListMediaUserFlagTimes", mock.Anything).Return([]database.MediaUserFlagTime{}, nil).Maybe()
+	m.On("GetMediaUserDataForPaths", mock.Anything).
+		Return(map[database.MediaUserRef]database.MediaUserData{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	// Startup checks for a reconcile left pending by a restore; default to none.
 	m.On("GetDeviceState", database.DeviceStateKeyMediaUserDataReconcile).Return("", false, nil).Maybe()

@@ -618,6 +618,11 @@ func startServiceWithOptions(
 		})
 	})
 	db.DeckTags = deckTagger
+	db.OnMediaUserFlagsChanged = func(systemID, path string, data *database.MediaUserData) {
+		notifications.MediaTagsChanged(st.Notifications, models.MediaTagsChangedNotification{
+			System: systemID, Path: path, Tags: data.UserTags(),
+		})
+	}
 	mediaUserReconcile := newMediaUserReconciler(db)
 	db.MediaUserData = mediaUserReconcile
 

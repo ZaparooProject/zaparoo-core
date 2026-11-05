@@ -115,7 +115,11 @@ Event and resolution fields are defined under [`ui`](./methods.md#ui-event-objec
         "kind": "picker",
         "title": "Favorites",
         "choices": [
-          {"id": "e88560a7-76bb-4ab4-a914-da4be745778d", "label": "Game One"},
+          {
+            "id": "e88560a7-76bb-4ab4-a914-da4be745778d",
+            "label": "Game One",
+            "media": {"system": "SNES", "path": "/media/fat/games/SNES/Game One.sfc", "name": "Game One"}
+          },
           {"id": "ce99379a-b803-4489-9da4-e752e96471e9", "label": "Game Two"}
         ],
         "selectedChoiceId": "e88560a7-76bb-4ab4-a914-da4be745778d",
@@ -160,6 +164,35 @@ An indexed media item's or a folder's hidden preference changed. No payload. Ref
 ### media.history.changed
 
 A platform recorded or updated play history outside the `media.started` and `media.stopped` lifecycle - for example, an externally launched game's playtime confirmed from host foreground evidence after it closed. No payload. Refetch `media.history`, `media.history.latest` and `media.history.top`. Notifications are not replayed, so also refetch after reconnect.
+
+### media.tags.changed
+
+An item's user flags changed, through [`media.tags.update`](methods.md#mediatagsupdate), Library sync, or anything else that sets them. Sent once per item whose flags changed. Update what you show for the item without searching again. A folder hidden or unhidden through `media.tags.update` is reported the same way, with the folder's path.
+
+#### Parameters
+
+| Key    | Type                                     | Required | Description                                                                                           |
+| :----- | :--------------------------------------- | :------- | :---------------------------------------------------------------------------------------------------- |
+| system | string                                   | Yes      | System ID of the item.                                                                                |
+| path   | string                                   | Yes      | Path of the item.                                                                                     |
+| tags   | [TagInfo](methods.md#taginfo-object)[] | Yes      | The item's full set of user flags after the change: any of `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`. Empty when none is set. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.tags.changed",
+  "params": {
+    "system": "SNES",
+    "path": "/media/fat/games/SNES/Super Metroid (USA).sfc",
+    "tags": [
+      { "tag": "favorite", "type": "user" },
+      { "tag": "playlater", "type": "user" }
+    ]
+  }
+}
+```
 
 ### media.started
 

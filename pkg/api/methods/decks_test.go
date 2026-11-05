@@ -72,6 +72,8 @@ func newDecksTestEnv(t *testing.T) *decksTestEnv {
 			Context:  context.Background(),
 			Database: &database.Database{MediaDB: mediaDB, UserDB: userDB, DeckTags: tagger},
 			State:    st,
+			// The frontend on the device itself.
+			IsLocal: true,
 		},
 		ns:     ns,
 		tagger: tagger,

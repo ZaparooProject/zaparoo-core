@@ -46,6 +46,10 @@ type Database struct {
 	// MediaUserData rebuilds the MediaDB projection of media user data in the
 	// background. It is nil wherever DeckTags is.
 	MediaUserData MediaUserDataReconciler
+	// OnMediaUserFlagsChanged is told a media path's user data after an edit
+	// changed its flags, from any path that edits them. It is nil where
+	// nothing listens. It must not block.
+	OnMediaUserFlagsChanged func(systemID, path string, data *MediaUserData)
 	// UserDBRecovery is set when startup found the user database damaged and
 	// replaced it, so the user can be told. It is nil after a normal open.
 	UserDBRecovery *UserDBRecovery
@@ -474,6 +478,21 @@ func (d *MediaUserData) ValidateFlags() error {
 		return ErrMediaUserFlagConflict
 	}
 	return nil
+}
+
+// MediaUserRef names one media path in UserDB. Path is canonical.
+type MediaUserRef struct {
+	SystemID string
+	Path     string
+}
+
+// MediaUserFlagTime is when one flag was last set on a media path, as a Unix
+// time in seconds. SetAt is 0 when the time is unknown, as for a flag set
+// before set times were recorded.
+type MediaUserFlagTime struct {
+	SystemID string
+	Path     string
+	SetAt    int64
 }
 
 // MediaTagUpdate is one file's tag edit in a batch: removals run before
@@ -1311,6 +1330,8 @@ type UserDBI interface {
 	UpsertMediaUserData(data *MediaUserData) error
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)
+	ListMediaUserFlagTimes(flag MediaUserFlag) ([]MediaUserFlagTime, error)
+	GetMediaUserDataForPaths(refs []MediaUserRef) (map[MediaUserRef]MediaUserData, error)
 
 	// Library sync bookkeeping for personal state.
 	ListLibraryStateSync() ([]LibraryStateSyncRow, error)
@@ -1327,6 +1348,9 @@ type UserDBI interface {
 	UpsertRemoteDeck(deck *Deck) (bool, error)
 	UpsertFetchedDeck(deck *Deck, maxCopies int) (FetchedDeckResult, error)
 	SetDeckSaved(deckID string, saved bool, ownerName string) error
+	SettleDeckCoverPush(deckID, pushedPending, pushedCoverFile, imageURL string) error
+	DiscardDeckCover(deckID, imageURL string) error
+	FindDeckItemsByAnchor(systemID, path string) (map[string][]int64, error)
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	CountOwnedDecks() (int, error)
 	RenameDeck(oldID, newID string) error

@@ -109,6 +109,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodDevicePowerSuspend:
 		return apiPriorityHigh
 	case models.MethodMediaImage,
+		models.MethodDecksImage,
 		models.MethodMediaAsset,
 		models.MethodMediaGenerate,
 		models.MethodMediaGenerateCancel,
@@ -145,7 +146,7 @@ func methodFromAPIRequestPayload(msg []byte) string {
 }
 
 func isImageAPIMethod(method string) bool {
-	return strings.EqualFold(method, models.MethodMediaImage)
+	return strings.EqualFold(method, models.MethodMediaImage) || strings.EqualFold(method, models.MethodDecksImage)
 }
 
 func isAssetAPIMethod(method string) bool {

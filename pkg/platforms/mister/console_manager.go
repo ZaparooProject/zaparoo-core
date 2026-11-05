@@ -85,8 +85,12 @@ type MiSTerConsoleManager struct {
 	leaseController consoleLeaseController
 	executor        command.Executor
 	platform        *Platform
-	activeVT        string
-	leaseNonce      string
+	// frontendActive reports whether Main runs the frontend in place of the
+	// stock menu; Main only grants its console lease while it does. nil reads
+	// Main's status file. Tests replace it.
+	frontendActive func() bool
+	activeVT       string
+	leaseNonce     string
 	// staleLeaseNonce is a lease whose release failed. Main may still hold
 	// it, so the next Open releases it before acquiring a new one.
 	staleLeaseNonce string
@@ -233,11 +237,24 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 	return errors.New("timeout waiting for console switch after 5s")
 }
 
+// leaseUsable reports whether Main's console lease applies: Main grants it
+// only while it runs the frontend in place of the stock menu. With the
+// frontend switched off, escaped or given up, Main refuses the lease and the
+// stock F9 console is the one that works.
+func (m *MiSTerConsoleManager) leaseUsable() bool {
+	if m.frontendActive != nil {
+		return m.frontendActive()
+	}
+	return frontendActive(afero.NewOsFs())
+}
+
 func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (bool, error) {
 	if !m.leaseController.Available() {
 		return false, nil
 	}
 
+	// A lease whose release failed goes first, even when the lease no longer
+	// applies: Main may still hold it and block the stock F9 console.
 	m.mu.Lock()
 	stale := m.staleLeaseNonce
 	m.staleLeaseNonce = ""
@@ -248,6 +265,9 @@ func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (
 			log.Warn().Err(err).Msg("could not release an earlier Main console lease")
 		}
 		releaseCancel()
+	}
+	if !m.leaseUsable() {
+		return false, nil
 	}
 
 	leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)

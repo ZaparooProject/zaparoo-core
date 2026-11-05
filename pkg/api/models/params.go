@@ -34,7 +34,7 @@ type SearchParams struct {
 	Cursor        *string   `json:"cursor,omitempty"`
 	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc added-desc"`
 	Query         *string   `json:"query"`
 	GroupBy       *string   `json:"groupBy,omitempty" validate:"omitempty,oneof=title"`
 	TitleID       *int64    `json:"titleId,omitempty" validate:"omitempty,gt=0"`
@@ -324,6 +324,37 @@ type DeckCardScriptInput struct {
 	ZapScript string `json:"zapscript" validate:"required,max=5000"`
 }
 
+// DecksParams lists decks. System and Path name one game, both or neither;
+// when given, every deck reports which of its items are linked to it.
+type DecksParams struct {
+	System *string `json:"system" validate:"omitempty,min=1"`
+	Path   *string `json:"path" validate:"omitempty,min=1"`
+}
+
+// DecksImageParams asks for a deck's cover, or for a card item's art when
+// ItemID is set. MaxSize and Delivery work as in media.image.
+type DecksImageParams struct {
+	ItemID   *int64 `json:"itemId,omitempty"`
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	DeckID   string `json:"deckId" validate:"required,min=1"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
+}
+
+// Deck cover kinds for decks.update.
+const (
+	DeckCoverKindMedia = "media"
+	DeckCoverKindFile  = "file"
+	DeckCoverKindNone  = "none"
+)
+
+// DeckCoverInput sets or removes a deck's cover: a game's art (system and
+// path), an image file on the Core host (path), or none.
+type DeckCoverInput struct {
+	Kind   string `json:"kind" validate:"required,oneof=media file none"`
+	System string `json:"system,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
+
 type DecksGetParams struct {
 	DeckID string `json:"deckId" validate:"required,min=1"`
 }
@@ -341,6 +372,7 @@ type DecksUpdateParams struct {
 	Name          *string          `json:"name" validate:"omitempty,min=1,max=100"`
 	Description   *string          `json:"description" validate:"omitempty,max=1000"`
 	Items         *[]DeckItemInput `json:"items" validate:"omitempty,max=120,dive"`
+	Cover         *DeckCoverInput  `json:"cover"`
 	DeckID        string           `json:"deckId" validate:"required,min=1"`
 	AddItems      []DeckItemInput  `json:"addItems" validate:"omitempty,max=120,dive"`
 	RemoveItemIDs []int64          `json:"removeItemIds"`
