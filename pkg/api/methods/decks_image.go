@@ -26,11 +26,14 @@ import (
 	"fmt"
 	"image/gif"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -50,10 +53,13 @@ const (
 )
 
 // deckImageClient fetches deck and card images from their https URLs. It
-// refuses a redirect to anything but https.
+// refuses a redirect to anything but https, and connects only to public
+// addresses: the URLs come from deck and card metadata, which another
+// account can write. Each dial is checked, so redirects and DNS answers are
+// too. No proxy, so the address checked is the one connected to.
 var deckImageClient = &http.Client{
 	Timeout:   20 * time.Second,
-	Transport: useragent.Transport(nil),
+	Transport: useragent.Transport(publicOnlyTransport()),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != "https" {
 			return errors.New("deck image redirect is not https")
@@ -63,6 +69,45 @@ var deckImageClient = &http.Client{
 		}
 		return nil
 	},
+}
+
+// publicOnlyTransport is the default transport with no proxy and a dialer
+// that refuses any address that is not public.
+func publicOnlyTransport() *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("deck image address %q: %w", address, err)
+			}
+			addr, err := netip.ParseAddr(host)
+			if err != nil || !publicAddr(addr) {
+				return fmt.Errorf("deck image address %s is not public", host)
+			}
+			return nil
+		},
+	}
+	transport.DialContext = dialer.DialContext
+	return transport
+}
+
+// sharedAddressSpace is the carrier-grade NAT range (RFC 6598), which
+// netip does not count as private.
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicAddr reports whether an address is a public unicast one: not
+// loopback, private, link-local, shared, multicast or unspecified.
+func publicAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsGlobalUnicast() && !addr.IsPrivate() && !addr.IsLoopback() &&
+		!addr.IsLinkLocalUnicast() && !sharedAddressSpace.Contains(addr)
 }
 
 // usableImageURL reports whether Core fetches an image URL: https only.
@@ -82,9 +127,17 @@ func deckCovers(env *requests.RequestEnv) (*decks.Covers, error) {
 	return decks.NewCovers(env.Platform), nil
 }
 
-// deckHasImage reports a cover decks.image can serve for a deck.
-func deckHasImage(deck *database.Deck) bool {
-	return deck.CoverFile != "" || usableImageURL(deck.RemoteImageURL())
+// deckHasImage reports a cover decks.image can serve for a deck: a stored
+// cover file that is still there, or a usable remote image.
+func deckHasImage(env *requests.RequestEnv, deck *database.Deck) bool {
+	if deck.CoverFile != "" {
+		if covers, err := deckCovers(env); err == nil {
+			if _, err := covers.Path(deck.CoverFile); err == nil {
+				return true
+			}
+		}
+	}
+	return usableImageURL(deck.RemoteImageURL())
 }
 
 // deckImageSource is the image decks.image serves: a cover file stored here
@@ -292,6 +345,10 @@ func deckCoverBytes(env *requests.RequestEnv, cover *models.DeckCoverInput) ([]b
 		}
 		return validCoverImage(raw.binary)
 	case models.DeckCoverKindFile:
+		// A file cover reads any image on the Core host.
+		if !isLocalOrAdmin(env) {
+			return nil, models.ClientErrf("%w", ErrForbidden)
+		}
 		if cover.System != "" || cover.Path == "" || !filepath.IsAbs(cover.Path) {
 			return nil, models.ClientErrf("invalid params: a file cover needs an absolute path and no system")
 		}

@@ -64,9 +64,13 @@ func frontendActive(fs afero.Fs) bool {
 		return false
 	}
 	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, frontendStatusMaxBytes+1))
+	if err != nil || len(data) > frontendStatusMaxBytes {
+		log.Debug().Err(err).Msg("frontend status file is not readable")
+		return false
+	}
 	var status frontendStatus
-	decoder := json.NewDecoder(io.LimitReader(file, frontendStatusMaxBytes))
-	if err := decoder.Decode(&status); err != nil {
+	if err := json.Unmarshal(data, &status); err != nil {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
 		return false
 	}
@@ -109,7 +113,9 @@ func (p *Platform) HandOffUI(_ context.Context, event *models.UIEvent) (handled 
 		returnToMenu = func() error { return p.StopActiveLauncher(platforms.StopForMenu) }
 	}
 	if err := returnToMenu(); err != nil {
+		// No menu, no frontend: let the widget try to show it instead.
 		log.Warn().Err(err).Msg("failed to return to the menu for a UI event")
+		return false, 0
 	}
 	return true, frontendColdStartHold
 }

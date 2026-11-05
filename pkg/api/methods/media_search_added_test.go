@@ -77,9 +77,21 @@ func addedSearchEnv(t *testing.T) (env requests.RequestEnv, names map[int64]stri
 			SystemID: "NES", Path: pathutil.CanonicalMediaPath(paths[i]), SetAt: at,
 		})
 	}
-	// Liked has times for the same files the other way round, to prove the
-	// first flag in the tag list is the one the order follows.
-	liked := []database.MediaUserFlagTime{{SystemID: "NES", Path: times[0].Path, SetAt: 900}}
+	// Bravo and Charlie are liked too, with set times the other way round,
+	// so an order shows which flag the search follows.
+	likedAt := map[string]int64{"Bravo": 100, "Charlie": 900}
+	liked := make([]database.MediaUserFlagTime, 0, len(likedAt))
+	for i, name := range files {
+		at, ok := likedAt[name]
+		if !ok {
+			continue
+		}
+		require.NoError(t, mediaDB.UpdateMediaTags(context.Background(), ids[i], nil,
+			[]database.MediaTagRef{{Type: "user", Tag: "liked"}}))
+		liked = append(liked, database.MediaUserFlagTime{
+			SystemID: "NES", Path: pathutil.CanonicalMediaPath(paths[i]), SetAt: at,
+		})
+	}
 	env = requests.RequestEnv{
 		Context: context.Background(),
 		Database: &database.Database{MediaDB: mediaDB, UserDB: &flagTimesUserDB{
@@ -146,10 +158,10 @@ func TestMediaSearchAddedDescPagesWithACursor(t *testing.T) {
 func TestMediaSearchAddedDescFollowsTheFirstFlagTag(t *testing.T) {
 	t.Parallel()
 	env, names := addedSearchEnv(t)
-	// The liked filter matches nothing tagged here, so nothing comes back,
-	// but the request is valid: the first flag tag names the order.
+	// Both flags match Bravo and Charlie; liked comes first, so its times
+	// order them, the reverse of the favorite order.
 	got, _ := searchNames(t, &env, `{"tags":["user:liked","user:favorite"],"sort":"added-desc"}`, names)
-	assert.Empty(t, got)
+	assert.Equal(t, []string{"Charlie", "Bravo"}, got)
 }
 
 func TestMediaSearchAddedDescRefusesOtherUses(t *testing.T) {

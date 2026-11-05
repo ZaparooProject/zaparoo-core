@@ -153,8 +153,9 @@ func ApplyMediaUserFlags(
 
 // watchMediaUserFlags reads a path's flags before an edit and returns the
 // function that reads them after it and tells OnMediaUserFlagsChanged when
-// they differ. It reads nothing when nobody listens. A read that fails is
-// taken as a change, so a listener is never left with a stale view.
+// they differ. It reads nothing when nobody listens. A failed read before
+// the edit is taken as a change; a failed read after it sends nothing, since
+// there are no flags to send, and is logged.
 func (db *Database) watchMediaUserFlags(systemID, path string) func() {
 	if db == nil || db.OnMediaUserFlagsChanged == nil || db.UserDB == nil {
 		return func() {}

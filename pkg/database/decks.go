@@ -165,15 +165,18 @@ func (d *Deck) RemoteImageURL() string {
 }
 
 // CardImageURL is a card item's art from its metadata: the rendered card
-// when there is one, else its image. Empty for any other item.
+// when it is an https URL, else its image when that is. Empty for any other
+// item.
 func (i *DeckItem) CardImageURL() string {
 	if i.Kind != DeckItemKindCard {
 		return ""
 	}
-	if rendered := metadataImageURL(i.Metadata, "rendered_url"); rendered != "" {
-		return rendered
+	for _, field := range []string{"rendered_url", "image_url"} {
+		if imageURL := metadataImageURL(i.Metadata, field); strings.HasPrefix(imageURL, "https://") {
+			return imageURL
+		}
 	}
-	return metadataImageURL(i.Metadata, "image_url")
+	return ""
 }
 
 // metadataImageURL reads one string field of a metadata object, empty when

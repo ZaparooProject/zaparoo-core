@@ -29,6 +29,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -120,14 +121,59 @@ func TestHandleDecks_CardItemHasImage(t *testing.T) {
 	deckID := e.newDeck(t, "Cards",
 		`{"kind":"card","cardId":"aaaa1111","metadata":{"rendered_url":"https://img.example/r.png"}},`+
 			`{"kind":"card","cardId":"bbbb2222","metadata":{"image_url":"http://img.example/i.png"}},`+
-			`{"kind":"card","cardId":"cccc3333"}`)
+			`{"kind":"card","cardId":"cccc3333"},`+
+			`{"kind":"card","cardId":"dddd4444","metadata":`+
+			`{"rendered_url":"http://img.example/r.png","image_url":"https://img.example/i.png"}}`)
 	got, ok := e.call(t, HandleDecksGet, fmt.Sprintf(`{"deckId":%q}`, deckID)).(models.DeckResponse)
 	require.True(t, ok)
 	assert.False(t, got.HasImage)
-	require.Len(t, got.Items, 3)
+	require.Len(t, got.Items, 4)
 	assert.True(t, got.Items[0].HasImage)
 	assert.False(t, got.Items[1].HasImage, "only https images are served")
 	assert.False(t, got.Items[2].HasImage)
+	assert.True(t, got.Items[3].HasImage, "an http render falls back to the https image")
+}
+
+// A file cover reads any image on the Core host, so only the device itself
+// or an admin may name one.
+func TestHandleDecksUpdate_FileCoverNeedsLocalOrAdmin(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	e.withDataDir(t)
+	deckID := e.newDeck(t, "Covered", `{"kind":"script","name":"S","zapscript":"**a"}`)
+	coverPath := filepath.Join(t.TempDir(), "cover.png")
+	require.NoError(t, os.WriteFile(coverPath, testPNG(t, 8), 0o600))
+
+	remote := e.env
+	remote.IsLocal = false
+	_, err := HandleDecksUpdate(withParams(&remote, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"file","path":%q}}`, deckID, coverPath)))
+	require.ErrorIs(t, err, ErrForbidden)
+	stored, err := e.env.Database.UserDB.GetDeck(deckID)
+	require.NoError(t, err)
+	assert.Empty(t, stored.CoverFile)
+}
+
+func TestPublicAddr(t *testing.T) {
+	t.Parallel()
+	for addr, public := range map[string]bool{
+		"93.184.216.34":   true,
+		"2606:4700::6810": true,
+		"127.0.0.1":       false,
+		"10.0.0.107":      false,
+		"192.168.1.2":     false,
+		"172.16.0.1":      false,
+		"169.254.169.254": false,
+		"100.64.0.1":      false,
+		"0.0.0.0":         false,
+		"::1":             false,
+		"fe80::1":         false,
+		"fd00::1":         false,
+		"::ffff:10.0.0.1": false,
+		"224.0.0.1":       false,
+	} {
+		assert.Equal(t, public, publicAddr(netip.MustParseAddr(addr)), addr)
+	}
 }
 
 func TestHandleDecksUpdate_CoverKinds(t *testing.T) {

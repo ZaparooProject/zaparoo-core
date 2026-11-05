@@ -919,6 +919,12 @@ func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error 
 	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
+	if remote.IsLocked && local != nil && local.CoverPending != "" {
+		// A locked deck takes no change from here, its cover included.
+		if err := p.discardCoverChange(pending.deckID, remote); err != nil {
+			return err
+		}
+	}
 	next := &database.DeckSyncRow{
 		DeckID: pending.deckID, Snapshot: server.encode(), Revision: remote.Revision,
 		Locked: remote.IsLocked, Conflicts: conflicts,

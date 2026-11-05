@@ -837,4 +837,35 @@ func TestFindDeckItemsByAnchor(t *testing.T) {
 	found, err = db.FindDeckItemsByAnchor("SNES", "roms/g.nes")
 	require.NoError(t, err)
 	assert.Empty(t, found)
+	// Another spelling of the same path finds it too.
+	found, err = db.FindDeckItemsByAnchor("NES", "roms/./sub/../g.nes")
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]int64{"0123456789ab": {deck.Items[1].DBID}}, found)
+}
+
+// A removal the account took also drops the image the deck's metadata
+// named, so the removed cover is not served again from there.
+func TestSettleDeckCoverPushRemovalDropsMetadataImage(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true,
+		Metadata: []byte(`{"image_url":"https://x/old.png","tint":"red"}`),
+	}))
+	_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.CoverPending = database.DeckCoverPendingRemove
+		return nil
+	})
+	require.NoError(t, err)
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.RemoteImageURL(), "hidden while the removal is pending")
+
+	require.NoError(t, db.SettleDeckCoverPush("0123456789ab", database.DeckCoverPendingRemove, "", ""))
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.CoverPending)
+	assert.Empty(t, got.RemoteImageURL())
+	assert.JSONEq(t, `{"tint":"red"}`, string(got.Metadata))
 }

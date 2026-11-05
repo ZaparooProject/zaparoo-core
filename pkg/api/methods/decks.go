@@ -83,7 +83,7 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
-		deck := deckSummary(&list[i])
+		deck := deckSummary(&env, &list[i])
 		deck.Locked = locked[deck.DeckID]
 		if params.System != nil {
 			deck.ContainsItemIDs = contains[deck.DeckID]
@@ -176,10 +176,6 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if !deck.Owned {
 		return nil, models.ClientErr(database.ErrDeckReadOnly)
 	}
-	coverFile, err := storeDeckCover(&env, deck.DeckID, cover)
-	if err != nil {
-		return nil, err
-	}
 
 	var name, description *string
 	if params.Name != nil {
@@ -200,6 +196,11 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 	added, err := buildDeckItems(&env, params.AddItems, false)
+	if err != nil {
+		return nil, err
+	}
+	// Stored last, so a request that fails validation leaves no file behind.
+	coverFile, err := storeDeckCover(&env, deck.DeckID, cover)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +646,7 @@ func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.D
 }
 
 // deckSummary is a deck as the decks list shows it, without items.
-func deckSummary(deck *database.Deck) models.DeckResponse {
+func deckSummary(env *requests.RequestEnv, deck *database.Deck) models.DeckResponse {
 	resp := models.DeckResponse{
 		Metadata:    deck.Metadata,
 		DeckID:      deck.DeckID,
@@ -656,7 +657,7 @@ func deckSummary(deck *database.Deck) models.DeckResponse {
 		ItemCount:   deck.ItemCount,
 		Owned:       deck.Owned,
 		Saved:       deck.Saved,
-		HasImage:    deckHasImage(deck),
+		HasImage:    deckHasImage(env, deck),
 	}
 	if !deck.Owned {
 		resp.SourceURL = deck.SourceURL
@@ -669,7 +670,7 @@ func deckSummary(deck *database.Deck) models.DeckResponse {
 // deck has an empty list.
 func deckResponse(env *requests.RequestEnv, deck *database.Deck, available map[int64]bool) models.DeckResponse {
 	userData := anchorUserData(env, deck.Items)
-	resp := deckSummary(deck)
+	resp := deckSummary(env, deck)
 	resp.ItemCount = len(deck.Items)
 	resp.Items = make([]models.DeckItemResponse, 0, len(deck.Items))
 	for i := range deck.Items {

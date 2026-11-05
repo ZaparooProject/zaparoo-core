@@ -82,6 +82,9 @@ func playlistChoiceMedia(env *platforms.CmdEnv, items []playlists.PlaylistItem) 
 			}
 			continue
 		}
+		if pathCtx.Err() != nil {
+			continue
+		}
 		out[i] = indexedChoiceMedia(pathCtx, mediaDB, systemID, path)
 	}
 

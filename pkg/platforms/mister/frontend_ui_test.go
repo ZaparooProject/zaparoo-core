@@ -22,6 +22,8 @@
 package mister
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +91,10 @@ func TestHandOffUI(t *testing.T) {
 		{name: "status file missing", mediaRunning: true},
 		{name: "frontend inactive", status: `{"active":false,"pid":4242}`, mediaRunning: true},
 		{name: "status file unparseable", status: `{"active":`, mediaRunning: true},
+		{
+			name: "trailing data after the status", status: `{"active":true,"pid":4242} {"active":false}`,
+			mediaRunning: true,
+		},
 		{name: "writer no longer running", status: `{"active":true,"pid":999}`, mediaRunning: true},
 		{name: "writer not named", status: `{"active":true}`, mediaRunning: true},
 		{name: "active without media", status: `{"active":true,"pid":4242}`, handled: true},
@@ -107,6 +113,28 @@ func TestHandOffUI(t *testing.T) {
 			assert.Equal(t, tt.stops, *stops)
 		})
 	}
+}
+
+// A menu return that fails leaves no frontend to draw the event, so the
+// widget gets to try it instead.
+func TestHandOffUIFallsBackToWidgetWhenMenuReturnFails(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `{"active":true,"pid":4242}`, true)
+	p.uiReturnToMenu = func() error { return errors.New("menu core failed to load") }
+	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
+	assert.False(t, handled)
+	assert.Zero(t, minOpen)
+}
+
+func TestFrontendActiveRejectsOversizedStatus(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll("/proc/4242", 0o755))
+	status := `{"active":true,"pid":4242}` + strings.Repeat(" ", frontendStatusMaxBytes)
+	require.NoError(t, afero.WriteFile(fs, frontendStatusPath, []byte(status), 0o600))
+	assert.False(t, frontendActive(fs))
 }
 
 // TestHandOffUIKeepsPickerOpenForFrontend drives the UI event service with the

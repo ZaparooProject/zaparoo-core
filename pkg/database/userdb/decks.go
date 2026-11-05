@@ -513,8 +513,12 @@ func (db *UserDB) SettleDeckCoverPush(deckID, pushedPending, pushedCoverFile, im
 	}
 	res, err := conn.ExecContext(db.ctx, `
 		update Decks set ImageURL = ?,
+			Metadata = case when ? = ? and CoverPending = ? and CoverFile = ? and json_valid(Metadata)
+				then json_remove(Metadata, '$.image_url') else Metadata end,
 			CoverPending = case when CoverPending = ? and CoverFile = ? then '' else CoverPending end
-		where DeckID = ?;`, imageURL, pushedPending, pushedCoverFile, deckID)
+		where DeckID = ?;`, imageURL,
+		pushedPending, database.DeckCoverPendingRemove, pushedPending, pushedCoverFile,
+		pushedPending, pushedCoverFile, deckID)
 	if err != nil {
 		return fmt.Errorf("failed to settle deck cover push: %w", err)
 	}
@@ -559,6 +563,8 @@ func (db *UserDB) FindDeckItemsByAnchor(systemID, path string) (map[string][]int
 	if conn == nil {
 		return nil, ErrNullSQL
 	}
+	// Anchors are stored canonical; match any spelling of the same path.
+	path = pathutil.CanonicalMediaPath(path)
 	rows, err := conn.QueryContext(db.ctx, `
 		select Decks.DeckID, DeckItems.DBID from DeckItems
 		join Decks on Decks.DBID = DeckItems.DeckDBID

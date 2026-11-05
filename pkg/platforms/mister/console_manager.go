@@ -249,10 +249,12 @@ func (m *MiSTerConsoleManager) leaseUsable() bool {
 }
 
 func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (bool, error) {
-	if !m.leaseController.Available() || !m.leaseUsable() {
+	if !m.leaseController.Available() {
 		return false, nil
 	}
 
+	// A lease whose release failed goes first, even when the lease no longer
+	// applies: Main may still hold it and block the stock F9 console.
 	m.mu.Lock()
 	stale := m.staleLeaseNonce
 	m.staleLeaseNonce = ""
@@ -263,6 +265,9 @@ func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (
 			log.Warn().Err(err).Msg("could not release an earlier Main console lease")
 		}
 		releaseCancel()
+	}
+	if !m.leaseUsable() {
+		return false, nil
 	}
 
 	leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)

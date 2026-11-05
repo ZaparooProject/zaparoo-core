@@ -311,7 +311,7 @@ None.
 | :---- | :----- | :------- | :---------- |
 | id    | string | Yes      | Opaque choice ID used by `ui.respond`. |
 | label | string | Yes      | Display label. |
-| media | object | No       | The local game the choice launches: `system` (system ID), `path` and `name`. Pass `system` and `path` to [`media.image`](#mediaimage) for its art. Present for playlist and deck items that resolve to an indexed game on this device, and for any other choice that is a game. |
+| media | object | No       | The local game the choice launches: `system` (system ID), `path` and `name`. Pass `system` and `path` to [`media.image`](#mediaimage) for its art. Present for playlist and deck items that resolve to an indexed game on this device when the lookup finishes in time, and for any other choice that is a game. |
 
 Choice IDs are presentation-safe. Executable ZapScript and private choice values remain inside Core.
 

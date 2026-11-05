@@ -273,3 +273,26 @@ func TestSyncDecks_PulledDeckKeepsItsImageURL(t *testing.T) {
 	assert.Equal(t, imageURL, local.ImageURL)
 	assert.True(t, strings.HasPrefix(local.RemoteImageURL(), "https://"))
 }
+
+// A push that conflicts with a deck the account locked meanwhile drops the
+// cover change too, so it never waits to be pushed once the deck unlocks.
+func TestSyncDecks_ConflictWithLockedDeckDropsTheCoverChange(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	covers := withDeckCovers(t, f)
+	f.createDeck(t, "0123456789ab", "Covered", scriptDeckItem("A", "**a"))
+	f.syncDecks(t)
+
+	f.setCover(t, covers, "0123456789ab")
+	f.online.onDeckPush(func(online *fakeOnline) {
+		// Inside the request, so no locking helpers.
+		online.moveDeckOn("0123456789AB", "Changed There")
+		online.decks["0123456789AB"].IsLocked = true
+	})
+	f.syncDecks(t)
+
+	local := f.localDeck(t, "0123456789ab")
+	assert.Empty(t, local.CoverPending)
+	assert.Empty(t, local.CoverFile)
+	assert.Nil(t, f.online.deck("0123456789ab").ImageURL)
+}

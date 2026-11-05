@@ -196,10 +196,30 @@ func TestMiSTerConsoleManager_Open_SkipsLeaseWithoutFrontend(t *testing.T) {
 	cm.frontendActive = func() bool { return false }
 	cm.fbChecker = &mockFramebufferChecker{ready: true}
 
-	// The F9 path fails in tests; only the lease matters here.
-	_ = cm.Open(context.Background(), "3")
+	// The F9 path fails in tests: no virtual keyboard.
+	err := cm.Open(context.Background(), "3")
+	require.ErrorContains(t, err, "failed to press F9 key")
 	assert.Empty(t, lease.acquiredVT)
 	assert.Empty(t, cm.leaseNonce)
+}
+
+// A lease whose release failed is released again even after the frontend
+// was switched off, so Main does not keep holding the console.
+func TestMiSTerConsoleManager_Open_ReleasesStaleLeaseWithoutFrontend(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.frontendActive = func() bool { return false }
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+	cm.staleLeaseNonce = "stale-nonce"
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorContains(t, err, "failed to press F9 key")
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.Empty(t, lease.acquiredVT)
+	assert.Empty(t, cm.staleLeaseNonce)
 }
 
 func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
