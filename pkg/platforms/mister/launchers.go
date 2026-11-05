@@ -2347,7 +2347,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemAppleII,
 			SystemID:   systemdefs.SystemAppleII,
 			Folders:    []string{"Apple-II"},
-			Extensions: []string{".dsk", ".do", ".po", ".nib", ".hdv"},
+			Extensions: []string{".dsk", ".do", ".po", ".nib", ".woz", ".hdv"},
 			Launch:     launch(pl, systemdefs.SystemAppleII),
 		},
 		{
