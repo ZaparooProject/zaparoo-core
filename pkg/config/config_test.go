@@ -1826,3 +1826,73 @@ func TestLoad_UnparseableFileIsInvalidConfigFile(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidConfigFile)
 	assert.True(t, cfg.AudioFeedback(), "a refused load keeps the running values")
 }
+
+func TestAudioMusicVolume_FollowsAudioVolumeUntilSet(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+	assert.Equal(t, 100, cfg.AudioMusicVolume())
+	assert.False(t, cfg.AudioMusicVolumeSet())
+
+	cfg.SetAudioVolume(40)
+	assert.Equal(t, 40, cfg.AudioMusicVolume(), "an unset music volume follows audio.volume")
+
+	cfg.SetAudioMusicVolume(0)
+	assert.True(t, cfg.AudioMusicVolumeSet())
+	assert.Equal(t, 0, cfg.AudioMusicVolume(), "0 is a real volume, not unset")
+
+	cfg.SetAudioMusicVolume(500)
+	assert.Equal(t, 200, cfg.AudioMusicVolume())
+	cfg.SetAudioMusicVolume(-5)
+	assert.Equal(t, 0, cfg.AudioMusicVolume())
+}
+
+func TestAudioMusicSettings_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioMusicAutoplay(), "autoplay is on by default")
+
+	cfg.SetAudioMusicVolume(150)
+	cfg.SetAudioMusicAutoplay(true)
+	require.NoError(t, cfg.Save())
+
+	data, err := os.ReadFile(filepath.Join(dir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "music_volume = 150")
+	assert.Contains(t, string(data), "music_autoplay = true")
+
+	loaded, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.Equal(t, 150, loaded.AudioMusicVolume())
+	assert.True(t, loaded.AudioMusicAutoplay())
+}
+
+func TestSetAudioPauseOnLaunch(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioPauseOnLaunch(), "pausing for games is on by default")
+
+	cfg.SetAudioPauseOnLaunch(false)
+	assert.False(t, cfg.AudioPauseOnLaunch())
+	defaults := cfg.SystemDefaults()
+	require.Len(t, defaults, 1, "an Audio entry is added when there is none")
+	assert.Equal(t, "Audio", defaults[0].System)
+
+	cfg.SetSystemDefaults([]SystemsDefault{
+		{System: "SNES", Launcher: "snes9x"},
+		{System: "audio", Launcher: "player"},
+	})
+	cfg.SetAudioPauseOnLaunch(true)
+	defaults = cfg.SystemDefaults()
+	require.Len(t, defaults, 2, "the existing Audio entry is used, whatever case names it")
+	require.NotNil(t, defaults[1].PauseOnLaunch)
+	assert.True(t, *defaults[1].PauseOnLaunch)
+	assert.Equal(t, "player", defaults[1].Launcher)
+	assert.Nil(t, defaults[0].PauseOnLaunch)
+}

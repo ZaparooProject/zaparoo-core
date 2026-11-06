@@ -217,6 +217,9 @@ type UpdateSettingsParams struct {
 	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	LauncherPreference        *[]string           `json:"launcherPreference,omitempty" validate:"omitempty,dive,required"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
+	AudioMusicVolume          *int                `json:"audioMusicVolume" validate:"omitempty,gte=0,lte=200"`
+	AudioMusicAutoplay        *bool               `json:"audioMusicAutoplay"`
+	AudioMusicPauseOnLaunch   *bool               `json:"audioMusicPauseOnLaunch"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
@@ -531,6 +534,22 @@ type MediaLookupParams struct {
 	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
 	Name        string `json:"name" validate:"required,min=1"`
 	System      string `json:"system" validate:"required,min=1"`
+}
+
+// PlaylistsUpdateParams changes the shuffle and repeat of the playlist open
+// in a slot. At least one of Shuffle and Repeat is required.
+type PlaylistsUpdateParams struct {
+	Shuffle *bool   `json:"shuffle,omitempty"`
+	Repeat  *string `json:"repeat,omitempty"`
+	Slot    string  `json:"slot,omitempty"`
+}
+
+// MediaActiveImageParams asks for the cover art of the audio track playing
+// in a slot. MaxSize and Delivery work as they do for media.image.
+type MediaActiveImageParams struct {
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	Slot     string `json:"slot,omitempty"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
 }
 
 type MediaControlParams struct {

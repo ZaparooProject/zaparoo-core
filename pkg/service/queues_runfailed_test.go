@@ -354,7 +354,7 @@ func TestLaunchPlaylistMedia_BusyRefusalDoesNotPause(t *testing.T) {
 	assert.True(t, after.Playing, "a busy refusal must not pause the playlist")
 }
 
-func TestLaunchPlaylistMedia_BackgroundFailurePausesBackgroundOnly(t *testing.T) {
+func TestLaunchPlaylistMedia_BackgroundFailureSkipsToTheNextItem(t *testing.T) {
 	t.Parallel()
 	env := setupRunFailedEnv(t)
 	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
@@ -364,12 +364,43 @@ func TestLaunchPlaylistMedia_BackgroundFailurePausesBackgroundOnly(t *testing.T)
 	env.svc.State.SetActivePlaylist(primary)
 	env.svc.State.SetBackgroundPlaylist(background)
 
-	launchPlaylistMedia(env.svc, background, env.player)
+	skip := launchPlaylistMedia(env.svc, background, env.player)
 
-	assert.False(t, env.svc.State.GetBackgroundPlaylist().Playing)
+	require.NotNil(t, skip, "music carries on past an item that cannot play")
+	assert.Equal(t, 1, skip.Index)
+	assert.Equal(t, 1, skip.SkipRun)
+	assert.True(t, env.svc.State.GetBackgroundPlaylist().Playing, "the playlist is not paused")
 	assert.True(t, env.svc.State.GetActivePlaylist().Playing)
 	failed := env.runFailed(t)
 	assert.Equal(t, "deck://bg", failed.PlaylistID)
+}
+
+func TestLaunchPlaylistMedia_BackgroundFailureStopsAfterAFullCycle(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
+	background := failingPlaylist("deck://bg", 2)
+	background.Slot = mediaslot.Background
+	background.SkipRun = 2 // every other item has already failed in a row
+	env.svc.State.SetBackgroundPlaylist(background)
+
+	skip := launchPlaylistMedia(env.svc, background, env.player)
+
+	assert.Nil(t, skip)
+	assert.False(t, env.svc.State.GetBackgroundPlaylist().Playing, "nothing plays, so it pauses")
+}
+
+func TestLaunchPlaylistMedia_PrimaryFailureNeverSkips(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
+	primary := failingPlaylist("deck://primary", 0)
+	env.svc.State.SetActivePlaylist(primary)
+
+	skip := launchPlaylistMedia(env.svc, primary, env.player)
+
+	assert.Nil(t, skip, "a failed game launch must not start the next game")
+	assert.False(t, env.svc.State.GetActivePlaylist().Playing)
 }
 
 func TestHandlePlaylist_PlayAfterFailedLaunchRelaunches(t *testing.T) {
@@ -801,4 +832,45 @@ func TestLaunchPlaylistMedia_NestedPlaylistIsNotRefusedByItsOwnLaunch(t *testing
 	assert.Equal(t, "inner", env.svc.State.GetActivePlaylist().ID, "the nested playlist took the slot")
 	failed := env.runFailed(t)
 	assert.Equal(t, "inner", failed.PlaylistID, "and its item was launched")
+}
+
+func TestSkipUndecodableBackgroundTrack_MovesOnOrPauses(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	env.svc.PlaylistQueue = make(chan *playlists.Playlist, 1)
+	background := failingPlaylist("deck://bg", 0)
+	background.Slot = mediaslot.Background
+	env.svc.State.SetBackgroundPlaylist(background)
+
+	skipUndecodableBackgroundTrack(env.svc)
+
+	select {
+	case next := <-env.svc.PlaylistQueue:
+		assert.Equal(t, 1, next.Index)
+		assert.Equal(t, 1, next.SkipRun)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the playlist did not move past the track that failed to decode")
+	}
+
+	last := failingPlaylist("deck://last", 2)
+	last.Slot = mediaslot.Background
+	env.svc.State.SetBackgroundPlaylist(last)
+
+	skipUndecodableBackgroundTrack(env.svc)
+
+	assert.False(t, env.svc.State.GetBackgroundPlaylist().Playing, "the end of the playlist pauses it")
+}
+
+func TestHandlePlaylist_AnIntentUpdateAppliesToTheCurrentPlaylist(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	background := failingPlaylist("deck://bg", 2)
+	background.Slot = mediaslot.Background
+	env.svc.State.SetBackgroundPlaylist(background)
+
+	handlePlaylist(env.svc, playlists.IntentUpdate(mediaslot.Background, false), env.player)
+
+	after := env.svc.State.GetBackgroundPlaylist()
+	assert.False(t, after.Playing)
+	assert.Equal(t, 2, after.Index, "the playlist keeps the place it had")
 }

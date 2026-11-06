@@ -814,6 +814,103 @@ func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_BackgroundSlotUsesNativeAudioOverAudioCore(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	songPath := filepath.Join(rootDir, "Music", "song.mp3")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, songPath, []byte("mp3"), 0o600))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "Audio"
+launcher = "phosphor"
+`))
+
+	// An Audio core that plays mp3 files in the primary slot only, set as
+	// the Audio default, and listed first.
+	audioCore := platforms.Launcher{
+		ID:         "phosphor",
+		SystemID:   "Audio",
+		Folders:    []string{"Music"},
+		Extensions: []string{".mp3"},
+	}
+	native := platforms.NativeAudioLauncher(nil, nil, nil, nil)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{audioCore, native})
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir}).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, songPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == platforms.NativeAudioLauncherID
+		}),
+		(*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		}),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{songPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"slot": "background"}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_PrimarySlotKeepsAudioDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	songPath := filepath.Join(rootDir, "Music", "song.mp3")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, songPath, []byte("mp3"), 0o600))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "Audio"
+launcher = "phosphor"
+`))
+
+	audioCore := platforms.Launcher{
+		ID:         "phosphor",
+		SystemID:   "Audio",
+		Folders:    []string{"Music"},
+		Extensions: []string{".mp3"},
+	}
+	native := platforms.NativeAudioLauncher(nil, nil, nil, nil)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{audioCore, native})
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir}).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, songPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "phosphor"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", Args: []string{songPath}},
+		Cfg: cfg,
+	}
+
+	_, err := cmdLaunchWithFS(fs, mockPlatform, env)
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_AbsolutePathAppliesInferredSystemDefault(t *testing.T) {
 	t.Parallel()
 

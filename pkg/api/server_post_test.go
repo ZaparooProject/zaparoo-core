@@ -65,6 +65,7 @@ func (*apiPlaybackStub) Pause(_ string) error                            { retur
 func (*apiPlaybackStub) Resume(_ string) error                           { return nil }
 func (*apiPlaybackStub) TogglePause(_ string) error                      { return nil }
 func (*apiPlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*apiPlaybackStub) SetVolume(_ string, _ float64) error             { return nil }
 func (*apiPlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
 
 // createTestPostHandler creates a POST handler with mocked dependencies for testing.

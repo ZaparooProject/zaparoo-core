@@ -1496,7 +1496,7 @@ func loadRawMediaImageLimited(
 		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
 
-	maxBytes := mediaImageMaxBytes(env.Platform)
+	maxBytes := MediaImageMaxBytes(env.Platform)
 	var raw *rawMediaImage
 	var err error
 	switch {
@@ -2219,7 +2219,8 @@ func logStaleMediaImageProperty(
 		Msg("media.image: stale image property ignored")
 }
 
-func mediaImageMaxBytes(pl platforms.Platform) int64 {
+// MediaImageMaxBytes is the largest image a media image request reads on pl.
+func MediaImageMaxBytes(pl platforms.Platform) int64 {
 	if pl != nil && pl.ID() == ids.Mister {
 		return misterMediaImageMaxBytes
 	}

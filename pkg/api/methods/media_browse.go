@@ -1326,7 +1326,10 @@ func browsePathPrefix(
 			return nil, fmt.Errorf("error browsing directories: %w", err)
 		}
 
-		if cursor == nil {
+		hasMoreDirs := len(dirs) > maxResults
+		// A first page that holds every directory has counted them already:
+		// the count query only runs when there are more to page through.
+		if cursor == nil && hasMoreDirs {
 			started = time.Now()
 			totalDirs, err = env.Database.MediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
 				ExcludeHidden: env.ExcludeHidden,
@@ -1337,9 +1340,9 @@ func browsePathPrefix(
 			if err != nil {
 				return nil, fmt.Errorf("error getting directory count: %w", err)
 			}
+		} else if cursor == nil {
+			totalDirs = len(dirs)
 		}
-
-		hasMoreDirs := len(dirs) > maxResults
 		if hasMoreDirs {
 			dirs = dirs[:maxResults]
 		}
@@ -1363,14 +1366,14 @@ func browsePathPrefix(
 		// Directories are exhausted. Fill the rest of the page with the first
 		// files so small folders return in a single round-trip (mixed boundary
 		// page), then continue paging files from there.
-		if cursor == nil {
-			totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems, tags)
-			if err != nil {
-				return nil, err
-			}
-		}
 		remaining := maxResults - len(dirs)
 		if remaining <= 0 {
+			if cursor == nil {
+				totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems, tags)
+				if err != nil {
+					return nil, err
+				}
+			}
 			// The page is already full of directories; transition to the files
 			// phase on the next page if any files exist.
 			var next *string
@@ -1398,6 +1401,18 @@ func browsePathPrefix(
 		logBrowseTiming("files", prefix, started, len(files))
 		if err != nil {
 			return nil, fmt.Errorf("error browsing files: %w", err)
+		}
+		// A page that holds every file has counted them already: the count
+		// query only runs when there are more to page through.
+		if cursor == nil {
+			if len(files) <= remaining {
+				totalFiles = len(files)
+			} else {
+				totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems, tags)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		files, next, encErr := paginateFiles(files, remaining, totalFiles, totalDirs, nil)
 		if encErr != nil {
@@ -1431,11 +1446,16 @@ func browsePathPrefix(
 	}
 
 	// Get total file count. First-page cursors carry this forward so loading
-	// additional pages in large directories does not repeat the same count query.
+	// additional pages in large directories does not repeat the same count
+	// query, and a first page that holds every file needs no query at all.
 	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
-		totalFiles, err = browseTotalFileCount(ctx, env, prefix, letter, systems, tags)
-		if err != nil {
-			return nil, err
+		if cursor == nil && len(files) <= maxResults {
+			totalFiles = len(files)
+		} else {
+			totalFiles, err = browseTotalFileCount(ctx, env, prefix, letter, systems, tags)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -1587,9 +1607,13 @@ func browseVirtual(
 	}
 
 	var totalFiles int
-	if cursor != nil && cursor.TotalFiles > 0 {
+	switch {
+	case cursor != nil && cursor.TotalFiles > 0:
 		totalFiles = cursor.TotalFiles
-	} else {
+	case cursor == nil && len(files) <= maxResults:
+		// The first page holds every entry, so it is the count.
+		totalFiles = len(files)
+	default:
 		totalFiles, err = browseTotalFileCount(ctx, env, schemePath, letter, systems, tags)
 		if err != nil {
 			return nil, err

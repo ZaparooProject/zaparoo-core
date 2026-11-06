@@ -166,6 +166,38 @@ func extras(root string, modules map[string]*linkedModule) ([]extraComponent, er
 		files: []extraFile{{name: "LICENSE-APACHE", text: wuffsApache}, {name: "LICENSE-MIT", text: wuffsMIT}},
 	})
 
+	drLibs, err := read("pkg/audio/nativedec/third_party/LICENSE-dr_libs")
+	if err != nil {
+		return nil, err
+	}
+	for _, lib := range []struct{ name, version, file string }{
+		{name: "dr_mp3", version: "0.7.4", file: "dr_mp3.h"},
+		{name: "dr_flac", version: "0.13.4", file: "dr_flac.h"},
+	} {
+		out = append(out, extraComponent{
+			component: credits.Component{
+				Name: lib.name, Version: lib.version, URL: "https://github.com/mackron/dr_libs",
+				License: "Unlicense OR MIT-0",
+				Note: "Vendored in pkg/audio/nativedec/third_party from " + lib.file + " at " +
+					"https://github.com/mackron/dr_libs/tree/35b5c392cc15456736c440a68dbe073178bbffe0.",
+			},
+			files: []extraFile{{name: "LICENSE", text: drLibs}},
+		})
+	}
+	stbVorbis, err := read("pkg/audio/nativedec/third_party/LICENSE-stb")
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, extraComponent{
+		component: credits.Component{
+			Name: "stb_vorbis", Version: "1.22", URL: "https://github.com/nothings/stb",
+			License: "MIT OR Unlicense",
+			Note: "Vendored in pkg/audio/nativedec/third_party from stb_vorbis.c at " +
+				"https://github.com/nothings/stb/tree/d14d46f6b44456eb88beac58cba833a4135d4c89.",
+		},
+		files: []extraFile{{name: "LICENSE", text: stbVorbis}},
+	})
+
 	vdf, err := read("internal/vdfbinary/LICENSE")
 	if err != nil {
 		return nil, err

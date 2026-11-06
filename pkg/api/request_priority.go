@@ -97,6 +97,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodReadersWriteCancel,
 		models.MethodMediaActiveUpdate,
 		models.MethodMediaControl,
+		models.MethodPlaylistsUpdate,
 		models.MethodMappingsNew,
 		models.MethodMappingsDelete,
 		models.MethodMappingsUpdate,
@@ -110,6 +111,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		return apiPriorityHigh
 	case models.MethodMediaImage,
 		models.MethodDecksImage,
+		models.MethodMediaActiveImage,
 		models.MethodMediaAsset,
 		models.MethodMediaGenerate,
 		models.MethodMediaGenerateCancel,
@@ -146,7 +148,9 @@ func methodFromAPIRequestPayload(msg []byte) string {
 }
 
 func isImageAPIMethod(method string) bool {
-	return strings.EqualFold(method, models.MethodMediaImage) || strings.EqualFold(method, models.MethodDecksImage)
+	return strings.EqualFold(method, models.MethodMediaImage) ||
+		strings.EqualFold(method, models.MethodDecksImage) ||
+		strings.EqualFold(method, models.MethodMediaActiveImage)
 }
 
 func isAssetAPIMethod(method string) bool {
@@ -181,5 +185,6 @@ func isMediaDBFreeInstantMethod(method string) bool {
 		strings.EqualFold(method, models.MethodDecksOpen) ||
 		strings.EqualFold(method, models.MethodLaunch) ||
 		strings.EqualFold(method, models.MethodStop) ||
-		strings.EqualFold(method, models.MethodMediaControl)
+		strings.EqualFold(method, models.MethodMediaControl) ||
+		strings.EqualFold(method, models.MethodPlaylistsUpdate)
 }

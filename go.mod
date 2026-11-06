@@ -11,7 +11,7 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.30.0
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.26.1
-	github.com/ZaparooProject/go-zapscript v0.22.1
+	github.com/ZaparooProject/go-zapscript v0.23.0
 	github.com/ZaparooProject/zaparoo-core/mister v0.1.1
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
@@ -21,6 +21,7 @@ require (
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20261103071945-eb7a6cfa5657
 	github.com/creativeprojects/go-selfupdate v1.7.0
+	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/expr-lang/expr v1.17.8
@@ -97,7 +98,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/google/go-github/v86 v86.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
@@ -110,8 +110,6 @@ require (
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
-	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect

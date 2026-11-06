@@ -34,6 +34,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -70,6 +72,9 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
 		AudioVolume:               env.Config.AudioVolume(),
+		AudioMusicVolume:          env.Config.AudioMusicVolume(),
+		AudioMusicAutoplay:        env.Config.AudioMusicAutoplay(),
+		AudioMusicPauseOnLaunch:   env.Config.AudioPauseOnLaunch(),
 		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
 		ReadersScanMode:           env.Config.ReadersScan().Mode,
 		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
@@ -154,8 +159,23 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		env.Player.ClearFileCache()
 		env.Player.SetVolume(float64(env.Config.AudioVolume()) / 100.0)
 	}
+	applyMusicVolume(&env)
 
 	return NoContent{}, nil
+}
+
+// applyMusicVolume sets the configured music volume on whatever native audio
+// is playing in either slot, so a change is heard at once.
+func applyMusicVolume(env *requests.RequestEnv) {
+	if env.PlaybackManager == nil {
+		return
+	}
+	gain := platforms.MusicVolumeGain(env.Config)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		if err := env.PlaybackManager.SetVolume(slot, gain); err != nil {
+			log.Warn().Err(err).Str("slot", slot).Msg("failed to apply music volume")
+		}
+	}
 }
 
 // HandleSettingsZapScriptHold disables ZapScript for as long as the calling
@@ -300,6 +320,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	if params.AudioMusicVolume != nil {
+		log.Debug().Int("audioMusicVolume", *params.AudioMusicVolume).Msg("updating setting")
+		env.Config.SetAudioMusicVolume(*params.AudioMusicVolume)
+	}
+
+	if params.AudioMusicAutoplay != nil {
+		log.Debug().Bool("audioMusicAutoplay", *params.AudioMusicAutoplay).Msg("updating setting")
+		env.Config.SetAudioMusicAutoplay(*params.AudioMusicAutoplay)
+	}
+
 	if params.ReadersAutoDetect != nil {
 		log.Debug().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("updating setting")
 		env.Config.SetAutoDetect(*params.ReadersAutoDetect)
@@ -409,6 +439,13 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		)
 	}
 
+	// After the system defaults, which hold where this is stored, so a
+	// request carrying both ends with the value it asked for.
+	if params.AudioMusicPauseOnLaunch != nil {
+		log.Debug().Bool("audioMusicPauseOnLaunch", *params.AudioMusicPauseOnLaunch).Msg("updating setting")
+		env.Config.SetAudioPauseOnLaunch(*params.AudioMusicPauseOnLaunch)
+	}
+
 	if params.LauncherPreference != nil {
 		log.Debug().Int("count", len(*params.LauncherPreference)).Msg("updating launchers.preference")
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
@@ -417,6 +454,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+	// Music follows audioVolume until it has a volume of its own. Applied
+	// only once the save succeeded, so a failed save leaves playback alone.
+	if params.AudioMusicVolume != nil || params.AudioVolume != nil {
+		applyMusicVolume(&env)
 	}
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()
@@ -561,6 +603,7 @@ func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []
 		}
 	}
 
+	carried := make(map[string]bool, len(updated))
 	for i := range updated {
 		system, err := systemdefs.LookupSystem(updated[i].System)
 		if err != nil {
@@ -568,7 +611,16 @@ func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []
 		}
 		if entry, ok := previous[system.ID]; ok {
 			updated[i].PauseOnLaunch = entry.PauseOnLaunch
+			carried[system.ID] = true
 		}
+	}
+
+	// A client that leaves Audio out of the list has not turned pausing for
+	// games back on; that lives on the Audio entry, so the entry stays.
+	entry, ok := previous[systemdefs.SystemAudio]
+	if ok && entry.PauseOnLaunch != nil && !carried[systemdefs.SystemAudio] {
+		pause := *entry.PauseOnLaunch
+		updated = append(updated, config.SystemsDefault{System: systemdefs.SystemAudio, PauseOnLaunch: &pause})
 	}
 	return updated
 }

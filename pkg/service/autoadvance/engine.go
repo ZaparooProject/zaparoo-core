@@ -160,6 +160,8 @@ const (
 	evMediaStarted eventKind = iota
 	evMediaEnded
 	evPlaylistChanged
+	evItemMoved
+	evItemRemoved
 	evLaunching
 	evLaunched
 	evUserActivity
@@ -182,6 +184,7 @@ type event struct {
 	plsID  string
 	gen    uint64
 	index  int
+	to     int
 	kind   eventKind
 	engine bool
 	async  bool
@@ -246,6 +249,12 @@ type retryMove struct {
 	upd       *playlists.Playlist
 	tries     int
 	wantArmed bool
+}
+
+// itemMove is an ItemMoved the next PlaylistChanged of its slot belongs to.
+type itemMove struct {
+	slot  string
+	plsID string
 }
 
 type slotState struct {
@@ -321,18 +330,22 @@ const (
 // *Engine accepts every call and does nothing, so callers never need to check
 // whether it is wired.
 type Engine struct {
-	clock        clockwork.Clock
-	host         Host
-	ui           UIOpener
-	input        platforms.InputActivitySource
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wake         chan struct{}
-	cd           *countdown
-	watch        *watch
-	frozen       *frozenAdvance
-	retry        *retryMove
-	handoff      *handoff
+	clock   clockwork.Clock
+	host    Host
+	ui      UIOpener
+	input   platforms.InputActivitySource
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wake    chan struct{}
+	cd      *countdown
+	watch   *watch
+	frozen  *frozenAdvance
+	retry   *retryMove
+	handoff *handoff
+	// moved is the item move reported just before the PlaylistChanged of the
+	// same change, which that PlaylistChanged then does not treat as a
+	// replacement of what the engine is waiting on.
+	moved        *itemMove
 	publishes    func(string) bool
 	promptID     string
 	lastActivity time.Time
@@ -411,6 +424,30 @@ func (e *Engine) MediaEnded(end state.MediaEnd) { //nolint:gocritic // the obser
 // updated.
 func (e *Engine) PlaylistChanged(slot string) {
 	e.post(&event{kind: evPlaylistChanged, slot: slot})
+}
+
+// ItemMoved reports that the item at index from of the playlist plsID in slot
+// is now at index to, without being launched again, as when shuffle is turned
+// on or off under it. Whatever the engine has bound to the item follows it, so
+// the item still advances when it ends, and a countdown for it carries on.
+// from and to may be equal: the change then only keeps what is waiting on the
+// item. Post it before the PlaylistChanged of the same change.
+func (e *Engine) ItemMoved(slot, plsID string, from, to int) {
+	if e == nil {
+		return
+	}
+	e.post(&event{kind: evItemMoved, slot: slot, plsID: plsID, index: from, to: to})
+}
+
+// ItemRemoved reports that the item at index of the playlist plsID in slot is
+// gone from it while the playlist stays open, as when a deck is edited. The
+// index now names another item, so nothing bound to the old one may follow it.
+// Post it before the PlaylistChanged of the same change.
+func (e *Engine) ItemRemoved(slot, plsID string, index int) {
+	if e == nil {
+		return
+	}
+	e.post(&event{kind: evItemRemoved, slot: slot, plsID: plsID, index: index})
 }
 
 // ItemLaunching reports that the launch of the item pls is on is starting.
@@ -554,6 +591,10 @@ func (e *Engine) handle(ev *event) {
 		e.onMediaEnded(ev)
 	case evPlaylistChanged:
 		e.onPlaylistChanged(ev.slot, ev.at)
+	case evItemMoved:
+		e.onItemMoved(ev)
+	case evItemRemoved:
+		e.onItemRemoved(ev)
 	case evLaunching:
 		e.onLaunching(ev)
 	case evLaunched:
@@ -820,19 +861,90 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		index:            pls.Index,
 		inputCancels:     e.input != nil,
 		ignoreInputUntil: at.Add(inputIgnoreWindow),
-	}, "Up next: "+itemLabel(next.Current()), wait, at)
+	}, countdownTitle(cdExit, next), wait, at)
+}
+
+// onItemMoved moves everything bound to an item to the index it moved to.
+func (e *Engine) onItemMoved(ev *event) {
+	from, to := ev.index, ev.to
+	matches := func(plsID string, index int) bool {
+		return plsID == ev.plsID && index == from
+	}
+	s := e.slot(ev.slot)
+	if w := s.launching; w != nil && matches(w.plsID, w.index) {
+		w.index = to
+	}
+	if p := s.pending; p != nil && matches(p.plsID, p.index) {
+		p.index = to
+	}
+	if b := s.bound; b != nil && matches(b.plsID, b.index) {
+		b.index = to
+	}
+	if c := e.cd; c != nil && c.slot == ev.slot && matches(c.plsID, c.index) {
+		c.index = to
+	}
+	e.moved = &itemMove{slot: ev.slot, plsID: ev.plsID}
+	if ev.slot != mediaslot.Primary {
+		return
+	}
+	if h := e.handoff; h != nil && h.ended != nil && matches(h.ended.plsID, h.ended.index) {
+		h.ended.index = to
+	}
+	if f := e.frozen; f != nil && matches(f.plsID, f.index) {
+		f.index = to
+	}
+}
+
+// onItemRemoved forgets everything bound to an item that left its playlist.
+func (e *Engine) onItemRemoved(ev *event) {
+	matches := func(plsID string, index int) bool {
+		return plsID == ev.plsID && index == ev.index
+	}
+	s := e.slot(ev.slot)
+	if w := s.launching; w != nil && matches(w.plsID, w.index) {
+		s.launching = nil
+	}
+	if p := s.pending; p != nil && matches(p.plsID, p.index) {
+		s.pending = nil
+	}
+	if b := s.bound; b != nil && matches(b.plsID, b.index) {
+		s.bound = nil
+		if c := e.cd; c != nil && c.item == b {
+			e.cancelCountdown()
+		}
+	}
+	if ev.slot != mediaslot.Primary {
+		return
+	}
+	if h := e.handoff; h != nil && h.ended != nil && matches(h.ended.plsID, h.ended.index) {
+		e.handoff = nil
+	}
+	if f := e.frozen; f != nil && matches(f.plsID, f.index) {
+		e.frozen = nil
+	}
 }
 
 func (e *Engine) onPlaylistChanged(slot string, at time.Time) {
+	var moved *itemMove
+	if m := e.moved; m != nil && m.slot == slot {
+		moved = m
+		e.moved = nil
+	}
 	if slot == mediaslot.Primary {
 		// Someone, or the engine itself, just did something with the playlist.
 		e.touch(at)
-		e.primary.pending = nil
-		e.handoff = nil
+		if moved == nil {
+			e.primary.pending = nil
+			e.handoff = nil
+		}
 	}
 	if c := e.cd; c != nil && c.slot == slot {
-		log.Debug().Msg("auto-advance: countdown cancelled, playlist changed")
-		e.cancelCountdown()
+		if moved != nil && moved.plsID == c.plsID && e.restartCountdown(c, at) {
+			log.Debug().Msg("auto-advance: countdown kept, its item only moved")
+		} else {
+			log.Debug().Msg("auto-advance: countdown cancelled, playlist changed")
+			e.cancelCountdown()
+		}
 	}
 	if slot != mediaslot.Primary {
 		return

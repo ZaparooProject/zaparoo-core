@@ -202,12 +202,15 @@ type SettingsResponse struct {
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
 	LauncherPreference        []string           `json:"launcherPreference"`
 	AudioVolume               int                `json:"audioVolume"`
+	AudioMusicVolume          int                `json:"audioMusicVolume"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
+	AudioMusicAutoplay        bool               `json:"audioMusicAutoplay"`
+	AudioMusicPauseOnLaunch   bool               `json:"audioMusicPauseOnLaunch"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
 	Encryption                bool               `json:"encryption"`
@@ -636,10 +639,13 @@ const (
 )
 
 type ActiveMedia struct {
-	Started          time.Time          `json:"started"`
-	RelPath          *string            `json:"relativePath,omitempty"`
-	PositionMs       *int64             `json:"positionMs,omitempty"`
-	DurationMs       *int64             `json:"durationMs,omitempty"`
+	Started    time.Time `json:"started"`
+	RelPath    *string   `json:"relativePath,omitempty"`
+	PositionMs *int64    `json:"positionMs,omitempty"`
+	DurationMs *int64    `json:"durationMs,omitempty"`
+	// Track is what the tags of an audio track played in-process say about
+	// it, omitted when it has none or they have not been read yet.
+	Track            *TrackInfo         `json:"track,omitempty"`
 	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
 	LauncherID       string             `json:"launcherId"`
 	SystemID         string             `json:"systemId"`
@@ -649,6 +655,23 @@ type ActiveMedia struct {
 	Slot             string             `json:"slot,omitempty"`
 	LauncherControls []string           `json:"launcherControls,omitempty"`
 	MediaID          int64              `json:"mediaId,omitempty"`
+}
+
+// TrackInfo is the tag metadata of an audio track. Fields the track does not
+// have are omitted.
+type TrackInfo struct {
+	Title       string `json:"title,omitempty"`
+	Artist      string `json:"artist,omitempty"`
+	Album       string `json:"album,omitempty"`
+	AlbumArtist string `json:"albumArtist,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Year        int    `json:"year,omitempty"`
+	TrackNumber int    `json:"trackNumber,omitempty"`
+	TrackTotal  int    `json:"trackTotal,omitempty"`
+	DiscNumber  int    `json:"discNumber,omitempty"`
+	DiscTotal   int    `json:"discTotal,omitempty"`
+	// HasArt reports cover art that media.active.image can return.
+	HasArt bool `json:"hasArt,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.
@@ -761,9 +784,18 @@ type PlaylistState struct {
 	Total       int                `json:"total"`
 	Playing     bool               `json:"playing"`
 	Unsafe      bool               `json:"unsafe"`
+	// Shuffle reports that the items are in a random order. Items lists them
+	// in the order they play.
+	Shuffle bool `json:"shuffle"`
 	// Armed reports an idle playlist that is loaded and waiting for the
 	// device to go idle before it starts.
 	Armed bool `json:"armed,omitempty"`
+}
+
+// PlaylistsChangedParams is the payload of the playlists.changed
+// notification: every open playlist, in every slot, empty when none is open.
+type PlaylistsChangedParams struct {
+	Playlists []PlaylistState `json:"playlists"`
 }
 
 type MediaResponse struct {

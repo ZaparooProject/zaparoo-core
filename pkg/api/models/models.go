@@ -53,6 +53,8 @@ const (
 	NotificationUpdateState          = "update.state"
 	NotificationRunFailed            = "run.failed"
 	NotificationDeviceChanged        = "device.changed"
+	NotificationPlaylistsChanged     = "playlists.changed"
+	NotificationMediaPlayback        = "media.playback"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -138,6 +140,8 @@ const (
 	MethodMediaBrowseIndex            = "media.browse.index"
 	MethodMediaControl                = "media.control"
 	MethodMediaActiveUpdate           = "media.active.update"
+	MethodMediaActiveImage            = "media.active.image"
+	MethodPlaylistsUpdate             = "playlists.update"
 	MethodMediaCleanOrphans           = "media.clean.orphans"
 	MethodSettings                    = "settings"
 	MethodSettingsUpdate              = "settings.update"
@@ -246,8 +250,13 @@ type ResponseWithCallback struct {
 }
 
 type Notification struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+	Method string `json:"method"`
+	// CoalesceKey separates notifications of one method that carry
+	// independent state, such as one per media slot, so that merging a burst
+	// for a slow client keeps the latest of each rather than only the latest
+	// of the method. It is never sent.
+	CoalesceKey string          `json:"-"`
+	Params      json.RawMessage `json:"params"`
 }
 
 type NotificationObject struct {

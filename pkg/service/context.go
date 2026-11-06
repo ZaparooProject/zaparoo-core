@@ -21,6 +21,7 @@ package service
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -73,4 +74,7 @@ type ServiceContext struct {
 	// Positions keeps the position of long native audio tracks. Nil keeps
 	// nothing.
 	Positions *playlistmemory.PositionTracker
+	// musicAutoplay starts the restored background playlist on the first
+	// start of a boot. Nil when it is off.
+	musicAutoplay atomic.Pointer[musicAutoplay]
 }

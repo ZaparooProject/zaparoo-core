@@ -579,8 +579,27 @@ None.
 | mediaName        | string   | Yes      | Display name of the media.                 |
 | slot             | string   | No       | Media slot for the item. Omitted or `primary` is foreground media; `background` is background audio. |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
-| zapScript        | string   | Yes      | ZapScript command to launch this media item. |
+| zapScript        | string   | Yes      | ZapScript command to launch this media item. For a track in the `background` slot this is the track's path, since track titles are not unique across albums. |
 | launcherControls | string[] | No       | List of control action names supported by the active launcher. Only present if the launcher supports controls. See [media.control](#mediacontrol). |
+| track            | [TrackInfo](#track-info-object) | No | Tags of an audio track played by native audio, in either slot. Omitted when the track has no tags or they have not been read yet, which takes a moment after the track starts. `mediaName` is unchanged by the tags. |
+
+##### Track info object
+
+Every field is omitted when the track does not have it.
+
+| Key         | Type    | Required | Description |
+| :---------- | :------ | :------- | :---------- |
+| title       | string  | No       | Track title. |
+| artist      | string  | No       | Track artist. |
+| album       | string  | No       | Album title. |
+| albumArtist | string  | No       | Album artist. |
+| genre       | string  | No       | Genre. |
+| year        | number  | No       | Release year. |
+| trackNumber | number  | No       | Track number on its disc. |
+| trackTotal  | number  | No       | Number of tracks on the disc. |
+| discNumber  | number  | No       | Disc number. |
+| discTotal   | number  | No       | Number of discs. |
+| hasArt      | boolean | No       | True when [media.active.image](#mediaactiveimage) has cover art for the track, embedded in it or beside it. Omitted when false. |
 
 ##### Playlist state object
 
@@ -590,6 +609,7 @@ None.
 | name    | string | Yes      | Playlist display name. |
 | slot    | string | Yes      | Playlist slot, `primary` or `background`. |
 | repeat  | string | Yes      | Repeat mode: `none`, `all`, or `one`. |
+| shuffle | boolean | Yes     | True when the items are in a random order. `items` lists them in the order they play. See [playlists.update](#playlistsupdate). |
 | items   | object[] | Yes    | Playlist items. |
 | index   | number | Yes      | Zero-based current item index. |
 | total   | number | Yes      | Total item count. |
@@ -873,6 +893,8 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate, except platform-defined `zaparoo://` media, which are listed among the files.
 
 A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. Display names leave out set markers such as `(Disc 1)`; the disc number is reported in `tags` instead. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
+A folder played as a playlist (`**playlist.play:<folder>`, and `playlist.load` and `playlist.open`) holds the folder's media as a `filename-asc` browse of it lists it: the same entries, in the same order, without hidden media, under the same names. Its `system` argument filters it as the browse's `systems` does (`?system=Audio` keeps the folder's tracks), so a client that browsed a folder with one system can play it with the same one and start it at the entry it shows as item *n* with `start=n`. The media index is preferred but not required: a folder it does not cover is read from disk instead, keeping to the files the system's launchers take.
 
 A directory that collapsed because it holds several disc images of one game is marked `multiDisc: true`. Its launch fields point at the disc most recently played from that folder, or at the first disc when none of them appears in the system's recent play history, and its `tags` carry that disc's number. Its `disambiguatingTags` omit the disc number, since the entry stands for the whole set. To offer the other discs, browse the entry's `path`. Only `media.browse` reads play history: `media.meta` and `media.image` given the folder's path alone resolve it to the first disc.
 
@@ -1602,6 +1624,93 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
     "mediaName": "Super Mario World",
     "zapScript": "@SNES/Super Mario World",
     "launcherControls": ["load_state", "save_state", "toggle_menu"]
+  }
+}
+```
+
+##### Response (background track)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "started": "2024-09-24T17:49:42.938167429+08:00",
+    "launcherId": "native-audio",
+    "systemId": "Audio",
+    "systemName": "Audio",
+    "mediaPath": "/media/fat/Music/Album/01 Intro.mp3",
+    "mediaName": "01 Intro",
+    "slot": "background",
+    "zapScript": "/media/fat/Music/Album/01 Intro.mp3",
+    "positionMs": 20000,
+    "durationMs": 180000,
+    "playbackState": "playing",
+    "launcherControls": ["fast_forward", "pause", "resume", "rewind", "stop", "toggle_pause"],
+    "track": {
+      "title": "Intro",
+      "artist": "Some Artist",
+      "album": "Some Album",
+      "trackNumber": 1,
+      "trackTotal": 12,
+      "hasArt": true
+    }
+  }
+}
+```
+
+### media.active.image
+
+**Access:** All clients.
+
+Returns the cover art of the audio track native audio is playing in a slot: the picture embedded in the track's tags, else a `cover`, `folder` or `front` image (`.jpg`, `.jpeg` or `.png`, any case) in the track's folder. The track is always the one the slot is playing; the request never names a path. Requests share the image concurrency limit and low-priority lane of [media.image](#mediaimage).
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| slot     | string | No       | `primary`, `background` or `bg`. Defaults to `primary`. |
+| maxSize  | number | No       | Longest edge in pixels, 1 to 8192, as for `media.image`: the image is resized to fit and snapped to a standard size, so it may come back larger than asked. Omit it for the full-size image. |
+| delivery | string | No       | `inline` (default) or `localPath`, as for `media.image`. `localPath` requires `maxSize`. |
+
+#### Result
+
+The same object as [media.image](#mediaimage), with `typeTag` `audio:embedded` for art from the track's tags or `audio:folder` for an image beside it.
+
+Errors:
+
+- `no active audio track`: nothing is playing through native audio in the slot.
+- `no cover art`: the track has no embedded picture and no image beside it.
+- `cover art is too large`: the art is larger than the platform's image limit.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "method": "media.active.image",
+  "params": {
+    "slot": "background",
+    "maxSize": 256
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "extension": "webp",
+    "contentType": "image/webp",
+    "data": "UklGRh4AAABXRUJQVlA4...",
+    "delivery": "inline",
+    "typeTag": "audio:embedded"
   }
 }
 ```
@@ -2853,6 +2962,8 @@ An object:
 | slot   | string | No       | Target media slot. Omit for primary media; use `"background"` to control background audio. |
 | args   | object | No       | Optional key-value arguments for the control action. Values are strings. |
 
+`pause`, `resume` and `toggle_pause` on the `background` slot also pause or play the background playlist, so its `playing` field matches the track.
+
 #### Result
 
 Returns `null` on success.
@@ -3057,6 +3168,57 @@ See [System object](#system-object).
 }
 ```
 
+## Playlists
+
+### playlists.update
+
+**Access:** All clients.
+
+Changes the shuffle and repeat of the playlist open in a slot. The current item stays current and playback is not interrupted; nothing is launched. The change applies to whatever playlist is open in the slot when Core gets to it, and every change is reported by the [playlists.changed](notifications.md#playlistschanged) notification.
+
+Turning shuffle on moves the current item to the front and shuffles the rest behind it. Turning it off puts the items back in the order they loaded in, keeping the current item. A playlist restored from a Core version that did not keep the load order stays in its shuffled order when shuffle is turned off.
+
+#### Parameters
+
+At least one of `shuffle` and `repeat` is required.
+
+| Key     | Type    | Required | Description |
+| :------ | :------ | :------- | :---------- |
+| slot    | string  | No       | `primary`, `background` or `bg`. Defaults to `primary`. |
+| shuffle | boolean | No       | Turn shuffle on or off. |
+| repeat  | string  | No       | `none`, `all` or `one`. `off` is accepted as `none`. |
+
+#### Result
+
+Returns `null` on success. Asking for a slot with no playlist open is an error.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "playlists.update",
+  "params": {
+    "slot": "background",
+    "shuffle": true,
+    "repeat": "all"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": null
+}
+```
+
 ## Settings
 
 ### settings
@@ -3078,6 +3240,10 @@ None.
 | runZapScript              | boolean                                   | Yes      | The user's ZapScript setting. Holds do not change it.           |
 | debugLogging              | boolean                                   | Yes      | Whether debug logging is enabled.                               |
 | audioScanFeedback         | boolean                                   | Yes      | Whether audio feedback on scan is enabled.                      |
+| audioVolume               | number                                    | Yes      | Volume of scan and other feedback sounds, 0 to 200 (100 is unchanged, 0 is silent). Music follows it while `audioMusicVolume` has not been set. |
+| audioMusicVolume          | number                                    | Yes      | Volume of music and other audio played by native audio in either slot, 0 to 200 (`[audio] music_volume`). Reports `audioVolume` while it has not been set. |
+| audioMusicAutoplay        | boolean                                   | Yes      | Whether the background playlist open when Core last stopped starts playing on the first Core start of each boot (`[audio] music_autoplay`). Defaults to true. |
+| audioMusicPauseOnLaunch   | boolean                                   | Yes      | Whether background music pauses while a game runs in the primary slot and resumes when it exits. Stored as `pause_on_launch` on the `Audio` entry of `[[systems.default]]`. Defaults to true. |
 | readersAutoDetect         | boolean                                   | Yes      | Whether automatic reader detection is enabled.                  |
 | readersScanMode           | string                                    | Yes      | Current scan mode setting.                                      |
 | readersScanExitDelay      | number                                    | Yes      | Delay before exiting scan mode in seconds.                      |
@@ -3174,6 +3340,10 @@ An object containing any of the following optional keys:
 | runZapScript              | boolean                                   | No       | Whether ZapScript execution is enabled.                         |
 | debugLogging              | boolean                                   | No       | Whether debug logging is enabled.                               |
 | audioScanFeedback         | boolean                                   | No       | Whether audio feedback on scan is enabled.                      |
+| audioVolume               | number                                    | No       | Volume of scan and other feedback sounds, 0 to 200. While `audioMusicVolume` has not been set, music follows it and the change is heard at once. |
+| audioMusicVolume          | number                                    | No       | Volume of music played by native audio in either slot, 0 to 200. `0` is silent. Applies at once to what is playing. |
+| audioMusicAutoplay        | boolean                                   | No       | Whether the restored background playlist starts playing on the first Core start of each boot. |
+| audioMusicPauseOnLaunch   | boolean                                   | No       | Whether background music pauses while a game runs. Applied after `systemDefaults` when both are sent, and kept when `systemDefaults` leaves the `Audio` entry out. |
 | readersAutoDetect         | boolean                                   | No       | Whether automatic reader detection is enabled.                  |
 | readersScanMode           | string                                    | No       | Current scan mode setting.                                      |
 | readersScanExitDelay      | number                                    | No       | Delay before exiting scan mode in seconds.                      |
@@ -3181,7 +3351,7 @@ An object containing any of the following optional keys:
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
 | encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
-| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). Fields the API does not carry, such as `pause_on_launch`, are kept, including on an `Audio` entry the list leaves out. |
 | launcherPreference        | string[]                                  | No       | Replace the global launcher preference list, keeping its order. `[]` clears it. Each entry must match a known launcher ID or group (case-insensitive), unless it is already in the current list. |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |

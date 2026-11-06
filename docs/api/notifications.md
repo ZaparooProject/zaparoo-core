@@ -206,6 +206,7 @@ New media was started on server.
 | systemName | string | Yes      | Display name of system.                      |
 | mediaPath  | string | Yes      | Path to media file on server.                |
 | mediaName  | string | Yes      | Cleaned display title of media.              |
+| slot       | string | No       | Media slot: `primary`, or `background` for background audio. A new background track is reported whenever its path changes, even when its title is the same. |
 
 #### Example
 
@@ -250,6 +251,83 @@ Media has stopped on server.
     "slot": "primary",
     "elapsed": 2730,
     "reason": "exited"
+  }
+}
+```
+
+### media.playback
+
+Native audio playback changed in a slot: a track started playing, paused, resumed or seeked, or its tags finished reading. It is sent for tracks played in-process by the `native-audio` launcher, in either slot, and not for position progress; `media.stopped` reports the end of a track. Each notification is the slot's whole state, so replace the client's copy of that slot with it. Bursts are merged for slow clients, keeping the latest per slot.
+
+#### Parameters
+
+An [ActiveMedia](methods.md#active-media-object) object, the same one [media.active](methods.md#mediaactive) returns for the slot, including `slot`, `positionMs`, `durationMs`, `playbackState`, `launcherControls`, `zapScript` and, once the track's tags are read, `track`.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.playback",
+  "params": {
+    "started": "2024-09-24T17:49:42.938167429+08:00",
+    "launcherId": "native-audio",
+    "systemId": "Audio",
+    "systemName": "Audio",
+    "mediaPath": "/media/fat/Music/Album/01 Intro.mp3",
+    "mediaName": "01 Intro",
+    "slot": "background",
+    "zapScript": "/media/fat/Music/Album/01 Intro.mp3",
+    "positionMs": 20000,
+    "durationMs": 180000,
+    "playbackState": "paused",
+    "launcherControls": ["fast_forward", "pause", "resume", "rewind", "stop", "toggle_pause"],
+    "track": {
+      "title": "Intro",
+      "artist": "Some Artist",
+      "album": "Some Album",
+      "trackNumber": 1,
+      "trackTotal": 12,
+      "hasArt": true
+    }
+  }
+}
+```
+
+### playlists.changed
+
+An open playlist changed: it was opened, closed, moved to another item, played, paused, or had its shuffle or repeat changed. The notification always carries every open playlist, in every slot, so the latest one is the whole state; bursts are merged for slow clients. It is only sent when what a client would see changed.
+
+#### Parameters
+
+| Key       | Type | Required | Description |
+| :-------- | :--- | :------- | :---------- |
+| playlists | [PlaylistState](methods.md#playlist-state-object)[] | Yes | Every open playlist, primary first. `[]` when none is open. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "playlists.changed",
+  "params": {
+    "playlists": [
+      {
+        "id": "/media/fat/Music/Chill",
+        "name": "Chill",
+        "slot": "background",
+        "repeat": "all",
+        "shuffle": true,
+        "items": [
+          { "name": "Intro", "zapScript": "/media/fat/Music/Chill/01 Intro.mp3" },
+          { "name": "Outro", "zapScript": "/media/fat/Music/Chill/02 Outro.mp3" }
+        ],
+        "index": 0,
+        "total": 2,
+        "playing": true,
+        "unsafe": false
+      }
+    ]
   }
 }
 ```

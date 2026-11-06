@@ -126,6 +126,7 @@ func TestLoadPlaylist_MarksShuffledPlaylists(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, pls.Shuffled)
+	assert.Equal(t, []string{"**a", "**b"}, playlists.ItemScripts(pls.Original), "the load order is kept")
 	require.Len(t, memory.prepared, 1)
 	assert.True(t, memory.prepared[0].Shuffled, "memory sees the shuffle so it can restore the order")
 }
