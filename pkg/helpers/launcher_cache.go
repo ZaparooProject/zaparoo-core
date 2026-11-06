@@ -46,11 +46,25 @@ var launcherCacheWaitTimeout = 30 * time.Second
 type LauncherCache struct {
 	bySystemID          map[string][]platforms.Launcher
 	availableBySystemID map[string][]platforms.Launcher
-	pending             chan struct{}
-	allLaunchers        []platforms.Launcher
-	launchableSystems   []launchables.VirtualSystem
-	extraLaunchers      []platforms.Launcher
-	mu                  syncutil.RWMutex
+	// relPrefixes holds, per system and set of root directories, the
+	// folders ToRelativePath strips, already normalized. Built on first use
+	// and dropped whenever the launchers are rebuilt.
+	relPrefixes       map[string][]relativePrefix
+	pending           chan struct{}
+	allLaunchers      []platforms.Launcher
+	launchableSystems []launchables.VirtualSystem
+	extraLaunchers    []platforms.Launcher
+	// relGen counts rebuilds, so a list built across one is not kept.
+	relGen uint64
+	mu     syncutil.RWMutex
+}
+
+// relativePrefix is one folder ToRelativePath can strip: as configured,
+// and normalized for comparison, with and without its trailing separator.
+type relativePrefix struct {
+	raw       string
+	norm      string
+	normSlash string
 }
 
 // GlobalLauncherCache is the singleton instance used throughout the application.
@@ -218,6 +232,8 @@ func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
 	copy(lc.allLaunchers, launchers)
 	lc.launchableSystems = nil
+	lc.relPrefixes = nil
+	lc.relGen++
 
 	lc.bySystemID = make(map[string][]platforms.Launcher)
 	lc.availableBySystemID = make(map[string][]platforms.Launcher)
@@ -318,9 +334,51 @@ func (lc *LauncherCache) ToRelativePath(
 		return path
 	}
 
+	prefixes := lc.relativePrefixes(rootDirs, systemID)
+	if len(prefixes) == 0 {
+		return path
+	}
+
+	// The path is normalized once; the folders were normalized when the
+	// list was built. A listing calls this for every row, and normalizing
+	// both sides of every comparison again was most of a browse's CPU time
+	// on MiSTer.
+	normPath := NormalizePathForComparison(path)
+	for i := range prefixes {
+		if hasNormalizedPrefix(normPath, &prefixes[i]) {
+			return stripPrefixAndPrepend(systemID, path, prefixes[i].raw)
+		}
+	}
+	return path
+}
+
+// hasNormalizedPrefix is PathHasPrefix for a path and folder that are both
+// normalized already.
+func hasNormalizedPrefix(normPath string, prefix *relativePrefix) bool {
+	if normPath == prefix.norm {
+		return true
+	}
+	if prefix.norm == "" {
+		return false
+	}
+	return strings.HasPrefix(normPath, prefix.normSlash)
+}
+
+// relativePrefixes returns the folders ToRelativePath tries for systemID
+// under rootDirs, in the order it tries them: every root directory joined
+// with each relative launcher folder, then the absolute launcher folders.
+func (lc *LauncherCache) relativePrefixes(rootDirs []string, systemID string) []relativePrefix {
 	launchers := lc.GetLaunchersBySystem(systemID)
 	if len(launchers) == 0 {
-		return path
+		return nil
+	}
+	key := systemID + "\x00" + strings.Join(rootDirs, "\x00")
+	lc.mu.RLock()
+	cached, ok := lc.relPrefixes[key]
+	gen := lc.relGen
+	lc.mu.RUnlock()
+	if ok {
+		return cached
 	}
 
 	// Collect unique folders from all launchers for this system.
@@ -343,24 +401,33 @@ func (lc *LauncherCache) ToRelativePath(
 		}
 	}
 
-	// Try rootDir + relative folder combinations.
+	prefixes := make([]relativePrefix, 0, len(rootDirs)*len(relFolders)+len(absFolders))
+	add := func(raw string) {
+		norm := NormalizePathForComparison(raw)
+		normSlash := norm
+		if !strings.HasSuffix(normSlash, "/") {
+			normSlash += "/"
+		}
+		prefixes = append(prefixes, relativePrefix{raw: raw, norm: norm, normSlash: normSlash})
+	}
 	for _, root := range rootDirs {
 		for _, folder := range relFolders {
-			prefix := filepath.Join(root, folder)
-			if PathHasPrefix(path, prefix) {
-				return stripPrefixAndPrepend(systemID, path, prefix)
-			}
+			add(filepath.Join(root, folder))
 		}
 	}
-
-	// Try absolute folders.
 	for _, folder := range absFolders {
-		if PathHasPrefix(path, folder) {
-			return stripPrefixAndPrepend(systemID, path, folder)
-		}
+		add(folder)
 	}
 
-	return path
+	lc.mu.Lock()
+	if lc.relGen == gen {
+		if lc.relPrefixes == nil {
+			lc.relPrefixes = make(map[string][]relativePrefix)
+		}
+		lc.relPrefixes[key] = prefixes
+	}
+	lc.mu.Unlock()
+	return prefixes
 }
 
 // stripPrefixAndPrepend removes prefix from path and prepends systemID.

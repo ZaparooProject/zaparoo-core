@@ -287,6 +287,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.meta.update               | Update writable metadata for indexed media.                                           | All clients |
 | media.active                    | Return currently active media.                                                        | All clients |
 | media.active.update             | Update currently active media information.                                            | All clients |
+| media.active.image              | Return cover art of the audio track playing in a slot.                                | All clients |
 | media.clean.orphans             | Remove orphaned media database rows.                                                  | All clients |
 | media.history                   | Return paginated media play history.                                                  | All clients |
 | media.history.latest            | Return latest media play history entries.                                             | All clients |
@@ -301,6 +302,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.scrape.cancel             | Cancel active metadata scraping.                                                      | All clients |
 | media.scrape.resume             | Resume paused metadata scraping.                                                      | All clients |
 | media.control                   | Send control action to active media launcher.                                         | All clients |
+| playlists.update                | Change shuffle and repeat of the playlist open in a slot.                             | All clients |
 | media.title.parse               | Preview media title and slug parsing.                                                  | All clients |
 | settings                        | List current configuration settings.                                                  | Tiered |
 | settings.update                 | Update and save configuration settings.                                               | `settings.write` |
@@ -386,8 +388,10 @@ Notifications let a server or client know an event has occurred. See the [API No
 | ui.changed             | Authoritative global UI event state changed.                                      |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
+| media.playback         | Native audio in a slot started, paused, resumed, seeked or had its tags read.     |
 | media.history.changed  | Play history was recorded outside the media started and stopped lifecycle.        |
 | media.tags.changed     | An item's user flags (favorite, liked, disliked, play later, hidden) changed.     |
+| playlists.changed      | An open playlist changed; carries every open playlist.                            |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |
 | media.scraping         | Progress updates emitted during media scraping (includes progress/status details). |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |

@@ -91,6 +91,31 @@ func TestRestoreOpenPlaylists_RestoresPausedWithoutLaunching(t *testing.T) {
 	assert.Nil(t, svc.State.GetBackgroundPlaylist())
 }
 
+func TestRestoreOpenPlaylists_BackgroundKeepsShuffleAndRepeatForAutoplay(t *testing.T) {
+	t.Parallel()
+	svc, db := setupPlaylistMemoryEnv(t)
+	pm := &servicePlaybackRecorder{}
+	svc.PlaybackManager = pm
+
+	pls := makeServicePlaylist()
+	pls.Slot = mediaslot.Background
+	pls.Index = 1
+	pls.LoopOne = true
+	shuffled := playlists.SetShuffle(playlists.Play(*pls), true)
+	recordOpenPlaylist(t, db, mediaslot.Background, shuffled)
+
+	restoreOpenPlaylists(svc, nil)
+
+	got := svc.State.GetBackgroundPlaylist()
+	require.NotNil(t, got, "the background playlist is there for autoplay to start")
+	assert.False(t, got.Playing, "it never starts by itself")
+	assert.True(t, got.Shuffled)
+	assert.True(t, got.LoopOne, "a repeat set at runtime survives the restart")
+	assert.Equal(t, shuffled.Items, got.Items)
+	assert.Equal(t, pls.Items, got.Original, "shuffle can still be turned off after a restart")
+	assert.Empty(t, pm.played)
+}
+
 func TestRestoreOpenPlaylists_DeckChecks(t *testing.T) {
 	t.Parallel()
 	svc, db := setupPlaylistMemoryEnv(t)

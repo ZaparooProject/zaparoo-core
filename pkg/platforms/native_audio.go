@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,17 @@ func NativeAudioLauncher(
 	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
 	resumeAt func(path string) (position, length time.Duration),
 ) Launcher {
+	controls := map[string]Control{
+		ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
+		ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
+		ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
+		ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
+		ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
+		ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
+	}
+	// Background media is published by the launch itself rather than by the
+	// launch pipeline, so it carries the control names from here.
+	controlNames := ControlNames(&Launcher{Controls: controls})
 	return Launcher{
 		ID:       NativeAudioLauncherID,
 		SystemID: "Audio",
@@ -64,23 +76,26 @@ func NativeAudioLauncher(
 			".flac",
 		},
 		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
-			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, cfg, path, opts)
+			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, controlNames, cfg, path, opts)
 		},
-		Controls: map[string]Control{
-			ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
-			ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
-			ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
-			ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
-			ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
-			ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
-		},
+		Controls: controls,
 	}
+}
+
+// MusicVolumeGain converts a configured music volume level (0-200) to the
+// playback gain native audio plays at. 0 is silent.
+func MusicVolumeGain(cfg *config.Instance) float64 {
+	if cfg == nil {
+		return 1.0
+	}
+	return float64(cfg.AudioMusicVolume()) / 100.0
 }
 
 func launchNativeAudio(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
 	resumeAt func(path string) (position, length time.Duration),
+	controlNames []string,
 	cfg *config.Instance,
 	path string,
 	opts *LaunchOptions,
@@ -98,15 +113,7 @@ func launchNativeAudio(
 		}
 	}
 
-	volume := 1.0
-	if cfg != nil {
-		v := cfg.AudioVolume()
-		if v > 0 {
-			volume = float64(v) / 100.0
-		}
-	}
-
-	playOpts := audio.PlaybackOptions{Volume: volume}
+	playOpts := audio.PlaybackOptions{Volume: MusicVolumeGain(cfg)}
 	if slot == mediaslot.Primary && resumeAt != nil {
 		playOpts.StartAt, playOpts.StartAtDuration = resumeAt(path)
 	}
@@ -116,6 +123,7 @@ func launchNativeAudio(
 
 	if slot == mediaslot.Background && setBackgroundMedia != nil {
 		media := models.NewActiveMedia("Audio", "Audio", path, audioDisplayName(path), NativeAudioLauncherID)
+		media.LauncherControls = slices.Clone(controlNames)
 		setBackgroundMedia(media)
 	}
 

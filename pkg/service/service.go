@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -316,10 +317,19 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 	})
 }
 
+// wirePlaybackNotifier has the notifier hear of every native-audio playback
+// change and of every media start, so media.playback follows both.
+func wirePlaybackNotifier(pm playbackChangeRegistrar, st *state.State, notifier *playbackNotifier) {
+	pm.SetChangeCallback(notifier.Signal)
+	st.AddMediaObserver(notifier)
+}
+
 // resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
 // media stops. Runs synchronously from the media-stop hook so that launch-path code
 // running after a SetActiveMedia(nil) observes the resumed state.
 func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
+	// Music that was to start on boot while a game ran starts now instead.
+	svc.musicAutoplay.Load().mediaStopped()
 	if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
 		return
 	}
@@ -460,6 +470,7 @@ func startServiceWithOptions(
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 	platformSettings := pl.Settings()
 	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
+	playbackManager.SetTrackMetaLimit(methods.MediaImageMaxBytes(pl))
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
@@ -479,6 +490,10 @@ func startServiceWithOptions(
 		models.NotificationMediaIndexing,
 		models.NotificationUIChanged,
 		models.NotificationDeviceChanged,
+		models.NotificationPlaylistsChanged,
+		// Merged per slot through the notification's coalesce key, so one
+		// slot's latest playback never replaces the other's.
+		models.NotificationMediaPlayback,
 	)
 	notifBroker.Start()
 
@@ -707,11 +722,52 @@ func startServiceWithOptions(
 			return ""
 		})
 		svc.PlaylistMemory.Start()
-		st.SetPlaylistObserver(svc.PlaylistMemory.PlaylistChanged)
 		svc.Positions = playlistmemory.NewPositionTracker(svc.PlaylistMemory, playbackManager, st.ActiveMedia, nil)
 		svc.Positions.Start()
 	}
+	playlistNotify := newPlaylistNotifier(st, notifBroker.Publish)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		playlistNotify.run(st.GetContext())
+	}()
+	// Every stored playlist reaches the memory, when there is one, and the
+	// notifier. Both only queue work, so neither holds up the state lock.
+	st.SetPlaylistObserver(func(slot string, pls *playlists.Playlist) {
+		svc.PlaylistMemory.PlaylistChanged(slot, pls)
+		playlistNotify.Signal()
+	})
+	// The queue worker is the only writer of the playlists, so an API
+	// request to change one is handed to it.
+	st.SetPlaylistRequester(func(ctx context.Context, pls *playlists.Playlist) error {
+		select {
+		case plq <- pls:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("queue playlist update: %w", ctx.Err())
+		case <-st.GetContext().Done():
+			return fmt.Errorf("queue playlist update: %w", st.GetContext().Err())
+		}
+	})
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
+	playbackNotify := newPlaybackNotifier(func(slot string) *models.ActiveMediaResponse {
+		env := requests.RequestEnv{
+			Context:         st.GetContext(),
+			Platform:        pl,
+			Config:          cfg,
+			State:           st,
+			Database:        db,
+			LauncherCache:   helpers.GlobalLauncherCache,
+			PlaybackManager: playbackManager,
+		}
+		return methods.ActiveMediaEntry(&env, slot)
+	}, playbackManager, notifBroker.Publish)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		playbackNotify.run(st.GetContext())
+	}()
+	wirePlaybackNotifier(playbackManager, st, playbackNotify)
 	svc.AutoAdvance = startAutoAdvance(svc, rendersPickers(pl, opts))
 
 	// Set up media readiness and the OnMediaStart hook.
@@ -1220,11 +1276,37 @@ func startServiceWithOptions(
 		}()
 	}
 
-	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
+	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" || cfg.AudioMusicAutoplay() {
 		backgroundWG.Add(1)
 		go func() {
 			defer backgroundWG.Done()
-			runConfiguredServiceHooks(svc)
+			// The first call records this start, so the answer is taken
+			// once and shared by everything that asks.
+			firstBootStart, bootErr := isFirstServiceStartForBoot(svc.Platform)
+			if cfg.AudioMusicAutoplay() {
+				switch {
+				case bootErr != nil:
+					log.Warn().Err(bootErr).Msg("skipping music autoplay: failed to detect boot state")
+				case !firstBootStart:
+					log.Debug().Msg("skipping music autoplay: Core already started during this boot")
+				default:
+					autoplay := newMusicAutoplay(svc, func(ctx context.Context) {
+						select {
+						case <-launcherCacheDone:
+						case <-ctx.Done():
+							return
+						}
+						waitForServiceReady(svc)
+					})
+					svc.musicAutoplay.Store(autoplay)
+					backgroundWG.Add(1)
+					go func() {
+						defer backgroundWG.Done()
+						autoplay.run(st.GetContext())
+					}()
+				}
+			}
+			runConfiguredServiceHooks(svc, firstBootStart, bootErr)
 		}()
 	}
 

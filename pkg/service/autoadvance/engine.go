@@ -160,6 +160,7 @@ const (
 	evMediaStarted eventKind = iota
 	evMediaEnded
 	evPlaylistChanged
+	evItemMoved
 	evLaunching
 	evLaunched
 	evUserActivity
@@ -182,6 +183,7 @@ type event struct {
 	plsID  string
 	gen    uint64
 	index  int
+	to     int
 	kind   eventKind
 	engine bool
 	async  bool
@@ -413,6 +415,18 @@ func (e *Engine) PlaylistChanged(slot string) {
 	e.post(&event{kind: evPlaylistChanged, slot: slot})
 }
 
+// ItemMoved reports that the item at index from of the playlist plsID in slot
+// is now at index to, without being launched again, as when shuffle is turned
+// on or off under it. Whatever the engine has bound to the item follows it, so
+// the item still advances when it ends. Post it before the PlaylistChanged of
+// the same change.
+func (e *Engine) ItemMoved(slot, plsID string, from, to int) {
+	if e == nil || from == to {
+		return
+	}
+	e.post(&event{kind: evItemMoved, slot: slot, plsID: plsID, index: from, to: to})
+}
+
 // ItemLaunching reports that the launch of the item pls is on is starting.
 // Media published until ItemLaunched is bound to the item.
 func (e *Engine) ItemLaunching(pls *playlists.Playlist) {
@@ -554,6 +568,8 @@ func (e *Engine) handle(ev *event) {
 		e.onMediaEnded(ev)
 	case evPlaylistChanged:
 		e.onPlaylistChanged(ev.slot, ev.at)
+	case evItemMoved:
+		e.onItemMoved(ev)
 	case evLaunching:
 		e.onLaunching(ev)
 	case evLaunched:
@@ -821,6 +837,33 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		inputCancels:     e.input != nil,
 		ignoreInputUntil: at.Add(inputIgnoreWindow),
 	}, "Up next: "+itemLabel(next.Current()), wait, at)
+}
+
+// onItemMoved moves everything bound to an item to the index it moved to.
+func (e *Engine) onItemMoved(ev *event) {
+	from, to := ev.index, ev.to
+	matches := func(plsID string, index int) bool {
+		return plsID == ev.plsID && index == from
+	}
+	s := e.slot(ev.slot)
+	if w := s.launching; w != nil && matches(w.plsID, w.index) {
+		w.index = to
+	}
+	if p := s.pending; p != nil && matches(p.plsID, p.index) {
+		p.index = to
+	}
+	if b := s.bound; b != nil && matches(b.plsID, b.index) {
+		b.index = to
+	}
+	if ev.slot != mediaslot.Primary {
+		return
+	}
+	if h := e.handoff; h != nil && h.ended != nil && matches(h.ended.plsID, h.ended.index) {
+		h.ended.index = to
+	}
+	if f := e.frozen; f != nil && matches(f.plsID, f.index) {
+		f.index = to
+	}
 }
 
 func (e *Engine) onPlaylistChanged(slot string, at time.Time) {

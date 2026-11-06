@@ -1612,16 +1612,18 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		enrichPlaybackState(&env, &bgEntry, mediaslot.Background)
 		resp.Active = append(resp.Active, models.ActiveMediaResponse{
 			ActiveMedia: bgEntry,
-			ZapScript:   database.BuildTitleZapScript(backgroundMedia.SystemID, backgroundMedia.Name, nil),
+			// A background track has no media database entry, and its title
+			// is not unique across albums, so its path is what plays it again.
+			ZapScript: backgroundMedia.Path,
 		})
 	}
 
 	// Populate active playlist state for both slots.
 	if activePL := env.State.GetActivePlaylist(); activePL != nil {
-		resp.Playlists = append(resp.Playlists, toPlaylistState(activePL))
+		resp.Playlists = append(resp.Playlists, activePL.APIState())
 	}
 	if bgPL := env.State.GetBackgroundPlaylist(); bgPL != nil {
-		resp.Playlists = append(resp.Playlists, toPlaylistState(bgPL))
+		resp.Playlists = append(resp.Playlists, bgPL.APIState())
 	}
 
 	status := statusInstance.get()
@@ -1785,6 +1787,17 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	entry := ActiveMediaEntry(&env, slot)
+	if entry == nil {
+		return nil, nil //nolint:nilnil // nil response means no active media
+	}
+	return *entry, nil
+}
+
+// ActiveMediaEntry returns what media.active reports for slot, a normalized
+// slot key, or nil when nothing is active there. The media.playback
+// notification carries the same object.
+func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMediaResponse {
 	var media *models.ActiveMedia
 	if slot == mediaslot.Background {
 		media = env.State.BackgroundMedia()
@@ -1792,7 +1805,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		media = env.State.ActiveMedia()
 	}
 	if media == nil {
-		return nil, nil //nolint:nilnil // nil response means no active media
+		return nil
 	}
 
 	// Media ID and disambiguated zapScript come from MediaDB for the primary
@@ -1800,13 +1813,15 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var mediaID int64
 	var zapScript string
 	if slot == mediaslot.Background {
-		zapScript = database.BuildTitleZapScript(media.SystemID, media.Name, nil)
+		// A background track's title is not unique across albums, so its
+		// path is what plays it again.
+		zapScript = media.Path
 	} else {
-		mediaID, zapScript = activeMediaEnrichment(&env, media.SystemID, media.Path, media.Name)
+		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.Name)
 	}
 
 	entry := models.ActiveMedia{
-		RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
+		RelPath:          mediaResponseRelativePath(env, media.SystemID, media.Path),
 		Started:          media.Started,
 		LauncherID:       media.LauncherID,
 		SystemID:         media.SystemID,
@@ -1818,12 +1833,12 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		MediaID:          mediaID,
 	}
 
-	enrichPlaybackState(&env, &entry, slot)
+	enrichPlaybackState(env, &entry, slot)
 
-	return models.ActiveMediaResponse{
+	return &models.ActiveMediaResponse{
 		ActiveMedia: entry,
 		ZapScript:   zapScript,
-	}, nil
+	}
 }
 
 //nolint:gocritic,revive // single-use parameter in API handler

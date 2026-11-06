@@ -522,6 +522,39 @@ func TestSetBackgroundMedia_Changed(t *testing.T) {
 	assert.Equal(t, second, st.BackgroundMedia())
 }
 
+func TestSetBackgroundMedia_SameNameOtherPathIsAChange(t *testing.T) {
+	t.Parallel()
+
+	st, ns := NewState(nil, "boot")
+	drainState(t, st, ns)
+
+	first := models.NewActiveMedia("Audio", "Audio", "/music/Album A/01 Intro.mp3", "Intro", "native-audio")
+	st.SetBackgroundMedia(first)
+	select {
+	case n := <-ns:
+		assert.Equal(t, models.NotificationStarted, n.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for MediaStarted")
+	}
+
+	second := models.NewActiveMedia("Audio", "Audio", "/music/Album B/01 Intro.mp3", "Intro", "native-audio")
+	st.SetBackgroundMedia(second)
+	select {
+	case n := <-ns:
+		assert.Equal(t, models.NotificationStopped, n.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for MediaStopped on change")
+	}
+	select {
+	case n := <-ns:
+		assert.Equal(t, models.NotificationStarted, n.Method)
+		assert.Contains(t, string(n.Params), "Album B")
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for MediaStarted on change")
+	}
+	assert.Equal(t, second.Path, st.BackgroundMedia().Path)
+}
+
 func TestSetBackgroundMedia_SameMediaIsNoOp(t *testing.T) {
 	t.Parallel()
 
@@ -647,4 +680,23 @@ func TestWaitForActiveMediaReady_ContextCancelled(t *testing.T) {
 
 	err := st.WaitForActiveMediaReady(ctx, gen)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRequestPlaylistUpdate(t *testing.T) {
+	t.Parallel()
+
+	st, ns := NewState(nil, "boot")
+	drainState(t, st, ns)
+
+	err := st.RequestPlaylistUpdate(context.Background(), &playlists.Playlist{})
+	require.ErrorIs(t, err, ErrPlaylistQueueUnavailable)
+
+	var got *playlists.Playlist
+	st.SetPlaylistRequester(func(_ context.Context, pls *playlists.Playlist) error {
+		got = pls
+		return nil
+	})
+	want := &playlists.Playlist{ModeChange: true}
+	require.NoError(t, st.RequestPlaylistUpdate(context.Background(), want))
+	assert.Same(t, want, got)
 }

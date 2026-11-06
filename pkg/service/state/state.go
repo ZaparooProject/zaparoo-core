@@ -90,6 +90,7 @@ type State struct {
 	onLaunchAbandoned      func(*models.ActiveMedia)
 	ctxCancelFunc          context.CancelFunc
 	playlistObserver       func(slot string, pls *playlists.Playlist)
+	playlistRequester      func(ctx context.Context, pls *playlists.Playlist) error
 	beforeExitHook         func()
 	pendingLaunchOverride  *PendingLaunchOverride
 	pendingWrite           *PendingWrite
@@ -710,6 +711,31 @@ func (s *State) SetPlaylistObserver(fn func(slot string, pls *playlists.Playlist
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.playlistObserver = fn
+}
+
+// ErrPlaylistQueueUnavailable is returned by RequestPlaylistUpdate when no
+// playlist queue is wired, as before the service has started.
+var ErrPlaylistQueueUnavailable = errors.New("playlist queue unavailable")
+
+// SetPlaylistRequester registers fn as the way RequestPlaylistUpdate hands a
+// playlist update to the playlist queue worker, the only writer of the
+// playlists.
+func (s *State) SetPlaylistRequester(fn func(ctx context.Context, pls *playlists.Playlist) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playlistRequester = fn
+}
+
+// RequestPlaylistUpdate queues pls for the playlist queue worker, waiting no
+// longer than ctx allows.
+func (s *State) RequestPlaylistUpdate(ctx context.Context, pls *playlists.Playlist) error {
+	s.mu.RLock()
+	fn := s.playlistRequester
+	s.mu.RUnlock()
+	if fn == nil {
+		return ErrPlaylistQueueUnavailable
+	}
+	return fn(ctx, pls)
 }
 
 func (s *State) notifyPlaylistLocked(slot string, pls *playlists.Playlist) {
@@ -1383,7 +1409,9 @@ func (s *State) applyBackgroundMedia(
 		return true
 	}
 
-	if !oldMedia.Equal(media) {
+	// Background tracks are told apart by path: two tracks with the same
+	// title in different albums are different tracks.
+	if oldMedia.Path != media.Path || !oldMedia.Equal(media) {
 		s.backgroundMedia = media
 		s.mu.Unlock()
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)

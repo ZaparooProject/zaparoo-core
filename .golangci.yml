@@ -19,7 +19,7 @@ linters:
       # cgo files trigger gocritic dupImport false positive: https://github.com/go-critic/go-critic/issues/845
       - linters:
           - gocritic
-        path: pkg/helpers/(usb_darwin|wuffspng/decode_cgo)\.go
+        path: pkg/(helpers/(usb_darwin|wuffspng/decode_cgo)|audio/nativedec/nativedec)\.go
   enable:
     - staticcheck
     - errcheck
@@ -239,3 +239,4 @@ formatters:
       # cgo files trigger gci bug: https://github.com/daixiang0/gci/issues/166
       - "pkg/helpers/usb_darwin\\.go"
       - "pkg/helpers/wuffspng/decode_cgo\\.go"
+      - "pkg/audio/nativedec/nativedec\\.go"

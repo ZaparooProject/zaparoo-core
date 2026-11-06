@@ -24,6 +24,8 @@ package broker
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -578,4 +580,51 @@ func TestBrokerPublishBypassesFullSourceQueue(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("directly published UI state was blocked by full source queue")
 	}
+}
+
+// TestBroker_CoalesceKeepsLatestPerKey verifies that notifications of one
+// method with different coalesce keys are merged separately, so a burst for
+// one key never replaces the pending update of another.
+func TestBroker_CoalesceKeepsLatestPerKey(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	b := NewBroker(ctx, make(chan models.Notification), models.NotificationMediaPlayback)
+	sub, _ := b.Subscribe(1)
+
+	playback := func(slot, version string) models.Notification {
+		return models.Notification{
+			Method:      models.NotificationMediaPlayback,
+			Params:      []byte(fmt.Sprintf(`{"slot":%q,"v":%q}`, slot, version)),
+			CoalesceKey: slot,
+		}
+	}
+	b.Publish(models.Notification{Method: "filler"}) // fills the buffer
+	b.Publish(playback("background", "1"))
+	b.Publish(playback("primary", "1"))
+	b.Publish(playback("background", "2"))
+
+	var params []string
+	deadline := time.After(2 * time.Second)
+	for !slices.Contains(params, `{"slot":"primary","v":"1"}`) ||
+		!slices.Contains(params, `{"slot":"background","v":"2"}`) {
+		select {
+		case n := <-sub:
+			if n.Method == models.NotificationMediaPlayback {
+				params = append(params, string(n.Params))
+			}
+		case <-deadline:
+			t.Fatalf("missing a slot's latest update, got %v", params)
+		}
+	}
+
+	last := ""
+	for _, p := range params {
+		if strings.Contains(p, `"background"`) {
+			last = p
+		}
+	}
+	assert.JSONEq(t, `{"slot":"background","v":"2"}`, last, "the latest background update wins")
 }

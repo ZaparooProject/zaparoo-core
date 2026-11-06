@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -120,6 +121,44 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		env.State.SetBackgroundMedia(nil)
 		env.State.SetBackgroundPlaylist(nil)
 	}
+	if slot == mediaslot.Background {
+		syncBackgroundPlaylistPlayback(&env, params.Action)
+	}
 
 	return NoContent{}, nil
+}
+
+// syncBackgroundPlaylistPlayback keeps the background playlist's playing
+// state in step with a pause or resume of its track, so clients reading the
+// playlist see what the slot is doing. The change goes through the playlist
+// queue, the only writer of the playlists.
+func syncBackgroundPlaylistPlayback(env *requests.RequestEnv, action string) {
+	open := env.State.GetBackgroundPlaylist()
+	if open == nil {
+		return
+	}
+	var playing bool
+	switch action {
+	case platforms.ControlPause:
+		playing = false
+	case platforms.ControlResume:
+		playing = true
+	case platforms.ControlTogglePause:
+		if env.PlaybackManager == nil {
+			return
+		}
+		playing = !env.PlaybackManager.State(mediaslot.Background).Paused
+	default:
+		return
+	}
+	if open.Playing == playing {
+		return
+	}
+	update := playlists.Pause(*open)
+	if playing {
+		update = playlists.Play(*open)
+	}
+	if err := env.State.RequestPlaylistUpdate(env.Context, update); err != nil {
+		log.Warn().Err(err).Str("action", action).Msg("failed to update background playlist playback")
+	}
 }

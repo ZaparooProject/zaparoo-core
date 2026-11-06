@@ -31,9 +31,12 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -796,4 +799,96 @@ func TestHandleMediaControl_InvalidControlArgumentIsClientError(t *testing.T) {
 
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
+}
+
+func backgroundControlEnv(
+	t *testing.T, action string, playlistPlaying bool, playbackPaused bool,
+) (env requests.RequestEnv, requested *[]*playlists.Playlist) {
+	t.Helper()
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+	drainNotifications(t, ns)
+
+	st.SetBackgroundMedia(models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID))
+	st.SetBackgroundPlaylist(&playlists.Playlist{
+		ID: "music", Slot: mediaslot.Background, Playing: playlistPlaying,
+		Items: []playlists.PlaylistItem{{ZapScript: "song.mp3"}},
+	})
+	var got []*playlists.Playlist
+	st.SetPlaylistRequester(func(_ context.Context, pls *playlists.Playlist) error {
+		got = append(got, pls)
+		return nil
+	})
+
+	noop := func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error { return nil }
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{
+		ID: platforms.NativeAudioLauncherID,
+		Controls: map[string]platforms.Control{
+			platforms.ControlPause:       {Func: noop},
+			platforms.ControlResume:      {Func: noop},
+			platforms.ControlTogglePause: {Func: noop},
+			platforms.ControlFastForward: {Func: noop},
+		},
+	}})
+
+	env = requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		PlaybackManager: newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{
+			Path: "song.mp3", Paused: playbackPaused, Playing: !playbackPaused,
+		}),
+		Params: json.RawMessage(fmt.Sprintf(`{"action":%q,"slot":"bg"}`, action)),
+	}
+	return env, &got
+}
+
+func TestHandleMediaControl_BackgroundPauseQueuesPlaylistPause(t *testing.T) {
+	t.Parallel()
+	env, requested := backgroundControlEnv(t, platforms.ControlPause, true, true)
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	require.Len(t, *requested, 1)
+	update := (*requested)[0]
+	assert.Equal(t, "music", update.ID)
+	assert.False(t, update.Playing, "the playlist follows its paused track")
+	assert.Equal(t, mediaslot.Background, update.Slot)
+}
+
+func TestHandleMediaControl_BackgroundResumeQueuesPlaylistPlay(t *testing.T) {
+	t.Parallel()
+	env, requested := backgroundControlEnv(t, platforms.ControlResume, false, false)
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	require.Len(t, *requested, 1)
+	assert.True(t, (*requested)[0].Playing)
+}
+
+func TestHandleMediaControl_BackgroundToggleFollowsPlayback(t *testing.T) {
+	t.Parallel()
+	env, requested := backgroundControlEnv(t, platforms.ControlTogglePause, true, true)
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	require.Len(t, *requested, 1)
+	assert.False(t, (*requested)[0].Playing, "the toggle left the track paused")
+}
+
+func TestHandleMediaControl_BackgroundNoChangeQueuesNothing(t *testing.T) {
+	t.Parallel()
+
+	env, requested := backgroundControlEnv(t, platforms.ControlResume, true, false)
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.Empty(t, *requested, "a playlist already playing is left alone")
+
+	env, requested = backgroundControlEnv(t, platforms.ControlFastForward, true, false)
+	_, err = HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.Empty(t, *requested, "a seek does not touch the playlist")
 }

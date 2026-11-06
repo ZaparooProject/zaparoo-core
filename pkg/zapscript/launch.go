@@ -1034,8 +1034,18 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
+		backgroundSlot := false
+		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {
+			backgroundSlot = true
+		}
 		switch {
 		case explicitLauncher:
+		case backgroundSlot:
+			// The background slot only plays native audio, so a system
+			// default, a preference or a launcher found for the path, such as
+			// an Audio core that only runs in the primary slot, would only
+			// fail the launch.
+			useNativeAudioForBackground(pl, env, target.path)
 		case launchables.IsURI(target.path):
 			// Only the launchable's own launcher can start a zaparoo:// URI,
 			// so a launcher chosen for the system's files (a default, the
@@ -1203,6 +1213,22 @@ func getLaunchClosure(
 			}
 		}
 		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
+	}
+}
+
+// useNativeAudioForBackground picks the native audio launcher for a
+// background slot launch of a file it can play.
+func useNativeAudioForBackground(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	native := findLauncher(pl, env, platforms.NativeAudioLauncherID)
+	if native == nil {
+		return
+	}
+	lower := strings.ToLower(path)
+	for _, ext := range native.Extensions {
+		if strings.HasSuffix(lower, strings.ToLower(ext)) {
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, native.ID)
+			return
+		}
 	}
 }
 

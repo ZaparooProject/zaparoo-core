@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1065,19 +1066,28 @@ func handlePlaylist(
 			clearPlaylistSlot(svc, slot)
 			return
 		}
-		refreshed := *activePlaylist
-		refreshed.Name = pls.Name
-		refreshed.Items = pls.Items
-		refreshed.Loop = pls.Loop
-		refreshed.LoopOne = pls.LoopOne
-		if refreshed.Index >= len(refreshed.Items) {
-			refreshed.Index = len(refreshed.Items) - 1
+		refreshed := refreshedPlaylist(activePlaylist, pls)
+		log.Info().Any("pls", playlistForLog(refreshed)).Msg("refreshing playlist in place")
+		if activePlaylist.Shuffled {
+			svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, refreshed.Index)
 		}
-		if refreshed.Index < 0 {
-			refreshed.Index = 0
+		storePlaylist(svc, slot, refreshed)
+		return
+	case pls.ModeChange:
+		// Shuffle or repeat changed on the playlist open now: nothing is
+		// launched and the current item and playback stay.
+		if activePlaylist == nil {
+			log.Debug().Str("slot", slot).Msg("playlist mode change ignored; no playlist is open")
+			return
 		}
-		log.Info().Any("pls", playlistForLog(&refreshed)).Msg("refreshing playlist in place")
-		storePlaylist(svc, slot, &refreshed)
+		changed, err := modeChangedPlaylist(activePlaylist, pls)
+		if err != nil {
+			log.Warn().Err(err).Str("slot", slot).Msg("playlist mode change ignored")
+			return
+		}
+		log.Info().Any("pls", playlistForLog(changed)).Msg("changing playlist shuffle and repeat")
+		svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, changed.Index)
+		storePlaylist(svc, slot, changed)
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
@@ -1175,6 +1185,57 @@ func handlePlaylist(
 		}
 		return
 	}
+}
+
+// refreshedPlaylist returns active with the items and name of the refresh
+// update, keeping its position, playback and repeat. A shuffled playlist takes
+// the new items as its load order and shuffles them again, keeping its
+// current item current.
+func refreshedPlaylist(active, update *playlists.Playlist) *playlists.Playlist {
+	refreshed := *active
+	refreshed.Name = update.Name
+	refreshed.Items = update.Items
+	if !active.Shuffled {
+		refreshed.Index = min(max(refreshed.Index, 0), len(refreshed.Items)-1)
+		return &refreshed
+	}
+	current := active.Current()
+	idx := playlists.LocateItem(update.Items, current.ZapScript, -1)
+	if idx < 0 {
+		idx = slices.Index(update.Items, current)
+	}
+	refreshed.Shuffled = false
+	refreshed.Original = nil
+	refreshed.Index = max(idx, 0)
+	reshuffled := playlists.SetShuffle(&refreshed, true)
+	if idx < 0 {
+		// The current item is gone; keep the position rather than jump to
+		// whatever shuffled to the front.
+		reshuffled.Index = min(max(active.Index, 0), len(reshuffled.Items)-1)
+	}
+	return reshuffled
+}
+
+// modeChangedPlaylist returns active with the shuffle and repeat settings of
+// a ModeChange update applied.
+func modeChangedPlaylist(active, update *playlists.Playlist) (*playlists.Playlist, error) {
+	changed := active
+	if update.ShuffleSet {
+		changed = playlists.SetShuffle(changed, update.Shuffle)
+	}
+	if update.Repeat != nil {
+		var err error
+		changed, err = playlists.SetRepeat(changed, *update.Repeat)
+		if err != nil {
+			return nil, fmt.Errorf("set playlist repeat: %w", err)
+		}
+	}
+	if changed == active {
+		// Nothing asked for; store a copy so the update is still a new value.
+		copied := *active
+		changed = &copied
+	}
+	return changed, nil
 }
 
 var (

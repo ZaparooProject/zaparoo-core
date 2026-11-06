@@ -160,6 +160,35 @@ func UIChanged(publish func(models.Notification), payload models.UIStateResponse
 	publish(notification)
 }
 
+// PlaylistsChanged publishes the open playlists of every slot. It goes to the
+// broker directly, like UIChanged, so a full source queue cannot drop the
+// latest state.
+func PlaylistsChanged(publish func(models.Notification), payload models.PlaylistsChangedParams) {
+	if payload.Playlists == nil {
+		payload.Playlists = []models.PlaylistState{}
+	}
+	notification, ok := newNotification(models.NotificationPlaylistsChanged, payload)
+	if !ok {
+		return
+	}
+	publish(notification)
+}
+
+// MediaPlayback publishes the playback state of native audio in one slot,
+// shaped as media.active returns it for that slot. It goes to the broker
+// directly, like PlaylistsChanged, and is merged per slot, so one slot's
+// update never replaces the other's.
+//
+//nolint:gocritic // notification payload is copied before synchronous broker fan-out
+func MediaPlayback(publish func(models.Notification), payload models.ActiveMediaResponse) {
+	notification, ok := newNotification(models.NotificationMediaPlayback, payload)
+	if !ok {
+		return
+	}
+	notification.CoalesceKey = payload.Slot
+	publish(notification)
+}
+
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
 	sendNotification(ns, models.NotificationClientsPaired, payload)
 }

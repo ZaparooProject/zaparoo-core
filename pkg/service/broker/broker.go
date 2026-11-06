@@ -36,7 +36,7 @@ import (
 //
 // For coalesceable methods: if outChan is full when a notification arrives, the
 // notification is stored in the coalesced map (replacing any prior pending
-// notification for the same method) and the drain goroutine is signalled. This
+// notification for the same method and coalesce key) and the drain goroutine is signalled. This
 // means slow consumers see only the latest value for high-frequency progress
 // events rather than losing the update entirely.
 //
@@ -187,7 +187,7 @@ func (b *Broker) broadcast(notif models.Notification) {
 			if coalesce {
 				// Channel full: store latest and wake drain goroutine.
 				sub.mu.Lock()
-				sub.coalesced[notif.Method] = notif
+				sub.coalesced[coalesceKey(notif)] = notif
 				sub.mu.Unlock()
 				select {
 				case sub.signal <- struct{}{}:
@@ -201,6 +201,16 @@ func (b *Broker) broadcast(notif models.Notification) {
 			}
 		}
 	}
+}
+
+// coalesceKey is the pending slot a coalesceable notification replaces: one
+// per method, or one per method and key for a method whose notifications
+// carry independent state.
+func coalesceKey(notif models.Notification) string {
+	if notif.CoalesceKey == "" {
+		return notif.Method
+	}
+	return notif.Method + "\x00" + notif.CoalesceKey
 }
 
 // Subscribe creates a new subscription and returns a channel that will receive

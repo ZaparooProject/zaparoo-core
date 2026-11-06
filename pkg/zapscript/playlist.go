@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,6 +37,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -401,7 +403,92 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 	return playlistItems, nil
 }
 
-func readPlaylistFolder(cfg *config.Instance, pl platforms.Platform, path string) ([]playlists.PlaylistItem, error) {
+// launchersInclude reports whether one of launchers belongs to systemID.
+func launchersInclude(launchers []platforms.Launcher, systemID string) bool {
+	for i := range launchers {
+		if strings.EqualFold(launchers[i].SystemID, systemID) {
+			return true
+		}
+	}
+	return false
+}
+
+// folderPageSize is how many rows a folder playlist reads from the media
+// index at a time.
+const folderPageSize = 500
+
+// folderPlaylistItems lists a folder as a playlist exactly as media.browse
+// lists it: the folder's indexed media, in filename order, without hidden
+// media, named as browse names them, and with system set only that system's
+// media, as a browse filtered by it. So item n of the playlist is entry n of
+// the folder's listing, which a client counting from a browse can rely on
+// for the start argument. The index is preferred, not required: a folder it
+// does not cover is read from disk instead, keeping to system's launchers.
+func folderPlaylistItems(
+	env *platforms.CmdEnv, pl platforms.Platform, path string, system *systemdefs.System,
+) ([]playlists.PlaylistItem, error) {
+	items, err := indexedFolderItems(env, path, system)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("folder playlist: index unavailable, reading the folder")
+	}
+	if len(items) > 0 {
+		return items, nil
+	}
+	return readPlaylistFolder(env.Cfg, pl, path, system)
+}
+
+// indexedFolderItems reads a folder's direct media from the index the way
+// a filename-sorted browse of it does, a page at a time.
+func indexedFolderItems(
+	env *platforms.CmdEnv, path string, system *systemdefs.System,
+) ([]playlists.PlaylistItem, error) {
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return nil, nil
+	}
+	var systems []systemdefs.System
+	if system != nil {
+		systems = []systemdefs.System{*system}
+	}
+	ctx := env.ServiceCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prefix := strings.TrimSuffix(filepath.ToSlash(path), "/") + "/"
+	var items []playlists.PlaylistItem
+	var cursor *database.BrowseCursor
+	for {
+		rows, err := env.Database.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+			Cursor:        cursor,
+			ExcludeHidden: true,
+			PathPrefix:    prefix,
+			Limit:         folderPageSize,
+			Sort:          "filename-asc",
+			Systems:       systems,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("browse folder %s: %w", path, err)
+		}
+		for i := range rows {
+			items = append(items, playlists.PlaylistItem{
+				Name:      mediatags.StripStructuralSetMarkers(rows[i].Name),
+				ZapScript: rows[i].Path,
+			})
+		}
+		if len(rows) < folderPageSize {
+			return items, nil
+		}
+		last := rows[len(rows)-1]
+		cursor = &database.BrowseCursor{
+			SortValue: last.SortValue,
+			SortMode:  last.SortMode,
+			LastID:    last.MediaID,
+		}
+	}
+}
+
+func readPlaylistFolder(
+	cfg *config.Instance, pl platforms.Platform, path string, system *systemdefs.System,
+) ([]playlists.PlaylistItem, error) {
 	if path == "" {
 		return nil, errors.New("no playlist path specified")
 	}
@@ -428,7 +515,11 @@ func readPlaylistFolder(cfg *config.Instance, pl platforms.Platform, path string
 		if matcher == nil {
 			matcher = helpers.NewLauncherMatcher(cfg, pl)
 		}
-		if _, err := matcher.FindLauncher(fullPath); err != nil {
+		if system != nil {
+			if !launchersInclude(matcher.PathToLaunchers(fullPath), system.ID) {
+				continue
+			}
+		} else if _, err := matcher.FindLauncher(fullPath); err != nil {
 			continue
 		}
 		files = append(files, fullPath)
@@ -487,6 +578,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 
 		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
+		shufflePlaylistIfAsked(pls, &args)
 		// A playlist written into a script inherits the trust of that
 		// script: one fetched from a ZapLink, or nested in an untrusted
 		// playlist's item, stays untrusted.
@@ -510,7 +602,14 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 			return nil, err
 		}
 	} else {
-		items, err = readPlaylistFolder(env.Cfg, pl, path)
+		var system *systemdefs.System
+		if args.System != "" {
+			system, err = systemdefs.LookupSystem(args.System)
+			if err != nil {
+				return nil, fmt.Errorf("invalid playlist system: %w", err)
+			}
+		}
+		items, err = folderPlaylistItems(&env, pl, path, system)
 		if err != nil {
 			return nil, err
 		}
@@ -523,16 +622,11 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		log.Info().Msgf("shuffling playlist: %s", env.Cmd.Args[0])
 		if len(items) == 0 {
 			log.Warn().Msgf("playlist is empty: %s", path)
-		} else {
-			//nolint:gosec // Playlist order is not security sensitive.
-			rand.Shuffle(len(items), func(i, j int) {
-				items[i], items[j] = items[j], items[i]
-			})
 		}
 	}
 
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
-	pls.Shuffled = zapscript.IsModeShuffle(args.Mode)
+	shufflePlaylistIfAsked(pls, &args)
 	pls.Unsafe = env.Unsafe
 	pls.AllowedCommands = env.AllowedCommands
 	if err := applyPlaylistArgs(pl, &env, pls, &args); err != nil {
@@ -546,15 +640,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 func collectionPlaylist(
 	pl platforms.Platform, env *platforms.CmdEnv, coll *collection, args *zapscript.PlaylistArgs,
 ) (*playlists.Playlist, error) {
-	items := coll.items
-	if zapscript.IsModeShuffle(args.Mode) && len(items) > 1 {
-		items = slices.Clone(items)
-		//nolint:gosec // Playlist order is not security sensitive.
-		rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
-	}
-
-	pls := playlists.NewPlaylist(coll.id, coll.name, items)
-	pls.Shuffled = zapscript.IsModeShuffle(args.Mode)
+	pls := playlists.NewPlaylist(coll.id, coll.name, slices.Clone(coll.items))
+	shufflePlaylistIfAsked(pls, args)
 	pls.DeckID = coll.deckID
 	pls.Unsafe = coll.unsafe
 	pls.AllowedCommands = env.AllowedCommands
@@ -562,6 +649,15 @@ func collectionPlaylist(
 		return nil, err
 	}
 	return pls, nil
+}
+
+// shufflePlaylistIfAsked puts a playlist that was just loaded in a random
+// order when its command asks for mode=shuffle, keeping the order it loaded
+// in so shuffle can be turned off later.
+func shufflePlaylistIfAsked(pls *playlists.Playlist, args *zapscript.PlaylistArgs) {
+	if zapscript.IsModeShuffle(args.Mode) {
+		playlists.ShuffleItems(pls)
+	}
 }
 
 // applyPlaylistArgs sets the slot, repeat and rotation of a playlist from the

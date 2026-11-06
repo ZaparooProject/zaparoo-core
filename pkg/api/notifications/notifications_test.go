@@ -406,3 +406,70 @@ func TestMediaHistoryChanged(t *testing.T) {
 		t.Fatal("expected notification was not sent")
 	}
 }
+
+func TestPlaylistsChanged_Payload(t *testing.T) {
+	t.Parallel()
+
+	var notification models.Notification
+	PlaylistsChanged(func(published models.Notification) {
+		notification = published
+	}, models.PlaylistsChangedParams{Playlists: []models.PlaylistState{{
+		ID: "pl", Slot: "background", Repeat: "all", Shuffle: true, Items: []models.PlaylistItemInfo{},
+	}}})
+
+	assert.Equal(t, models.NotificationPlaylistsChanged, notification.Method)
+	var received models.PlaylistsChangedParams
+	require.NoError(t, json.Unmarshal(notification.Params, &received))
+	require.Len(t, received.Playlists, 1)
+	assert.Equal(t, "pl", received.Playlists[0].ID)
+	assert.Equal(t, "background", received.Playlists[0].Slot)
+	assert.True(t, received.Playlists[0].Shuffle)
+}
+
+func TestPlaylistsChanged_NoneOpenIsAnEmptyList(t *testing.T) {
+	t.Parallel()
+
+	var notification models.Notification
+	PlaylistsChanged(func(published models.Notification) {
+		notification = published
+	}, models.PlaylistsChangedParams{})
+
+	assert.Equal(t, models.NotificationPlaylistsChanged, notification.Method)
+	assert.JSONEq(t, `{"playlists":[]}`, string(notification.Params))
+}
+
+func TestMediaPlayback_Payload(t *testing.T) {
+	t.Parallel()
+
+	position, duration := int64(20000), int64(180000)
+	var notification models.Notification
+	MediaPlayback(func(published models.Notification) {
+		notification = published
+	}, models.ActiveMediaResponse{
+		ZapScript: "/music/01 Intro.mp3",
+		ActiveMedia: models.ActiveMedia{
+			LauncherID:    "native-audio",
+			SystemID:      "Audio",
+			SystemName:    "Audio",
+			Path:          "/music/01 Intro.mp3",
+			Name:          "01 Intro",
+			Slot:          "background",
+			PositionMs:    &position,
+			DurationMs:    &duration,
+			PlaybackState: models.MediaPlaybackStatePaused,
+			Track:         &models.TrackInfo{Title: "Intro"},
+		},
+	})
+
+	assert.Equal(t, models.NotificationMediaPlayback, notification.Method)
+	assert.Equal(t, "background", notification.CoalesceKey, "merged per slot")
+	var received map[string]any
+	require.NoError(t, json.Unmarshal(notification.Params, &received))
+	assert.Equal(t, "background", received["slot"])
+	assert.Equal(t, "/music/01 Intro.mp3", received["zapScript"])
+	assert.Equal(t, "paused", received["playbackState"])
+	assert.InDelta(t, 20000, received["positionMs"], 0)
+	assert.InDelta(t, 180000, received["durationMs"], 0)
+	assert.Equal(t, map[string]any{"title": "Intro"}, received["track"])
+	assert.NotContains(t, received, "CoalesceKey", "the coalesce key is never sent")
+}

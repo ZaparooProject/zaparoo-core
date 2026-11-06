@@ -99,6 +99,28 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 	assert.False(t, pls.Unsafe, "the user's own deck is trusted")
 }
 
+func TestCmdPlaylistLoad_DeckShuffleKeepsLoadOrder(t *testing.T) {
+	t.Parallel()
+	env, db, queue := deckTestEnv(t, "deck://0123456789AB")
+	env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyMode, zapscript.ModeShuffle)
+	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Weekend", Owned: true,
+		Items: []database.DeckItem{
+			{Kind: database.DeckItemKindScript, Name: "First", ZapScript: "**launch.system:NES"},
+			{Kind: database.DeckItemKindScript, Name: "Second", ZapScript: "**launch.system:SNES"},
+			{Kind: database.DeckItemKindScript, Name: "Third", ZapScript: "**launch.system:Genesis"},
+		},
+	}))
+
+	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	pls := <-queue
+	assert.True(t, pls.Shuffled)
+	want := []string{"**launch.system:NES", "**launch.system:SNES", "**launch.system:Genesis"}
+	assert.Equal(t, want, playlists.ItemScripts(pls.Original))
+	assert.ElementsMatch(t, want, playlists.ItemScripts(pls.Items))
+}
+
 func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
 	t.Parallel()
 	env, db, queue := deckTestEnv(t, "deck://0123456789ab")

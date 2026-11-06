@@ -224,3 +224,39 @@ func TestBackground_FinishedAdvancesBoundTrack(t *testing.T) {
 	assert.Equal(t, 1, got.Index)
 	assert.Equal(t, mediaslot.Background, got.Slot)
 }
+
+func TestFinished_AdvancesAfterTheItemMoved(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	pls := testPlaylist(4, 2, nil)
+	gen := r.play(pls)
+
+	// Shuffle turned on under the playing item moves it to the front.
+	shuffled := playlists.SetShuffle(pls, true)
+	require.Equal(t, 0, shuffled.Index)
+	r.eng.ItemMoved(pls.Slot, pls.ID, pls.Index, shuffled.Index)
+	r.host.set(pls.Slot, shuffled)
+	r.changed()
+
+	r.end(gen, models.MediaStopReasonFinished)
+	got := r.host.last(t)
+	require.Len(t, r.host.queued(), 1, "the moved item still advances when it ends")
+	assert.Equal(t, 1, got.Index)
+	assert.True(t, got.Playing)
+}
+
+func TestFinished_NoAdvanceWithoutTheMove(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t)
+	pls := testPlaylist(4, 2, nil)
+	gen := r.play(pls)
+
+	// A cursor moved to another item is not the playing item moving.
+	r.host.set(pls.Slot, playlists.Goto(*pls, 0))
+	r.changed()
+
+	r.end(gen, models.MediaStopReasonFinished)
+	assert.Empty(t, r.host.queued())
+}

@@ -127,13 +127,15 @@ type Updates struct {
 }
 
 type Audio struct {
-	SuccessSound *string `toml:"success_sound,omitempty"`
-	FailSound    *string `toml:"fail_sound,omitempty"`
-	LimitSound   *string `toml:"limit_sound,omitempty"`
-	PendingSound *string `toml:"pending_sound,omitempty"`
-	ReadySound   *string `toml:"ready_sound,omitempty"`
-	Volume       *int    `toml:"volume,omitempty"`
-	ScanFeedback bool    `toml:"scan_feedback"`
+	SuccessSound  *string `toml:"success_sound,omitempty"`
+	FailSound     *string `toml:"fail_sound,omitempty"`
+	LimitSound    *string `toml:"limit_sound,omitempty"`
+	PendingSound  *string `toml:"pending_sound,omitempty"`
+	ReadySound    *string `toml:"ready_sound,omitempty"`
+	Volume        *int    `toml:"volume,omitempty"`
+	MusicVolume   *int    `toml:"music_volume,omitempty"`
+	MusicAutoplay *bool   `toml:"music_autoplay,omitempty"`
+	ScanFeedback  bool    `toml:"scan_feedback"`
 }
 
 type ZapScript struct {
@@ -671,6 +673,52 @@ func (c *Instance) SetAudioVolume(v int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.Volume = &v
+}
+
+// AudioMusicVolume returns the volume level (0-200) of music and other
+// long-form audio played in-process. When it is unset, music follows
+// AudioVolume. Clamped to [0, 200].
+func (c *Instance) AudioMusicVolume() int {
+	c.mu.RLock()
+	set := c.vals.Audio.MusicVolume
+	c.mu.RUnlock()
+	if set == nil {
+		return c.AudioVolume()
+	}
+	return max(0, min(200, *set))
+}
+
+// AudioMusicVolumeSet reports whether the music volume has its own value
+// rather than following AudioVolume.
+func (c *Instance) AudioMusicVolumeSet() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.MusicVolume != nil
+}
+
+// SetAudioMusicVolume sets the music volume level (0-200).
+func (c *Instance) SetAudioMusicVolume(v int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.MusicVolume = &v
+}
+
+// AudioMusicAutoplay reports whether the background playlist that was open
+// when Core last stopped starts playing on the first start of each boot.
+// Defaults to true: with nothing remembered there is nothing to start, and
+// music someone left playing comes back with the device.
+func (c *Instance) AudioMusicAutoplay() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.MusicAutoplay == nil || *c.vals.Audio.MusicAutoplay
+}
+
+// SetAudioMusicAutoplay sets whether the restored background playlist starts
+// playing on the first start of each boot.
+func (c *Instance) SetAudioMusicAutoplay(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.MusicAutoplay = &enabled
 }
 
 // SuccessSoundPath resolves the success sound file path based on config and disk overrides.

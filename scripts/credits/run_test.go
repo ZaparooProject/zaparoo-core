@@ -158,6 +158,9 @@ ENV LIBNFC_COMMIT="3fa0751ad58fb0053d3de2e61bbbd4066259104c"
 	write("pkg/helpers/wuffspng/LICENSE-MIT", mitText)
 	write("pkg/helpers/wuffspng/LICENSE-APACHE", "Apache License Version 2.0")
 	write("pkg/database/gamedatabase/LICENSE", "GameDataBase by PigSaint is licensed under CC BY 4.0")
+	write("pkg/audio/nativedec/third_party/LICENSE-dr_libs",
+		"This software is available as a choice of the following licenses.")
+	write("pkg/audio/nativedec/third_party/LICENSE-stb", "This software is available under 2 licenses.")
 	write("mod/sqlite/sqlite3-binding.c", fakeSQLite)
 	write("mod/sqlite/LICENSE", mitText)
 	write("mod/malgo/miniaudio.h", fakeMiniaudio)
@@ -291,6 +294,16 @@ func TestExtrasFailWhenInputsAreMissing(t *testing.T) {
 				require.NoError(t, os.Remove(filepath.Join(c.root, "pkg", "database", "gamedatabase", "LICENSE")))
 			},
 		},
+		{name: "dr_libs license", want: "LICENSE-dr_libs", mutate: func(t *testing.T, c *fakeCheckout) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(
+				c.root, "pkg", "audio", "nativedec", "third_party", "LICENSE-dr_libs")))
+		}},
+		{name: "stb license", want: "LICENSE-stb", mutate: func(t *testing.T, c *fakeCheckout) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(
+				c.root, "pkg", "audio", "nativedec", "third_party", "LICENSE-stb")))
+		}},
 		{name: "EFF attribution", want: "eff-wordlist.txt", mutate: func(t *testing.T, c *fakeCheckout) {
 			t.Helper()
 			require.NoError(t, os.Remove(filepath.Join(c.root, textsDir, "eff-wordlist.txt")))

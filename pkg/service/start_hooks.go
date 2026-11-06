@@ -80,8 +80,12 @@ func logHookError(err error, hookName string) {
 	log.Error().Err(err).Msgf("error running %s script", hookName)
 }
 
-func runConfiguredServiceHooks(svc *ServiceContext) {
-	firstBootStart, err := isFirstServiceStartForBoot(svc.Platform)
+// runConfiguredServiceHooks runs on_boot and on_ready. firstBootStart and
+// err are the one answer isFirstServiceStartForBoot gave for this start.
+func runConfiguredServiceHooks(svc *ServiceContext, firstBootStart bool, err error) {
+	if svc.Config.ServiceOnBoot() == "" && svc.Config.ServiceOnReady() == "" {
+		return
+	}
 	if err != nil {
 		if svc.Config.ServiceOnBoot() != "" {
 			log.Warn().Err(err).Msg("skipping on_boot: failed to detect boot state")
