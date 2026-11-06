@@ -468,3 +468,57 @@ func TestTransition_DropsModeChange(t *testing.T) {
 	assert.False(t, next.Shuffle)
 	assert.Nil(t, next.Repeat)
 }
+
+func TestSkipFailedStepsPastAnItemUntilAFullCycle(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	pls.Playing = true
+
+	next, ok := playlists.SkipFailed(*pls)
+	require.True(t, ok)
+	assert.Equal(t, 1, next.Index)
+	assert.Equal(t, 1, next.SkipRun)
+
+	next, ok = playlists.SkipFailed(*next)
+	require.True(t, ok)
+	assert.Equal(t, 2, next.Index)
+
+	_, ok = playlists.SkipFailed(*next)
+	assert.False(t, ok, "every other item has failed")
+	assert.Zero(t, playlists.Next(*next).SkipRun, "any other move starts the count over")
+}
+
+func TestSkipFailedStopsAtTheEndOfAPlaylistThatDoesNotLoop(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	pls.Index = 2
+	_, ok := playlists.SkipFailed(*pls)
+	assert.False(t, ok)
+
+	pls.Loop = true
+	next, ok := playlists.SkipFailed(*pls)
+	require.True(t, ok)
+	assert.Equal(t, 0, next.Index)
+}
+
+func TestApplyIntentMeetsThePlaylistAsItIs(t *testing.T) {
+	t.Parallel()
+
+	open := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	open.Index = 2
+	open.Loop = true
+	open.Playing = true
+
+	paused := playlists.ApplyIntent(open, playlists.IntentUpdate("background", false))
+	require.NotNil(t, paused)
+	assert.False(t, paused.Playing)
+	assert.Equal(t, 2, paused.Index, "the open playlist's place is kept")
+	assert.True(t, paused.Loop)
+
+	resumed := playlists.ApplyIntent(paused, playlists.IntentUpdate("background", true))
+	require.NotNil(t, resumed)
+	assert.True(t, resumed.Playing)
+	assert.Nil(t, playlists.ApplyIntent(nil, playlists.IntentUpdate("background", true)))
+}

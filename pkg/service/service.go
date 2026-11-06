@@ -230,6 +230,7 @@ func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bo
 
 type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
+	SetDecodeFailureCallback(slot string, fn func())
 }
 
 func ownedByNativeAudio(media *models.ActiveMedia) bool {
@@ -315,6 +316,37 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		// that media, or the engine would move on from a track still playing.
 		svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonFinished)
 	})
+	pm.SetDecodeFailureCallback(mediaslot.Background, func() {
+		skipUndecodableBackgroundTrack(svc)
+	})
+}
+
+// skipUndecodableBackgroundTrack carries music on past a track that stopped
+// because it failed to decode: the slot is cleared, and the playlist moves to
+// the next item the way it does for a track that cannot launch. It pauses
+// the playlist instead when there is nowhere to go.
+func skipUndecodableBackgroundTrack(svc *ServiceContext) {
+	pls := svc.State.GetBackgroundPlaylist()
+	svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonStopped)
+	if pls == nil || !pls.Playing {
+		return
+	}
+	next, ok := playlists.SkipFailed(*pls)
+	if !ok {
+		if svc.State.PausePlaylistIfCurrent(mediaslot.Background, pls) {
+			log.Info().Str("playlist", pls.ID).Msg("background track failed to decode, playlist paused")
+			svc.AutoAdvance.PlaylistChanged(mediaslot.Background)
+		}
+		return
+	}
+	log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+		Msg("background track failed to decode, skipping it")
+	go func() {
+		select {
+		case svc.PlaylistQueue <- next:
+		case <-svc.State.GetContext().Done():
+		}
+	}()
 }
 
 // wirePlaybackNotifier has the notifier hear of every native-audio playback

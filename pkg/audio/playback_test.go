@@ -601,6 +601,35 @@ func TestLongformPlaybackManager_LateDrainOfReplacedSourceIsNotNatural(t *testin
 	second.stopAndDeregister()
 }
 
+func TestLongformPlaybackManager_DecodeFailureIsReportedOnceForTheCurrentTrack(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	path := filepath.Join(t.TempDir(), "a.wav")
+	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	failures := 0
+	m.SetDecodeFailureCallback(mediaslot.Primary, func() { failures++ })
+
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	src := m.primary
+	src.decodeFailed.Store(true)
+	src.onDrained()
+	assert.Equal(t, 1, failures, "the current track failing to decode is reported")
+
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	stale := m.primary
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	stale.decodeFailed.Store(true)
+	stale.onDrained()
+	assert.Equal(t, 1, failures, "a replaced track failing is not the slot's failure")
+	m.primary.stopAndDeregister()
+}
+
 // TestLongformPlaybackManager_InvalidSlot verifies every mutating method returns
 // an error when given a slot name that is neither primary nor background.
 func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {

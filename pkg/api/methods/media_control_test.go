@@ -854,8 +854,7 @@ func TestHandleMediaControl_BackgroundPauseQueuesPlaylistPause(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, *requested, 1)
 	update := (*requested)[0]
-	assert.Equal(t, "music", update.ID)
-	assert.False(t, update.Playing, "the playlist follows its paused track")
+	assert.Equal(t, playlists.IntentPause, update.Intent, "only the intent travels, not a playlist copy")
 	assert.Equal(t, mediaslot.Background, update.Slot)
 }
 
@@ -866,7 +865,7 @@ func TestHandleMediaControl_BackgroundResumeQueuesPlaylistPlay(t *testing.T) {
 	_, err := HandleMediaControl(env)
 	require.NoError(t, err)
 	require.Len(t, *requested, 1)
-	assert.True(t, (*requested)[0].Playing)
+	assert.Equal(t, playlists.IntentPlay, (*requested)[0].Intent)
 }
 
 func TestHandleMediaControl_BackgroundToggleFollowsPlayback(t *testing.T) {
@@ -876,7 +875,7 @@ func TestHandleMediaControl_BackgroundToggleFollowsPlayback(t *testing.T) {
 	_, err := HandleMediaControl(env)
 	require.NoError(t, err)
 	require.Len(t, *requested, 1)
-	assert.False(t, (*requested)[0].Playing, "the toggle left the track paused")
+	assert.Equal(t, playlists.IntentPause, (*requested)[0].Intent, "the toggle left the track paused")
 }
 
 func TestHandleMediaControl_BackgroundUnrelatedActionQueuesNothing(t *testing.T) {

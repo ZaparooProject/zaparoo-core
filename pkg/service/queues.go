@@ -739,11 +739,32 @@ func pauseBackgroundForPrimaryLaunch(
 	return nil
 }
 
+// runPlaylistLaunch launches the playlist's current item, ends the launch
+// reservation, and only then queues the move past an item that failed: the
+// move reserves a launch of its own, which the one still held would refuse.
+func runPlaylistLaunch(svc *ServiceContext, pls *playlists.Playlist, player audio.Player) {
+	var skip *playlists.Playlist
+	func() {
+		defer svc.State.LauncherManager().EndPlaylistLaunch()
+		skip = launchPlaylistMedia(svc, pls, player)
+	}()
+	if skip == nil {
+		return
+	}
+	select {
+	case svc.PlaylistQueue <- skip:
+	case <-svc.State.GetContext().Done():
+	}
+}
+
+// launchPlaylistMedia launches the item and returns the move to queue past it
+// when it failed in the background slot, where music should carry on rather
+// than stop for one missing file; nil otherwise.
 func launchPlaylistMedia(
 	svc *ServiceContext,
 	pls *playlists.Playlist,
 	player audio.Player,
-) {
+) *playlists.Playlist {
 	t := tokens.Token{
 		Text:     pls.Current().ZapScript,
 		ScanTime: time.Now(),
@@ -775,7 +796,7 @@ func launchPlaylistMedia(
 		// and before its launch began, and wins.
 		log.Debug().Str("playlist", pls.ID).Int("index", pls.Index).
 			Msg("automatic playlist launch dropped, it was overtaken")
-		return
+		return nil
 	}
 	var publishesLater atomic.Bool
 	plsc.LaunchResolved = publishesLater.Store
@@ -798,16 +819,26 @@ func launchPlaylistMedia(
 		// The playlist was stored as playing before this item was tried.
 		// Nothing is playing, so leave it paused: clients read the truth,
 		// playing it again retries this item, and next still moves on.
-		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) &&
-			svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
-			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
-				Msg("playlist item failed to launch, playlist paused")
-			svc.AutoAdvance.PlaylistChanged(pls.Slot)
+		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) {
+			if pls.Slot == mediaslot.Background && !launchOvertaken(svc, pls) {
+				// Music carries on past a track that cannot play, such as
+				// a file deleted since the index was built.
+				if next, ok := playlists.SkipFailed(*pls); ok {
+					log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+						Msg("playlist item failed to launch, skipping it")
+					return next
+				}
+			}
+			if svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
+				log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+					Msg("playlist item failed to launch, playlist paused")
+				svc.AutoAdvance.PlaylistChanged(pls.Slot)
+			}
 		}
 	}
 
 	if pls.Slot == mediaslot.Background {
-		return
+		return nil
 	}
 
 	now := time.Now()
@@ -838,6 +869,7 @@ func launchPlaylistMedia(
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
 	}
+	return nil
 }
 
 // reservePlaylistLaunch reserves the launch an update is about to start, and
@@ -1015,6 +1047,14 @@ func handlePlaylist(
 		activePlaylist = svc.State.GetBackgroundPlaylist()
 	}
 
+	if pls != nil && pls.Intent != playlists.IntentNone {
+		// A play or pause meets the playlist as it is now, so it cannot undo
+		// a move, shuffle or repeat change that got here first.
+		if pls = playlists.ApplyIntent(activePlaylist, pls); pls == nil {
+			return
+		}
+	}
+
 	if pls != nil && pls.EngineStarted && !engineMoveStillWanted(svc, pls, activePlaylist) {
 		// The engine decided on this move from a playlist, or before a stop,
 		// that has since changed, so the person who changed it got there first.
@@ -1141,8 +1181,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
-				defer svc.State.LauncherManager().EndPlaylistLaunch()
-				launchPlaylistMedia(svc, pls, player)
+				runPlaylistLaunch(svc, pls, player)
 			}()
 		} else {
 			log.Info().Any("pls", playlistForLog(pls)).Msg("setting new playlist")
@@ -1203,8 +1242,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
-				defer svc.State.LauncherManager().EndPlaylistLaunch()
-				launchPlaylistMedia(svc, pls, player)
+				runPlaylistLaunch(svc, pls, player)
 			}()
 		} else {
 			if svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {

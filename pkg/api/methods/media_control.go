@@ -151,10 +151,9 @@ func syncBackgroundPlaylistPlayback(env *requests.RequestEnv, action string) {
 	default:
 		return
 	}
-	update := playlists.Pause(*open)
-	if playing {
-		update = playlists.Play(*open)
-	}
+	// Only the intent travels: the worker applies it to the playlist as it
+	// is by then, so it cannot write an old index or loop setting back.
+	update := playlists.IntentUpdate(mediaslot.Background, playing)
 	if err := env.State.RequestPlaylistUpdate(env.Context, update); err != nil {
 		log.Warn().Err(err).Str("action", action).Msg("failed to update background playlist playback")
 	}

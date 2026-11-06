@@ -380,6 +380,14 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 
 type testDrainCallbackRegistrar struct {
 	callbacks map[string]func(natural bool)
+	failures  map[string]func()
+}
+
+func (r *testDrainCallbackRegistrar) SetDecodeFailureCallback(slot string, fn func()) {
+	if r.failures == nil {
+		r.failures = make(map[string]func())
+	}
+	r.failures[slot] = fn
 }
 
 func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func(natural bool)) {

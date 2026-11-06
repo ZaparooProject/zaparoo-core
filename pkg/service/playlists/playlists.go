@@ -85,6 +85,12 @@ type Playlist struct {
 	// EngineFromIndex is the item the engine moved this update away from, so
 	// the queue handler can drop a move the user has already overtaken.
 	EngineFromIndex int `json:"-"`
+	// Intent, when set, makes this an update that only plays or pauses the
+	// open playlist; the other fields are then ignored.
+	Intent Intent `json:"-"`
+	// SkipRun counts the items in a row a background playlist has stepped
+	// past because their launch failed. Any other move starts it over.
+	SkipRun int `json:"-"`
 	// StopSeq is the count of stops of the primary media when the update was
 	// issued, valid when StopStamped is set. A stop after that cancels an
 	// update that has not launched yet.
@@ -213,6 +219,7 @@ func transition(p *Playlist) *Playlist {
 func moveTo(p *Playlist, idx int) *Playlist {
 	out := transition(p)
 	out.Index = idx
+	out.SkipRun = 0
 	if out.PausedByFailure {
 		out.Playing = true
 		out.PausedByFailure = false
@@ -226,6 +233,53 @@ func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		idx = 0
 	}
 	return moveTo(&p, idx)
+}
+
+// Intent is a request to play or pause whatever playlist is open in a slot,
+// resolved by the queue worker against the playlist as it is at that moment.
+type Intent int
+
+const (
+	// IntentNone marks an ordinary update that carries a whole playlist.
+	IntentNone Intent = iota
+	IntentPlay
+	IntentPause
+)
+
+// IntentUpdate returns an update that only plays or pauses the playlist open
+// in slot. It carries no playlist of its own, so it cannot overwrite a move,
+// shuffle or repeat change that lands before the worker reaches it.
+func IntentUpdate(slot string, playing bool) *Playlist {
+	intent := IntentPause
+	if playing {
+		intent = IntentPlay
+	}
+	return &Playlist{Slot: slot, Intent: intent}
+}
+
+// ApplyIntent resolves an intent-only update against the open playlist, or
+// returns nil when none is open.
+func ApplyIntent(open, update *Playlist) *Playlist {
+	if open == nil || update == nil || update.Intent == IntentNone {
+		return nil
+	}
+	if update.Intent == IntentPlay {
+		return Play(*open)
+	}
+	return Pause(*open)
+}
+
+// SkipFailed returns the move past p's current item after its launch failed,
+// or false when there is nowhere to go: the end of a playlist that does not
+// loop, or every item having failed in a row. It keeps count, which any other
+// move starts over.
+func SkipFailed(p Playlist) (*Playlist, bool) { //nolint:gocritic // value copy, as Next
+	if p.SkipRun+1 >= len(p.Items) || (p.Index+1 >= len(p.Items) && !p.Loop) {
+		return nil, false
+	}
+	out := Next(p)
+	out.SkipRun = p.SkipRun + 1
+	return out, true
 }
 
 func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates

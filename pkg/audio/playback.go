@@ -106,8 +106,10 @@ type LongformPlaybackManager struct {
 	primary        *streamingSource
 	background     *streamingSource
 	drainCallbacks map[string]func(natural bool)
-	onChange       atomic.Pointer[func(slot string)]
-	readMeta       func(path string, maxBytes int64) (*trackmeta.Meta, error)
+	// failureCallbacks hear of a slot's track failing to decode.
+	failureCallbacks map[string]func()
+	onChange         atomic.Pointer[func(slot string)]
+	readMeta         func(path string, maxBytes int64) (*trackmeta.Meta, error)
 	// metaPending is the newest tag request of each slot, metaReaders how
 	// many workers are reading them; both are guarded by metaMu.
 	metaPending     map[string]*streamingSource
@@ -126,9 +128,10 @@ func NewLongformPlaybackManager(lowPowerAudio bool) *LongformPlaybackManager {
 		quality = lowPowerResampleQuality
 	}
 	m := &LongformPlaybackManager{
-		drainCallbacks:  make(map[string]func(natural bool)),
-		readMeta:        trackmeta.Read,
-		resampleQuality: quality,
+		drainCallbacks:   make(map[string]func(natural bool)),
+		failureCallbacks: make(map[string]func()),
+		readMeta:         trackmeta.Read,
+		resampleQuality:  quality,
 	}
 	m.metaMaxBytes.Store(defaultTrackMetaMaxBytes)
 	return m
@@ -153,6 +156,19 @@ func (m *LongformPlaybackManager) SetDrainCallback(slot string, fn func(natural 
 	}
 	m.mu.Lock()
 	m.drainCallbacks[key] = fn
+	m.mu.Unlock()
+}
+
+// SetDecodeFailureCallback registers fn to be called when the track on a slot
+// stops because it failed to decode, after the drain callback has reported it
+// as not natural. A track that was stopped or replaced first does not count.
+func (m *LongformPlaybackManager) SetDecodeFailureCallback(slot string, fn func()) {
+	key, err := m.slotKey(slot)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	m.failureCallbacks[key] = fn
 	m.mu.Unlock()
 }
 
@@ -206,9 +222,13 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 			m.setSourceLocked(key, nil)
 		}
 		cb := m.drainCallbacks[key]
+		failed := m.failureCallbacks[key]
 		m.mu.Unlock()
 		if cb != nil {
 			cb(natural && current)
+		}
+		if failed != nil && current && src.decodeFailed.Load() {
+			failed()
 		}
 	}
 
