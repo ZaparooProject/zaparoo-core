@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -35,7 +36,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var autoplayTrack = filepath.Join(string(filepath.Separator), "media", "usb0", "Music", "intro.mp3")
+// autoplayRoot is the root of an absolute path here: a bare separator is not
+// absolute on Windows, which needs its drive.
+var autoplayRoot = filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
+
+var autoplayTrack = filepath.Join(autoplayRoot, "media", "usb0", "Music", "intro.mp3")
 
 type autoplayFixture struct {
 	svc      *ServiceContext
@@ -277,6 +282,7 @@ func TestMusicAutoplay_MissingTrackReadsTheLaunchPath(t *testing.T) {
 	t.Parallel()
 	f := newAutoplayFixture(t)
 	relative := filepath.Join(string(filepath.Separator), "mock", "roms", "Music", "late.mp3")
+	gone := "**launch:" + filepath.Join(autoplayRoot, "media", "usb1", "gone.mp3") + "?system=Audio"
 
 	tests := []struct {
 		name     string
@@ -285,7 +291,7 @@ func TestMusicAutoplay_MissingTrackReadsTheLaunchPath(t *testing.T) {
 		absolute bool
 	}{
 		{"launch command with the track present", "**launch:" + autoplayTrack + "?system=Audio", false, false},
-		{"launch command with the track missing", "**launch:/media/usb1/gone.mp3?system=Audio", true, true},
+		{"launch command with the track missing", gone, true, true},
 		{"relative track under a games folder", "**launch:Music/late.mp3", true, false},
 		{"not a launch", "**stop", false, false},
 	}
