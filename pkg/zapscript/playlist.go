@@ -427,23 +427,25 @@ const folderPageSize = 500
 func folderPlaylistItems(
 	env *platforms.CmdEnv, pl platforms.Platform, path string, system *systemdefs.System,
 ) ([]playlists.PlaylistItem, error) {
-	items, err := indexedFolderItems(env, path, system)
+	items, indexed, err := indexedFolderItems(env, path, system)
 	if err != nil {
 		log.Debug().Err(err).Str("path", path).Msg("folder playlist: index unavailable, reading the folder")
 	}
-	if len(items) > 0 {
+	if len(items) > 0 || indexed {
 		return items, nil
 	}
 	return readPlaylistFolder(env.Cfg, pl, path, system)
 }
 
 // indexedFolderItems reads a folder's direct media from the index the way
-// a filename-sorted browse of it does, a page at a time.
+// a filename-sorted browse of it does, a page at a time. indexed reports
+// whether the index covers the folder at all, so a folder whose media is all
+// hidden or of another system stays empty instead of being read from disk.
 func indexedFolderItems(
 	env *platforms.CmdEnv, path string, system *systemdefs.System,
-) ([]playlists.PlaylistItem, error) {
+) (items []playlists.PlaylistItem, indexed bool, err error) {
 	if env.Database == nil || env.Database.MediaDB == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	var systems []systemdefs.System
 	if system != nil {
@@ -454,7 +456,6 @@ func indexedFolderItems(
 		ctx = context.Background()
 	}
 	prefix := strings.TrimSuffix(filepath.ToSlash(path), "/") + "/"
-	var items []playlists.PlaylistItem
 	var cursor *database.BrowseCursor
 	for {
 		rows, err := env.Database.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
@@ -466,7 +467,7 @@ func indexedFolderItems(
 			Systems:       systems,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("browse folder %s: %w", path, err)
+			return nil, false, fmt.Errorf("browse folder %s: %w", path, err)
 		}
 		for i := range rows {
 			items = append(items, playlists.PlaylistItem{
@@ -475,7 +476,11 @@ func indexedFolderItems(
 			})
 		}
 		if len(rows) < folderPageSize {
-			return items, nil
+			if len(items) > 0 {
+				return items, true, nil
+			}
+			covered, err := folderIndexed(ctx, env, prefix)
+			return items, covered, err
 		}
 		last := rows[len(rows)-1]
 		cursor = &database.BrowseCursor{
@@ -484,6 +489,20 @@ func indexedFolderItems(
 			LastID:    last.MediaID,
 		}
 	}
+}
+
+// folderIndexed reports whether the index holds any media, hidden or of any
+// system, under prefix.
+func folderIndexed(ctx context.Context, env *platforms.CmdEnv, prefix string) (bool, error) {
+	rows, err := env.Database.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		PathPrefix: prefix,
+		Limit:      1,
+		Sort:       "filename-asc",
+	})
+	if err != nil {
+		return false, fmt.Errorf("probe folder %s: %w", prefix, err)
+	}
+	return len(rows) > 0, nil
 }
 
 func readPlaylistFolder(

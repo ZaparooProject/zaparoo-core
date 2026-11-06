@@ -368,15 +368,19 @@ func hasNormalizedPrefix(normPath string, prefix *relativePrefix) bool {
 // under rootDirs, in the order it tries them: every root directory joined
 // with each relative launcher folder, then the absolute launcher folders.
 func (lc *LauncherCache) relativePrefixes(rootDirs []string, systemID string) []relativePrefix {
-	launchers := lc.GetLaunchersBySystem(systemID)
-	if len(launchers) == 0 {
-		return nil
-	}
+	lc.awaitReady()
 	key := systemID + "\x00" + strings.Join(rootDirs, "\x00")
+	// Launchers, cached prefixes and the generation are read under one lock,
+	// so a reload cannot slip between them and have prefixes built from old
+	// launchers stored under the new generation.
 	lc.mu.RLock()
+	launchers := lc.bySystemID[systemID]
 	cached, ok := lc.relPrefixes[key]
 	gen := lc.relGen
 	lc.mu.RUnlock()
+	if len(launchers) == 0 {
+		return nil
+	}
 	if ok {
 		return cached
 	}

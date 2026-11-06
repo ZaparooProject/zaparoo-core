@@ -151,9 +151,6 @@ func syncBackgroundPlaylistPlayback(env *requests.RequestEnv, action string) {
 	default:
 		return
 	}
-	if open.Playing == playing {
-		return
-	}
 	update := playlists.Pause(*open)
 	if playing {
 		update = playlists.Play(*open)

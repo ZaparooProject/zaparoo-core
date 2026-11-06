@@ -129,8 +129,8 @@ func Read(path string, maxTagBytes int64) (*Meta, error) {
 // embedded in its tags, else a cover, folder or front image beside it. Art
 // larger than maxBytes is not returned.
 func ReadPicture(path string, maxBytes int64) (*Picture, error) {
-	md, err := readTags(path, maxBytes)
-	if err == nil && md != nil {
+	md, tagsErr := readTags(path, maxBytes)
+	if tagsErr == nil && md != nil {
 		if pic := md.Picture(); pic != nil && len(pic.Data) > 0 && int64(len(pic.Data)) <= maxBytes {
 			return &Picture{
 				Path:     path,
@@ -140,12 +140,25 @@ func ReadPicture(path string, maxBytes int64) (*Picture, error) {
 			}, nil
 		}
 	}
+	// Tags over the limit were not read, so embedded art may exist. Keep
+	// that failure apart from the folder art's own, which can also be a
+	// size failure.
+	var limitErr error
+	if errors.Is(tagsErr, ErrTagsTooLarge) {
+		limitErr = tagsErr
+	}
 	artPath, ok := findFolderArt(path)
 	if !ok {
+		if limitErr != nil {
+			return nil, limitErr
+		}
 		return nil, ErrNoArt
 	}
 	data, err := readFileLimited(artPath, maxBytes)
 	if err != nil {
+		if limitErr != nil {
+			return nil, fmt.Errorf("folder art: %w (after tags: %w)", err, limitErr)
+		}
 		return nil, err
 	}
 	return &Picture{
@@ -227,6 +240,9 @@ func parseTags(r io.ReaderAt, head []byte, size, maxTagBytes int64) (md tag.Meta
 		if readErr != nil {
 			return nil, readErr
 		}
+		if !validID3v2Frames(buf) {
+			return nil, ErrMalformedTags
+		}
 		return parsed(tag.ReadID3v2Tags(bytes.NewReader(buf)))
 	case len(head) >= 4 && string(head[0:4]) == "fLaC":
 		end, scanErr := flacMetadataEnd(r, size, maxTagBytes)
@@ -292,6 +308,69 @@ func readRegion(r io.ReaderAt, n, size, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("read track tags: %w", err)
 	}
 	return buf, nil
+}
+
+// validID3v2Frames reports whether every frame an ID3v2 tag declares fits
+// inside the tag, so the parser is never asked to read past the bounded
+// buffer or allocate for a length the tag cannot hold. buf holds the whole
+// tag: header, frames, padding and footer.
+func validID3v2Frames(buf []byte) bool {
+	if len(buf) < 10 {
+		return false
+	}
+	version, flags := buf[3], buf[5]
+	var idSize, headerSize int
+	switch version {
+	case 2:
+		idSize, headerSize = 3, 6
+	case 3, 4:
+		idSize, headerSize = 4, 10
+	default:
+		// Not a version the parser reads; it refuses the tag itself.
+		return true
+	}
+	body := buf[10:]
+	if flags&0x10 != 0 && version == 4 {
+		if len(body) < 10 {
+			return false
+		}
+		body = body[:len(body)-10]
+	}
+	if version < 4 && flags&0x80 != 0 {
+		// Whole-tag unsynchronization: frame sizes count the decoded bytes.
+		body = bytes.ReplaceAll(body, []byte{0xFF, 0x00}, []byte{0xFF})
+	}
+	if version >= 3 && flags&0x40 != 0 {
+		if len(body) < 4 {
+			return false
+		}
+		var skip int64
+		if version == 3 {
+			skip = 4 + int64(binary.BigEndian.Uint32(body))
+		} else {
+			skip = int64(syncsafe(body))
+		}
+		if skip < 4 || skip > int64(len(body)) {
+			return false
+		}
+		body = body[skip:]
+	}
+	for len(body) >= headerSize && body[0] != 0 {
+		var size int64
+		switch version {
+		case 2:
+			size = int64(body[3])<<16 | int64(body[4])<<8 | int64(body[5])
+		case 3:
+			size = int64(binary.BigEndian.Uint32(body[idSize:]))
+		default:
+			size = int64(syncsafe(body[idSize:]))
+		}
+		if size > int64(len(body)-headerSize) {
+			return false
+		}
+		body = body[headerSize+int(size):]
+	}
+	return true
 }
 
 // flacMetadataEnd walks the FLAC metadata block headers and returns where the
@@ -639,21 +718,24 @@ func findFolderArt(path string) (string, bool) {
 				if ext != wantExt {
 					continue
 				}
-				if rank := ni*len(folderArtExts) + ei; rank < bestRank {
-					best, bestRank = entry.Name(), rank
+				rank := ni*len(folderArtExts) + ei
+				if rank >= bestRank {
+					continue
 				}
+				// A dangling symlink or a non-regular file must not hide a
+				// lower-ranked image that can be read.
+				info, statErr := os.Stat(filepath.Join(dir, entry.Name()))
+				if statErr != nil || !info.Mode().IsRegular() {
+					continue
+				}
+				best, bestRank = entry.Name(), rank
 			}
 		}
 	}
 	if best == "" {
 		return "", false
 	}
-	full := filepath.Join(dir, best)
-	info, err := os.Stat(full)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", false
-	}
-	return full, true
+	return filepath.Join(dir, best), true
 }
 
 func readFileLimited(path string, maxBytes int64) ([]byte, error) {

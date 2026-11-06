@@ -133,3 +133,19 @@ func TestPlaylistNotifier_SignalNeverBlocks(t *testing.T) {
 	var nilNotifier *playlistNotifier
 	nilNotifier.Signal()
 }
+
+func TestPlaylistNotifier_RedactsProfileSwitchIDs(t *testing.T) {
+	t.Parallel()
+	st, published := startTestPlaylistNotifier(t)
+
+	const script = "**profile:sw-7f3a9c21"
+	pls := playlists.NewPlaylist("p", "Profiles", []playlists.PlaylistItem{{Name: "card", ZapScript: script}})
+	pls.Slot = mediaslot.Background
+	st.SetBackgroundPlaylist(pls)
+
+	params := nextPlaylistsChanged(t, published)
+	require.Len(t, params.Playlists, 1)
+	require.Len(t, params.Playlists[0].Items, 1)
+	assert.NotContains(t, params.Playlists[0].Items[0].ZapScript, "sw-7f3a9c21")
+	assert.Equal(t, script, pls.Items[0].ZapScript, "the stored script still plays")
+}

@@ -23,6 +23,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -221,4 +222,114 @@ func TestSanitize_RepairsDoubleEncodedUTF8(t *testing.T) {
 			assert.Equal(t, tt.want, sanitize(tt.in))
 		})
 	}
+}
+
+func TestFolderArt_SkipsUnreadableCandidates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := copyFixture(t, "tagged.ogg", dir)
+	// The best-ranked names are a dangling symlink and a directory-like
+	// non-regular file; the lower-ranked cover.png is the only usable image.
+	require.NoError(t, os.Symlink(filepath.Join(dir, "missing.jpg"), filepath.Join(dir, "cover.jpg")))
+	require.NoError(t, os.Symlink(dir, filepath.Join(dir, "cover.jpeg")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "folder.png"), []byte("\x89PNG\r\n\x1a\nxx"), 0o600))
+
+	got, ok := FolderArtPath(path)
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(dir, "folder.png"), got)
+
+	meta, err := Read(path, testMaxBytes)
+	require.NoError(t, err)
+	assert.True(t, meta.HasArt)
+}
+
+func TestFolderArt_NoUsableCandidate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := copyFixture(t, "tagged.ogg", dir)
+	require.NoError(t, os.Symlink(filepath.Join(dir, "missing.jpg"), filepath.Join(dir, "cover.jpg")))
+
+	_, ok := FolderArtPath(path)
+	assert.False(t, ok)
+}
+
+func TestReadPicture_TagLimitSurvivesMissingFolderArt(t *testing.T) {
+	t.Parallel()
+
+	path := copyFixture(t, "tagged.mp3", t.TempDir())
+	_, err := ReadPicture(path, 64)
+	require.ErrorIs(t, err, ErrTagsTooLarge, "embedded art may exist but was not read")
+	require.NotErrorIs(t, err, ErrNoArt)
+}
+
+func TestReadPicture_TagLimitAndFolderArtFailureAreBothReported(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := copyFixture(t, "tagged.mp3", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.jpg"), make([]byte, 4096), 0o600))
+
+	_, err := ReadPicture(path, 128)
+	require.ErrorIs(t, err, ErrTagsTooLarge)
+	assert.Contains(t, err.Error(), "folder art")
+	assert.Contains(t, err.Error(), "after tags")
+}
+
+func TestReadPicture_SmallTagsLargeArtIsNotATagFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := copyFixture(t, "tagged.ogg", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.jpg"), make([]byte, 4096), 0o600))
+
+	_, err := ReadPicture(path, 1024)
+	require.ErrorIs(t, err, ErrTagsTooLarge)
+	assert.NotContains(t, err.Error(), "after tags")
+}
+
+// id3v2 builds an ID3v2 tag of the given version whose body is body.
+func id3v2(version, flags byte, body []byte) []byte {
+	n := len(body)
+	out := make([]byte, 0, 10+n)
+	out = append(out, 'I', 'D', '3', version, 0, flags,
+		byte(n>>21&0x7f), byte(n>>14&0x7f), byte(n>>7&0x7f), byte(n&0x7f))
+	return append(out, body...)
+}
+
+func TestRead_ID3v2FrameLengthPastTagIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tag  []byte
+	}{
+		{"v2.2", id3v2(2, 0, []byte{'T', 'T', '2', 0x7f, 0xff, 0xff, 0, 'a', 'b'})},
+		{"v2.3", id3v2(3, 0, []byte{'T', 'I', 'T', '2', 0x7f, 0xff, 0xff, 0xff, 0, 0, 0, 'a'})},
+		{"v2.4", id3v2(4, 0, []byte{'T', 'I', 'T', '2', 0x7f, 0x7f, 0x7f, 0x7f, 0, 0, 0, 'a'})},
+		{"v2.3 one byte over", id3v2(3, 0, []byte{'T', 'I', 'T', '2', 0, 0, 0, 3, 0, 0, 'a', 'b'})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "bad.mp3")
+			require.NoError(t, os.WriteFile(path, append(tt.tag, make([]byte, 64)...), 0o600))
+			_, err := Read(path, testMaxBytes)
+			require.ErrorIs(t, err, ErrMalformedTags)
+		})
+	}
+}
+
+func TestValidID3v2Frames_AcceptsWellFormedTags(t *testing.T) {
+	t.Parallel()
+
+	frame := []byte{'T', 'I', 'T', '2', 0, 0, 0, 2, 0, 0, 0, 'a'}
+	padded := append(slices.Clone(frame), 0, 0, 0, 0)
+	assert.True(t, validID3v2Frames(id3v2(3, 0, padded)), "padding after frames")
+	assert.True(t, validID3v2Frames(id3v2(3, 0, frame[:0])), "no frames")
+	withExt := append([]byte{0, 0, 0, 2, 0, 0, 0, 0}, frame...)
+	assert.True(t, validID3v2Frames(id3v2(3, 0x40, withExt)), "extended header")
+	unknown := id3v2(9, 0, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+	assert.True(t, validID3v2Frames(unknown), "an unknown version is the parser's to refuse")
 }

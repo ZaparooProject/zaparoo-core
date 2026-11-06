@@ -451,14 +451,14 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
-	// Music follows audioVolume until it has a volume of its own.
-	if params.AudioMusicVolume != nil || params.AudioVolume != nil {
-		applyMusicVolume(&env)
-	}
-
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+	// Music follows audioVolume until it has a volume of its own. Applied
+	// only once the save succeeded, so a failed save leaves playback alone.
+	if params.AudioMusicVolume != nil || params.AudioVolume != nil {
+		applyMusicVolume(&env)
 	}
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()

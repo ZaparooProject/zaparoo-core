@@ -1276,39 +1276,38 @@ func startServiceWithOptions(
 		}()
 	}
 
-	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" || cfg.AudioMusicAutoplay() {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			// The first call records this start, so the answer is taken
-			// once and shared by everything that asks.
-			firstBootStart, bootErr := isFirstServiceStartForBoot(svc.Platform)
-			if cfg.AudioMusicAutoplay() {
-				switch {
-				case bootErr != nil:
-					log.Warn().Err(bootErr).Msg("skipping music autoplay: failed to detect boot state")
-				case !firstBootStart:
-					log.Debug().Msg("skipping music autoplay: Core already started during this boot")
-				default:
-					autoplay := newMusicAutoplay(svc, func(ctx context.Context) {
-						select {
-						case <-launcherCacheDone:
-						case <-ctx.Done():
-							return
-						}
-						waitForServiceReady(svc)
-					})
-					svc.musicAutoplay.Store(autoplay)
-					backgroundWG.Add(1)
-					go func() {
-						defer backgroundWG.Done()
-						autoplay.run(st.GetContext())
-					}()
-				}
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		// Every start records itself, whatever is configured, so a later
+		// start in the same boot is not mistaken for the first. The answer
+		// is taken once and shared by everything that asks.
+		firstBootStart, bootErr := isFirstServiceStartForBoot(svc.Platform)
+		if cfg.AudioMusicAutoplay() {
+			switch {
+			case bootErr != nil:
+				log.Warn().Err(bootErr).Msg("skipping music autoplay: failed to detect boot state")
+			case !firstBootStart:
+				log.Debug().Msg("skipping music autoplay: Core already started during this boot")
+			default:
+				autoplay := newMusicAutoplay(svc, func(ctx context.Context) {
+					select {
+					case <-launcherCacheDone:
+					case <-ctx.Done():
+						return
+					}
+					waitForServiceReady(svc)
+				})
+				svc.musicAutoplay.Store(autoplay)
+				backgroundWG.Add(1)
+				go func() {
+					defer backgroundWG.Done()
+					autoplay.run(st.GetContext())
+				}()
 			}
-			runConfiguredServiceHooks(svc, firstBootStart, bootErr)
-		}()
-	}
+		}
+		runConfiguredServiceHooks(svc, firstBootStart, bootErr)
+	}()
 
 	stopContext := func(ctx context.Context) error {
 		st.StopService()

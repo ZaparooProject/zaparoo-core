@@ -169,8 +169,14 @@ func activeAudioTrackPath(env *requests.RequestEnv, slot string) (string, bool) 
 	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
 		return "", false
 	}
+	// Published media and playback state are updated separately, so while a
+	// track is being replaced they can name different tracks. Only a path
+	// that matches the published media is that track's.
 	path := env.PlaybackManager.State(slot).Path
-	return path, path != ""
+	if path == "" || path != media.Path {
+		return "", false
+	}
+	return path, true
 }
 
 // activeImageSourceKey names a track's art in the thumbnail cache. Embedded

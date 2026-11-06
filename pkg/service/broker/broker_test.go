@@ -592,6 +592,7 @@ func TestBroker_CoalesceKeepsLatestPerKey(t *testing.T) {
 	defer cancel()
 
 	b := NewBroker(ctx, make(chan models.Notification), models.NotificationMediaPlayback)
+	defer b.Stop()
 	sub, _ := b.Subscribe(1)
 
 	playback := func(slot, version string) models.Notification {
@@ -627,4 +628,45 @@ func TestBroker_CoalesceKeepsLatestPerKey(t *testing.T) {
 		}
 	}
 	assert.JSONEq(t, `{"slot":"background","v":"2"}`, last, "the latest background update wins")
+}
+
+// TestBroker_CoalesceKeepsSlotOrder verifies that a newer update for a slot
+// never arrives before an older pending update for the same slot, even when
+// the output channel has space again by the time the newer one is published.
+func TestBroker_CoalesceKeepsSlotOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	b := NewBroker(ctx, make(chan models.Notification), models.NotificationMediaPlayback)
+	defer b.Stop()
+	sub, _ := b.Subscribe(2)
+
+	playback := func(version string) models.Notification {
+		return models.Notification{
+			Method:      models.NotificationMediaPlayback,
+			Params:      []byte(version),
+			CoalesceKey: "background",
+		}
+	}
+	b.Publish(models.Notification{Method: "filler1"})
+	b.Publish(models.Notification{Method: "filler2"})
+	b.Publish(playback("1")) // buffer full: pending
+	<-sub                    // space opens before the drain delivers
+	b.Publish(playback("2"))
+
+	var versions []string
+	deadline := time.After(2 * time.Second)
+	for len(versions) == 0 || versions[len(versions)-1] != "2" {
+		select {
+		case n := <-sub:
+			if n.Method == models.NotificationMediaPlayback {
+				versions = append(versions, string(n.Params))
+			}
+		case <-deadline:
+			t.Fatalf("latest update never arrived, got %v", versions)
+		}
+	}
+	assert.True(t, slices.IsSorted(versions), "updates arrived out of order: %v", versions)
 }

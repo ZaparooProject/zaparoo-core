@@ -27,7 +27,10 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -88,7 +91,7 @@ func (a *musicAutoplay) start(ctx context.Context) {
 	if !ok {
 		return
 	}
-	if path, missing := a.missingTrack(pls); missing {
+	if path, missing, _ := a.missingTrack(pls); missing {
 		log.Info().Str("path", path).Dur("retryIn", a.retryDelay).
 			Msg("music autoplay: track not found yet, retrying")
 		if !sleepOnClock(ctx, a.clock, a.retryDelay) {
@@ -97,9 +100,13 @@ func (a *musicAutoplay) start(ctx context.Context) {
 		if pls, ok = a.playable(); !ok {
 			return
 		}
-		if path, missing = a.missingTrack(pls); missing {
-			log.Warn().Str("path", path).Msg("music autoplay: track not found, not starting music")
-			return
+		var absolute bool
+		if path, missing, absolute = a.missingTrack(pls); missing {
+			if absolute {
+				log.Warn().Str("path", path).Msg("music autoplay: track not found, not starting music")
+				return
+			}
+			log.Debug().Str("path", path).Msg("music autoplay: track not found as a file, leaving it to the launch")
 		}
 	}
 
@@ -129,18 +136,43 @@ func (a *musicAutoplay) playable() (*playlists.Playlist, bool) {
 	return pls, true
 }
 
-// missingTrack reports the current track of pls when it is a file that is
-// not there.
-func (a *musicAutoplay) missingTrack(pls *playlists.Playlist) (string, bool) {
-	path := strings.TrimSpace(pls.Current().ZapScript)
-	path = strings.TrimPrefix(path, "**"+gozapscript.ZapScriptCmdLaunch+":")
-	if !filepath.IsAbs(path) {
+// missingTrack reports the current track of pls when it is a launched file
+// that is not there, and whether the path is absolute. An absolute path is a
+// definite miss; a relative one may still resolve through the title or
+// system formats, so only its first miss is worth a retry. Entries that are
+// not a plain file launch are never missing.
+func (a *musicAutoplay) missingTrack(pls *playlists.Playlist) (path string, missing, absolute bool) {
+	path, ok := launchPath(pls.Current().ZapScript)
+	if !ok || helpers.ReURI.MatchString(path) {
+		return "", false, false
+	}
+	absolute = filepath.IsAbs(path)
+	if !absolute && filepath.Ext(path) == "" {
+		return "", false, false
+	}
+	_, err := zapscript.FindLaunchFile(a.fs, a.svc.Platform, a.svc.Config, &platforms.LauncherSnapshot{}, path)
+	if err != nil {
+		return path, true, absolute
+	}
+	return "", false, false
+}
+
+// launchPath returns the path argument of a script that is a launch, whether
+// written with the launch command or as a bare path.
+func launchPath(script string) (string, bool) {
+	script = strings.TrimSpace(script)
+	if script == "" {
 		return "", false
 	}
-	if _, err := a.fs.Stat(path); err != nil {
-		return path, true
+	parsed, err := gozapscript.NewParser(script).ParseScript()
+	if err != nil || len(parsed.Cmds) != 1 {
+		return "", false
 	}
-	return "", false
+	cmd := parsed.Cmds[0]
+	if cmd.Name != gozapscript.ZapScriptCmdLaunch || len(cmd.Args) == 0 || cmd.Args[0] == "" {
+		return "", false
+	}
+	return cmd.Args[0], true
 }
 
 // mediaStopped starts music left pending by a game that was running at

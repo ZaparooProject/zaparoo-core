@@ -2217,13 +2217,8 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 			{Name: "NES", FileCount: 100},
 			{Name: "SNES", FileCount: 200},
 		}, nil)
-	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(romsAPIPath+"/")).
-		Return(2, nil).Maybe()
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{}, nil)
-	// The directory page also reports the total file count as the denominator.
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(romsAPIPath+"/", nil)).
-		Return(0, nil).Maybe()
 
 	path := romsAPIPath
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
@@ -2246,6 +2241,9 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 
 	assert.Equal(t, "SNES", browseResults.Entries[1].Name)
 	mockMediaDB.AssertExpectations(t)
+	// A complete page already holds every entry, so no count query runs.
+	mockMediaDB.AssertNotCalled(t, "BrowseDirCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
 }
 
 // TestHandleMediaBrowse_LauncherMediaDirOutsideRoots covers a custom launcher
@@ -2270,12 +2268,8 @@ func TestHandleMediaBrowse_LauncherMediaDirOutsideRoots(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(mediaAPIPath+"/")).
 		Return([]database.BrowseDirectoryResult{{Name: "Japan", FileCount: 4}}, nil)
-	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(mediaAPIPath+"/")).
-		Return(1, nil).Maybe()
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{}, nil)
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(mediaAPIPath+"/", nil)).
-		Return(0, nil).Maybe()
 
 	path := mediaAPIPath
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &path})
@@ -2289,6 +2283,8 @@ func TestHandleMediaBrowse_LauncherMediaDirOutsideRoots(t *testing.T) {
 	require.Len(t, browseResults.Entries, 1)
 	assert.Equal(t, "Japan", browseResults.Entries[0].Name)
 	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "BrowseDirCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
 }
 
 func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
@@ -2304,8 +2300,6 @@ func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
 		Return([]database.BrowseDirectoryResult{}, nil)
-	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
-		Return(0, nil).Maybe()
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{
@@ -2317,8 +2311,6 @@ func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
 				Path: "/roms/SNES/Zelda.sfc", MediaID: 2,
 			},
 		}, nil)
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
-		Return(2, nil).Maybe()
 
 	path := "/roms/SNES"
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
@@ -2332,6 +2324,8 @@ func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, browseResults.Entries, 2)
 	assert.Equal(t, 2, browseResults.TotalFiles)
+	mockMediaDB.AssertNotCalled(t, "BrowseDirCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
 	assert.Equal(t, "media", browseResults.Entries[0].Type)
 	assert.Equal(t, "Super Mario World", browseResults.Entries[0].Name)
 	require.NotNil(t, browseResults.Entries[0].SystemID)
@@ -2988,8 +2982,6 @@ func TestHandleMediaBrowse_VirtualScheme(t *testing.T) {
 				Path: "steam://440/Team%20Fortress%202", MediaID: 10,
 			},
 		}, nil)
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("steam://", nil)).
-		Return(1, nil).Maybe()
 
 	path := "steam://"
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
@@ -2999,6 +2991,7 @@ func TestHandleMediaBrowse_VirtualScheme(t *testing.T) {
 	result, err := HandleMediaBrowse(env)
 	require.NoError(t, err)
 
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
 	assert.Equal(t, "steam://", browseResults.Path)

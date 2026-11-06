@@ -439,6 +439,20 @@ func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
 	return roots
 }
 
+// FindLaunchFile resolves a launch path with the lookup rules a launch uses:
+// an absolute path as is, a relative one under the games folders, and a
+// virtual entry a launcher vouches for. It returns ErrFileNotFound when
+// nothing matches.
+func FindLaunchFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
+	path string,
+) (string, error) {
+	return findFile(fs, pl, cfg, launchers, path)
+}
+
 // Check all games folders for a relative path to a file. A path that is not
 // on disk is still found when one of the platform's launchers vouches for it
 // as a virtual entry, such as a game named in a listing file.

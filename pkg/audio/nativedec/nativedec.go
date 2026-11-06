@@ -118,8 +118,25 @@ func newDecoder(d *C.nd_decoder, channels, rate C.uint, frames C.longlong) (*Dec
 		d:        d,
 		channels: int(channels),
 		rate:     int(rate),
-		length:   int(frames),
+		length:   lengthInFrames(frames),
 	}, nil
+}
+
+// lengthInFrames is a decoder's frame count as an int, or -1 when it is
+// unknown or does not fit: int is 32 bits on the ARM32 MiSTer, where a long
+// file's count would otherwise wrap to a wrong, positive length.
+func lengthInFrames(frames C.longlong) int {
+	return boundedLength(int64(frames), int64(maxInt))
+}
+
+const maxInt = int(^uint(0) >> 1)
+
+// boundedLength is frames, or -1 when it is negative or above limit.
+func boundedLength(frames, limit int64) int {
+	if frames < 0 || frames > limit {
+		return -1
+	}
+	return int(frames)
 }
 
 // SampleRate is the decoded audio's sample rate.
@@ -146,6 +163,9 @@ func (d *Decoder) Stream(samples [][2]float64) (int, bool) {
 	buf := d.buf[:need]
 	n := int(C.nd_read(d.d, (*C.float)(unsafe.Pointer(&buf[0])), C.longlong(len(samples))))
 	if n <= 0 {
+		if C.nd_failed(d.d) != 0 {
+			d.err = fmt.Errorf("nativedec: decode failed at frame %d", d.pos)
+		}
 		return 0, false
 	}
 	switch d.channels {

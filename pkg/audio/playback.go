@@ -103,14 +103,19 @@ const defaultTrackMetaMaxBytes = 2 << 20
 // Each slot streams audio through the shared global output device via a ring-buffer
 // prefetch goroutine — no full-file decode into RAM.
 type LongformPlaybackManager struct {
-	primary         *streamingSource
-	background      *streamingSource
-	drainCallbacks  map[string]func(natural bool)
-	onChange        atomic.Pointer[func(slot string)]
-	readMeta        func(path string, maxBytes int64) (*trackmeta.Meta, error)
+	primary        *streamingSource
+	background     *streamingSource
+	drainCallbacks map[string]func(natural bool)
+	onChange       atomic.Pointer[func(slot string)]
+	readMeta       func(path string, maxBytes int64) (*trackmeta.Meta, error)
+	// metaPending is the newest tag request of each slot, metaReaders how
+	// many workers are reading them; both are guarded by metaMu.
+	metaPending     map[string]*streamingSource
 	resampleQuality int
 	metaMaxBytes    atomic.Int64
 	mu              syncutil.Mutex
+	metaReaders     int
+	metaMu          syncutil.Mutex
 }
 
 // NewLongformPlaybackManager creates a new LongformPlaybackManager. lowPowerAudio
@@ -222,15 +227,71 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 
 	// Tags are read once per track, off the playback path and through a
 	// file handle of their own, so a slow or broken tag never delays sound.
-	go m.loadMeta(key, src)
+	m.queueMeta(key, src)
 	return nil
 }
 
+// maxMetaReaders bounds how many tag reads run at once, whatever the
+// playback does meanwhile.
+const maxMetaReaders = 2
+
+// queueMeta asks for the tags of the track src plays in slot key. Requests
+// never wait on one another or on playback: each slot keeps only its newest
+// request, so one for a track that has been replaced is dropped before it
+// reads anything, and at most maxMetaReaders workers read at a time.
+func (m *LongformPlaybackManager) queueMeta(key string, src *streamingSource) {
+	if m.readMeta == nil {
+		return
+	}
+	m.metaMu.Lock()
+	if m.metaPending == nil {
+		m.metaPending = make(map[string]*streamingSource)
+	}
+	m.metaPending[key] = src
+	start := m.metaReaders < maxMetaReaders
+	if start {
+		m.metaReaders++
+	}
+	m.metaMu.Unlock()
+	if start {
+		go m.metaWorker()
+	}
+}
+
+// metaWorker reads queued tags until none are left.
+func (m *LongformPlaybackManager) metaWorker() {
+	for {
+		m.metaMu.Lock()
+		var (
+			key string
+			src *streamingSource
+		)
+		for k, v := range m.metaPending {
+			key, src = k, v
+			delete(m.metaPending, k)
+			break
+		}
+		if src == nil {
+			m.metaReaders--
+			m.metaMu.Unlock()
+			return
+		}
+		m.metaMu.Unlock()
+		m.loadMeta(key, src)
+	}
+}
+
 // loadMeta reads the tags of the track src plays in slot key and attaches
-// them to it.
+// them to it. A track that is no longer the slot's is skipped.
 func (m *LongformPlaybackManager) loadMeta(key string, src *streamingSource) {
 	readMeta := m.readMeta
 	if readMeta == nil {
+		return
+	}
+	m.mu.Lock()
+	current := m.getSourceLocked(key) == src
+	m.mu.Unlock()
+	if !current {
 		return
 	}
 	meta, err := readMeta(src.path, m.metaMaxBytes.Load())
@@ -243,7 +304,7 @@ func (m *LongformPlaybackManager) loadMeta(key string, src *streamingSource) {
 	}
 	src.meta.Store(meta)
 	m.mu.Lock()
-	current := m.getSourceLocked(key) == src
+	current = m.getSourceLocked(key) == src
 	m.mu.Unlock()
 	// Tags of a track that has since been replaced or stopped change nothing
 	// a client can see.
@@ -436,6 +497,7 @@ type streamingSource struct {
 	consumerActive atomic.Bool
 	underrunActive atomic.Bool
 	eof            atomic.Bool
+	decodeFailed   atomic.Bool
 	stopped        atomic.Bool
 	paused         atomic.Bool
 }
@@ -572,7 +634,9 @@ prefetchLoop:
 		if s.seekPending.Load() {
 			s.seekMu.Lock()
 			seekFrame := s.seekSrcFrame.Load()
-			if err := s.decoder.Seek(int(seekFrame)); err != nil {
+			// An int is 32 bits on ARM32; a frame beyond it cannot be in a
+			// file whose length the decoder reported.
+			if err := s.decoder.Seek(int(min(seekFrame, int64(math.MaxInt)))); err != nil {
 				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
 			}
 			s.streamer = streamerAtTargetSampleRate(s.decoder, beep.SampleRate(s.sourceRate), s.quality)
@@ -621,7 +685,11 @@ prefetchLoop:
 			}
 			if !ok {
 				if err := s.decoder.Err(); err != nil {
-					log.Warn().Err(err).Str("path", s.path).Msg("audio decode error")
+					// A failed decode is not the track finishing: it drains
+					// as a stop, so the slot does not move on as if it had
+					// played to the end.
+					s.decodeFailed.Store(true)
+					log.Error().Err(err).Str("path", s.path).Msg("audio decode error")
 				}
 				// Publish EOF only after final frames. Loading EOF before writePos
 				// lets the consumer observe every frame before reporting drained.
@@ -753,11 +821,11 @@ func (s *streamingSource) fail() {
 }
 
 // onDrained is called by the device manager goroutine when this source drains.
-// It determines whether the drain was natural (track reached EOF) or explicit
-// (Stop/replace), then cancels the prefetch goroutine, which parks at EOF while
+// It determines whether the drain was natural (track reached EOF) or not
+// (Stop/replace, or a decode failure), then cancels the prefetch goroutine, which parks at EOF while
 // the ring tail plays out and would otherwise leak.
 func (s *streamingSource) onDrained() {
-	natural := !s.stopped.Swap(true)
+	natural := !s.stopped.Swap(true) && !s.decodeFailed.Load()
 	s.mu.Lock()
 	cancelFn := s.cancelFn
 	s.mu.Unlock()
@@ -834,7 +902,7 @@ func (s *streamingSource) startAt(offset, expected time.Duration) {
 		return
 	}
 	if s.totalFrames > 0 {
-		length := sampleDuration(int(s.totalFrames))
+		length := sampleDuration(s.totalFrames)
 		if offset >= length {
 			return
 		}
@@ -880,14 +948,14 @@ func (s *streamingSource) state() PlaybackState {
 	return PlaybackState{
 		Meta:     s.meta.Load(),
 		Path:     s.path,
-		Position: sampleDuration(int(s.played.Load())),
-		Duration: sampleDuration(int(s.totalFrames)),
+		Position: sampleDuration(s.played.Load()),
+		Duration: sampleDuration(s.totalFrames),
 		Playing:  !paused && !stopped && (!eof || s.bufferedFrames() != 0),
 		Paused:   paused,
 	}
 }
 
-func sampleDuration(samples int) time.Duration {
+func sampleDuration(samples int64) time.Duration {
 	if samples <= 0 {
 		return 0
 	}

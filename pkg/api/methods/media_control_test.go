@@ -879,16 +879,11 @@ func TestHandleMediaControl_BackgroundToggleFollowsPlayback(t *testing.T) {
 	assert.False(t, (*requested)[0].Playing, "the toggle left the track paused")
 }
 
-func TestHandleMediaControl_BackgroundNoChangeQueuesNothing(t *testing.T) {
+func TestHandleMediaControl_BackgroundUnrelatedActionQueuesNothing(t *testing.T) {
 	t.Parallel()
 
-	env, requested := backgroundControlEnv(t, platforms.ControlResume, true, false)
+	env, requested := backgroundControlEnv(t, platforms.ControlFastForward, true, false)
 	_, err := HandleMediaControl(env)
-	require.NoError(t, err)
-	assert.Empty(t, *requested, "a playlist already playing is left alone")
-
-	env, requested = backgroundControlEnv(t, platforms.ControlFastForward, true, false)
-	_, err = HandleMediaControl(env)
 	require.NoError(t, err)
 	assert.Empty(t, *requested, "a seek does not touch the playlist")
 }

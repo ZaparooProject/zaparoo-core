@@ -54,6 +54,28 @@ func (e *Engine) send(from, next *playlists.Playlist) {
 	e.queueMove(next, from.Armed)
 }
 
+// ReconcileMove returns the move to make for an automatic move that was
+// decided before the repeat mode of active changed, such as to repeat-one
+// while the move waited in the queue. The move keeps the stamps that let the
+// queue handler drop it when overtaken. A move decided under the current
+// repeat mode, one from an armed playlist, and one that stops the playlist on
+// request come back unchanged.
+func ReconcileMove(active, move *playlists.Playlist) *playlists.Playlist {
+	if active == nil || move == nil || move.EngineFromArmed || (move.Clear && !move.Completed) ||
+		(move.Loop == active.Loop && move.LoopOne == active.LoopOne) {
+		return move
+	}
+	next, ok := nextAfterCompletion(active)
+	if !ok {
+		next = &playlists.Playlist{ID: active.ID, Slot: move.Slot, Clear: true, Completed: true}
+	}
+	next.EngineStarted = true
+	next.EngineFromIndex = move.EngineFromIndex
+	next.StopSeq = move.StopSeq
+	next.StopStamped = move.StopStamped
+	return next
+}
+
 // clearPlaylist closes the playlist from is, the way a stop would, unless it
 // is no longer the open one by the time the queue gets to it.
 func (e *Engine) clearPlaylist(slot string, from *playlists.Playlist) {
@@ -285,7 +307,7 @@ func (e *Engine) onAdvanceExpired(pls *playlists.Playlist, b *bound, now time.Ti
 			plsID: pls.ID,
 			index: pls.Index,
 			item:  b,
-		}, "Switching to "+itemLabel(next.Current()), pls.EffectiveCountdown(), now)
+		}, countdownTitle(cdSwitchAdvance, next), pls.EffectiveCountdown(), now)
 		return
 	}
 	e.send(pls, next)
@@ -383,7 +405,7 @@ func (e *Engine) onIdleExpired(pls *playlists.Playlist, now time.Time) {
 				index:        pls.Index,
 				item:         e.primary.bound,
 				inputCancels: true,
-			}, "Switching to "+itemLabel(next.Current()), pls.EffectiveCountdown(), now)
+			}, countdownTitle(cdSwitchIdle, next), pls.EffectiveCountdown(), now)
 			return
 		}
 		log.Info().Str("playlist", pls.ID).Msg("auto-advance: idle, rotating to the next item")
@@ -444,6 +466,45 @@ func (e *Engine) startCountdown(c *countdown, title string, wait time.Duration, 
 		case <-ctx.Done():
 		}
 	}()
+}
+
+// countdownTitle is what a countdown tells the user is coming next.
+func countdownTitle(kind countdownKind, next *playlists.Playlist) string {
+	if kind == cdExit {
+		return "Up next: " + itemLabel(next.Current())
+	}
+	return "Switching to " + itemLabel(next.Current())
+}
+
+// restartCountdown reopens the open countdown c for its item after the item
+// moved or a mode changed under it, with the time it had left and a title
+// for where the playlist goes now. It reports false when nothing is left to
+// count down to, and the caller cancels the countdown.
+func (e *Engine) restartCountdown(c *countdown, at time.Time) bool {
+	pls := e.playlistFor(c.slot)
+	if pls == nil || pls.ID != c.plsID || pls.Index != c.index {
+		return false
+	}
+	next, ok := nextAfterCompletion(pls)
+	if !ok {
+		return false
+	}
+	left := max(c.deadline.Sub(at), 0)
+	// Not cancelCountdown: a rotation that carries on is not the user
+	// having been active.
+	e.cd = nil
+	c.cancel()
+	restarted := &countdown{
+		ignoreInputUntil: c.ignoreInputUntil,
+		item:             c.item,
+		slot:             c.slot,
+		plsID:            c.plsID,
+		index:            c.index,
+		kind:             c.kind,
+		inputCancels:     c.inputCancels,
+	}
+	e.startCountdown(restarted, countdownTitle(c.kind, next), left, at)
+	return true
 }
 
 // cancelCountdown drops the open countdown without acting, dismissing its

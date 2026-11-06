@@ -100,7 +100,7 @@ func TestFolderPlaylistItems_ReadsAnUnindexedFolderFromDisk(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "alpha.nes"), []byte{}, 0o600))
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
-		Return([]database.SearchResultWithCursor{}, nil).Once()
+		Return([]database.SearchResultWithCursor{}, nil).Twice()
 	env := &platforms.CmdEnv{
 		Cfg:      &config.Instance{},
 		Database: &database.Database{MediaDB: mediaDB},
@@ -110,6 +110,31 @@ func TestFolderPlaylistItems_ReadsAnUnindexedFolderFromDisk(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, filepath.Join(dir, "alpha.nes"), items[0].ZapScript)
+}
+
+// A folder the index covers but whose media is all hidden stays empty; the
+// disk is not read in its place.
+func TestFolderPlaylistItems_IndexedFolderWithNoVisibleRowsStaysEmpty(t *testing.T) {
+	initTestLauncherCache(t, []string{".nes"})
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "alpha.nes"), []byte{}, 0o600))
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return opts.ExcludeHidden
+	})).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mediaDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return !opts.ExcludeHidden && opts.Limit == 1
+	})).Return([]database.SearchResultWithCursor{{Name: "Hidden", Path: filepath.Join(dir, "alpha.nes")}}, nil).Once()
+	env := &platforms.CmdEnv{
+		Cfg:      &config.Instance{},
+		Database: &database.Database{MediaDB: mediaDB},
+	}
+
+	items, err := folderPlaylistItems(env, mocks.NewMockPlatform(), dir, nil)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	mediaDB.AssertExpectations(t)
 }
 
 // With a system, the index is read as a browse filtered by that system.

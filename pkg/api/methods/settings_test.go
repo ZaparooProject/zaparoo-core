@@ -2576,6 +2576,13 @@ func TestHandleSettingsUpdate_MusicVolumeZeroIsAllowed(t *testing.T) {
 	_, err = HandleSettingsUpdate(env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cfg.AudioMusicVolume())
+	mgr, ok := env.PlaybackManager.(*stubPlaybackManager)
+	require.True(t, ok)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		gain, recorded := mgr.volumes[slot]
+		assert.True(t, recorded, "zero gain is recorded for %s", slot)
+		assert.InDelta(t, 0.0, gain, 1e-9)
+	}
 
 	tooLoud := 201
 	env = musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMusicVolume: &tooLoud})

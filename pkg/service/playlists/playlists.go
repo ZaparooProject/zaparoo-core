@@ -67,6 +67,10 @@ type Playlist struct {
 	// Items.
 	Original []PlaylistItem
 	Index    int
+	// Move identifies the move that stored the playlist, and so the launch
+	// it started. In-place changes that launch nothing, such as shuffle and
+	// repeat, keep it; any other update gets a new one. Zero is unstamped.
+	Move uint64 `json:"-"`
 	// Advance moves to the next item after this much playing time. Zero
 	// means the playlist does not rotate on a timer.
 	Advance time.Duration

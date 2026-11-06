@@ -1614,7 +1614,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			ActiveMedia: bgEntry,
 			// A background track has no media database entry, and its title
 			// is not unique across albums, so its path is what plays it again.
-			ZapScript: backgroundMedia.Path,
+			ZapScript: backgroundTrackZapScript(backgroundMedia.Path),
 		})
 	}
 
@@ -1794,6 +1794,20 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	return *entry, nil
 }
 
+// backgroundTrackZapScript is what plays path again: the bare path, which
+// launches as it stands, unless it holds ZapScript syntax, when it is
+// escaped into one launch command so it cannot split into several.
+func backgroundTrackZapScript(path string) string {
+	script := zapscript.Command{
+		Name: zapscript.ZapScriptCmdLaunch,
+		Args: []string{path},
+	}.String()
+	if script == "**"+zapscript.ZapScriptCmdLaunch+":"+path {
+		return path
+	}
+	return script
+}
+
 // ActiveMediaEntry returns what media.active reports for slot, a normalized
 // slot key, or nil when nothing is active there. The media.playback
 // notification carries the same object.
@@ -1815,7 +1829,7 @@ func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMedia
 	if slot == mediaslot.Background {
 		// A background track's title is not unique across albums, so its
 		// path is what plays it again.
-		zapScript = media.Path
+		zapScript = backgroundTrackZapScript(media.Path)
 	} else {
 		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.Name)
 	}

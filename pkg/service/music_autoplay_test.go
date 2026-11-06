@@ -272,3 +272,37 @@ func TestMusicAutoplay_MediaStoppedWithoutPendingDoesNothing(t *testing.T) {
 	nilAutoplay.mediaStopped()
 	expectNothingQueued(t, f.svc)
 }
+
+func TestMusicAutoplay_MissingTrackReadsTheLaunchPath(t *testing.T) {
+	t.Parallel()
+	f := newAutoplayFixture(t)
+	relative := filepath.Join(string(filepath.Separator), "mock", "roms", "Music", "late.mp3")
+
+	tests := []struct {
+		name     string
+		script   string
+		missing  bool
+		absolute bool
+	}{
+		{"launch command with the track present", "**launch:" + autoplayTrack + "?system=Audio", false, false},
+		{"launch command with the track missing", "**launch:/media/usb1/gone.mp3?system=Audio", true, true},
+		{"relative track under a games folder", "**launch:Music/late.mp3", true, false},
+		{"not a launch", "**stop", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pls := playlists.NewPlaylist("", "Music", []playlists.PlaylistItem{{Name: "t", ZapScript: tt.script}})
+			_, missing, absolute := f.autoplay.missingTrack(pls)
+			assert.Equal(t, tt.missing, missing)
+			assert.Equal(t, tt.absolute, absolute)
+		})
+	}
+
+	// The drive mounts: the relative track is found under the games folder.
+	require.NoError(t, afero.WriteFile(f.fs, relative, []byte("mp3"), 0o600))
+	pls := playlists.NewPlaylist("", "Music", []playlists.PlaylistItem{
+		{Name: "t", ZapScript: "**launch:Music/late.mp3"},
+	})
+	_, missing, _ := f.autoplay.missingTrack(pls)
+	assert.False(t, missing)
+}

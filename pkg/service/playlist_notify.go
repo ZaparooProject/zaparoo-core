@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 )
 
 // openPlaylistsSource is where the playlist notifier reads the playlists
@@ -95,6 +96,11 @@ func (n *playlistNotifier) publishCurrent() {
 			continue
 		}
 		state := open.pls.APIState()
+		// The stored scripts stay as they are for playback; the copy that
+		// goes to clients must not carry profile switch IDs.
+		for i := range state.Items {
+			state.Items[i].ZapScript = zapscript.RedactScript(state.Items[i].ZapScript)
+		}
 		if state.Slot == "" {
 			state.Slot = open.slot
 		}

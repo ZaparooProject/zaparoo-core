@@ -25,6 +25,7 @@ struct nd_decoder {
 	unsigned channels;
 	drmp3 mp3;
 	drmp3_seek_point* seek_points;
+	int seek_table_tried;
 	drflac* flac;
 	stb_vorbis* vorbis;
 	/* A copy of the encoded data for a decoder opened from memory, owned
@@ -53,17 +54,16 @@ static nd_decoder* nd_open_any(const char* path, void* data, size_t size, int ki
 		}
 		d->channels = d->mp3.channels;
 		*rate = d->mp3.sampleRate;
-		/* One pass over the frame headers gives both the length and a
-		   seek table, so a seek decodes from the nearest point rather than
-		   from the start of the file. */
-		drmp3_uint32 count = 256;
-		d->seek_points = (drmp3_seek_point*)malloc(sizeof(drmp3_seek_point) * count);
-		if (d->seek_points != NULL && drmp3_calculate_seek_points(&d->mp3, &count, d->seek_points)) {
-			drmp3_bind_seek_table(&d->mp3, count, d->seek_points);
-		}
+		/* The length is free when the file carries a Xing or Info header;
+		   without one dr_mp3 walks every frame header to count, and the
+		   stream is rewound afterwards. The seek table is another walk, so
+		   it waits for the first seek rather than delaying playback. */
+		int counted = d->mp3.totalPCMFrameCount == DRMP3_UINT64_MAX;
 		drmp3_uint64 total = drmp3_get_pcm_frame_count(&d->mp3);
 		*frames = (long long)total;
-		drmp3_seek_to_pcm_frame(&d->mp3, 0);
+		if (counted) {
+			drmp3_seek_to_pcm_frame(&d->mp3, 0);
+		}
 		break;
 	}
 	case ND_FLAC:
@@ -131,10 +131,37 @@ long long nd_read(nd_decoder* d, float* out, long long frames)
 	return 0;
 }
 
+int nd_failed(nd_decoder* d)
+{
+	switch (d->kind) {
+	case ND_FLAC:
+		/* A short read before the length STREAMINFO promises means the
+		   stream broke off, not that it ended. */
+		return d->flac->totalPCMFrameCount > 0 && d->flac->currentPCMFrame < d->flac->totalPCMFrameCount;
+	case ND_VORBIS: {
+		int err = stb_vorbis_get_error(d->vorbis);
+		return err != 0 && err != VORBIS_need_more_data;
+	}
+	}
+	/* dr_mp3 reports nothing: a broken frame ends the stream like EOF. */
+	return 0;
+}
+
 int nd_seek(nd_decoder* d, long long frame)
 {
 	switch (d->kind) {
 	case ND_MP3:
+		if (frame > 0 && !d->seek_table_tried) {
+			/* One pass over the frame headers gives a seek table, so a seek
+			   decodes from the nearest point rather than from the start of
+			   the file. A failure leaves seeking to decode from the start. */
+			drmp3_uint32 count = 256;
+			d->seek_table_tried = 1;
+			d->seek_points = (drmp3_seek_point*)malloc(sizeof(drmp3_seek_point) * count);
+			if (d->seek_points != NULL && drmp3_calculate_seek_points(&d->mp3, &count, d->seek_points)) {
+				drmp3_bind_seek_table(&d->mp3, count, d->seek_points);
+			}
+		}
 		return drmp3_seek_to_pcm_frame(&d->mp3, (drmp3_uint64)frame) ? 1 : 0;
 	case ND_FLAC:
 		return drflac_seek_to_pcm_frame(d->flac, (drflac_uint64)frame) ? 1 : 0;

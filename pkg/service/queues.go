@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -909,10 +910,19 @@ func launchOvertaken(svc *ServiceContext, pls *playlists.Playlist) bool {
 		return false
 	}
 	if pls.EngineStarted {
-		return svc.State.StopEpoch() > pls.StopSeq || openPlaylist(svc, pls.Slot) != pls
+		return svc.State.StopEpoch() > pls.StopSeq || !sameMove(openPlaylist(svc, pls.Slot), pls)
 	}
 	return pls.StopStamped && svc.State.UserStopSeq() > pls.StopSeq
 }
+
+// sameMove reports whether open is the playlist the move of pls stored, or a
+// copy of it that only changed shuffle, repeat or rotation settings in place.
+func sameMove(open, pls *playlists.Playlist) bool {
+	return open == pls || (open != nil && pls.Move != 0 && open.Move == pls.Move)
+}
+
+// playlistMoveSeq numbers the moves that store a playlist.
+var playlistMoveSeq atomic.Uint64
 
 // commandStopsPrimaryNow reports whether cmd stops the running primary media
 // itself, as opposed to queueing something that does later. Such a command
@@ -966,9 +976,18 @@ func playlistMemoryFor(svc *ServiceContext) platforms.PlaylistMemory {
 	return svc.PlaylistMemory
 }
 
-// storePlaylist makes pls the playlist of its slot and tells the auto-advance
-// engine, which drops any countdown that belonged to the one it replaced.
+// storePlaylist makes pls the playlist of its slot as a new move, and tells
+// the auto-advance engine, which drops any countdown that belonged to the one
+// it replaced.
 func storePlaylist(svc *ServiceContext, slot string, pls *playlists.Playlist) {
+	pls.Move = playlistMoveSeq.Add(1)
+	storePlaylistInPlace(svc, slot, pls)
+}
+
+// storePlaylistInPlace stores pls as a change to the playlist open now, one
+// that launches nothing, so a launch begun for the open playlist is still the
+// one wanted.
+func storePlaylistInPlace(svc *ServiceContext, slot string, pls *playlists.Playlist) {
 	if slot == mediaslot.Background {
 		svc.State.SetBackgroundPlaylist(pls)
 	} else {
@@ -1001,6 +1020,12 @@ func handlePlaylist(
 		// that has since changed, so the person who changed it got there first.
 		log.Debug().Str("id", pls.ID).Str("slot", slot).Msg("automatic playlist move dropped, it was overtaken")
 		return
+	}
+
+	if pls != nil && pls.EngineStarted {
+		// Shuffle or repeat may have changed since the engine decided; the
+		// move it makes is the one the playlist as it is now calls for.
+		pls = autoadvance.ReconcileMove(activePlaylist, pls)
 	}
 
 	if pls != nil && !pls.EngineStarted && pls.Playing && pls.StopStamped && svc.State.UserStopSeq() > pls.StopSeq {
@@ -1048,7 +1073,7 @@ func handlePlaylist(
 		reconfigured.CountdownSet = pls.CountdownSet
 		reconfigured.Armed = pls.Armed
 		log.Info().Any("pls", playlistForLog(&reconfigured)).Msg("reconfiguring playlist in place")
-		storePlaylist(svc, slot, &reconfigured)
+		storePlaylistInPlace(svc, slot, &reconfigured)
 		return
 	case pls.Refresh:
 		// The content of the active playlist changed underneath it, such as a
@@ -1066,12 +1091,18 @@ func handlePlaylist(
 			clearPlaylistSlot(svc, slot)
 			return
 		}
-		refreshed := refreshedPlaylist(activePlaylist, pls)
+		refreshed, currentKept := refreshedPlaylist(activePlaylist, pls)
 		log.Info().Any("pls", playlistForLog(refreshed)).Msg("refreshing playlist in place")
 		if activePlaylist.Shuffled {
-			svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, refreshed.Index)
+			if currentKept {
+				svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, refreshed.Index)
+			} else {
+				// The item is gone and the index now names another one, so
+				// nothing bound to the old item may follow it there.
+				svc.AutoAdvance.ItemRemoved(slot, activePlaylist.ID, activePlaylist.Index)
+			}
 		}
-		storePlaylist(svc, slot, refreshed)
+		storePlaylistInPlace(svc, slot, refreshed)
 		return
 	case pls.ModeChange:
 		// Shuffle or repeat changed on the playlist open now: nothing is
@@ -1087,7 +1118,7 @@ func handlePlaylist(
 		}
 		log.Info().Any("pls", playlistForLog(changed)).Msg("changing playlist shuffle and repeat")
 		svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, changed.Index)
-		storePlaylist(svc, slot, changed)
+		storePlaylistInPlace(svc, slot, changed)
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
@@ -1190,30 +1221,32 @@ func handlePlaylist(
 // refreshedPlaylist returns active with the items and name of the refresh
 // update, keeping its position, playback and repeat. A shuffled playlist takes
 // the new items as its load order and shuffles them again, keeping its
-// current item current.
-func refreshedPlaylist(active, update *playlists.Playlist) *playlists.Playlist {
-	refreshed := *active
-	refreshed.Name = update.Name
-	refreshed.Items = update.Items
+// current item current. For a shuffled playlist it reports whether the
+// current item is still in it; when it is not, the index is kept in range and
+// names another item.
+func refreshedPlaylist(active, update *playlists.Playlist) (refreshed *playlists.Playlist, currentKept bool) {
+	next := *active
+	next.Name = update.Name
+	next.Items = update.Items
 	if !active.Shuffled {
-		refreshed.Index = min(max(refreshed.Index, 0), len(refreshed.Items)-1)
-		return &refreshed
+		next.Index = min(max(next.Index, 0), len(next.Items)-1)
+		return &next, true
 	}
 	current := active.Current()
 	idx := playlists.LocateItem(update.Items, current.ZapScript, -1)
 	if idx < 0 {
 		idx = slices.Index(update.Items, current)
 	}
-	refreshed.Shuffled = false
-	refreshed.Original = nil
-	refreshed.Index = max(idx, 0)
-	reshuffled := playlists.SetShuffle(&refreshed, true)
+	next.Shuffled = false
+	next.Original = nil
+	next.Index = max(idx, 0)
+	reshuffled := playlists.SetShuffle(&next, true)
 	if idx < 0 {
 		// The current item is gone; keep the position rather than jump to
 		// whatever shuffled to the front.
 		reshuffled.Index = min(max(active.Index, 0), len(reshuffled.Items)-1)
 	}
-	return reshuffled
+	return reshuffled, idx >= 0
 }
 
 // modeChangedPlaylist returns active with the shuffle and repeat settings of

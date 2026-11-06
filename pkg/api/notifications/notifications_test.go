@@ -472,4 +472,13 @@ func TestMediaPlayback_Payload(t *testing.T) {
 	assert.InDelta(t, 180000, received["durationMs"], 0)
 	assert.Equal(t, map[string]any{"title": "Intro"}, received["track"])
 	assert.NotContains(t, received, "CoalesceKey", "the coalesce key is never sent")
+
+	// The envelope as published carries only the method and params.
+	raw, err := json.Marshal(notification)
+	require.NoError(t, err)
+	var envelope map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &envelope))
+	assert.Len(t, envelope, 2)
+	assert.Contains(t, envelope, "method")
+	assert.Contains(t, envelope, "params")
 }

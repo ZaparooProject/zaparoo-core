@@ -20,6 +20,9 @@ nd_decoder* nd_open_memory(void* data, size_t size, int kind, unsigned* channels
 /* Reads up to frames interleaved float frames; returns how many it read,
    0 at the end. */
 long long nd_read(nd_decoder* d, float* out, long long frames);
+/* After nd_read returned 0: nonzero when the stream failed rather than
+   ended. dr_mp3 cannot tell the two apart and reports 0 for both. */
+int nd_failed(nd_decoder* d);
 int nd_seek(nd_decoder* d, long long frame);
 void nd_close(nd_decoder* d);
 

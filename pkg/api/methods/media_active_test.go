@@ -25,6 +25,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1036,4 +1037,13 @@ func TestHandleUpdateActiveMedia_InvalidSystem(t *testing.T) {
 	_, err := HandleUpdateActiveMedia(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "looking up system")
+}
+
+func TestBackgroundTrackZapScript(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "/music/a.mp3", backgroundTrackZapScript("/music/a.mp3"))
+	escaped := backgroundTrackZapScript("/music/a||b.mp3")
+	assert.NotEqual(t, "/music/a||b.mp3", escaped, "syntax in a path is escaped")
+	assert.True(t, strings.HasPrefix(escaped, "**launch:"))
 }

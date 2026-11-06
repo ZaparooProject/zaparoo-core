@@ -21,12 +21,16 @@ package audio
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
 	"github.com/stretchr/testify/assert"
@@ -988,4 +992,97 @@ func TestLongformPlaybackManager_ChangeCallbackOnPlayAndTags(t *testing.T) {
 	assert.Empty(t, drainChanges(changes))
 
 	require.NoError(t, m.Stop(mediaslot.Primary))
+}
+
+// failingDecoder is a decoder whose stream breaks off with an error.
+type failingDecoder struct{ err error }
+
+func (*failingDecoder) Stream([][2]float64) (int, bool) { return 0, false }
+func (d *failingDecoder) Err() error                    { return d.err }
+func (*failingDecoder) Len() int                        { return -1 }
+func (*failingDecoder) Position() int                   { return 0 }
+func (*failingDecoder) Seek(int) error                  { return nil }
+func (*failingDecoder) Close() error                    { return nil }
+
+func TestStreamingSource_DecodeFailureDrainsAsStop(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		err     error
+		name    string
+		natural bool
+	}{
+		{name: "end of stream", err: nil, natural: true},
+		{name: "decode failure", err: errors.New("decode failed"), natural: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newTestSource()
+			s.decoder = &failingDecoder{err: tt.err}
+			s.streamer = s.decoder
+			s.chunk = make([][2]float64, 16)
+			s.tickInterval = time.Millisecond
+			got := make(chan bool, 1)
+			s.onDrain = func(natural bool) { got <- natural }
+			s.startPrefetch()
+			require.Eventually(t, s.eof.Load, time.Second, time.Millisecond)
+
+			buf := make([][2]float64, 8)
+			_, drained := s.mixAdd(buf, len(buf))
+			require.True(t, drained)
+			s.onDrained()
+			assert.Equal(t, tt.natural, <-got)
+			<-s.doneCh
+		})
+	}
+}
+
+func TestLongformPlaybackManager_MetaReadsAreBoundedAndNewestWins(t *testing.T) {
+	m := NewLongformPlaybackManager(false)
+	release := make(chan struct{})
+	var running, peak atomic.Int32
+	var mu syncutil.Mutex
+	var read []string
+	m.readMeta = func(p string, _ int64) (*trackmeta.Meta, error) {
+		n := running.Add(1)
+		for {
+			old := peak.Load()
+			if n <= old || peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		mu.Lock()
+		read = append(read, p)
+		mu.Unlock()
+		<-release
+		running.Add(-1)
+		return &trackmeta.Meta{Title: p}, nil
+	}
+
+	// Many tracks replace one another in the same slot while reads are stuck.
+	var last *streamingSource
+	for i := range 50 {
+		src := &streamingSource{path: fmt.Sprintf("track-%d", i)}
+		m.mu.Lock()
+		m.setSourceLocked(mediaslot.Background, src)
+		m.mu.Unlock()
+		m.queueMeta(mediaslot.Background, src) // must not block
+		last = src
+	}
+	require.Eventually(t, func() bool { return running.Load() >= 1 }, time.Second, time.Millisecond)
+	close(release)
+	require.Eventually(t, func() bool {
+		m.metaMu.Lock()
+		defer m.metaMu.Unlock()
+		return m.metaReaders == 0 && len(m.metaPending) == 0
+	}, time.Second, time.Millisecond)
+
+	assert.LessOrEqual(t, int(peak.Load()), maxMetaReaders)
+	mu.Lock()
+	assert.Less(t, len(read), 10, "requests for replaced tracks are dropped, not read")
+	assert.Contains(t, read, "track-49")
+	mu.Unlock()
+	require.NotNil(t, last.meta.Load())
+	assert.Equal(t, "track-49", last.meta.Load().Title)
 }
