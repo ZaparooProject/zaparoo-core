@@ -124,6 +124,16 @@ func TestMethodLegacyMetadataFailsClosed(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, denied.legacyAllowed)
 
+	online, ok := methodMap.getDefinition(models.MethodOnlineStatus)
+	require.True(t, ok)
+	assert.False(t, online.legacyAllowed)
+	assert.False(t, unauthenticatedBootstrapMethods[models.MethodOnlineStatus])
+	_, onlineErr := handleRequest(methodMap, requests.RequestEnv{
+		PlatformID: platformids.Mister,
+	}, models.RequestObject{JSONRPC: "2.0", Method: models.MethodOnlineStatus})
+	require.NotNil(t, onlineErr)
+	assert.Contains(t, onlineErr.Message, "client role does not permit")
+
 	for _, method := range []string{
 		models.MethodDeviceStatus,
 		models.MethodDevicePowerReboot,

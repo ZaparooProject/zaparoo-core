@@ -4524,6 +4524,98 @@ func TestManagerRefreshRemoteAvailabilityMarksTransientFailureUnknown(t *testing
 	assert.True(t, status.Remote.Linked)
 }
 
+func TestManagerOnlineStatusFeatures(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var failing atomic.Bool
+	features := []string{"custom_branding", "", "cloud_backup", "custom_branding"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if failing.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(t, w, remoteDeviceMeResponse{
+			ID: "device-1", Name: "test", BackupActive: true, Features: features,
+		})
+	}))
+	defer server.Close()
+
+	unlinked := env.Manager.OnlineStatus()
+	assert.False(t, unlinked.Linked)
+	assert.NotNil(t, unlinked.Features)
+	assert.Empty(t, unlinked.Features)
+	assert.Nil(t, unlinked.FeaturesCheckedAt)
+
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	linked := env.Manager.OnlineStatus()
+	assert.True(t, linked.Linked)
+	assert.Empty(t, linked.Features)
+	assert.Nil(t, linked.FeaturesCheckedAt, "no successful check since link")
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	checked := env.Manager.OnlineStatus()
+	assert.Equal(t, []string{"cloud_backup", "custom_branding"}, checked.Features,
+		"features are deduplicated, sorted and free of empty names")
+	require.NotNil(t, checked.FeaturesCheckedAt)
+	_, err = time.Parse(time.RFC3339, *checked.FeaturesCheckedAt)
+	require.NoError(t, err)
+
+	failing.Store(true)
+	_, err = env.Manager.RefreshRemoteAvailability(context.Background())
+	require.Error(t, err)
+	afterFailure := env.Manager.OnlineStatus()
+	assert.Equal(t, checked.Features, afterFailure.Features, "a failed check keeps the last features")
+	assert.Equal(t, checked.FeaturesCheckedAt, afterFailure.FeaturesCheckedAt,
+		"a failed check keeps the last checked time")
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+
+	// A run status write starts from a fresh entry and must carry them over.
+	require.NoError(t, env.Manager.writeRemoteStatus(&statusEntry{LastStatus: "running"}))
+	assert.Equal(t, afterFailure, env.Manager.OnlineStatus())
+
+	env.Manager.MarkRemoteUnlinked()
+	stored := env.Manager.readStatus().Remote
+	assert.Nil(t, stored.Features, "unlinking clears features")
+	assert.Empty(t, stored.FeaturesCheckedAt, "unlinking clears the checked time")
+	assert.False(t, env.Manager.OnlineStatus().Linked)
+
+	env.Manager.MarkRemoteLinked()
+	failing.Store(false)
+	_, err = env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, env.Manager.OnlineStatus().Features)
+	env.Manager.MarkRemoteLinked()
+	relinked := env.Manager.OnlineStatus()
+	assert.True(t, relinked.Linked)
+	assert.Empty(t, relinked.Features, "relinking clears features")
+	assert.Nil(t, relinked.FeaturesCheckedAt, "relinking clears the checked time")
+}
+
+func TestManagerOnlineStatusServerWithoutFeatures(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"id":"device-1","name":"test","backup_active":true}`))
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	status := env.Manager.OnlineStatus()
+	assert.True(t, status.Linked)
+	assert.NotNil(t, status.Features)
+	assert.Empty(t, status.Features)
+	assert.NotNil(t, status.FeaturesCheckedAt, "a response without the field still counts as checked")
+}
+
 func TestRemoteAvailabilityNeedsRefreshUsesStateSpecificTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)

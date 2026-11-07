@@ -211,6 +211,7 @@ const (
 	MethodScreenshot                  = "screenshot"
 	MethodMediaTitleParse             = "media.title.parse"
 	MethodRemoteActivity              = "remote.activity"
+	MethodOnlineStatus                = "online.status"
 	MethodDeviceStatus                = "device.status"
 	MethodDevicePowerReboot           = "device.power.reboot"
 	MethodDevicePowerShutdown         = "device.power.shutdown"

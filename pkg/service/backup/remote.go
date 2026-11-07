@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -300,10 +301,26 @@ type remotePackResponse struct {
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
 type remoteDeviceMeResponse struct {
-	Name         string    `json:"name"`
-	LinkedAt     time.Time `json:"linked_at"`
-	ID           string    `json:"id"`
-	BackupActive bool      `json:"backup_active"`
+	Name     string    `json:"name"`
+	LinkedAt time.Time `json:"linked_at"`
+	ID       string    `json:"id"`
+	// Features lists the account features the Online service reports for
+	// this device. Names are opaque to Core; older servers omit the field.
+	Features     []string `json:"features"`
+	BackupActive bool     `json:"backup_active"`
+}
+
+// normalizeFeatures returns a sorted, deduplicated copy of names without
+// empty entries. It never returns nil.
+func normalizeFeatures(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 type remoteAPIErrorBody struct {
@@ -1487,7 +1504,8 @@ func (m *Manager) updateRemoteAvailability(
 // setRemoteAvailability persists the availability check result. When the
 // check reached the server, the device identity it reported (name, link
 // time) is recorded alongside so the UI can show what this device is
-// linked as.
+// linked as, together with the account features it listed. A failed check
+// leaves the last reported features in place.
 func (m *Manager) setRemoteAvailability(
 	availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
 ) {
@@ -1502,6 +1520,8 @@ func (m *Manager) setRemoteAvailability(
 		if !me.LinkedAt.IsZero() {
 			st.Remote.LinkedAt = formatTime(me.LinkedAt)
 		}
+		st.Remote.Features = normalizeFeatures(me.Features)
+		st.Remote.FeaturesCheckedAt = formatTime(checkedAt)
 	}
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to persist remote backup availability")
@@ -1535,6 +1555,8 @@ func (m *Manager) MarkRemoteUnlinked() {
 	st.Remote.AvailabilityCheckedAt = ""
 	st.Remote.DeviceName = ""
 	st.Remote.LinkedAt = ""
+	st.Remote.Features = nil
+	st.Remote.FeaturesCheckedAt = ""
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to persist remote backup revocation")
 	}
@@ -1555,6 +1577,8 @@ func (m *Manager) MarkRemoteLinked() {
 	st.Remote.AvailabilityCheckedAt = ""
 	st.Remote.DeviceName = ""
 	st.Remote.LinkedAt = ""
+	st.Remote.Features = nil
+	st.Remote.FeaturesCheckedAt = ""
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to clear remote backup unlinked marker")
 	}
@@ -1588,6 +1612,10 @@ func (m *Manager) writeRemoteStatus(remote *statusEntry) error {
 	}
 	if remote.LinkedAt == "" {
 		remote.LinkedAt = st.Remote.LinkedAt
+	}
+	if remote.FeaturesCheckedAt == "" {
+		remote.FeaturesCheckedAt = st.Remote.FeaturesCheckedAt
+		remote.Features = st.Remote.Features
 	}
 	remote.Unlinked = remote.Unlinked || st.Remote.Unlinked
 	st.Remote = *remote
