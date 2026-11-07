@@ -259,6 +259,7 @@ func (m *MockSettingsService) SetupGetBackupStatus(status *models.BackupStatusRe
 	m.On("GetBackupStatus", mock.Anything).Return(status, nil)
 }
 
+// GetOnlineStatus returns the online status the test set up.
 func (m *MockSettingsService) GetOnlineStatus(ctx context.Context) (*models.OnlineStatusResponse, error) {
 	args := m.Called(ctx)
 	status, ok := args.Get(0).(*models.OnlineStatusResponse)
@@ -268,6 +269,7 @@ func (m *MockSettingsService) GetOnlineStatus(ctx context.Context) (*models.Onli
 	return status, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+// SetupGetOnlineStatus makes every GetOnlineStatus call return status.
 func (m *MockSettingsService) SetupGetOnlineStatus(status *models.OnlineStatusResponse) {
 	m.On("GetOnlineStatus", mock.Anything).Return(status, nil)
 }

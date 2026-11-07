@@ -4620,6 +4620,36 @@ func TestManagerOnlineStatusServerWithoutFeatures(t *testing.T) {
 	assert.Equal(t, "test", *status.DeviceName)
 }
 
+// TestManagerRemoteAvailabilityDropsSupersededLink pins that a device check
+// still running when the device is relinked does not write the earlier
+// link's features over the new link's cleared status.
+func TestManagerRemoteAvailabilityDropsSupersededLink(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var baseURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Relink while the check is in flight: new credential, then the
+		// status reset the link flow performs.
+		config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+			config.RemoteAuthLookupURL(baseURL): {Bearer: "new-token"},
+		})
+		env.Manager.MarkRemoteLinked()
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"id":"d","name":"old","features":["cloud_backup","custom_branding"]}`))
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+	baseURL = server.URL
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	status := env.Manager.OnlineStatus()
+	assert.Nil(t, status.FeaturesCheckedAt)
+	assert.Empty(t, status.Features)
+	assert.Nil(t, status.DeviceName)
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+}
+
 func TestManagerRemoteAvailabilityFollowsCloudBackupFeature(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body string

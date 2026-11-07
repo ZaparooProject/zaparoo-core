@@ -1499,7 +1499,7 @@ func (m *Manager) updateRemoteAvailability(
 	me, err := client.deviceMe(ctx)
 	if err != nil {
 		if !errors.Is(err, errRemoteUnlinked) {
-			m.setRemoteAvailability(RemoteAvailabilityUnknown, time.Now().UTC(), nil)
+			m.setRemoteAvailability(client, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
 		}
 		return RemoteAvailabilityUnknown, err
 	}
@@ -1507,7 +1507,7 @@ func (m *Manager) updateRemoteAvailability(
 	if me.allowsCloudBackup() {
 		availability = RemoteAvailabilityAvailable
 	}
-	m.setRemoteAvailability(availability, time.Now().UTC(), me)
+	m.setRemoteAvailability(client, availability, time.Now().UTC(), me)
 	return availability, nil
 }
 
@@ -1515,12 +1515,20 @@ func (m *Manager) updateRemoteAvailability(
 // check reached the server, the device identity it reported (name, link
 // time) is recorded alongside so the UI can show what this device is
 // linked as, together with the account features it listed. A failed check
-// leaves the last reported features in place.
+// leaves the last reported features in place. A result for a credential
+// that was replaced while the check ran belongs to the earlier link and is
+// dropped: linking writes the new credential before clearing the status
+// under statusMu, so the comparison here cannot miss a relink.
 func (m *Manager) setRemoteAvailability(
-	availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
+	client *remoteClient, availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
 ) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
+	current := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(client.baseURL))
+	if current == nil || current.Bearer != client.bearer {
+		log.Debug().Msg("ignoring remote availability result for superseded credential")
+		return
+	}
 	st := m.readStatusLocked()
 	st.Remote.Availability = availability
 	st.Remote.AvailabilityCheckedAt = formatTime(checkedAt)
