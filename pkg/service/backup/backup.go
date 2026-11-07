@@ -562,13 +562,19 @@ func (m *Manager) remoteLinked(stored *statusFile) bool {
 	return !stored.Remote.Unlinked
 }
 
-// OnlineStatus reports the link state and the account features the Online
-// service last listed for this device. It reads stored state only and never
-// contacts the server. Feature names are passed through as reported.
+// OnlineStatus reports the link state, the device's name and link time on
+// the Online service, and the account features it last listed. It reads
+// stored state only and never contacts the server. Feature names are passed
+// through as reported.
 func (m *Manager) OnlineStatus() models.OnlineStatusResponse {
 	stored := m.readStatus()
 	resp := models.OnlineStatusResponse{Linked: m.remoteLinked(&stored), Features: []string{}}
-	if !resp.Linked || stored.Remote.FeaturesCheckedAt == "" {
+	if !resp.Linked {
+		return resp
+	}
+	resp.DeviceName = optionalString(stored.Remote.DeviceName)
+	resp.LinkedAt = optionalString(stored.Remote.LinkedAt)
+	if stored.Remote.FeaturesCheckedAt == "" {
 		return resp
 	}
 	resp.Features = normalizeFeatures(stored.Remote.Features)

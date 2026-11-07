@@ -197,6 +197,27 @@ func TestDefaultSettingsService_LocalBackupAPIContracts(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestDefaultSettingsService_GetOnlineStatus(t *testing.T) {
+	t.Parallel()
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodOnlineStatus, "").Return(
+		`{"linked":true,"deviceName":"Bedroom","linkedAt":"2026-07-10T12:00:00Z",`+
+			`"features":["cloud_backup"],"featuresCheckedAt":"2026-07-10T12:05:00Z"}`, nil,
+	).Once()
+	svc := NewSettingsService(mockClient)
+
+	status, err := svc.GetOnlineStatus(context.Background())
+	require.NoError(t, err)
+	assert.True(t, status.Linked)
+	require.NotNil(t, status.DeviceName)
+	assert.Equal(t, "Bedroom", *status.DeviceName)
+	require.NotNil(t, status.LinkedAt)
+	assert.Equal(t, []string{models.OnlineFeatureCloudBackup}, status.Features)
+	require.NotNil(t, status.FeaturesCheckedAt)
+	assert.Equal(t, warpAvailable, warpFromOnline(status))
+	mockClient.AssertExpectations(t)
+}
+
 func TestDefaultSettingsService_RemoteBackupAPIContracts(t *testing.T) {
 	t.Parallel()
 	const backupID = "save/a%b ?\u96ea"

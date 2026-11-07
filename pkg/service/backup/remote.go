@@ -310,6 +310,16 @@ type remoteDeviceMeResponse struct {
 	BackupActive bool     `json:"backup_active"`
 }
 
+// allowsCloudBackup reports whether the account may upload remote backups:
+// the cloud_backup feature, or backup_active from a server that does not
+// list features.
+func (r *remoteDeviceMeResponse) allowsCloudBackup() bool {
+	if r.Features == nil {
+		return r.BackupActive
+	}
+	return slices.Contains(r.Features, models.OnlineFeatureCloudBackup)
+}
+
 // normalizeFeatures returns a sorted, deduplicated copy of names without
 // empty entries. It never returns nil.
 func normalizeFeatures(names []string) []string {
@@ -1494,7 +1504,7 @@ func (m *Manager) updateRemoteAvailability(
 		return RemoteAvailabilityUnknown, err
 	}
 	availability := RemoteAvailabilityUnavailable
-	if me.BackupActive {
+	if me.allowsCloudBackup() {
 		availability = RemoteAvailabilityAvailable
 	}
 	m.setRemoteAvailability(availability, time.Now().UTC(), me)

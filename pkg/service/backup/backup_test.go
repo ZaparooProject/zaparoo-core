@@ -4614,6 +4614,73 @@ func TestManagerOnlineStatusServerWithoutFeatures(t *testing.T) {
 	assert.NotNil(t, status.Features)
 	assert.Empty(t, status.Features)
 	assert.NotNil(t, status.FeaturesCheckedAt, "a response without the field still counts as checked")
+	assert.Equal(t, RemoteAvailabilityAvailable, env.Manager.Status().Remote.Availability,
+		"without a features list, backup_active decides availability")
+	require.NotNil(t, status.DeviceName)
+	assert.Equal(t, "test", *status.DeviceName)
+}
+
+func TestManagerRemoteAvailabilityFollowsCloudBackupFeature(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"cloud_backup listed": {
+			`{"id":"d","backup_active":false,"features":["cloud_backup"]}`, RemoteAvailabilityAvailable,
+		},
+		"cloud_backup missing": {
+			`{"id":"d","backup_active":true,"features":["custom_branding"]}`, RemoteAvailabilityUnavailable,
+		},
+		"empty list": {
+			`{"id":"d","backup_active":true,"features":[]}`, RemoteAvailabilityUnavailable,
+		},
+		"no list, backup_active true":  {`{"id":"d","backup_active":true}`, RemoteAvailabilityAvailable},
+		"no list, backup_active false": {`{"id":"d","backup_active":false}`, RemoteAvailabilityUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tc.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
+
+			got, err := env.Manager.RefreshRemoteAvailability(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, env.Manager.Status().Remote.Availability)
+		})
+	}
+}
+
+func TestManagerOnlineStatusDeviceIdentity(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	linkedAt := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "Living Room", LinkedAt: linkedAt})
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	before := env.Manager.OnlineStatus()
+	assert.Nil(t, before.DeviceName, "no name before the first check")
+	assert.Nil(t, before.LinkedAt)
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	status := env.Manager.OnlineStatus()
+	require.NotNil(t, status.DeviceName)
+	assert.Equal(t, "Living Room", *status.DeviceName)
+	require.NotNil(t, status.LinkedAt)
+	assert.Equal(t, env.Manager.Status().Remote.LinkedAt, status.LinkedAt,
+		"matches the backup status")
+
+	env.Manager.MarkRemoteUnlinked()
+	unlinked := env.Manager.OnlineStatus()
+	assert.Nil(t, unlinked.DeviceName)
+	assert.Nil(t, unlinked.LinkedAt)
 }
 
 func TestRemoteAvailabilityNeedsRefreshUsesStateSpecificTTL(t *testing.T) {

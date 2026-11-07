@@ -1134,11 +1134,18 @@ type SettingsAuthStatusResponse struct {
 	Linked bool `json:"linked"`
 }
 
-// OnlineStatusResponse reports the online account link and the account
-// features the Online service last listed for this device. Features is
-// never null; FeaturesCheckedAt is null until a check succeeds after linking.
+// OnlineFeatureCloudBackup is the account feature that allows remote
+// backups. Core reads it to decide whether remote backups are available.
+const OnlineFeatureCloudBackup = "cloud_backup"
+
+// OnlineStatusResponse reports the online account link, the name and link
+// time the Online service knows this device by, and the account features it
+// last listed. Features is never null; FeaturesCheckedAt is null until a
+// check succeeds after linking.
 type OnlineStatusResponse struct {
 	FeaturesCheckedAt *string  `json:"featuresCheckedAt"`
+	DeviceName        *string  `json:"deviceName,omitempty"`
+	LinkedAt          *string  `json:"linkedAt,omitempty"`
 	Features          []string `json:"features"`
 	Linked            bool     `json:"linked"`
 }
