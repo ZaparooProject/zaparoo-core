@@ -4090,7 +4090,7 @@ None.
 | linked                | boolean | No       | Whether device has usable remote credentials. |
 | deviceName            | string  | No       | Linked remote device name. |
 | linkedAt              | string  | No       | Device link time. |
-| availability          | string  | No       | Cached remote service availability. |
+| availability          | string  | No       | Cached remote service availability: `available` when the account has the `cloud_backup` feature, `unavailable` when it does not, `unknown` before a check succeeds or after one fails. |
 | availabilityCheckedAt | string  | No       | Latest availability check time. |
 
 #### Example
@@ -5993,6 +5993,56 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "clients-pair-cancel-1",
   "result": null
+}
+```
+
+## Online account
+
+### online.status
+
+**Access:** All clients. Localhost and paired admin requests may trigger a background refresh of stale remote availability, the same as `settings.backup.status`; the response never waits for that network request.
+
+Report whether the device is linked to a Zaparoo Online account and which account features the Online service last reported for it. Core answers from stored state. Feature names are strings such as `cloud_backup` or `custom_branding`, passed through as the service lists them (deduplicated and sorted). Core itself reads only `cloud_backup`, which decides remote backup availability; other names are for clients. Core records them each time it checks the device with the Online service, which happens at startup, on link, before remote backups, on a daily heartbeat, and in the background refresh above. A failed check keeps the last reported features. Linking or unlinking the account clears them.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key               | Type     | Required | Description                                                                                                                                       |
+| :---------------- | :------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| linked            | boolean  | Yes      | Whether the device holds an online account credential that the server has not rejected. Matches `remote.linked` from `settings.backup.status`.   |
+| deviceName        | string   | No       | Name of this device on the Online account. Omitted when unlinked or unknown.                                                                      |
+| linkedAt          | string   | No       | RFC 3339 time the device was linked. Omitted when unlinked or unknown.                                                                            |
+| features          | string[] | Yes      | Account features the Online service reported in its last successful check. Always an array; empty when unlinked or before the first check.       |
+| featuresCheckedAt | string   | Yes      | RFC 3339 time of the last successful check, or `null` when no check has succeeded since the account was linked. An empty `features` list with a non-null time means the service reported no features. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "online-status-1",
+  "method": "online.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "online-status-1",
+  "result": {
+    "linked": true,
+    "deviceName": "Living Room MiSTer",
+    "linkedAt": "2026-11-01T09:30:00Z",
+    "features": ["cloud_backup", "custom_branding"],
+    "featuresCheckedAt": "2026-11-06T12:00:00Z"
+  }
 }
 ```
 

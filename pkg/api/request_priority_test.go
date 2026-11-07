@@ -113,6 +113,7 @@ func TestClassifyAPIMethod(t *testing.T) {
 		{"bluetooth scan stop stays normal", models.MethodDeviceBluetoothScanStop, apiPriorityNormal},
 		{"bluetooth forget stays normal", models.MethodDeviceBluetoothForget, apiPriorityNormal},
 		{"bluetooth devices stays normal", models.MethodDeviceBluetoothDevices, apiPriorityNormal},
+		{"online status stays normal", models.MethodOnlineStatus, apiPriorityNormal},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
 		{"low generate prefix", "media.generate.extra", apiPriorityLow},
 		{"unknown normal", "custom.method", apiPriorityNormal},

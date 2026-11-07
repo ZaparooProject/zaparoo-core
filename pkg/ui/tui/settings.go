@@ -894,12 +894,12 @@ func showLinkedDialog(svc SettingsService, pages *tview.Pages, app *tview.Applic
 			}
 			var warp string
 			ctx, cancel := tuiContext()
-			status, err := svc.GetBackupStatus(ctx)
+			online, err := svc.GetOnlineStatus(ctx)
 			cancel()
 			if err != nil {
-				log.Warn().Err(err).Msg("error reading backup status after linking")
+				log.Warn().Err(err).Msg("error reading online status after linking")
 			} else {
-				warp = status.Remote.Availability
+				warp = warpFromOnline(online)
 			}
 			setAllOnlineFeatures(svc, pages, app, onlineFeatures{}, true, warp,
 				func(_ onlineFeatures, err error) {
