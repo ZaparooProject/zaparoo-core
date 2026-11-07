@@ -657,6 +657,60 @@ func TestAllOnlineFeaturesUpdate(t *testing.T) {
 	assert.Equal(t, onlineFeatures{}, next)
 }
 
+func TestApplyAllOnlineFeatures_ReportsSkippedCloudBackup_Integration(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, warp string) (*TestAppRunner, *MockSettingsService, <-chan onlineFeatures) {
+		t.Helper()
+		runner := NewTestAppRunner(t, 80, 25)
+		t.Cleanup(runner.Stop)
+		pages := tview.NewPages().AddPage("base", tview.NewBox(), true, true)
+		runner.Start(pages)
+		mockSvc := NewMockSettingsService()
+		mockSvc.On("UpdateSettings", mock.Anything, mock.Anything).Return(nil).Once()
+		done := make(chan onlineFeatures, 1)
+		runner.QueueUpdateDraw(func() {
+			applyAllOnlineFeatures(mockSvc, pages, runner.App(), onlineFeatures{}, true, warp,
+				func(next onlineFeatures, err error) {
+					assert.NoError(t, err)
+					done <- next
+				})
+		})
+		return runner, mockSvc, done
+	}
+
+	t.Run("unknown Warp waits on a modal after saving the others", func(t *testing.T) {
+		t.Parallel()
+		runner, mockSvc, done := run(t, "")
+		require.True(t, runner.WaitForText("Cloud backup wasn't turned on", uiSettleTimeout))
+		assert.Empty(t, done, "the caller takes focus back only after the modal is dismissed")
+
+		params, ok := mockSvc.Calls[0].Arguments[1].(*models.UpdateSettingsParams)
+		require.True(t, ok)
+		assert.Nil(t, params.BackupRemoteEnabled)
+		assert.True(t, boolIs(params.LibrarySyncEnabled, true))
+
+		runner.SimulateEnter()
+		select {
+		case next := <-done:
+			assert.False(t, next.cloudBackup)
+			assert.True(t, next.library)
+		case <-time.After(uiSettleTimeout):
+			require.Fail(t, "dismissing the modal did not finish the update")
+		}
+	})
+
+	t.Run("known Warp finishes without a modal", func(t *testing.T) {
+		t.Parallel()
+		for _, warp := range []string{warpAvailable, warpUnavailable} {
+			runner, _, done := run(t, warp)
+			next := <-done
+			assert.Equal(t, warp == warpAvailable, next.cloudBackup)
+			assert.False(t, runner.ContainsText("Cloud backup wasn't turned on"))
+		}
+	})
+}
+
 func TestResolveWarpAvailability(t *testing.T) {
 	t.Parallel()
 

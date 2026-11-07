@@ -320,6 +320,16 @@ func (r *remoteDeviceMeResponse) allowsCloudBackup() bool {
 	return slices.Contains(r.Features, models.OnlineFeatureCloudBackup)
 }
 
+// reportedFeatures returns the features to record for the account. A server
+// that does not list features still grants cloud backup through
+// backup_active, so online.status agrees with allowsCloudBackup.
+func (r *remoteDeviceMeResponse) reportedFeatures() []string {
+	if r.Features == nil && r.BackupActive {
+		return []string{models.OnlineFeatureCloudBackup}
+	}
+	return r.Features
+}
+
 // normalizeFeatures returns a sorted, deduplicated copy of names without
 // empty entries. It never returns nil.
 func normalizeFeatures(names []string) []string {
@@ -1538,7 +1548,7 @@ func (m *Manager) setRemoteAvailability(
 		if !me.LinkedAt.IsZero() {
 			st.Remote.LinkedAt = formatTime(me.LinkedAt)
 		}
-		st.Remote.Features = normalizeFeatures(me.Features)
+		st.Remote.Features = normalizeFeatures(me.reportedFeatures())
 		st.Remote.FeaturesCheckedAt = formatTime(checkedAt)
 	}
 	if err := m.writeStatusLocked(&st); err != nil {

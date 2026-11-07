@@ -131,6 +131,12 @@ const (
 
 const onlineLinkFirstDesc = "Link your Zaparoo Online account first"
 
+// warpUnknownBackupSkipped tells the user why turning every feature on left
+// cloud backup off.
+const warpUnknownBackupSkipped = "Cloud backup wasn't turned on because your\n" +
+	"Zaparoo Warp status couldn't be checked.\n\n" +
+	"You can turn it on in Settings > Online."
+
 // onlineFeatures holds the per-feature consent settings grouped by the
 // "All online features" row.
 type onlineFeatures struct {
@@ -245,6 +251,8 @@ func resolveWarpAvailability(
 // update and calls onDone on the UI thread with the resulting features. When
 // turning on with Warp availability still unknown, it first waits for the
 // check behind a cancellable "checking" modal; cancelling makes no change.
+// If the check never finishes, the other features still turn on and a modal
+// says cloud backup did not.
 func setAllOnlineFeatures(
 	svc SettingsService,
 	pages *tview.Pages,
@@ -254,19 +262,8 @@ func setAllOnlineFeatures(
 	warp string,
 	onDone func(onlineFeatures, error),
 ) {
-	apply := func(warp string) {
-		next, params := allOnlineFeaturesUpdate(current, on, warp)
-		ctx, cancel := tuiContext()
-		defer cancel()
-		if err := svc.UpdateSettings(ctx, params); err != nil {
-			log.Warn().Err(err).Bool("on", on).Msg("error updating all online features")
-			onDone(current, err)
-			return
-		}
-		onDone(next, nil)
-	}
 	if !on || warp == warpAvailable || warp == warpUnavailable {
-		apply(warp)
+		applyAllOnlineFeatures(svc, pages, app, current, on, warp, onDone)
 		return
 	}
 
@@ -285,9 +282,38 @@ func setAllOnlineFeatures(
 				return
 			}
 			closeWaiting()
-			apply(resolved)
+			applyAllOnlineFeatures(svc, pages, app, current, on, resolved, onDone)
 		})
 	}()
+}
+
+// applyAllOnlineFeatures saves the update and calls onDone with the result.
+// Turning on with Warp still unknown leaves cloud backup off, so onDone waits
+// until the user has dismissed a modal saying so.
+func applyAllOnlineFeatures(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	current onlineFeatures,
+	on bool,
+	warp string,
+	onDone func(onlineFeatures, error),
+) {
+	next, params := allOnlineFeaturesUpdate(current, on, warp)
+	ctx, cancel := tuiContext()
+	defer cancel()
+	if err := svc.UpdateSettings(ctx, params); err != nil {
+		log.Warn().Err(err).Bool("on", on).Msg("error updating all online features")
+		onDone(current, err)
+		return
+	}
+	if on && warp != warpAvailable && warp != warpUnavailable {
+		ShowInfoModal(pages, app, "Cloud backup", warpUnknownBackupSkipped, func() {
+			onDone(next, nil)
+		})
+		return
+	}
+	onDone(next, nil)
 }
 
 // renderOnlineSettingsMenu shows the Zaparoo Online page in two columns.

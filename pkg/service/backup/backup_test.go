@@ -4595,29 +4595,56 @@ func TestManagerOnlineStatusFeatures(t *testing.T) {
 }
 
 func TestManagerOnlineStatusServerWithoutFeatures(t *testing.T) {
-	env := newBackupTestEnv(t, platformids.Mister)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, err := w.Write([]byte(`{"id":"device-1","name":"test","backup_active":true}`))
-		assert.NoError(t, err)
-	}))
-	defer server.Close()
-	configureRemoteTestAuth(t, env.Manager, server.URL)
+	tests := []struct {
+		name         string
+		body         string
+		availability string
+		features     []string
+	}{
+		{
+			name:         "backup_active grants cloud backup",
+			body:         `{"id":"device-1","name":"test","backup_active":true}`,
+			availability: RemoteAvailabilityAvailable,
+			features:     []string{models.OnlineFeatureCloudBackup},
+		},
+		{
+			name:         "no backup_active grants nothing",
+			body:         `{"id":"device-1","name":"test","backup_active":false}`,
+			availability: RemoteAvailabilityUnavailable,
+			features:     []string{},
+		},
+		{
+			name:         "a listed empty set wins over backup_active",
+			body:         `{"id":"device-1","name":"test","backup_active":true,"features":[]}`,
+			availability: RemoteAvailabilityUnavailable,
+			features:     []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
 
-	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
-	require.NoError(t, err)
-	status := env.Manager.OnlineStatus()
-	assert.True(t, status.Linked)
-	assert.NotNil(t, status.Features)
-	assert.Empty(t, status.Features)
-	assert.NotNil(t, status.FeaturesCheckedAt, "a response without the field still counts as checked")
-	assert.Equal(t, RemoteAvailabilityAvailable, env.Manager.Status().Remote.Availability,
-		"without a features list, backup_active decides availability")
-	require.NotNil(t, status.DeviceName)
-	assert.Equal(t, "test", *status.DeviceName)
+			_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+			require.NoError(t, err)
+			status := env.Manager.OnlineStatus()
+			assert.True(t, status.Linked)
+			assert.Equal(t, tt.features, status.Features)
+			assert.NotNil(t, status.FeaturesCheckedAt, "a response without the field still counts as checked")
+			assert.Equal(t, tt.availability, env.Manager.Status().Remote.Availability)
+			require.NotNil(t, status.DeviceName)
+			assert.Equal(t, "test", *status.DeviceName)
+		})
+	}
 }
 
 // TestManagerRemoteAvailabilityDropsSupersededLink pins that a device check
