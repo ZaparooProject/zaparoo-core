@@ -33,9 +33,15 @@ const (
 )
 
 type Media struct {
-	FilenameTags   *bool    `toml:"filename_tags,omitempty"`
+	FilenameTags *bool `toml:"filename_tags,omitempty"`
+	// ImageDir is where scraped images and the generated thumbnail cache are
+	// stored. Empty means "images" under Core's data directory.
+	ImageDir       string   `toml:"image_dir,omitempty"`
 	DefaultRegions []string `toml:"default_regions,omitempty,multiline"`
 	DefaultLangs   []string `toml:"default_langs,omitempty,multiline"`
+	// ThumbCacheMaxMB caps the generated thumbnail cache, not scraped images.
+	// Zero means DefaultThumbCacheMaxMB.
+	ThumbCacheMaxMB int `toml:"thumb_cache_max_mb,omitempty"`
 }
 
 // pauseByDefaultSystems lists the storage-streaming systems most sensitive

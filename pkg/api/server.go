@@ -533,6 +533,12 @@ func NewMethodMap() *MethodMap {
 		models.MethodDevicePowerReboot:   methods.HandleDevicePower(hoststatus.PowerReboot),
 		models.MethodDevicePowerShutdown: methods.HandleDevicePower(hoststatus.PowerShutdown),
 		models.MethodDevicePowerSuspend:  methods.HandleDevicePower(hoststatus.PowerSuspend),
+
+		models.MethodDeviceBluetoothDevices:   methods.HandleDeviceBluetoothDevices,
+		models.MethodDeviceBluetoothScanStart: methods.HandleDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothScanStop:  methods.HandleDeviceBluetoothScanStop,
+		models.MethodDeviceBluetoothPair:      methods.HandleDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget:    methods.HandleDeviceBluetoothForget,
 	}
 
 	for name, fn := range defaultMethods {
@@ -1174,6 +1180,7 @@ func privateNetworkAccessMiddleware(next http.Handler) http.Handler {
 func broadcastNotifications(
 	st *state.State,
 	session *melody.Melody,
+	platformID string,
 	notifications <-chan models.Notification,
 ) {
 	for {
@@ -1194,15 +1201,63 @@ func broadcastNotifications(
 				continue
 			}
 
-			broadcastToSessions(session, data)
+			broadcastToSessions(session, data, notificationAudience(notif.Method, platformID))
 		}
 	}
 }
 
-// broadcastToSessions sends a notification to every connected session,
-// encrypting per-session for sessions that have established encryption.
-// Errors on individual sessions are logged but do not stop the broadcast.
-func broadcastToSessions(session *melody.Melody, plaintext []byte) {
+// notificationCapabilities lists the notifications only some clients may
+// receive. device.bluetooth.changed names and addresses every device in
+// range, so it goes only to clients that may manage Bluetooth.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var notificationCapabilities = map[string]permissions.Capability{
+	models.NotificationDeviceBluetooth: permissions.CapDeviceBluetooth,
+}
+
+// notificationAudience returns which sessions may receive a notification, or
+// nil when every session may.
+func notificationAudience(method, platformID string) func(*melody.Session) bool {
+	capability, gated := notificationCapabilities[method]
+	if !gated {
+		return nil
+	}
+	return func(s *melody.Session) bool {
+		return sessionGrant(s.Request, getClientSession(s), platformID).Has(capability)
+	}
+}
+
+// sessionGrant builds a WebSocket session's grant the way its requests are
+// granted. A session that has not settled its transport yet has no paired
+// role, so a remote client misses gated notifications until it does.
+func sessionGrant(
+	r *http.Request,
+	cs *apimiddleware.ClientSession,
+	platformID string,
+) permissions.Grant {
+	grant := permissions.Grant{}
+	if r != nil {
+		grant.IsLocal = apimiddleware.IsLocalRequest(r)
+		grant.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(r)
+	}
+	if !grant.IsLocal {
+		grant.PlatformID = platformID
+	}
+	if cs != nil {
+		grant.Role = permissions.Role(cs.ClientRole())
+	}
+	return grant
+}
+
+// broadcastToSessions sends a notification to every connected session that
+// mayReceive admits (every one when it is nil), encrypting per-session for
+// sessions that have established encryption. Errors on individual sessions
+// are logged but do not stop the broadcast.
+func broadcastToSessions(
+	session *melody.Melody,
+	plaintext []byte,
+	mayReceive func(*melody.Session) bool,
+) {
 	sessions, err := session.Sessions()
 	if err != nil {
 		logWSWriteError(err, "fetching sessions for broadcast")
@@ -1210,6 +1265,9 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 	}
 	for _, s := range sessions {
 		if s == nil || s.IsClosed() {
+			continue
+		}
+		if mayReceive != nil && !mayReceive(s) {
 			continue
 		}
 		writeNotificationToSession(s, plaintext)
@@ -1283,8 +1341,10 @@ func notificationClientDisconnected(st *state.State) {
 // handleSSE returns an HTTP handler that streams notifications as Server-Sent
 // Events. Each connected client gets its own broker subscription which is
 // cleaned up on disconnect.
-func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
+func handleSSE(notifBroker *broker.Broker, st *state.State, platformID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// SSE has no paired sessions, so the request alone decides the grant.
+		grant := sessionGrant(r, nil, platformID)
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -1312,6 +1372,9 @@ func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
 			case notif, ok := <-notifs:
 				if !ok {
 					return
+				}
+				if capability, gated := notificationCapabilities[notif.Method]; gated && !grant.Has(capability) {
+					continue
 				}
 
 				obj := models.NotificationObject{
@@ -2120,7 +2183,7 @@ func StartWithListener(
 		return err
 	}
 
-	waitThumbReap := methods.InitMediaThumbCache(platform)
+	waitThumbReap := methods.InitMediaThumbCache(platform, cfg)
 	defer waitThumbReap()
 
 	// Extract port from listen address or use default
@@ -2367,7 +2430,7 @@ func StartWithListener(
 	})
 	wsNotifications, wsSubID := notifBroker.Subscribe(100)
 	go func() {
-		broadcastNotifications(st, session, wsNotifications)
+		broadcastNotifications(st, session, platform.ID(), wsNotifications)
 		notifBroker.Unsubscribe(wsSubID)
 	}()
 
@@ -2502,7 +2565,7 @@ func StartWithListener(
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 
-		sseHandler := handleSSE(notifBroker, st)
+		sseHandler := handleSSE(notifBroker, st, platform.ID())
 		r.Get("/api/events", sseHandler)
 		r.Get("/api/v0/events", sseHandler)
 		r.Get("/api/v0.1/events", sseHandler)

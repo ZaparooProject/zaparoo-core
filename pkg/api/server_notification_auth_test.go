@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/stretchr/testify/assert"
@@ -82,7 +84,7 @@ func TestPendingWebSocketReceivesNoPlaintextNotifications(t *testing.T) {
 	t.Parallel()
 
 	sessions, conn := startNotificationAuthServer(t, webSocketAuthPending, 0)
-	broadcastToSessions(sessions, []byte(`{"jsonrpc":"2.0","method":"media.started"}`))
+	broadcastToSessions(sessions, []byte(`{"jsonrpc":"2.0","method":"media.started"}`), nil)
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
 	_, _, err := conn.ReadMessage()
 	require.Error(t, err)
@@ -96,7 +98,7 @@ func TestAuthorizedPlaintextWebSocketReceivesNotifications(t *testing.T) {
 
 	sessions, conn := startNotificationAuthServer(t, webSocketAuthPlaintext, 0)
 	want := []byte(`{"jsonrpc":"2.0","method":"media.started"}`)
-	broadcastToSessions(sessions, want)
+	broadcastToSessions(sessions, want, nil)
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
 	_, got, err := conn.ReadMessage()
 	require.NoError(t, err)
@@ -110,4 +112,22 @@ func TestPendingWebSocketAuthenticationDeadline(t *testing.T) {
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
 	_, _, err := conn.ReadMessage()
 	require.Error(t, err)
+}
+
+func TestBluetoothNotificationsNeedTheBluetoothCapability(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, notificationAudience(models.NotificationStarted, "mister"),
+		"ungated notifications go to every session")
+	require.NotNil(t, notificationAudience(models.NotificationDeviceBluetooth, "mister"))
+
+	local := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api", http.NoBody)
+	local.RemoteAddr = "127.0.0.1:5000"
+	assert.True(t, sessionGrant(local, nil, "mister").Has(permissions.CapDeviceBluetooth),
+		"the device's own frontend hears about nearby devices")
+
+	remote := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api", http.NoBody)
+	remote.RemoteAddr = "192.168.1.20:5000"
+	assert.False(t, sessionGrant(remote, nil, "mister").Has(permissions.CapDeviceBluetooth),
+		"an unpaired remote client does not")
 }

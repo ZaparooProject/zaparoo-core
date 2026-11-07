@@ -116,6 +116,12 @@ func TestGrant_AuthenticationAndAccess(t *testing.T) {
 	assert.False(t, Grant{}.Has(CapDevicePower))
 	assert.False(t, Grant{Role: RoleMember}.Has(CapDevicePower))
 	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapDevicePower))
+
+	assert.True(t, Grant{IsLocal: true}.Has(CapDeviceBluetooth))
+	assert.True(t, Grant{Role: RoleAdmin}.Has(CapDeviceBluetooth))
+	assert.False(t, Grant{}.Has(CapDeviceBluetooth))
+	assert.False(t, Grant{Role: RoleMember}.Has(CapDeviceBluetooth))
+	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapDeviceBluetooth))
 }
 
 func TestGrant_Capabilities(t *testing.T) {
@@ -130,7 +136,7 @@ func TestGrant_Capabilities(t *testing.T) {
 			name:  "paired admin is sorted",
 			grant: Grant{Role: RoleAdmin},
 			want: []Capability{
-				CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapDeviceBluetooth, CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
 				CapScreenshot, CapSettingsWrite, CapUpdateApply,
 			},
 		},
@@ -153,7 +159,7 @@ func TestGrant_Capabilities(t *testing.T) {
 			name:  "local member gets local capabilities",
 			grant: Grant{Role: RoleMember, IsLocal: true},
 			want: []Capability{
-				CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapDeviceBluetooth, CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
 				CapScreenshot, CapSettingsWrite, CapUpdateApply,
 			},
 		},
@@ -200,6 +206,7 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.ReplayOS,
 	} {
 		assert.False(t, Grant{PlatformID: platformID}.Has(CapDevicePower), platformID)
+		assert.False(t, Grant{PlatformID: platformID}.Has(CapDeviceBluetooth), platformID)
 	}
 	for _, platformID := range []string{
 		platformids.Linux,
@@ -270,6 +277,7 @@ func TestGrant_RoleRemoteNeverGainsCapabilities(t *testing.T) {
 	assert.False(t, grant.Has(CapSettingsWrite))
 	assert.False(t, grant.Has(CapUpdateApply))
 	assert.False(t, grant.Has(CapDevicePower))
+	assert.False(t, grant.Has(CapDeviceBluetooth))
 	assert.Empty(t, grant.Capabilities())
 
 	// Local never applies to remote-operation requests, but if it somehow

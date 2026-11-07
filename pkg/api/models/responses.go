@@ -195,6 +195,7 @@ type SettingsResponse struct {
 	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
+	MediaImageDir             *string            `json:"mediaImageDir,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
@@ -203,6 +204,7 @@ type SettingsResponse struct {
 	LauncherPreference        []string           `json:"launcherPreference"`
 	AudioVolume               int                `json:"audioVolume"`
 	AudioMusicVolume          int                `json:"audioMusicVolume"`
+	MediaThumbCacheMaxMB      int                `json:"mediaThumbCacheMaxMb"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`

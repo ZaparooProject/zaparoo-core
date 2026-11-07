@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -90,6 +91,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
 		ProfilesSwapData:          env.Config.ProfilesSwapData(),
+		MediaThumbCacheMaxMB:      env.Config.ThumbCacheMaxMB(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -107,6 +109,8 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		resp.LibrarySyncEnabled = &librarySyncEnabled
 		resp.RemoteControlEnabled = &remoteControlEnabled
 		resp.OnlineBaseURL = &onlineBaseURL
+		imageDir := requestImageDir(&env)
+		resp.MediaImageDir = &imageDir
 	}
 
 	return resp, nil
@@ -225,6 +229,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		params.RemoteControlEnabled != nil {
 		if !isLocalOrAdmin(&env) {
 			return nil, models.ClientErrf("online settings require a local or admin client")
+		}
+	}
+	// The image folder decides where Core writes downloads and which folder's
+	// thumbs/ it empties, so it is held to the same bar.
+	if params.MediaImageDir != nil && !isLocalOrAdmin(&env) {
+		return nil, models.ClientErrf("the image folder can only be changed by a local or admin client")
+	}
+	if params.MediaImageDir != nil {
+		if err := validateMediaImageDir(*params.MediaImageDir, helpers.DataDir(env.Platform)); err != nil {
+			return nil, err
 		}
 	}
 
@@ -451,6 +465,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
+	if params.MediaImageDir != nil {
+		log.Debug().Str("mediaImageDir", *params.MediaImageDir).Msg("updating setting")
+		env.Config.SetImageDir(*params.MediaImageDir)
+	}
+
+	if params.MediaThumbCacheMaxMB != nil {
+		log.Debug().Int("mediaThumbCacheMaxMb", *params.MediaThumbCacheMaxMB).Msg("updating setting")
+		env.Config.SetThumbCacheMaxMB(*params.MediaThumbCacheMaxMB)
+	}
+
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
@@ -463,7 +487,30 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()
 	}
+	// The reload is the cache's own: it is a no-op when neither value
+	// actually changed, so a request echoing the current values is cheap.
+	if params.MediaImageDir != nil || params.MediaThumbCacheMaxMB != nil {
+		ReloadMediaThumbCache(env.Config)
+	}
 	return NoContent{}, nil
+}
+
+// validateMediaImageDir refuses an image folder Core could not use: a
+// filesystem root, whose thumbs folder Core would claim, or a path that
+// exists and is not a directory. A folder that does not exist yet is fine;
+// Core creates it on first use.
+func validateMediaImageDir(dir, dataDir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	resolved := config.ResolveImageDir(dir, dataDir)
+	if filepath.Dir(resolved) == resolved {
+		return models.ClientErrf("mediaImageDir cannot be a filesystem root")
+	}
+	if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+		return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
+	}
+	return nil
 }
 
 //nolint:gocritic // single-use parameter in API handler

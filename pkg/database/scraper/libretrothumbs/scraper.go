@@ -20,8 +20,9 @@
 // Package libretrothumbs downloads box art, screenshots and title screens
 // from the libretro thumbnail server, the source RetroArch uses. Thumbnails
 // are named after libretro database entries, so a file is matched by its own
-// name first and by its indexed title otherwise. Images are stored under
-// Core's data directory and recorded as image properties like local artwork.
+// name first and by its indexed title otherwise. Images are stored in the
+// libretro folder of Core's image folder ([media] image_dir) and recorded as
+// image properties holding images:// paths, so the folder can move.
 package libretrothumbs
 
 import (
@@ -50,8 +51,6 @@ import (
 
 const (
 	scraperID = "libretro-thumbnails"
-	// dirName is the folder under Core's data directory holding downloads.
-	dirName = "libretro-thumbnails"
 	// workers bounds concurrent requests to the thumbnail server.
 	workers = 4
 	// batchSize is how many matched rows are written in one transaction.
@@ -72,19 +71,31 @@ var kindProperty = map[string]tags.TagValue{
 // NewPlatformScraper returns the libretro thumbnail scraper. It downloads, so
 // it only runs when asked and is never an automatic post-index scraper.
 func NewPlatformScraper() platforms.Scraper {
-	return newScraper(DefaultBaseURL, func(pl platforms.Platform) string {
-		return filepath.Join(helpers.DataDir(pl), dirName)
-	})
+	return newScraper(DefaultBaseURL, Dir, helpers.FreeDiskSpace)
 }
 
-func newScraper(baseURL string, dir func(platforms.Platform) string) platforms.Scraper {
+// Dir is the folder downloads are stored in: the libretro folder of the
+// configured image folder.
+func Dir(cfg *config.Instance, pl platforms.Platform) string {
+	dataDir := helpers.DataDir(pl)
+	if cfg == nil {
+		return filepath.Join(config.ResolveImageDir("", dataDir), config.ImageLibretroDir)
+	}
+	return filepath.Join(cfg.ImageDir(dataDir), config.ImageLibretroDir)
+}
+
+func newScraper(
+	baseURL string,
+	dir func(*config.Instance, platforms.Platform) string,
+	freeSpace func(string) (uint64, error),
+) platforms.Scraper {
 	return platforms.Scraper{
 		ID:                  scraperID,
 		Name:                "libretro thumbnails",
 		SupportedSystemIDs:  SupportedSystems(),
 		SupportsFillMissing: true,
 		Scrape: func(
-			ctx context.Context, _ *config.Instance, pl platforms.Platform, fs afero.Fs,
+			ctx context.Context, cfg *config.Instance, pl platforms.Platform, fs afero.Fs,
 			db *database.Database, opts scraper.ScrapeOptions, _ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
@@ -97,7 +108,9 @@ func newScraper(baseURL string, dir func(platforms.Platform) string) platforms.S
 			if fs == nil {
 				fs = afero.NewOsFs()
 			}
-			r := &run{db: db.MediaDB, client: newClient(fs, dir(pl), baseURL), opts: opts}
+			c := newClient(fs, dir(cfg, pl), baseURL)
+			c.freeSpace = freeSpace
+			r := &run{db: db.MediaDB, client: c, opts: opts}
 			go r.loop(ctx, ch)
 			return nil
 		},
@@ -234,9 +247,18 @@ func (r *run) thumbnails(
 			continue
 		}
 		for _, kind := range kinds {
-			imagePath, err := r.client.image(ctx, playlist, kind, name, r.opts.Force)
+			file, err := r.client.image(ctx, playlist, kind, name, r.opts.Force)
 			if errors.Is(err, errNotFound) {
 				continue
+			}
+			var imagePath string
+			if err == nil {
+				imagePath, err = r.client.imagePath(file)
+			}
+			if lowSpace := (*lowDiskSpaceError)(nil); errors.As(err, &lowSpace) {
+				// The run stops; nothing later in this row would fit either.
+				out.err = err
+				return out
 			}
 			if err != nil {
 				// Keep the kinds that did arrive: the row is written with them
@@ -375,8 +397,9 @@ func (r *run) scrapeSystem(
 	}
 	ticker := time.NewTicker(batchInterval)
 	defer ticker.Stop()
+	var stopErr error
 loop:
-	for {
+	for stopErr == nil {
 		var res result
 		select {
 		case got, ok := <-results:
@@ -394,6 +417,10 @@ loop:
 			continue
 		}
 		c.processed++
+		if lowSpace := (*lowDiskSpaceError)(nil); errors.As(res.err, &lowSpace) {
+			// Finish this row with what it got, then stop the run.
+			stopErr = res.err
+		}
 		if res.err != nil {
 			log.Debug().Err(res.err).Str("path", res.row.Path).Msg("libretro thumbnail download failed")
 			if len(res.props) == 0 {
@@ -428,10 +455,19 @@ loop:
 		}
 		progress(nil)
 	}
+	if stopErr != nil {
+		cancel()
+		for range results { //nolint:revive // drain so the workers exit
+		}
+		log.Warn().Err(stopErr).Msg("libretro thumbnails: stopping, the image folder is low on space")
+	}
 	// Downloads that finished are kept even when the run was cancelled: the
 	// final write does not inherit the cancellation.
 	if err := batch.flush(context.WithoutCancel(ctx)); err != nil {
 		return c, fmt.Errorf("libretro-thumbnails: %w", err)
+	}
+	if stopErr != nil {
+		return c, fmt.Errorf("libretro-thumbnails: %w", stopErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return c, fmt.Errorf("libretro-thumbnails: %w", err)

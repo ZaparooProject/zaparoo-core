@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/godbus/dbus/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -264,7 +265,12 @@ func (r *LinuxDisplay) Read() (Display, error) {
 type LinuxControllers struct {
 	Fs afero.Fs
 	// Resolve returns the real device path behind a sysfs class entry.
-	Resolve     func(path string) (string, error)
+	Resolve func(path string) (string, error)
+	// Batteries returns the charge BlueZ reads from Bluetooth devices' own
+	// battery service, keyed by lower-case address. It covers pads whose
+	// kernel driver adds no battery, such as the Xbox Wireless Controller over
+	// Bluetooth LE. It may be nil.
+	Batteries   func() map[string]int
 	InputRoot   string
 	PowerRoot   string
 	VirtualName string
@@ -280,6 +286,20 @@ var builtInControllers = map[[2]uint16]bool{ //nolint:gochecknoglobals // Static
 
 // virtualDevicePath is where the kernel roots devices that software created.
 var virtualDevicePath = filepath.Join("devices", "virtual") + string(filepath.Separator)
+
+// uhidDevicePath is where BlueZ puts a Bluetooth LE pad's input device: it
+// forwards the real pad through uhid, so the device sits under
+// virtualDevicePath even though it is hardware in someone's hands.
+var uhidDevicePath = filepath.Join("devices", "virtual", "misc", "uhid") + string(filepath.Separator)
+
+// softwareMade reports whether an input device was created by a program
+// rather than by a driver for real hardware.
+func softwareMade(realPath string, parsed InputModalias) bool {
+	if !strings.Contains(realPath, virtualDevicePath) {
+		return false
+	}
+	return parsed.Bus != busBluetooth || !strings.Contains(realPath, uhidDevicePath)
+}
 
 type controllerSupply struct {
 	parent string
@@ -299,6 +319,8 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 		return nil, fmt.Errorf("listing input devices: %w", err)
 	}
 	supplies := r.deviceSupplies()
+	var bluezBatteries map[string]int
+	bluezRead := false
 
 	controllers := []Controller{}
 	seenBuiltIn := map[[2]uint16]bool{}
@@ -330,20 +352,33 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 		}
 		name, _ := readTrimmed(r.Fs, filepath.Join(dir, "name"))
 		realPath, resolveErr := r.Resolve(dir)
-		if resolveErr == nil && strings.Contains(realPath, virtualDevicePath) {
+		if resolveErr == nil && softwareMade(realPath, parsed) {
 			continue
 		}
 		if name == r.VirtualName && r.VirtualName != "" {
 			continue
 		}
 		uniq, _ := readTrimmed(r.Fs, filepath.Join(dir, "uniq"))
+		address := strings.ToLower(uniq)
+		battery := r.battery(supplies, realPath, uniq)
+		if battery == nil && address != "" && r.Batteries != nil {
+			// One BlueZ read per pass, and only when a pad needs it.
+			if !bluezRead {
+				bluezBatteries = r.Batteries()
+				bluezRead = true
+			}
+			if percent, ok := bluezBatteries[address]; ok {
+				battery = &ControllerBattery{Percent: &percent, Level: BatteryLevel(percent)}
+			}
+		}
 		controllers = append(controllers, Controller{
+			Address:    address,
 			ID:         id,
 			Name:       name,
 			VendorID:   fmt.Sprintf("%04x", parsed.Vendor),
 			ProductID:  fmt.Sprintf("%04x", parsed.Product),
 			Connection: parsed.Connection(),
-			Battery:    r.battery(supplies, realPath, uniq),
+			Battery:    battery,
 		})
 	}
 	sort.Slice(controllers, func(a, b int) bool {
@@ -400,7 +435,12 @@ func (r *LinuxControllers) battery(supplies []controllerSupply, realPath, uniq s
 			log.Debug().Str("supply", supply.name).Str("capacity", raw).Msg("ignoring controller battery reading")
 			return nil
 		}
-		return &ControllerBattery{Percent: &percent, Level: BatteryLevel(percent)}
+		status, _ := readTrimmed(r.Fs, filepath.Join(supply.dir, "status"))
+		return &ControllerBattery{
+			Percent:     &percent,
+			Level:       BatteryLevel(percent),
+			ChargeState: power.SysfsChargeState(status),
+		}
 	}
 	return nil
 }

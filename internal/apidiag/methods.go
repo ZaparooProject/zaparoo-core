@@ -47,6 +47,8 @@ inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings
 settings.auth.link settings.auth.link.status settings.auth.link.cancel
 update.check update.status update.apply input.keyboard input.gamepad screenshot media.title.parse remote.activity
 device.status device.power.reboot device.power.shutdown device.power.suspend
+device.bluetooth.devices device.bluetooth.scan.start device.bluetooth.scan.stop
+device.bluetooth.pair device.bluetooth.forget
 `)
 	result := make(map[string]struct{}, len(methods))
 	for _, method := range methods {

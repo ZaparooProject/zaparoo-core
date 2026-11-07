@@ -107,7 +107,11 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodDecksDelete,
 		models.MethodDevicePowerReboot,
 		models.MethodDevicePowerShutdown,
-		models.MethodDevicePowerSuspend:
+		models.MethodDevicePowerSuspend,
+		models.MethodDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothScanStop,
+		models.MethodDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget:
 		return apiPriorityHigh
 	case models.MethodMediaImage,
 		models.MethodDecksImage,

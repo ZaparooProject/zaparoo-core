@@ -217,7 +217,7 @@ Core evaluates four public access states:
 
 - **Localhost** requests originate from Core's device and have full access.
 - Authenticated **admin** includes paired admin clients and requests carrying a valid configured static API key. API-key admin is not localhost and cannot invoke localhost-only methods.
-- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, apply updates, or reboot or shut down the device.
+- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, apply updates, reboot or shut down the device, or pair Bluetooth devices.
 - Unauthenticated **legacy** clients are admitted only on MiSTer, MiSTeX, Batocera, LibreELEC, and ReplayOS. Legacy is a distinct compatibility state, never admin. Every other platform rejects legacy full-API access.
 
 Grandfathered legacy screenshot access exists on MiSTer and ReplayOS. Grandfathered legacy input exists on MiSTer, MiSTeX, Batocera, and ReplayOS. New methods and capabilities do not become legacy-accessible automatically.
@@ -372,6 +372,11 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | device.power.reboot             | Restart the device.                                                                   | `device.power` |
 | device.power.shutdown           | Power the device off.                                                                 | `device.power` |
 | device.power.suspend            | Put the device to sleep.                                                              | `device.power` |
+| device.bluetooth.devices        | List paired Bluetooth devices and the ones a scan found.                              | Localhost or any paired client |
+| device.bluetooth.scan.start     | Start looking for Bluetooth devices.                                                  | `device.bluetooth` |
+| device.bluetooth.scan.stop      | Stop looking for Bluetooth devices.                                                   | `device.bluetooth` |
+| device.bluetooth.pair           | Pair with a Bluetooth device, trust it and connect it.                                | `device.bluetooth` |
+| device.bluetooth.forget         | Unpair a Bluetooth device and remove it.                                              | `device.bluetooth` |
 
 ## Notifications
 
@@ -401,3 +406,4 @@ Notifications let a server or client know an event has occurred. See the [API No
 | decks.changed          | A deck was created, edited, deleted or refreshed from its source.                 |
 | update.state           | Progress of an update being applied.                                              |
 | device.changed         | The state of the device Core runs on changed.                                     |
+| device.bluetooth.changed | Bluetooth devices, a scan or a pairing attempt changed.                         |

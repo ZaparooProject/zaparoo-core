@@ -228,6 +228,10 @@ type UpdateSettingsParams struct {
 	ProfilesSwapData          *bool               `json:"profilesSwapData"`
 	UpdateCheck               *bool               `json:"updateCheck"`
 	UpdateInstall             *bool               `json:"updateInstall"`
+	// MediaImageDir is [media] image_dir; "" restores the default.
+	MediaImageDir *string `json:"mediaImageDir" validate:"omitempty,max=4096"`
+	// MediaThumbCacheMaxMB is [media] thumb_cache_max_mb; 0 restores the default.
+	MediaThumbCacheMaxMB *int `json:"mediaThumbCacheMaxMb" validate:"omitempty,gte=0,lte=1048576"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -585,4 +589,16 @@ type MediaTitleParseParams struct {
 // not get past anything that would risk their data.
 type UpdateApplyParams struct {
 	Force bool `json:"force"`
+}
+
+// DeviceBluetoothScanParams starts a Bluetooth scan. Unless All is set, only
+// gamepads and joysticks are listed besides paired devices.
+type DeviceBluetoothScanParams struct {
+	TimeoutSeconds *int `json:"timeoutSeconds" validate:"omitempty,min=1,max=120"`
+	All            bool `json:"all"`
+}
+
+// DeviceBluetoothDeviceParams names one Bluetooth device by its address.
+type DeviceBluetoothDeviceParams struct {
+	ID string `json:"id" validate:"required"`
 }

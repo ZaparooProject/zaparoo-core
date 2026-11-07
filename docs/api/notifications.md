@@ -943,14 +943,59 @@ Each key is always present and is `null` when the device has no such section or 
         {
           "id": "input17",
           "name": "DualSense Wireless Controller",
+          "displayName": "DualSense",
           "vendorId": "054c",
           "productId": "0ce6",
           "connection": "bluetooth",
-          "battery": { "percent": 80, "level": "full" }
+          "battery": { "percent": 80, "level": "full", "chargeState": "charging" }
         }
       ]
     },
     "time": { "clockReliable": true }
+  }
+}
+```
+
+### device.bluetooth.changed
+
+Sent when Bluetooth devices change while at least one client holds a WebSocket or SSE connection: a scan starts or stops, a device is found, paired, connected or forgotten, the adapter is switched on or off, or a pairing attempt moves on. Changes that arrive together, such as a burst of devices found by a scan, are sent as one notification about a quarter of a second later.
+
+Only clients granted the `device.bluetooth` capability receive it, because it names and addresses every device in range. Local clients and API key clients have it; a paired client needs the admin role.
+
+The `scanning` field follows the adapter: when the Bluetooth stack ends discovery on its own, for example after a fault or a restart of the stack, it turns `false` even though no client stopped the scan.
+
+Each notification carries the whole state, not a difference. Replace what you hold with it. Call [`device.bluetooth.devices`](methods.md#devicebluetoothdevices) once after connecting, then apply these notifications.
+
+The outcome of [`device.bluetooth.pair`](methods.md#devicebluetoothpair) arrives here: `pairing.state` turns to `paired` or `failed`.
+
+#### Parameters
+
+A [Bluetooth state](methods.md#bluetooth-state-object), the same as the result of `device.bluetooth.devices`. When the adapter or the Bluetooth stack goes away, `powered` is `false` and `devices` is empty.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "device.bluetooth.changed",
+  "params": {
+    "powered": true,
+    "scanning": false,
+    "devices": [
+      {
+        "id": "E4:17:D8:33:44:55",
+        "name": "8BitDo Pro 2",
+        "displayName": "8BitDo Pro 2",
+        "vendorId": "2dc8",
+        "productId": "6006",
+        "paired": true,
+        "connected": true,
+        "trusted": true,
+        "gamepad": true,
+        "controllerId": "input18"
+      }
+    ],
+    "pairing": { "id": "E4:17:D8:33:44:55", "state": "paired", "error": null, "attempt": 1 }
   }
 }
 ```
