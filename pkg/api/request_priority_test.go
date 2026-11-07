@@ -108,6 +108,7 @@ func TestClassifyAPIMethod(t *testing.T) {
 		{"high device shutdown", models.MethodDevicePowerShutdown, apiPriorityHigh},
 		{"high device suspend", models.MethodDevicePowerSuspend, apiPriorityHigh},
 		{"device status stays normal", models.MethodDeviceStatus, apiPriorityNormal},
+		{"online status stays normal", models.MethodOnlineStatus, apiPriorityNormal},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
 		{"low generate prefix", "media.generate.extra", apiPriorityLow},
 		{"unknown normal", "custom.method", apiPriorityNormal},

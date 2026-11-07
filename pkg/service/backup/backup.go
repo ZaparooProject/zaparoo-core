@@ -196,7 +196,9 @@ type statusEntry struct {
 	Availability          string                                 `json:"availability,omitempty"`
 	DeviceName            string                                 `json:"deviceName,omitempty"`
 	LinkedAt              string                                 `json:"linkedAt,omitempty"`
+	FeaturesCheckedAt     string                                 `json:"featuresCheckedAt,omitempty"`
 	Warnings              []models.BackupWarning                 `json:"warnings,omitempty"`
+	Features              []string                               `json:"features,omitempty"`
 	LastBackupSize        int64                                  `json:"lastBackupSize"`
 	SkippedFiles          int                                    `json:"skippedFiles,omitempty"`
 	Unlinked              bool                                   `json:"unlinked,omitempty"`
@@ -531,13 +533,7 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 
 func (m *Manager) Status() models.BackupStatusResponse {
 	stored := m.readStatus()
-	remoteLinked := false
-	lookupURL := config.RemoteAuthLookupURL(m.cfg.OnlineBaseURL())
-	if entry := config.LookupAuth(config.GetAuthCfg(), lookupURL); entry != nil && entry.Bearer != "" {
-		// A recorded 401 means the token was revoked server-side: report
-		// unlinked so the UI prompts a re-link instead of silently failing.
-		remoteLinked = !stored.Remote.Unlinked
-	}
+	remoteLinked := m.remoteLinked(&stored)
 	local := toStatusEntry(&stored.Local, true, "")
 	remote := toStatusEntry(&stored.Remote, m.cfg.BackupRemoteEnabled(), m.cfg.BackupRemoteSchedule())
 	remote.Linked = remoteLinked
@@ -551,6 +547,40 @@ func (m *Manager) Status() models.BackupStatusResponse {
 		}
 	}
 	return status
+}
+
+// remoteLinked reports whether a usable online credential exists: a stored
+// bearer for the configured online server that has not been rejected.
+func (m *Manager) remoteLinked(stored *statusFile) bool {
+	lookupURL := config.RemoteAuthLookupURL(m.cfg.OnlineBaseURL())
+	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
+	if entry == nil || entry.Bearer == "" {
+		return false
+	}
+	// A recorded 401 means the token was revoked server-side: report
+	// unlinked so the UI prompts a re-link instead of silently failing.
+	return !stored.Remote.Unlinked
+}
+
+// OnlineStatus reports the link state, the device's name and link time on
+// the Online service, and the account features it last listed. It reads
+// stored state only and never contacts the server. Feature names are passed
+// through as reported.
+func (m *Manager) OnlineStatus() models.OnlineStatusResponse {
+	stored := m.readStatus()
+	resp := models.OnlineStatusResponse{Linked: m.remoteLinked(&stored), Features: []string{}}
+	if !resp.Linked {
+		return resp
+	}
+	resp.DeviceName = optionalString(stored.Remote.DeviceName)
+	resp.LinkedAt = optionalString(stored.Remote.LinkedAt)
+	if stored.Remote.FeaturesCheckedAt == "" {
+		return resp
+	}
+	resp.Features = normalizeFeatures(stored.Remote.Features)
+	checkedAt := stored.Remote.FeaturesCheckedAt
+	resp.FeaturesCheckedAt = &checkedAt
+	return resp
 }
 
 func (m *Manager) backupDir() string {

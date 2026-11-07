@@ -518,6 +518,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsAuthLinkStatus: methods.HandleSettingsAuthLinkStatus,
 		models.MethodSettingsAuthLinkCancel: methods.HandleSettingsAuthLinkCancel,
 		models.MethodRemoteActivity:         methods.HandleRemoteActivity,
+		models.MethodOnlineStatus:           methods.HandleOnlineStatus,
 		// update
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)

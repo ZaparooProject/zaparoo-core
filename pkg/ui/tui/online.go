@@ -38,6 +38,7 @@ import (
 // renders and shows the status as unknown.
 type onlinePageData struct {
 	status   *models.BackupStatusResponse
+	online   *models.OnlineStatusResponse
 	settings *models.SettingsResponse
 	activity *models.RemoteActivityResponse
 }
@@ -74,6 +75,10 @@ func buildOnlineSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 		"Failed to load online status",
 		tuiContext, goBack,
 		func(ctx context.Context) (*onlinePageData, error) {
+			online, err := svc.GetOnlineStatus(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("get online status: %w", err)
+			}
 			status, err := svc.GetBackupStatus(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("get backup status: %w", err)
@@ -87,7 +92,7 @@ func buildOnlineSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 				log.Warn().Err(err).Msg("error loading remote control status")
 				activity = nil
 			}
-			return &onlinePageData{status: status, settings: settings, activity: activity}, nil
+			return &onlinePageData{status: status, online: online, settings: settings, activity: activity}, nil
 		},
 		func(data *onlinePageData) {
 			renderOnlineSettingsMenu(svc, pages, app, data, goBack)
@@ -95,11 +100,25 @@ func buildOnlineSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 	)
 }
 
-// Warp availability values reported in the remote backup status.
+// Warp availability values, read from the account features by
+// warpFromOnline. An empty value means no check has succeeded yet.
 const (
 	warpAvailable   = "available"
 	warpUnavailable = "unavailable"
 )
+
+// warpFromOnline reads Warp from the online status: available when the
+// account lists the cloud backup feature, unavailable when a check succeeded
+// without it, and unknown ("") before any check has.
+func warpFromOnline(online *models.OnlineStatusResponse) string {
+	if online == nil || online.FeaturesCheckedAt == nil {
+		return ""
+	}
+	if slices.Contains(online.Features, models.OnlineFeatureCloudBackup) {
+		return warpAvailable
+	}
+	return warpUnavailable
+}
 
 // warpCheckAttempts and warpCheckInterval bound how long turning every
 // feature on waits for an unknown Warp status to resolve. Core refreshes
@@ -111,6 +130,12 @@ const (
 )
 
 const onlineLinkFirstDesc = "Link your Zaparoo Online account first"
+
+// warpUnknownBackupSkipped tells the user why turning every feature on left
+// cloud backup off.
+const warpUnknownBackupSkipped = "Cloud backup wasn't turned on because your\n" +
+	"Zaparoo Warp status couldn't be checked.\n\n" +
+	"You can turn it on in Settings > Online."
 
 // onlineFeatures holds the per-feature consent settings grouped by the
 // "All online features" row.
@@ -194,7 +219,7 @@ func allOnlineFeaturesUpdate(
 	return next, params
 }
 
-// resolveWarpAvailability re-reads the backup status while Warp
+// resolveWarpAvailability re-reads the online status while Warp
 // availability is unknown, giving Core's background check time to finish.
 // It returns the last availability seen, which is still unknown if the
 // check did not complete in time.
@@ -212,12 +237,12 @@ func resolveWarpAvailability(
 			return current
 		case <-timer.C:
 		}
-		status, err := svc.GetBackupStatus(ctx)
+		online, err := svc.GetOnlineStatus(ctx)
 		if err != nil {
-			log.Debug().Err(err).Msg("error re-reading backup status for Warp availability")
+			log.Debug().Err(err).Msg("error re-reading online status for Warp availability")
 			continue
 		}
-		current = status.Remote.Availability
+		current = warpFromOnline(online)
 	}
 	return current
 }
@@ -226,6 +251,8 @@ func resolveWarpAvailability(
 // update and calls onDone on the UI thread with the resulting features. When
 // turning on with Warp availability still unknown, it first waits for the
 // check behind a cancellable "checking" modal; cancelling makes no change.
+// If the check never finishes, the other features still turn on and a modal
+// says cloud backup did not.
 func setAllOnlineFeatures(
 	svc SettingsService,
 	pages *tview.Pages,
@@ -235,19 +262,8 @@ func setAllOnlineFeatures(
 	warp string,
 	onDone func(onlineFeatures, error),
 ) {
-	apply := func(warp string) {
-		next, params := allOnlineFeaturesUpdate(current, on, warp)
-		ctx, cancel := tuiContext()
-		defer cancel()
-		if err := svc.UpdateSettings(ctx, params); err != nil {
-			log.Warn().Err(err).Bool("on", on).Msg("error updating all online features")
-			onDone(current, err)
-			return
-		}
-		onDone(next, nil)
-	}
 	if !on || warp == warpAvailable || warp == warpUnavailable {
-		apply(warp)
+		applyAllOnlineFeatures(svc, pages, app, current, on, warp, onDone)
 		return
 	}
 
@@ -266,9 +282,38 @@ func setAllOnlineFeatures(
 				return
 			}
 			closeWaiting()
-			apply(resolved)
+			applyAllOnlineFeatures(svc, pages, app, current, on, resolved, onDone)
 		})
 	}()
+}
+
+// applyAllOnlineFeatures saves the update and calls onDone with the result.
+// Turning on with Warp still unknown leaves cloud backup off, so onDone waits
+// until the user has dismissed a modal saying so.
+func applyAllOnlineFeatures(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	current onlineFeatures,
+	on bool,
+	warp string,
+	onDone func(onlineFeatures, error),
+) {
+	next, params := allOnlineFeaturesUpdate(current, on, warp)
+	ctx, cancel := tuiContext()
+	defer cancel()
+	if err := svc.UpdateSettings(ctx, params); err != nil {
+		log.Warn().Err(err).Bool("on", on).Msg("error updating all online features")
+		onDone(current, err)
+		return
+	}
+	if on && warp != warpAvailable && warp != warpUnavailable {
+		ShowInfoModal(pages, app, "Cloud backup", warpUnknownBackupSkipped, func() {
+			onDone(next, nil)
+		})
+		return
+	}
+	onDone(next, nil)
 }
 
 // renderOnlineSettingsMenu shows the Zaparoo Online page in two columns.
@@ -300,7 +345,7 @@ func renderOnlineSettingsMenu(
 
 	rebuild := func() { buildOnlineSettingsMenu(svc, pages, app, goBack) }
 	status := data.status
-	linked := status.Remote.Linked
+	linked := data.online.Linked
 	serverHost := onlineServerHost(data.settings)
 	if serverHost != "" {
 		frame.SetInfoText(fmt.Sprintf(
@@ -309,11 +354,11 @@ func renderOnlineSettingsMenu(
 		))
 	}
 	features := onlineFeaturesFromSettings(data.settings, status)
-	warp := status.Remote.Availability
+	warp := warpFromOnline(data.online)
 
 	left.AddHeader("Account")
 	if linked {
-		addOnlineAccountItems(pages, app, left, status, serverHost, refocus)
+		addOnlineAccountItems(pages, app, left, data.online, serverHost, refocus)
 	} else {
 		left.AddValueAction("Status",
 			"Link a Zaparoo Online account to use online features",
@@ -444,13 +489,13 @@ func addOnlineAccountItems(
 	pages *tview.Pages,
 	app *tview.Application,
 	menu *SettingsList,
-	status *models.BackupStatusResponse,
+	online *models.OnlineStatusResponse,
 	serverHost string,
 	refocus func(),
 ) {
 	deviceName := ""
-	if status.Remote.DeviceName != nil {
-		deviceName = *status.Remote.DeviceName
+	if online.DeviceName != nil {
+		deviceName = *online.DeviceName
 	}
 	accountLabel, accountValue := "Status", "Linked"
 	if deviceName != "" {
@@ -464,7 +509,7 @@ func addOnlineAccountItems(
 	if deviceName != "" {
 		accountDetail += "\n\nDevice name: " + deviceName
 	}
-	if since := formatLinkedSince(status.Remote.LinkedAt); since != "" {
+	if since := formatLinkedSince(online.LinkedAt); since != "" {
 		accountDetail += "\nLinked since: " + since
 	}
 	menu.AddValueAction(accountLabel, accountDesc, func() string { return accountValue }, func() {
@@ -472,7 +517,7 @@ func addOnlineAccountItems(
 	})
 
 	var warpValue, warpDetail string
-	switch status.Remote.Availability {
+	switch warpFromOnline(online) {
 	case warpAvailable:
 		warpValue = "Active"
 		warpDetail = "Your Zaparoo Warp subscription is active.\n\n" +
