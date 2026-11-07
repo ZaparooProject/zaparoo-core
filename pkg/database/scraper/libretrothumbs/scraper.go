@@ -50,7 +50,8 @@ import (
 )
 
 const (
-	scraperID = "libretro-thumbnails"
+	// ScraperID names this scraper in media.scrape and its status.
+	ScraperID = "libretro-thumbnails"
 	// workers bounds concurrent requests to the thumbnail server.
 	workers = 4
 	// batchSize is how many matched rows are written in one transaction.
@@ -90,7 +91,7 @@ func newScraper(
 	freeSpace func(string) (uint64, error),
 ) platforms.Scraper {
 	return platforms.Scraper{
-		ID:                  scraperID,
+		ID:                  ScraperID,
 		Name:                "libretro thumbnails",
 		SupportedSystemIDs:  SupportedSystems(),
 		SupportsFillMissing: true,
@@ -163,7 +164,7 @@ func (r *run) systems() ([]string, error) {
 // load returns a system's rows still to scrape, with their title slugs.
 func (r *run) load(ctx context.Context, systemID string) ([]database.MediaWithFullPath, error) {
 	if r.opts.Scope != nil {
-		selection, err := scraper.LoadScopedSelection(ctx, r.db, r.opts, scraperID)
+		selection, err := scraper.LoadScopedSelection(ctx, r.db, r.opts, ScraperID)
 		if err != nil {
 			return nil, fmt.Errorf("load scoped selection: %w", err)
 		}
@@ -188,9 +189,9 @@ func (r *run) load(ctx context.Context, systemID string) ([]database.MediaWithFu
 			return nil, fmt.Errorf("look up system %s: %w", systemID, err)
 		}
 		if r.opts.Force || r.opts.FillMissing {
-			completed, err = r.db.GetScrapeRunMediaIDs(ctx, scraperID, r.opts.RunID, system.DBID)
+			completed, err = r.db.GetScrapeRunMediaIDs(ctx, ScraperID, r.opts.RunID, system.DBID)
 		} else {
-			completed, err = r.db.GetScrapedMediaIDs(ctx, scraperID, system.DBID)
+			completed, err = r.db.GetScrapedMediaIDs(ctx, ScraperID, system.DBID)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("load scrape markers for %s: %w", systemID, err)
@@ -440,9 +441,9 @@ loop:
 		// A row that lost some thumbnails keeps the ones it got but is not
 		// marked done, so the next run fetches the rest.
 		if res.err == nil {
-			write.Sentinel = scraper.SentinelTagInfo(scraperID)
+			write.Sentinel = scraper.SentinelTagInfo(ScraperID)
 			if r.opts.RunID != "" {
-				write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, r.opts.RunID))
+				write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(ScraperID, r.opts.RunID))
 			}
 		}
 		if err := batch.add(ctx, database.ScrapeWriteTarget{

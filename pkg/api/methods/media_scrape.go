@@ -96,6 +96,14 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	return true
 }
 
+// isRunningScraper reports whether the named scraper is running. A cancelled
+// run counts until its goroutine has wound down, since it may still be writing.
+func (s *scrapingStatus) isRunningScraper(scraperID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.running && s.scraperID == scraperID
+}
+
 func (s *scrapingStatus) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -907,6 +907,8 @@ Download progress is reported at most a few times a second, and the final byte a
 
 Sent when the state of the device Core runs on changes: its battery, network link, internet reachability, Bluetooth adapter, docked state, connected controllers, or whether its clock can be trusted.
 
+Only localhost and authenticated clients receive it, the same clients [`device.status`](methods.md#devicestatus) answers.
+
 Core only watches the device while at least one client holds a WebSocket or SSE connection. Call [`device.status`](methods.md#devicestatus) once after connecting for the full state, then apply these notifications.
 
 Each notification carries the whole of the state it covers, not a difference from the last one. Replace what you hold with it. When changes arrive faster than a client reads them, intermediate notifications are dropped and the latest is delivered.

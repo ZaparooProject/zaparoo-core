@@ -1215,15 +1215,39 @@ var notificationCapabilities = map[string]permissions.Capability{
 	models.NotificationDeviceBluetooth: permissions.CapDeviceBluetooth,
 }
 
+// authenticatedNotifications lists the notifications that repeat what a method
+// limited to authenticated clients returns, so they stay behind the same bar.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var authenticatedNotifications = map[string]bool{
+	models.NotificationDeviceChanged: true,
+}
+
+// notificationGated reports whether only some clients may receive a
+// notification.
+func notificationGated(method string) bool {
+	_, needsCapability := notificationCapabilities[method]
+	return needsCapability || authenticatedNotifications[method]
+}
+
+// notificationAllowed reports whether a client with this grant may receive a
+// notification.
+func notificationAllowed(method string, grant permissions.Grant) bool {
+	if authenticatedNotifications[method] && !grant.Authenticated() {
+		return false
+	}
+	capability, needsCapability := notificationCapabilities[method]
+	return !needsCapability || grant.Has(capability)
+}
+
 // notificationAudience returns which sessions may receive a notification, or
 // nil when every session may.
 func notificationAudience(method, platformID string) func(*melody.Session) bool {
-	capability, gated := notificationCapabilities[method]
-	if !gated {
+	if !notificationGated(method) {
 		return nil
 	}
 	return func(s *melody.Session) bool {
-		return sessionGrant(s.Request, getClientSession(s), platformID).Has(capability)
+		return notificationAllowed(method, sessionGrant(s.Request, getClientSession(s), platformID))
 	}
 }
 
@@ -1373,7 +1397,7 @@ func handleSSE(notifBroker *broker.Broker, st *state.State, platformID string) h
 				if !ok {
 					return
 				}
-				if capability, gated := notificationCapabilities[notif.Method]; gated && !grant.Has(capability) {
+				if !notificationAllowed(notif.Method, grant) {
 					continue
 				}
 

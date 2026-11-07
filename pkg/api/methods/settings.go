@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -241,6 +242,13 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.MediaImageDir != nil {
 		if err := validateMediaImageDir(*params.MediaImageDir, helpers.DataDir(env.Platform)); err != nil {
 			return nil, err
+		}
+		// A run reads the folder as it downloads but records paths relative
+		// to it, so a change mid-run leaves covers recorded against a folder
+		// their files are not in. Sending the current value changes nothing.
+		if *params.MediaImageDir != env.Config.ImageDirSetting() &&
+			scrapingStatusInstance.isRunningScraper(libretrothumbs.ScraperID) {
+			return nil, mediaBusyError("the image folder cannot be changed while images are downloading", nil)
 		}
 	}
 

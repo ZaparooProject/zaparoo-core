@@ -153,46 +153,75 @@ func TestBluetoothNotificationsNeedTheBluetoothCapability(t *testing.T) {
 		"an unpaired remote client does not")
 }
 
-func TestBluetoothNotificationsReachOnlyGrantedWebSockets(t *testing.T) {
+// device.changed repeats device.status, so it has the same audience: any
+// authenticated client, member included, and no unpaired one.
+func TestDeviceChangedNeedsAnAuthenticatedClient(t *testing.T) {
 	t.Parallel()
 
-	bluetooth := []byte(`{"jsonrpc":"2.0","method":"device.bluetooth.changed"}`)
+	method := models.NotificationDeviceChanged
+	assert.True(t, notificationAllowed(method, permissions.Grant{IsLocal: true}))
+	assert.True(t, notificationAllowed(method, permissions.Grant{APIKeyAuthenticated: true}))
+	assert.True(t, notificationAllowed(method, permissions.Grant{Role: permissions.RoleAdmin}))
+	assert.True(t, notificationAllowed(method, permissions.Grant{Role: permissions.RoleMember}))
+	assert.False(t, notificationAllowed(method, permissions.Grant{PlatformID: "mister"}))
+
+	member := permissions.Grant{Role: permissions.RoleMember}
+	assert.False(t, notificationAllowed(models.NotificationDeviceBluetooth, member),
+		"a member is authenticated but has no Bluetooth capability")
+	assert.True(t, notificationAllowed(models.NotificationStarted, permissions.Grant{PlatformID: "mister"}),
+		"ungated notifications reach unpaired clients")
+}
+
+func TestGatedNotificationsReachOnlyGrantedWebSockets(t *testing.T) {
+	t.Parallel()
+
 	started := []byte(`{"jsonrpc":"2.0","method":"media.started"}`)
-	tests := []struct {
-		name       string
-		remoteAddr string
-		want       []byte
-	}{
-		{name: "local", want: bluetooth},
-		{name: "remote", remoteAddr: "192.168.1.20:5000", want: started},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			sessions, conn := startNotificationAuthServerFrom(t, webSocketAuthPlaintext, 0, tt.remoteAddr)
-			// The first message read shows whether the gated one got through.
-			broadcastToSessions(sessions, bluetooth,
-				notificationAudience(models.NotificationDeviceBluetooth, "mister"))
-			broadcastToSessions(sessions, started,
-				notificationAudience(models.NotificationStarted, "mister"))
-			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
-			_, got, err := conn.ReadMessage()
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
+	for _, method := range []string{models.NotificationDeviceBluetooth, models.NotificationDeviceChanged} {
+		gated := []byte(`{"jsonrpc":"2.0","method":"` + method + `"}`)
+		tests := []struct {
+			name       string
+			remoteAddr string
+			want       []byte
+		}{
+			{name: "local", want: gated},
+			{name: "remote", remoteAddr: "192.168.1.20:5000", want: started},
+		}
+		for _, tt := range tests {
+			t.Run(method+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+				sessions, conn := startNotificationAuthServerFrom(t, webSocketAuthPlaintext, 0, tt.remoteAddr)
+				// The first message read shows whether the gated one got through.
+				broadcastToSessions(sessions, gated, notificationAudience(method, "mister"))
+				broadcastToSessions(sessions, started,
+					notificationAudience(models.NotificationStarted, "mister"))
+				require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+				_, got, err := conn.ReadMessage()
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			})
+		}
 	}
 }
 
-func TestBluetoothNotificationsReachOnlyGrantedSSEClients(t *testing.T) {
+func TestGatedNotificationsReachOnlyGrantedSSEClients(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name       string
+		method     string
 		remoteAddr string
 		want       string
 	}{
-		{name: "local", want: models.NotificationDeviceBluetooth},
-		{name: "remote", remoteAddr: "192.168.1.20:5000", want: models.NotificationStarted},
+		{name: "bluetooth local", method: models.NotificationDeviceBluetooth, want: models.NotificationDeviceBluetooth},
+		{
+			name: "bluetooth remote", method: models.NotificationDeviceBluetooth,
+			remoteAddr: "192.168.1.20:5000", want: models.NotificationStarted,
+		},
+		{name: "device local", method: models.NotificationDeviceChanged, want: models.NotificationDeviceChanged},
+		{
+			name: "device remote", method: models.NotificationDeviceChanged,
+			remoteAddr: "192.168.1.20:5000", want: models.NotificationStarted,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -222,9 +251,7 @@ func TestBluetoothNotificationsReachOnlyGrantedSSEClients(t *testing.T) {
 
 			// The headers arrive once the stream has subscribed, so nothing
 			// sent from here on is missed.
-			st.Notifications <- models.Notification{
-				Method: models.NotificationDeviceBluetooth, Params: json.RawMessage(`{}`),
-			}
+			st.Notifications <- models.Notification{Method: tt.method, Params: json.RawMessage(`{}`)}
 			st.Notifications <- models.Notification{
 				Method: models.NotificationStarted, Params: json.RawMessage(`{}`),
 			}

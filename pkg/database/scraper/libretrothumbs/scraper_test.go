@@ -185,8 +185,8 @@ func TestScrapeDownloadsMatchedThumbnailsOnce(t *testing.T) {
 
 	props := map[int64][]database.MediaProperty{}
 	for _, w := range db.writes {
-		require.Equal(t, scraper.SentinelTagInfo(scraperID), w.Write.Sentinel)
-		require.Equal(t, []database.TagInfo{scraper.RunTagInfo(scraperID, "r1")}, w.Write.MediaTags)
+		require.Equal(t, scraper.SentinelTagInfo(ScraperID), w.Write.Sentinel)
+		require.Equal(t, []database.TagInfo{scraper.RunTagInfo(ScraperID, "r1")}, w.Write.MediaTags)
 		require.True(t, w.Write.FillMissing)
 		props[w.MediaDBID] = w.Write.MediaProps
 	}

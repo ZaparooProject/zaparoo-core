@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -288,6 +289,44 @@ func TestImageSettingsUpdateKeepsTheOldValuesWhenTheSaveFails(t *testing.T) {
 	assert.Zero(t, cfg.ThumbCacheMaxMBSetting())
 	assert.Same(t, cache, mediaThumbCachePointer.Load(), "the cache stays on the old folder")
 	assert.Equal(t, int64(1<<30), cache.maxBytes.Load())
+}
+
+// Not parallel: it holds the process-wide scraping status.
+//
+//nolint:paralleltest // uses the global scraping status
+func TestImageDirSettingRefusedWhileImagesDownload(t *testing.T) {
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("test-platform").Maybe()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir, HostManagedPaths: true})
+	current := filepath.Join(t.TempDir(), "current")
+	next := filepath.Join(t.TempDir(), "next")
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetImageDir(current)
+
+	update := func(dir string) error {
+		_, updateErr := HandleSettingsUpdate(
+			imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &dir}))
+		return updateErr
+	}
+
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	require.True(t, scrapingStatusInstance.startIfNotRunning(libretrothumbs.ScraperID, false))
+
+	err = update(next)
+	var categorized *models.CategorizedError
+	require.ErrorAs(t, err, &categorized)
+	assert.Equal(t, models.ErrorCategoryBusy, categorized.Category)
+	assert.Equal(t, current, cfg.ImageDirSetting())
+
+	require.NoError(t, update(current), "sending the current folder changes nothing")
+
+	ClearScrapingStatus()
+	require.True(t, scrapingStatusInstance.startIfNotRunning("gamelist.xml", false))
+	require.NoError(t, update(next), "other scrapers do not write to the image folder")
+	assert.Equal(t, next, cfg.ImageDirSetting())
 }
 
 func TestImageDirSettingValidation(t *testing.T) {
