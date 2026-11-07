@@ -356,3 +356,249 @@ func TestHandleDevicePower_NoMonitor(t *testing.T) {
 	_, err := HandleDevicePower(hoststatus.PowerReboot)(env)
 	assert.Equal(t, models.ErrorCategoryUnavailable, errorCategory(t, err))
 }
+
+// fakeBluetoothStack is an adapter with one gamepad in range.
+type fakeBluetoothStack struct {
+	readErr     error
+	startErr    error
+	powered     bool
+	discovering bool
+}
+
+func (s *fakeBluetoothStack) Read(context.Context) (hoststatus.BluetoothReading, error) {
+	return hoststatus.BluetoothReading{
+		Powered:     s.powered,
+		Discovering: s.discovering,
+		Devices: []hoststatus.BluetoothDevice{{
+			Address: "AA:BB:CC:DD:EE:FF", Class: 0x002508, InRange: true, VendorID: "054c", ProductID: "09cc",
+		}},
+	}, s.readErr
+}
+
+func (s *fakeBluetoothStack) StartDiscovery(context.Context) error {
+	if s.startErr == nil {
+		s.discovering = true
+	}
+	return s.startErr
+}
+
+func (s *fakeBluetoothStack) StopDiscovery(context.Context) error {
+	s.discovering = false
+	return nil
+}
+func (*fakeBluetoothStack) Pair(context.Context, string) error    { return nil }
+func (*fakeBluetoothStack) Trust(context.Context, string) error   { return nil }
+func (*fakeBluetoothStack) Connect(context.Context, string) error { return nil }
+func (*fakeBluetoothStack) Remove(context.Context, string) error  { return nil }
+func (*fakeBluetoothStack) Watch(ctx context.Context, _ func())   { <-ctx.Done() }
+
+func bluetoothTestEnv(t *testing.T, stack hoststatus.BluetoothController) requests.RequestEnv {
+	t.Helper()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("test")
+	pl.On("Settings").Return(platforms.Settings{DataDir: "/data/zaparoo"})
+	pl.On("RootDirs", mock.Anything).Return([]string{"/media/games"})
+
+	monitor := device.NewMonitor(&device.Options{
+		Platform: pl,
+		Clock:    clockwork.NewFakeClock(),
+		Readers: hoststatus.Readers{
+			PowerControl:     newFakePowerControl(),
+			BluetoothControl: stack,
+		},
+	})
+	t.Cleanup(monitor.Bluetooth().Close)
+
+	st, _ := state.NewState(pl, "boot")
+	t.Cleanup(st.StopService)
+	st.SetDeviceMonitor(monitor)
+	return requests.RequestEnv{Context: t.Context(), Platform: pl, State: st, IsLocal: true}
+}
+
+func TestHandleDeviceStatus_BluetoothActions(t *testing.T) {
+	t.Parallel()
+
+	bluetoothActions := []string{
+		models.MethodDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget,
+	}
+	tests := []struct {
+		stack      *fakeBluetoothStack
+		name       string
+		clientRole string
+		want       string
+		isLocal    bool
+	}{
+		{name: "local", stack: &fakeBluetoothStack{powered: true}, isLocal: true, want: models.DeviceSupported},
+		{
+			name: "powered off is still supported", stack: &fakeBluetoothStack{},
+			isLocal: true, want: models.DeviceSupported,
+		},
+		{
+			name: "paired member may not", stack: &fakeBluetoothStack{powered: true},
+			clientRole: string(permissions.RoleMember), want: models.DeviceNotPermitted,
+		},
+		{
+			name: "no adapter leaves them out", stack: &fakeBluetoothStack{readErr: hoststatus.ErrBluetoothNoAdapter},
+			isLocal: true,
+		},
+		{
+			name: "no bluetoothd leaves them out", stack: &fakeBluetoothStack{readErr: hoststatus.ErrUnsupported},
+			isLocal: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := bluetoothTestEnv(t, tt.stack)
+			env.IsLocal = tt.isLocal
+			env.ClientRole = tt.clientRole
+
+			result, err := HandleDeviceStatus(env)
+			require.NoError(t, err)
+			response, ok := result.(models.DeviceStatusResponse)
+			require.True(t, ok)
+			for _, method := range bluetoothActions {
+				got, present := response.Capabilities.Actions[method]
+				if tt.want == "" {
+					assert.False(t, present, method)
+					continue
+				}
+				assert.Equal(t, tt.want, got, method)
+			}
+			assert.NotContains(t, response.Capabilities.Actions, models.MethodDeviceBluetoothScanStop)
+			assert.NotContains(t, response.Capabilities.Actions, models.MethodDeviceBluetoothDevices)
+		})
+	}
+}
+
+func TestHandleDeviceBluetooth_Authorization(t *testing.T) {
+	t.Parallel()
+
+	pairParams := []byte(`{"id":"aa:bb:cc:dd:ee:ff"}`)
+	handlers := []struct {
+		handler func(requests.RequestEnv) (any, error)
+		name    string
+		params  []byte
+	}{
+		{name: "devices", handler: HandleDeviceBluetoothDevices},
+		{name: "scan start", handler: HandleDeviceBluetoothScanStart},
+		{name: "scan stop", handler: HandleDeviceBluetoothScanStop},
+		{name: "pair", handler: HandleDeviceBluetoothPair, params: pairParams},
+		{name: "forget", handler: HandleDeviceBluetoothForget, params: pairParams},
+	}
+	grants := []struct {
+		name        string
+		clientRole  string
+		isLocal     bool
+		wantAllowed bool
+	}{
+		{name: "paired member is refused", clientRole: string(permissions.RoleMember)},
+		{name: "unpaired remote is refused"},
+		{name: "paired admin is allowed", clientRole: string(permissions.RoleAdmin), wantAllowed: true},
+		{name: "local is allowed", isLocal: true, wantAllowed: true},
+	}
+	for _, h := range handlers {
+		for _, grant := range grants {
+			t.Run(h.name+"/"+grant.name, func(t *testing.T) {
+				t.Parallel()
+				env := bluetoothTestEnv(t, &fakeBluetoothStack{powered: true})
+				env.IsLocal = grant.isLocal
+				env.ClientRole = grant.clientRole
+				env.Params = h.params
+
+				result, err := h.handler(env)
+				if !grant.wantAllowed {
+					require.ErrorIs(t, err, ErrForbidden)
+					return
+				}
+				require.NoError(t, err)
+				assert.IsType(t, models.DeviceBluetoothState{}, result)
+			})
+		}
+	}
+}
+
+func TestHandleDeviceBluetooth_Results(t *testing.T) {
+	t.Parallel()
+
+	env := bluetoothTestEnv(t, &fakeBluetoothStack{powered: true})
+	env.Params = []byte(`{"all":true,"timeoutSeconds":30}`)
+	result, err := HandleDeviceBluetoothScanStart(env)
+	require.NoError(t, err)
+	scan, ok := result.(models.DeviceBluetoothState)
+	require.True(t, ok)
+	assert.True(t, scan.Scanning)
+	require.Len(t, scan.Devices, 1)
+	pad := scan.Devices[0]
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", pad.ID)
+	require.NotNil(t, pad.VendorID)
+	require.NotNil(t, pad.ProductID)
+	require.NotNil(t, pad.DisplayName)
+	assert.Equal(t, "054c", *pad.VendorID)
+	assert.Equal(t, "09cc", *pad.ProductID)
+	assert.Equal(t, "DualShock 4", *pad.DisplayName)
+
+	// Starting again while the scan runs extends it and keeps what it found.
+	env.Params = []byte(`{"timeoutSeconds":60}`)
+	result, err = HandleDeviceBluetoothScanStart(env)
+	require.NoError(t, err)
+	scan, ok = result.(models.DeviceBluetoothState)
+	require.True(t, ok)
+	assert.True(t, scan.Scanning)
+	require.Len(t, scan.Devices, 1)
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", scan.Devices[0].ID)
+
+	env.Params = []byte(`{"id":"aa:bb:cc:dd:ee:ff"}`)
+	result, err = HandleDeviceBluetoothPair(env)
+	require.NoError(t, err)
+	pair, ok := result.(models.DeviceBluetoothState)
+	require.True(t, ok)
+	require.NotNil(t, pair.Pairing)
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", pair.Pairing.ID)
+	assert.Equal(t, models.BluetoothPairingPairing, pair.Pairing.State)
+}
+
+func TestHandleDeviceBluetooth_Errors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no bluetooth on this device", func(t *testing.T) {
+		t.Parallel()
+		env := deviceTestEnv(t, newFakePowerControl())
+		_, err := HandleDeviceBluetoothDevices(env)
+		assert.Equal(t, models.ErrorCategoryUnsupported, errorCategory(t, err))
+	})
+	t.Run("no adapter", func(t *testing.T) {
+		t.Parallel()
+		env := bluetoothTestEnv(t, &fakeBluetoothStack{readErr: hoststatus.ErrBluetoothNoAdapter})
+		_, err := HandleDeviceBluetoothDevices(env)
+		assert.Equal(t, models.ErrorCategoryUnsupported, errorCategory(t, err))
+	})
+	t.Run("adapter off", func(t *testing.T) {
+		t.Parallel()
+		env := bluetoothTestEnv(t, &fakeBluetoothStack{startErr: hoststatus.ErrBluetoothNotPowered})
+		_, err := HandleDeviceBluetoothScanStart(env)
+		assert.Equal(t, models.ErrorCategoryUnavailable, errorCategory(t, err))
+		require.EqualError(t, err, "bluetooth adapter is powered off")
+
+		env.Params = []byte(`{"id":"AA:BB:CC:DD:EE:FF"}`)
+		_, err = HandleDeviceBluetoothPair(env)
+		require.EqualError(t, err, "bluetooth adapter is powered off")
+	})
+	t.Run("bad params", func(t *testing.T) {
+		t.Parallel()
+		env := bluetoothTestEnv(t, &fakeBluetoothStack{powered: true})
+		for _, params := range []string{`{}`, `{"id":"not-an-address"}`, `{"id":"AA-BB-CC-DD-EE-FF"}`} {
+			env.Params = []byte(params)
+			_, err := HandleDeviceBluetoothPair(env)
+			var clientErr *models.ClientError
+			require.ErrorAs(t, err, &clientErr, params)
+		}
+		env.Params = []byte(`{"timeoutSeconds":500}`)
+		_, err := HandleDeviceBluetoothScanStart(env)
+		var clientErr *models.ClientError
+		require.ErrorAs(t, err, &clientErr)
+	})
+}

@@ -169,6 +169,7 @@ func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:goc
 		log.Error().Err(err).Msg("error reloading config")
 		return nil, errors.New("error reloading config")
 	}
+	ReloadMediaThumbCache(env.Config)
 
 	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
 	err = env.Config.LoadCustomLaunchers(launchersDir)

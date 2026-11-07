@@ -38,12 +38,13 @@ func newDeviceMonitor(
 	cfg *config.Instance,
 	publish func(models.Notification),
 ) *device.Monitor {
+	defaults := device.DefaultReaders()
 	return device.NewMonitor(&device.Options{
 		Platform: pl,
 		Config:   cfg,
 		Clock:    clockwork.NewRealClock(),
 		Publish:  publish,
-		Readers:  platforms.ResolveDeviceReaders(pl, device.DefaultReaders()),
+		Readers:  platforms.ResolveDeviceReaders(pl, &defaults),
 		Prober:   hoststatus.NewProber(hoststatus.DefaultConnectivityURLs, nil),
 	})
 }

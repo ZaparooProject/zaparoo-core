@@ -139,6 +139,11 @@ func TestMethodLegacyMetadataFailsClosed(t *testing.T) {
 		models.MethodDevicePowerReboot,
 		models.MethodDevicePowerShutdown,
 		models.MethodDevicePowerSuspend,
+		models.MethodDeviceBluetoothDevices,
+		models.MethodDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothScanStop,
+		models.MethodDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget,
 	} {
 		definition, found := methodMap.getDefinition(method)
 		require.True(t, found, method)

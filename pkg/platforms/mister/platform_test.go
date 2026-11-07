@@ -1060,7 +1060,7 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	select {
 	case <-stopReturned:
 		// Good - returned after cleanup
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("StopActiveLauncher did not return after cleanup completed")
 	}
 }

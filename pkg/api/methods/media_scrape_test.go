@@ -606,7 +606,7 @@ func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 			fs := afero.NewMemMapFs()
 			oldCache := &mediaThumbCache{
 				fs:       fs,
-				dir:      filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+				dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 				resolved: make(map[string]resolvedThumb),
 			}
 			mediaID := int64(1)
@@ -685,7 +685,7 @@ func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 func TestInvalidateChangedScrapeThumbnails_NoChangesPreservesCache(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		fs: fs, dir: filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)
@@ -799,7 +799,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		fs: fs, dir: filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)

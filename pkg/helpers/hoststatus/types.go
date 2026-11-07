@@ -156,6 +156,8 @@ type ControllerBattery struct {
 	// Percent is nil when the hardware reports only a coarse level.
 	Percent *int
 	Level   string
+	// ChargeState is empty when the hardware does not say.
+	ChargeState power.ChargeState
 }
 
 // Controller is one physical game controller.
@@ -168,6 +170,10 @@ type Controller struct {
 	VendorID   string
 	ProductID  string
 	Connection string
+	// Address is the controller's hardware address in lower case, as the
+	// kernel reports it, or empty. A Bluetooth controller's is its Bluetooth
+	// address. It is never sent to clients.
+	Address string
 }
 
 // System is what the device is.
@@ -211,6 +217,8 @@ type Readers struct {
 	Controllers  func() ([]Controller, error)
 	System       func() (System, error)
 	PowerControl PowerController
+	// BluetoothControl is nil when Core cannot manage Bluetooth devices here.
+	BluetoothControl BluetoothController
 }
 
 // NoPowerControl is the controller for a device that supports no power
