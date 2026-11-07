@@ -40,6 +40,7 @@ const legacyLibretroThumbsDir = "libretro-thumbnails"
 // needs: rewriting stored image paths in the same transaction as the move.
 type imagePropertyRewriter interface {
 	RewriteImagePropertyPrefix(ctx context.Context, oldPrefix, newPrefix, sep string, apply func() error) (int64, error)
+	ImagePathsMigrated(ctx context.Context) (bool, error)
 }
 
 // migrateImageStorage moves image storage from its old places under the data
@@ -52,7 +53,9 @@ type imagePropertyRewriter interface {
 // folder is on the same filesystem (always true for the default). Any failure
 // leaves the files and the database as they were and Core keeps working: old
 // absolute image paths still load. Once a move is done its source is gone, so
-// running this again does nothing.
+// running this again moves nothing. Stored paths left behind pointing at the
+// old folder, by a move interrupted before its commit or by a media database
+// restored from before the move, are rewritten once.
 func migrateImageStorage(ctx context.Context, fs afero.Fs, dataDir, imageDir string, mediaDB database.MediaDBI) {
 	if dataDir == "" || imageDir == "" {
 		return
@@ -77,10 +80,16 @@ func migrateLibretroThumbnails(
 	oldDir := filepath.Join(dataDir, legacyLibretroThumbsDir)
 	newDir := filepath.Join(imageDir, config.ImageLibretroDir)
 	pending, err := migrationPending(fs, oldDir, newDir)
-	if err != nil || !pending {
+	if err != nil {
 		return
 	}
 	rewriter, ok := mediaDB.(imagePropertyRewriter)
+	if !pending {
+		if ok {
+			repairLibretroImagePaths(ctx, fs, oldDir, newDir, rewriter)
+		}
+		return
+	}
 	if !ok {
 		// Moving the files without rewriting their paths would lose every
 		// downloaded cover, so both happen or neither does.
@@ -115,6 +124,40 @@ func migrateLibretroThumbnails(
 	}
 	log.Info().Str("from", oldDir).Str("to", newDir).Int64("properties", rewritten).
 		Msg("image storage: moved libretro thumbnails")
+}
+
+// repairLibretroImagePaths rewrites stored paths into the old folder when the
+// files are already in the new one but the database never recorded the move.
+// Those paths can no longer load, since nothing is left at the old folder. The
+// rewrite marks the database, so the property tables are only scanned once.
+func repairLibretroImagePaths(
+	ctx context.Context, fs afero.Fs, oldDir, newDir string, rewriter imagePropertyRewriter,
+) {
+	if _, err := fs.Stat(oldDir); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if info, err := fs.Stat(newDir); err != nil || !info.IsDir() {
+		return
+	}
+	migrated, err := rewriter.ImagePathsMigrated(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("image storage: could not check for old image paths")
+		return
+	}
+	if migrated {
+		return
+	}
+	rewritten, err := rewriter.RewriteImagePropertyPrefix(ctx,
+		oldDir+string(filepath.Separator),
+		config.ImagePath(config.ImageLibretroDir)+"/",
+		string(filepath.Separator),
+		nil,
+	)
+	if err != nil {
+		log.Warn().Err(err).Msg("image storage: could not repair old image paths")
+		return
+	}
+	log.Info().Int64("properties", rewritten).Msg("image storage: repaired old image paths")
 }
 
 // migrationPending reports whether from is a folder still to be moved to an

@@ -256,9 +256,11 @@ func (r *run) thumbnails(
 				imagePath, err = r.client.imagePath(file)
 			}
 			if lowSpace := (*lowDiskSpaceError)(nil); errors.As(err, &lowSpace) {
-				// The run stops; nothing later in this row would fit either.
+				// The run stops after this row. Later kinds still pick up a
+				// file already on disk, which needs no space; one that would
+				// download hits the same check.
 				out.err = err
-				return out
+				continue
 			}
 			if err != nil {
 				// Keep the kinds that did arrive: the row is written with them

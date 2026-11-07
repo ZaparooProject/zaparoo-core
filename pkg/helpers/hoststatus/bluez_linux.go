@@ -43,6 +43,7 @@ const (
 	bluezAgent        = "org.bluez.Agent1"
 	dbusObjectManager = "org.freedesktop.DBus.ObjectManager"
 	dbusProperties    = "org.freedesktop.DBus.Properties"
+	dbusDaemon        = "org.freedesktop.DBus"
 
 	// bluezAgentPath is where the pairing agent is exported while an attempt
 	// runs. Only one attempt runs at a time.
@@ -80,6 +81,7 @@ const (
 	signalInterfacesAdded    = dbusObjectManager + ".InterfacesAdded"
 	signalInterfacesRemoved  = dbusObjectManager + ".InterfacesRemoved"
 	signalPropertiesChanged  = dbusProperties + ".PropertiesChanged"
+	signalNameOwnerChanged   = dbusDaemon + ".NameOwnerChanged"
 	bluezGetManagedObjects   = dbusObjectManager + ".GetManagedObjects"
 	bluezPropertiesSet       = dbusProperties + ".Set"
 	bluezSetDiscoveryFilter  = bluezAdapter + ".SetDiscoveryFilter"
@@ -111,7 +113,32 @@ type bluezBus interface {
 
 type privateBus struct {
 	conn *dbus.Conn
-	mu   syncutil.Mutex
+	// closeConn ends conn's context, which closes it.
+	closeConn context.CancelFunc
+	mu        syncutil.Mutex
+}
+
+// connectSystemBus gives up after bluezCallLimit. The library authenticates
+// and greets the bus with no deadline of its own, and connection holds its
+// lock meanwhile, so a stalled bus daemon would otherwise hang every caller.
+// The connection lives until its context ends, so the cancel is returned for
+// the owner to call once the connection is no longer used.
+func connectSystemBus() (*dbus.Conn, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(bluezCallLimit, cancel)
+	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
+	if !timer.Stop() {
+		cancel()
+		if err == nil {
+			_ = conn.Close()
+		}
+		return nil, nil, fmt.Errorf("connecting to the system bus: %w", context.DeadlineExceeded)
+	}
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("connecting to the system bus: %w", err)
+	}
+	return conn, cancel, nil
 }
 
 func (b *privateBus) connection() (*dbus.Conn, error) {
@@ -120,17 +147,20 @@ func (b *privateBus) connection() (*dbus.Conn, error) {
 	if b.conn != nil && b.conn.Connected() {
 		return b.conn, nil
 	}
-	b.conn = nil
+	if b.closeConn != nil {
+		b.closeConn()
+	}
+	b.conn, b.closeConn = nil, nil
 	if os.Getenv("DBUS_SYSTEM_BUS_ADDRESS") == "" {
 		if _, err := os.Stat(systemBusSocket); err != nil {
 			return nil, errNoSystemBus
 		}
 	}
-	conn, err := dbus.ConnectSystemBus()
+	conn, closeConn, err := connectSystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errNoSystemBus, err)
 	}
-	b.conn = conn
+	b.conn, b.closeConn = conn, closeConn
 	return conn, nil
 }
 
@@ -182,6 +212,14 @@ func bluezMatches() [][]dbus.MatchOption {
 			dbus.WithMatchInterface(dbusProperties),
 			dbus.WithMatchMember("PropertiesChanged"),
 			dbus.WithMatchPathNamespace(bluezRoot),
+		},
+		// bluetoothd restarting or exiting drops every object at once
+		// without removing them one by one.
+		{
+			dbus.WithMatchSender(dbusDaemon),
+			dbus.WithMatchInterface(dbusDaemon),
+			dbus.WithMatchMember("NameOwnerChanged"),
+			dbus.WithMatchArg(0, bluezService),
 		},
 	}
 }
@@ -632,6 +670,12 @@ func relevantBluezSignal(signal *dbus.Signal) bool {
 		}
 		iface, ok := signal.Body[0].(string)
 		return ok && (iface == bluezAdapter || iface == bluezDevice)
+	case signalNameOwnerChanged:
+		if len(signal.Body) == 0 {
+			return false
+		}
+		name, ok := signal.Body[0].(string)
+		return ok && name == bluezService
 	default:
 		return false
 	}
@@ -643,13 +687,13 @@ func (b *BlueZ) Watch(ctx context.Context, onChange func()) {
 	for {
 		signals, stop, err := b.bus.subscribe()
 		if err == nil {
+			// Whatever changed before the subscription took hold was missed.
+			onChange()
 			lost := b.forward(ctx, signals, onChange)
 			stop()
 			if !lost {
 				return
 			}
-			// Whatever happened while the connection was down is unknown.
-			onChange()
 		} else {
 			log.Debug().Err(err).Msg("could not watch bluetooth")
 		}
@@ -696,7 +740,12 @@ func (a *pairingAgent) pinRequested() bool {
 	return a.pinRequest
 }
 
-func (a *pairingAgent) needPin() *dbus.Error {
+// needPin ends the attempt when the device being paired asks for a PIN or
+// passkey. A request for any other device is refused without touching it.
+func (a *pairingAgent) needPin(device dbus.ObjectPath) *dbus.Error {
+	if device != a.device {
+		return dbus.NewError(bluezErrRejected, nil)
+	}
 	a.mu.Lock()
 	a.pinRequest = true
 	a.mu.Unlock()
@@ -717,20 +766,20 @@ func (*pairingAgent) Release() *dbus.Error { return nil }
 
 func (*pairingAgent) Cancel() *dbus.Error { return nil }
 
-func (a *pairingAgent) RequestPinCode(dbus.ObjectPath) (string, *dbus.Error) {
-	return "", a.needPin()
+func (a *pairingAgent) RequestPinCode(device dbus.ObjectPath) (string, *dbus.Error) {
+	return "", a.needPin(device)
 }
 
-func (a *pairingAgent) DisplayPinCode(dbus.ObjectPath, string) *dbus.Error {
-	return a.needPin()
+func (a *pairingAgent) DisplayPinCode(device dbus.ObjectPath, _ string) *dbus.Error {
+	return a.needPin(device)
 }
 
-func (a *pairingAgent) RequestPasskey(dbus.ObjectPath) (uint32, *dbus.Error) {
-	return 0, a.needPin()
+func (a *pairingAgent) RequestPasskey(device dbus.ObjectPath) (uint32, *dbus.Error) {
+	return 0, a.needPin(device)
 }
 
-func (a *pairingAgent) DisplayPasskey(dbus.ObjectPath, uint32, uint16) *dbus.Error {
-	return a.needPin()
+func (a *pairingAgent) DisplayPasskey(device dbus.ObjectPath, _ uint32, _ uint16) *dbus.Error {
+	return a.needPin(device)
 }
 
 func (a *pairingAgent) RequestConfirmation(device dbus.ObjectPath, _ uint32) *dbus.Error {

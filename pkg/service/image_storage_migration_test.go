@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,11 +38,16 @@ type fakeImageRewriter struct {
 	database.MediaDBI
 	beforeErr error
 	commitErr error
+	markerErr error
 	oldPrefix string
 	newPrefix string
 	sep       string
 	calls     int
 	committed bool
+}
+
+func (f *fakeImageRewriter) ImagePathsMigrated(context.Context) (bool, error) {
+	return f.committed, f.markerErr
 }
 
 func (f *fakeImageRewriter) RewriteImagePropertyPrefix(
@@ -52,8 +58,10 @@ func (f *fakeImageRewriter) RewriteImagePropertyPrefix(
 	if f.beforeErr != nil {
 		return 0, f.beforeErr
 	}
-	if err := apply(); err != nil {
-		return 0, err
+	if apply != nil {
+		if err := apply(); err != nil {
+			return 0, err
+		}
 	}
 	if f.commitErr != nil {
 		return 0, f.commitErr
@@ -61,6 +69,8 @@ func (f *fakeImageRewriter) RewriteImagePropertyPrefix(
 	f.committed = true
 	return 3, nil
 }
+
+var _ imagePropertyRewriter = (*mediadb.MediaDB)(nil)
 
 // failRenameFs fails every rename, as a move to another filesystem does.
 type failRenameFs struct{ afero.Fs }
@@ -124,6 +134,56 @@ func TestMigrateImageStorageMovesTheOldLayout(t *testing.T) {
 	migrateImageStorage(context.Background(), fs, migrationDataDir, migrationImageDir, db)
 	assert.Equal(t, 1, db.calls)
 	assert.True(t, imagePathExists(t, fs, filepath.Join(newLibretro, "NES", "Named_Boxarts", "A.png")))
+}
+
+// A database that never recorded the move, with the files already moved, gets
+// its old paths rewritten once and the files stay where they are.
+func TestMigrateImageStorageRepairsPathsLeftByAnEarlierMove(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	moved := filepath.Join(newLibretro, "NES", "Named_Boxarts", "A.png")
+	require.NoError(t, afero.WriteFile(fs, moved, []byte("png"), 0o600))
+	db := &fakeImageRewriter{}
+
+	migrateImageStorage(context.Background(), fs, migrationDataDir, migrationImageDir, db)
+
+	assert.Equal(t, 1, db.calls)
+	assert.True(t, db.committed)
+	assert.Equal(t, legacyLibretro+string(filepath.Separator), db.oldPrefix)
+	assert.Equal(t, "images://libretro/", db.newPrefix)
+	assert.True(t, imagePathExists(t, fs, moved))
+
+	migrateImageStorage(context.Background(), fs, migrationDataDir, migrationImageDir, db)
+	assert.Equal(t, 1, db.calls, "the marker stops a second scan")
+}
+
+// Stored paths into the old folder still load while it exists, and with no
+// new folder there was no move to repair.
+func TestMigrateImageStorageRepairNeedsOnlyTheNewFolder(t *testing.T) {
+	t.Parallel()
+
+	t.Run("both folders exist", func(t *testing.T) {
+		t.Parallel()
+		fs := oldImageLayout(t)
+		require.NoError(t, fs.MkdirAll(newLibretro, 0o750))
+		db := &fakeImageRewriter{}
+		migrateImageStorage(context.Background(), fs, migrationDataDir, migrationImageDir, db)
+		assert.Zero(t, db.calls)
+	})
+	t.Run("neither folder exists", func(t *testing.T) {
+		t.Parallel()
+		db := &fakeImageRewriter{}
+		migrateImageStorage(context.Background(), afero.NewMemMapFs(), migrationDataDir, migrationImageDir, db)
+		assert.Zero(t, db.calls)
+	})
+	t.Run("the marker cannot be read", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		require.NoError(t, fs.MkdirAll(newLibretro, 0o750))
+		db := &fakeImageRewriter{markerErr: errors.New("database is locked")}
+		migrateImageStorage(context.Background(), fs, migrationDataDir, migrationImageDir, db)
+		assert.Zero(t, db.calls)
+	})
 }
 
 // A destination that already exists is never merged into or replaced.

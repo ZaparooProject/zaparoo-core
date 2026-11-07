@@ -330,6 +330,16 @@ func (c *mediaThumbCache) reapStaleVersions() {
 		log.Warn().Str("dir", c.dir).Msg("media.image: thumb cache: not reaping outside the thumbs folder")
 		return
 	}
+	// A thumbs folder that is a link points somewhere Core does not own, so
+	// its other entries are left alone.
+	if lstater, ok := c.fs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(parent)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			log.Warn().Err(err).Str("dir", parent).
+				Msg("media.image: thumb cache: not reaping a linked thumbs folder")
+			return
+		}
+	}
 	entries, err := afero.ReadDir(c.fs, parent)
 	if err != nil {
 		log.Debug().Err(err).Str("dir", parent).Msg("media.image: thumb cache: failed to read parent for reap")

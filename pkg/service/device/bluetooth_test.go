@@ -45,7 +45,10 @@ const (
 type fakeBluetooth struct {
 	readErr   error
 	startErr  error
+	stopErr   error
 	removeErr error
+	// onRead runs after each read, outside the lock, and can fail it.
+	onRead    func() error
 	pair      func(ctx context.Context, address string) error
 	onChange  func()
 	trusted   []string
@@ -74,10 +77,14 @@ func newFakeBluetooth() *fakeBluetooth {
 
 func (f *fakeBluetooth) Read(context.Context) (hoststatus.BluetoothReading, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	reading := f.reading
 	reading.Devices = append([]hoststatus.BluetoothDevice(nil), f.reading.Devices...)
-	return reading, f.readErr
+	err, onRead := f.readErr, f.onRead
+	f.mu.Unlock()
+	if err == nil && onRead != nil {
+		err = onRead()
+	}
+	return reading, err
 }
 
 func (f *fakeBluetooth) StartDiscovery(context.Context) error {
@@ -95,6 +102,9 @@ func (f *fakeBluetooth) StopDiscovery(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops++
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	f.reading.Discovering = false
 	return nil
 }
@@ -765,4 +775,179 @@ func TestMonitor_NoBluetoothControl(t *testing.T) {
 
 	monitor := NewMonitor(&Options{Platform: testPlatform(platforms.Settings{})})
 	assert.Nil(t, monitor.Bluetooth())
+}
+
+func TestBluetooth_RefusedStopKeepsTheScanAndRetries(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	stack.stopErr = errors.New("org.bluez.Error.InProgress")
+	manager, clock, _ := newTestBluetooth(t, stack)
+	ctx := context.Background()
+
+	_, err := manager.StartScan(ctx, false, 0)
+	require.NoError(t, err)
+	_, err = manager.StopScan(ctx)
+	require.Error(t, err)
+	state, err := manager.State(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.Scanning, "Core still owns the scan it could not stop")
+
+	stack.mu.Lock()
+	stack.stopErr = nil
+	stack.mu.Unlock()
+	clock.Advance(bluetoothStopRetry)
+	require.Eventually(t, func() bool {
+		_, stops, _ := stack.counts()
+		return stops == 2
+	}, 5*time.Second, time.Millisecond)
+	state, err = manager.State(ctx)
+	require.NoError(t, err)
+	assert.False(t, state.Scanning)
+}
+
+func TestBluetooth_StopKeepsDevicesHeardSinceTheLastRead(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	stack.reading.Devices[1].InRange = false
+	manager, _, _ := newTestBluetooth(t, stack)
+	ctx := context.Background()
+
+	state, err := manager.StartScan(ctx, false, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{pairedAddress}, ids(state))
+
+	// The pad is heard, and nothing reads the state before the scan stops.
+	stack.update(func(reading *hoststatus.BluetoothReading) { reading.Devices[1].InRange = true })
+	_, err = manager.StopScan(ctx)
+	require.NoError(t, err)
+
+	stack.update(func(reading *hoststatus.BluetoothReading) { reading.Devices[1].InRange = false })
+	state, err = manager.State(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{pairedAddress, padAddress}, ids(state))
+}
+
+func TestBluetooth_StateKeepsAScanStartedDuringTheRead(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	manager, _, _ := newTestBluetooth(t, stack)
+	ctx := context.Background()
+
+	// The reading below says the adapter is not discovering, but a scan
+	// starts before State gets to look at it.
+	started := false
+	stack.onRead = func() error {
+		if started {
+			return nil
+		}
+		started = true
+		_, err := manager.StartScan(ctx, false, 0)
+		return err
+	}
+	_, err := manager.State(ctx)
+	require.NoError(t, err)
+
+	stack.mu.Lock()
+	stack.onRead = nil
+	stack.mu.Unlock()
+	state, err := manager.State(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.Scanning)
+}
+
+func TestBluetooth_StartScanAfterClose(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	manager, _, _ := newTestBluetooth(t, stack)
+	manager.Close()
+
+	_, err := manager.StartScan(context.Background(), false, 0)
+	require.ErrorIs(t, err, hoststatus.ErrUnsupported)
+	starts, _, _ := stack.counts()
+	assert.Zero(t, starts)
+}
+
+func TestBluetooth_LateDisconnectCleanupSparesANewScan(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	manager, _, _ := newTestBluetooth(t, stack)
+	ctx := context.Background()
+
+	manager.ClientConnected()
+	_, err := manager.StartScan(ctx, false, 0)
+	require.NoError(t, err)
+
+	// Hold the cleanup back while a client returns and scans again.
+	manager.opMu.Lock()
+	manager.ClientDisconnected()
+	manager.mu.Lock()
+	manager.clients++
+	manager.scanGen++
+	manager.mu.Unlock()
+	manager.opMu.Unlock()
+	manager.wg.Wait()
+
+	_, stops, _ := stack.counts()
+	assert.Zero(t, stops)
+	state, err := manager.State(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.Scanning)
+}
+
+func TestBluetooth_PairAnswersWhenTheStateReadFails(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	release := make(chan struct{})
+	stack.pair = func(context.Context, string) error {
+		<-release
+		return nil
+	}
+	reads := 0
+	stack.onRead = func() error {
+		reads++
+		if reads == 2 {
+			return errors.New("stack hiccup")
+		}
+		return nil
+	}
+	manager, _, _ := newTestBluetooth(t, stack)
+
+	state, err := manager.Pair(context.Background(), padAddress)
+	require.NoError(t, err, "the attempt is running, so the request succeeded")
+	require.NotNil(t, state.Pairing)
+	assert.Equal(t, models.BluetoothPairingPairing, state.Pairing.State)
+	assert.True(t, state.Powered)
+	close(release)
+	awaitPairing(t, manager, models.BluetoothPairingPaired)
+}
+
+func TestBluetooth_ForgetRefusedWhilePairingThatDevice(t *testing.T) {
+	t.Parallel()
+
+	stack := newFakeBluetooth()
+	release := make(chan struct{})
+	stack.pair = func(context.Context, string) error {
+		<-release
+		return nil
+	}
+	manager, _, _ := newTestBluetooth(t, stack)
+	ctx := context.Background()
+
+	_, err := manager.Pair(ctx, padAddress)
+	require.NoError(t, err)
+	_, err = manager.Forget(ctx, padAddress)
+	require.ErrorIs(t, err, ErrBluetoothBusy)
+	_, err = manager.Forget(ctx, pairedAddress)
+	require.NoError(t, err, "other devices can still be forgotten")
+
+	close(release)
+	awaitPairing(t, manager, models.BluetoothPairingPaired)
+	_, err = manager.Forget(ctx, padAddress)
+	require.NoError(t, err)
 }

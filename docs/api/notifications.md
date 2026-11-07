@@ -962,7 +962,7 @@ Sent when Bluetooth devices change while at least one client holds a WebSocket o
 
 Only clients granted the `device.bluetooth` capability receive it, because it names and addresses every device in range. Local clients and API key clients have it; a paired client needs the admin role.
 
-The `scanning` field follows the adapter: when the Bluetooth stack ends discovery on its own, for example after a fault or a restart of the stack, it turns `false` even though no client stopped the scan.
+The `scanning` field is `true` while the scan Core started runs. Scans started by other programs on the device do not set it. It also follows the adapter: when the Bluetooth stack ends discovery on its own, for example after a fault or a restart of the stack, it turns `false` even though no client stopped the scan.
 
 Each notification carries the whole state, not a difference. Replace what you hold with it. Call [`device.bluetooth.devices`](methods.md#devicebluetoothdevices) once after connecting, then apply these notifications.
 

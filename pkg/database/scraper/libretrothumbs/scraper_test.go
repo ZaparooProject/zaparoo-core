@@ -548,6 +548,7 @@ func TestScrapeStopsWhenTheImageFolderIsLowOnSpace(t *testing.T) {
 	t.Cleanup(ts.Close)
 	fs := afero.NewMemMapFs()
 	box := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", "A (USA)")
+	title := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Titles", "A (USA)")
 	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/NES/A (USA).nes"}}}
 	var asked []string
 	var askedMu syncutil.Mutex
@@ -577,6 +578,7 @@ func TestScrapeStopsWhenTheImageFolderIsLowOnSpace(t *testing.T) {
 	require.Len(t, db.writes, 1)
 	require.Equal(t, []database.MediaProperty{
 		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: box},
-	}, db.writes[0].Write.MediaProps, "the thumbnail already on disk is recorded")
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageTitleshot), Text: title},
+	}, db.writes[0].Write.MediaProps, "the thumbnails already on disk are recorded, before and after the stop")
 	require.Equal(t, database.TagInfo{}, db.writes[0].Write.Sentinel, "the row is retried by a later run")
 }

@@ -402,6 +402,12 @@ func TestBlueZ_Watch(t *testing.T) {
 		controller.Watch(ctx, func() { changes <- struct{}{} })
 	}()
 
+	// Subscribing reports once, for whatever changed before it took hold.
+	select {
+	case <-changes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscribing did not report a change")
+	}
 	bus.signals <- &dbus.Signal{
 		Name: signalPropertiesChanged, Path: testPad,
 		Body: []any{"org.bluez.Battery1", map[string]dbus.Variant{}, []string{}},
@@ -430,6 +436,61 @@ func TestBlueZ_Watch(t *testing.T) {
 	<-done
 }
 
+func TestBlueZ_WatchResubscribes(t *testing.T) {
+	t.Parallel()
+
+	bus := newFakeBluez(true)
+	controller := &BlueZ{bus: bus, watchRetry: time.Millisecond}
+	changes := make(chan struct{}, 16)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		controller.Watch(ctx, func() { changes <- struct{}{} })
+	}()
+	waitChange := func(why string) {
+		t.Helper()
+		select {
+		case <-changes:
+		case <-time.After(5 * time.Second):
+			t.Fatal(why)
+		}
+	}
+
+	waitChange("the first subscription did not report a change")
+	bus.mu.Lock()
+	lost := bus.signals
+	bus.signals = make(chan *dbus.Signal, 8)
+	bus.mu.Unlock()
+	close(lost)
+	waitChange("the new subscription did not report a change")
+	bus.mu.Lock()
+	subs := bus.subs
+	bus.mu.Unlock()
+	assert.Equal(t, 2, subs)
+
+	cancel()
+	<-done
+}
+
+func TestBlueZ_PairIgnoresOtherDevicesPins(t *testing.T) {
+	t.Parallel()
+
+	other := dbus.ObjectPath("/org/bluez/hci0/dev_11_22_33_44_55_66")
+	bus := newFakeBluez(true)
+	bus.onPair = func(_ context.Context, agent *pairingAgent) error {
+		_, err := agent.RequestPinCode(other)
+		assert.NotNil(t, err, "another device's PIN request is refused")
+		_, err = agent.RequestPasskey(other)
+		assert.NotNil(t, err)
+		assert.NotNil(t, agent.DisplayPasskey(other, 1, 0))
+		assert.NotNil(t, agent.DisplayPinCode(other, "0000"))
+		return nil
+	}
+	require.NoError(t, (&BlueZ{bus: bus}).Pair(context.Background(), testPadAddr))
+	assert.NotContains(t, bus.recorded(), string(testPad)+" "+bluezCancelPairing)
+}
+
 func TestRelevantBluezSignal(t *testing.T) {
 	t.Parallel()
 
@@ -444,6 +505,13 @@ func TestRelevantBluezSignal(t *testing.T) {
 	}))
 	assert.False(t, relevantBluezSignal(&dbus.Signal{
 		Name: signalPropertiesChanged, Path: "/org/freedesktop/NetworkManager", Body: []any{bluezAdapter},
+	}))
+	assert.True(t, relevantBluezSignal(&dbus.Signal{
+		Name: signalNameOwnerChanged, Path: "/org/freedesktop/DBus", Body: []any{bluezService, ":1.4", ""},
+	}))
+	assert.False(t, relevantBluezSignal(&dbus.Signal{
+		Name: signalNameOwnerChanged, Path: "/org/freedesktop/DBus",
+		Body: []any{"org.freedesktop.NetworkManager", "", ":1.9"},
 	}))
 	assert.False(t, relevantBluezSignal(&dbus.Signal{Name: "org.example.Other"}))
 }

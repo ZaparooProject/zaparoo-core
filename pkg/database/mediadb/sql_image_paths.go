@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"unicode/utf8"
@@ -36,7 +37,8 @@ import (
 // apply runs inside the transaction once the rows are rewritten, and an error
 // from it rolls the rewrite back, so a file move that fails leaves the
 // database as it was. When apply succeeded but the commit fails, the error is
-// returned and the caller undoes whatever apply did.
+// returned and the caller undoes whatever apply did. A successful rewrite also
+// records DBConfigImagePathsMigrated, so ImagePathsMigrated answers true.
 func (db *MediaDB) RewriteImagePropertyPrefix(
 	ctx context.Context, oldPrefix, newPrefix, sep string, apply func() error,
 ) (int64, error) {
@@ -93,6 +95,14 @@ func (db *MediaDB) RewriteImagePropertyPrefix(
 		total += rows
 	}
 
+	if _, err := tx.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigImagePathsMigrated, "1",
+	); err != nil {
+		db.NoteCorruption(err)
+		return 0, fmt.Errorf("record image property rewrite: %w", err)
+	}
+
 	if apply != nil {
 		if err := apply(); err != nil {
 			return 0, err
@@ -103,4 +113,25 @@ func (db *MediaDB) RewriteImagePropertyPrefix(
 	}
 	committed = true
 	return total, nil
+}
+
+// ImagePathsMigrated reports whether RewriteImagePropertyPrefix has completed
+// on this database. It is a single row read, cheap enough for every boot, where
+// looking for old paths in the property tables is not.
+func (db *MediaDB) ImagePathsMigrated(ctx context.Context) (bool, error) {
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return false, err
+	}
+	var value string
+	err = sqlDB.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?", DBConfigImagePathsMigrated,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read image paths marker: %w", err)
+	}
+	return true, nil
 }

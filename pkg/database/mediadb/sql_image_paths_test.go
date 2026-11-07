@@ -86,6 +86,25 @@ func TestRewriteImagePropertyPrefix(t *testing.T) {
 	}, imagePropertyTexts(t, db))
 }
 
+// A data folder with non-ASCII characters in its own path is matched and cut
+// by characters, not bytes, so nothing of the old prefix is left behind.
+func TestRewriteImagePropertyPrefixWithANonASCIIPrefix(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupScraperTestDB(t)
+	t.Cleanup(cleanup)
+	_, err := db.sql.Load().ExecContext(context.Background(), `
+		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES
+			(1, 2, '/home/zoë/zaparoo/libretro-thumbnails/NES/Named_Boxarts/A.png')`)
+	require.NoError(t, err)
+
+	n, err := db.RewriteImagePropertyPrefix(context.Background(),
+		"/home/zoë/zaparoo/libretro-thumbnails/", "images://libretro/", "/", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.Equal(t, []string{"images://libretro/NES/Named_Boxarts/A.png"}, imagePropertyTexts(t, db))
+}
+
 // Windows paths keep backslashes after the prefix; they become slashes.
 func TestRewriteImagePropertyPrefixConvertsSeparators(t *testing.T) {
 	t.Parallel()
@@ -117,4 +136,29 @@ func TestRewriteImagePropertyPrefixRollsBackWhenApplyFails(t *testing.T) {
 
 	require.ErrorIs(t, err, moveErr)
 	assert.Equal(t, before, imagePropertyTexts(t, db))
+}
+
+// The marker lands with the rewrite and rolls back with it.
+func TestImagePathsMigrated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := setupImagePathsTestDB(t)
+
+	migrated, err := db.ImagePathsMigrated(ctx)
+	require.NoError(t, err)
+	assert.False(t, migrated)
+
+	_, err = db.RewriteImagePropertyPrefix(ctx, "/data/zaparoo/libretro-thumbnails/", "images://libretro/", "/",
+		func() error { return errors.New("rename failed") })
+	require.Error(t, err)
+	migrated, err = db.ImagePathsMigrated(ctx)
+	require.NoError(t, err)
+	assert.False(t, migrated)
+
+	_, err = db.RewriteImagePropertyPrefix(ctx, "/data/zaparoo/libretro-thumbnails/", "images://libretro/", "/", nil)
+	require.NoError(t, err)
+	migrated, err = db.ImagePathsMigrated(ctx)
+	require.NoError(t, err)
+	assert.True(t, migrated)
+	assert.Contains(t, imagePropertyTexts(t, db), "images://libretro/Nintendé/Named_Boxarts/A.png")
 }

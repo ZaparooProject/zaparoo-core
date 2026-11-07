@@ -62,7 +62,7 @@ func ImagePath(rel string) string {
 
 // ResolveImagePath returns the file an images:// path names under imageDir.
 // It answers false for anything that is not an images:// path, for an empty
-// or absolute imageDir, and for a path that would leave imageDir, since the
+// or relative imageDir, and for a path that would leave imageDir, since the
 // text comes from the database and is not trusted to stay inside it.
 func ResolveImagePath(imageDir, text string) (string, bool) {
 	rel, ok := strings.CutPrefix(text, imageSchemePrefix)
@@ -127,6 +127,14 @@ func (c *Instance) ThumbCacheMaxMB() int {
 		return DefaultThumbCacheMaxMB
 	}
 	return min(c.vals.Media.ThumbCacheMaxMB, MaxThumbCacheMaxMB)
+}
+
+// ThumbCacheMaxMBSetting returns [media] thumb_cache_max_mb as written, 0
+// when unset.
+func (c *Instance) ThumbCacheMaxMBSetting() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Media.ThumbCacheMaxMB
 }
 
 // ThumbCacheMaxBytes is ThumbCacheMaxMB in bytes.

@@ -6703,11 +6703,11 @@ Put the device to sleep. Access, parameters, result and errors are the same as [
 
 ### device.bluetooth.devices
 
-**Access:** Localhost or any authenticated client.
+**Access:** Requires `device.bluetooth`.
 
 List paired Bluetooth devices and the devices the current or last scan found. Offer pairing only when `capabilities.actions["device.bluetooth.pair"]` in [`device.status`](#devicestatus) is `supported` and `bluetooth.present` is `true`.
 
-While a client holds a WebSocket or SSE connection, Core sends [`device.bluetooth.changed`](notifications.md#devicebluetoothchanged) whenever this state changes. Call this method once, then follow the notification.
+While a client holds a WebSocket or SSE connection, Core sends [`device.bluetooth.changed`](notifications.md#devicebluetoothchanged) whenever this state changes. Call this method once, then follow the notification. Both carry the names and addresses of nearby devices, so both need the `device.bluetooth` capability.
 
 #### Parameters
 
@@ -6882,6 +6882,13 @@ None.
 
 The [Bluetooth state](#bluetooth-state-object). The devices the scan found stay listed until a new scan starts.
 
+#### Errors
+
+| Category           | Meaning                                                                 |
+| :----------------- | :---------------------------------------------------------------------- |
+| `unsupported`      | Core cannot manage Bluetooth devices here, or there is no adapter.      |
+| `execution_failed` | The Bluetooth stack refused to stop. The scan keeps running, and Core tries to stop it again 30 seconds later. |
+
 ### device.bluetooth.pair
 
 **Access:** Requires `device.bluetooth`.
@@ -6972,5 +6979,6 @@ The [Bluetooth state](#bluetooth-state-object), without the device.
 | Category      | Meaning                                                              |
 | :------------ | :------------------------------------------------------------------- |
 | `unsupported` | Core cannot manage Bluetooth devices here, or there is no adapter.   |
+| `busy`        | Core is pairing with this device. Wait for the attempt to end.       |
 
 An `id` the Bluetooth stack does not know is refused with the message `bluetooth device not found`.

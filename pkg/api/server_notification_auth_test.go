@@ -20,15 +20,21 @@
 package api
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/stretchr/testify/assert"
@@ -37,8 +43,20 @@ import (
 
 func startNotificationAuthServer(
 	t *testing.T,
-	state webSocketAuthState,
+	authState webSocketAuthState,
 	deadline time.Duration,
+) (*melody.Melody, *websocket.Conn) {
+	t.Helper()
+	return startNotificationAuthServerFrom(t, authState, deadline, "")
+}
+
+// startNotificationAuthServerFrom is startNotificationAuthServer with the
+// client seen at remoteAddr, or at its real loopback address when empty.
+func startNotificationAuthServerFrom(
+	t *testing.T,
+	authState webSocketAuthState,
+	deadline time.Duration,
+	remoteAddr string,
 ) (*melody.Melody, *websocket.Conn) {
 	t.Helper()
 
@@ -50,7 +68,10 @@ func startNotificationAuthServer(
 		sessions.HandleDisconnect(stopWebSocketAuthDeadline)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = sessions.HandleRequestWithKeys(w, r, map[string]any{melodySessionAuthStateKey: state})
+		if remoteAddr != "" {
+			r.RemoteAddr = remoteAddr
+		}
+		_ = sessions.HandleRequestWithKeys(w, r, map[string]any{melodySessionAuthStateKey: authState})
 	}))
 	t.Cleanup(func() {
 		_ = sessions.Close()
@@ -130,4 +151,102 @@ func TestBluetoothNotificationsNeedTheBluetoothCapability(t *testing.T) {
 	remote.RemoteAddr = "192.168.1.20:5000"
 	assert.False(t, sessionGrant(remote, nil, "mister").Has(permissions.CapDeviceBluetooth),
 		"an unpaired remote client does not")
+}
+
+func TestBluetoothNotificationsReachOnlyGrantedWebSockets(t *testing.T) {
+	t.Parallel()
+
+	bluetooth := []byte(`{"jsonrpc":"2.0","method":"device.bluetooth.changed"}`)
+	started := []byte(`{"jsonrpc":"2.0","method":"media.started"}`)
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       []byte
+	}{
+		{name: "local", want: bluetooth},
+		{name: "remote", remoteAddr: "192.168.1.20:5000", want: started},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sessions, conn := startNotificationAuthServerFrom(t, webSocketAuthPlaintext, 0, tt.remoteAddr)
+			// The first message read shows whether the gated one got through.
+			broadcastToSessions(sessions, bluetooth,
+				notificationAudience(models.NotificationDeviceBluetooth, "mister"))
+			broadcastToSessions(sessions, started,
+				notificationAudience(models.NotificationStarted, "mister"))
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			_, got, err := conn.ReadMessage()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBluetoothNotificationsReachOnlyGrantedSSEClients(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{name: "local", want: models.NotificationDeviceBluetooth},
+		{name: "remote", remoteAddr: "192.168.1.20:5000", want: models.NotificationStarted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			platform := mocks.NewMockPlatform()
+			platform.SetupBasicMock()
+			st, notifCh := state.NewState(platform, "test-boot-uuid")
+			t.Cleanup(st.StopService)
+			notifBroker := newTestBroker(st.GetContext(), notifCh)
+
+			handler := handleSSE(notifBroker, st, "mister")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.remoteAddr != "" {
+					r.RemoteAddr = tt.remoteAddr
+				}
+				handler(w, r)
+			}))
+			t.Cleanup(server.Close)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, http.NoBody)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req) //nolint:gosec // test hitting local test server
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+
+			// The headers arrive once the stream has subscribed, so nothing
+			// sent from here on is missed.
+			st.Notifications <- models.Notification{
+				Method: models.NotificationDeviceBluetooth, Params: json.RawMessage(`{}`),
+			}
+			st.Notifications <- models.Notification{
+				Method: models.NotificationStarted, Params: json.RawMessage(`{}`),
+			}
+
+			first := make(chan string, 1)
+			go func() {
+				scanner := bufio.NewScanner(resp.Body)
+				for scanner.Scan() {
+					if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+						first <- data
+						return
+					}
+				}
+			}()
+			select {
+			case data := <-first:
+				var obj models.NotificationObject
+				require.NoError(t, json.Unmarshal([]byte(data), &obj))
+				assert.Equal(t, tt.want, obj.Method)
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for an SSE event")
+			}
+		})
+	}
 }

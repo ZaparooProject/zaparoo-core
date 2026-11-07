@@ -483,6 +483,7 @@ func TestHandleDeviceBluetooth_Authorization(t *testing.T) {
 		name    string
 		params  []byte
 	}{
+		{name: "devices", handler: HandleDeviceBluetoothDevices},
 		{name: "scan start", handler: HandleDeviceBluetoothScanStart},
 		{name: "scan stop", handler: HandleDeviceBluetoothScanStop},
 		{name: "pair", handler: HandleDeviceBluetoothPair, params: pairParams},
@@ -517,21 +518,6 @@ func TestHandleDeviceBluetooth_Authorization(t *testing.T) {
 				assert.IsType(t, models.DeviceBluetoothState{}, result)
 			})
 		}
-	}
-
-	for _, grant := range grants {
-		t.Run("devices/"+grant.name, func(t *testing.T) {
-			t.Parallel()
-			env := bluetoothTestEnv(t, &fakeBluetoothStack{powered: true})
-			env.IsLocal = grant.isLocal
-			env.ClientRole = grant.clientRole
-			_, err := HandleDeviceBluetoothDevices(env)
-			if grant.clientRole == "" && !grant.isLocal {
-				require.ErrorIs(t, err, ErrForbidden)
-				return
-			}
-			require.NoError(t, err, "listing needs only an authenticated caller")
-		})
 	}
 }
 

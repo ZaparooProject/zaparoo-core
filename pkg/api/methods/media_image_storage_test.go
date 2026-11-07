@@ -152,6 +152,25 @@ func TestReapStaleVersionsLeavesTheRestOfTheImageFolder(t *testing.T) {
 	}
 }
 
+// A thumbs folder linked to somewhere else is not Core's to empty.
+func TestReapStaleVersionsSkipsALinkedThumbsFolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "elsewhere")
+	other := filepath.Join(target, "not-a-cache.png")
+	require.NoError(t, os.MkdirAll(target, 0o750))
+	require.NoError(t, os.WriteFile(other, []byte("x"), 0o600))
+	imageDir := filepath.Join(root, "images")
+	require.NoError(t, os.MkdirAll(imageDir, 0o750))
+	require.NoError(t, os.Symlink(target, filepath.Join(imageDir, "thumbs")))
+
+	cache := newTestThumbCache(afero.NewOsFs(), filepath.Join(imageDir, "thumbs", mediaThumbCacheVersionDir()))
+	cache.reapStaleVersions()
+
+	_, err := os.Stat(other)
+	assert.NoError(t, err, "files behind a linked thumbs folder are kept")
+}
+
 func imageSettingsEnv(t *testing.T, pl platforms.Platform, cfg *config.Instance, params any) requests.RequestEnv {
 	t.Helper()
 	appState, ns := state.NewState(pl, "test-boot-uuid")
@@ -232,6 +251,45 @@ func TestImageSettingsUpdateReloadsTheThumbCache(t *testing.T) {
 	assert.False(t, ReloadMediaThumbCache(cfg), "a stopped cache is not reloaded")
 }
 
+// A save that fails leaves the image folder and cache cap as they were, in
+// the config and in the running thumbnail cache.
+func TestImageSettingsUpdateKeepsTheOldValuesWhenTheSaveFails(t *testing.T) {
+	// Not parallel: installs the process-wide thumb cache.
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("test-platform").Maybe()
+	pl.On("ManagedByPackageManager").Return(false).Maybe()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir, HostManagedPaths: true})
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+
+	stop := InitMediaThumbCache(pl, cfg)
+	t.Cleanup(func() {
+		stop()
+		mediaThumbCachePointer.Store(nil)
+	})
+	cache := mediaThumbCachePointer.Load()
+	require.NotNil(t, cache)
+
+	require.NoError(t, os.Chmod(configDir, 0o500))       //nolint:gosec // a read-only folder makes the save fail
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) }) //nolint:gosec // writable again for cleanup
+
+	newDir := filepath.Join(t.TempDir(), "nas", "images")
+	capMB := 64
+	_, err = HandleSettingsUpdate(imageSettingsEnv(t, pl, cfg,
+		models.UpdateSettingsParams{MediaImageDir: &newDir, MediaThumbCacheMaxMB: &capMB}))
+	require.ErrorContains(t, err, "failed to save config")
+
+	assert.Empty(t, cfg.ImageDirSetting())
+	assert.Zero(t, cfg.ThumbCacheMaxMBSetting())
+	assert.Same(t, cache, mediaThumbCachePointer.Load(), "the cache stays on the old folder")
+	assert.Equal(t, int64(1<<30), cache.maxBytes.Load())
+}
+
 func TestImageDirSettingValidation(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()
@@ -243,7 +301,7 @@ func TestImageDirSettingValidation(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "file.txt")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 
-	for _, dir := range []string{string(filepath.Separator), file} {
+	for _, dir := range []string{string(filepath.Separator), file, filepath.Join(file, "images")} {
 		_, updateErr := HandleSettingsUpdate(
 			imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &dir}))
 		require.Error(t, updateErr, dir)

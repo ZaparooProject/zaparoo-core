@@ -604,6 +604,36 @@ func TestLinuxControllers_BatteryChargeState(t *testing.T) {
 	}
 }
 
+func TestLinuxControllers_BlueZBatteryKeepsSysfsChargeState(t *testing.T) {
+	t.Parallel()
+
+	inputRoot := sys("class", "input")
+	powerRoot := sys("class", "power_supply")
+	supply := filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff")
+	fs := afero.NewMemMapFs()
+	writeFiles(t, fs, map[string]string{
+		filepath.Join(inputRoot, "input3", "modalias"): dualSenseAlias,
+		filepath.Join(inputRoot, "input3", "uniq"):     "aa:bb:cc:dd:ee:ff",
+		filepath.Join(supply, "scope"):                 "Device",
+		filepath.Join(supply, "capacity"):              "unknown",
+		filepath.Join(supply, "status"):                "Charging\n",
+	})
+	reader := &LinuxControllers{
+		Fs:        fs,
+		Resolve:   func(string) (string, error) { return "", errors.New("no links here") },
+		InputRoot: inputRoot,
+		PowerRoot: powerRoot,
+		Batteries: func() map[string]int { return map[string]int{"aa:bb:cc:dd:ee:ff": 40} },
+	}
+
+	controllers, err := reader.Read()
+	require.NoError(t, err)
+	require.Len(t, controllers, 1)
+	require.NotNil(t, controllers[0].Battery)
+	assert.Equal(t, 40, *controllers[0].Battery.Percent)
+	assert.Equal(t, power.ChargeCharging, controllers[0].Battery.ChargeState)
+}
+
 func TestLinuxControllers_NoInputClass(t *testing.T) {
 	t.Parallel()
 

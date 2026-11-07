@@ -233,11 +233,12 @@ func bluetoothDeviceID(env *requests.RequestEnv) (string, error) {
 }
 
 // HandleDeviceBluetoothDevices lists paired Bluetooth devices and the ones
-// the current or last scan found.
+// the current or last scan found. It needs the same capability as
+// device.bluetooth.changed, which carries the same names and addresses.
 //
 //nolint:gocritic // single-use parameter in API handler
 func HandleDeviceBluetoothDevices(env requests.RequestEnv) (any, error) {
-	if err := requireAuthenticated(&env); err != nil {
+	if err := requireCapability(&env, permissions.CapDeviceBluetooth); err != nil {
 		return nil, err
 	}
 	bluetooth, err := deviceBluetooth(&env)

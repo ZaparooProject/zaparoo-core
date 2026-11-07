@@ -152,6 +152,8 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading settings")
 	}
 
+	ReloadMediaThumbCache(env.Config)
+
 	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)
 	err = env.Config.LoadMappings(mapDir)
 	if err != nil {
@@ -280,6 +282,10 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := reloadConfigBeforeSave(env.Config, "settings update"); err != nil {
 		return nil, err
 	}
+	// The thumbnail cache follows the config however this request ends: the
+	// reload above can change its values as well as the request. Reloading
+	// is a no-op when neither value changed, so this is cheap.
+	defer ReloadMediaThumbCache(env.Config)
 
 	// Installing updates without checking for them is not a state the device
 	// can be in, so the combination is refused rather than stored and quietly
@@ -465,6 +471,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
+	// The image folder and cache cap take effect as soon as they are set, so
+	// a failed save puts them back rather than leaving the running Core on
+	// values the file does not hold.
+	prevImageDir := env.Config.ImageDirSetting()
+	prevThumbCacheMaxMB := env.Config.ThumbCacheMaxMBSetting()
 	if params.MediaImageDir != nil {
 		log.Debug().Str("mediaImageDir", *params.MediaImageDir).Msg("updating setting")
 		env.Config.SetImageDir(*params.MediaImageDir)
@@ -477,6 +488,8 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	err := env.Config.Save()
 	if err != nil {
+		env.Config.SetImageDir(prevImageDir)
+		env.Config.SetThumbCacheMaxMB(prevThumbCacheMaxMB)
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 	// Music follows audioVolume until it has a volume of its own. Applied
@@ -487,17 +500,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()
 	}
-	// The reload is the cache's own: it is a no-op when neither value
-	// actually changed, so a request echoing the current values is cheap.
-	if params.MediaImageDir != nil || params.MediaThumbCacheMaxMB != nil {
-		ReloadMediaThumbCache(env.Config)
-	}
 	return NoContent{}, nil
 }
 
 // validateMediaImageDir refuses an image folder Core could not use: a
-// filesystem root, whose thumbs folder Core would claim, or a path that
-// exists and is not a directory. A folder that does not exist yet is fine;
+// filesystem root, whose thumbs folder Core would claim, a path that exists
+// and is not a directory, or one Core cannot check. A folder that does not exist yet is fine;
 // Core creates it on first use.
 func validateMediaImageDir(dir, dataDir string) error {
 	if strings.TrimSpace(dir) == "" {
@@ -507,7 +515,13 @@ func validateMediaImageDir(dir, dataDir string) error {
 	if filepath.Dir(resolved) == resolved {
 		return models.ClientErrf("mediaImageDir cannot be a filesystem root")
 	}
-	if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+	info, err := os.Stat(resolved)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
+	case !info.IsDir():
 		return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
 	}
 	return nil

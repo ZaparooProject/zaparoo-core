@@ -107,11 +107,10 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodDecksDelete,
 		models.MethodDevicePowerReboot,
 		models.MethodDevicePowerShutdown,
-		models.MethodDevicePowerSuspend,
-		models.MethodDeviceBluetoothScanStart,
-		models.MethodDeviceBluetoothScanStop,
-		models.MethodDeviceBluetoothPair,
-		models.MethodDeviceBluetoothForget:
+		models.MethodDevicePowerSuspend:
+		// The Bluetooth methods stay on the normal lane: a radio call can
+		// take seconds, and the high lane has one worker that stop, confirm
+		// and media.control must never wait behind.
 		return apiPriorityHigh
 	case models.MethodMediaImage,
 		models.MethodDecksImage,

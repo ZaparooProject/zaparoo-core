@@ -360,7 +360,7 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 		}
 		uniq, _ := readTrimmed(r.Fs, filepath.Join(dir, "uniq"))
 		address := strings.ToLower(uniq)
-		battery := r.battery(supplies, realPath, uniq)
+		battery, chargeState := r.battery(supplies, realPath, uniq)
 		if battery == nil && address != "" && r.Batteries != nil {
 			// One BlueZ read per pass, and only when a pad needs it.
 			if !bluezRead {
@@ -368,7 +368,11 @@ func (r *LinuxControllers) Read() ([]Controller, error) {
 				bluezRead = true
 			}
 			if percent, ok := bluezBatteries[address]; ok {
-				battery = &ControllerBattery{Percent: &percent, Level: BatteryLevel(percent)}
+				battery = &ControllerBattery{
+					Percent:     &percent,
+					Level:       BatteryLevel(percent),
+					ChargeState: chargeState,
+				}
 			}
 		}
 		controllers = append(controllers, Controller{
@@ -418,7 +422,12 @@ func (r *LinuxControllers) deviceSupplies() []controllerSupply {
 	return supplies
 }
 
-func (r *LinuxControllers) battery(supplies []controllerSupply, realPath, uniq string) *ControllerBattery {
+// battery reads the controller's own power supply. When the supply is there
+// but its capacity is not usable, the charge state it reports is still
+// returned, for a percentage from elsewhere.
+func (r *LinuxControllers) battery(
+	supplies []controllerSupply, realPath, uniq string,
+) (*ControllerBattery, power.ChargeState) {
 	uniq = strings.ToLower(uniq)
 	for _, supply := range supplies {
 		sameDevice := realPath != "" && len(supply.parent) > 1 && strings.HasPrefix(realPath, supply.parent)
@@ -426,23 +435,24 @@ func (r *LinuxControllers) battery(supplies []controllerSupply, realPath, uniq s
 		if !sameDevice && !sameAddress {
 			continue
 		}
+		status, _ := readTrimmed(r.Fs, filepath.Join(supply.dir, "status"))
+		chargeState := power.SysfsChargeState(status)
 		raw, ok := readTrimmed(r.Fs, filepath.Join(supply.dir, "capacity"))
 		if !ok {
-			return nil
+			return nil, chargeState
 		}
 		percent, err := strconv.Atoi(raw)
 		if err != nil || percent < 0 || percent > 100 {
 			log.Debug().Str("supply", supply.name).Str("capacity", raw).Msg("ignoring controller battery reading")
-			return nil
+			return nil, chargeState
 		}
-		status, _ := readTrimmed(r.Fs, filepath.Join(supply.dir, "status"))
 		return &ControllerBattery{
 			Percent:     &percent,
 			Level:       BatteryLevel(percent),
-			ChargeState: power.SysfsChargeState(status),
-		}
+			ChargeState: chargeState,
+		}, chargeState
 	}
-	return nil
+	return nil, ""
 }
 
 // LinuxSystem reads what the machine calls itself.

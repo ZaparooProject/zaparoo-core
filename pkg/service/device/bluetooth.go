@@ -49,6 +49,9 @@ const (
 	// bluetoothCleanupTimeout bounds the stack calls Core makes on its own
 	// behalf, with no request waiting on them.
 	bluetoothCleanupTimeout = 5 * time.Second
+	// bluetoothStopRetry is how long Core waits to stop a scan again after
+	// the stack refused.
+	bluetoothStopRetry = 30 * time.Second
 )
 
 // ErrBluetoothBusy means a pairing attempt is already running.
@@ -174,6 +177,7 @@ func (b *Bluetooth) ClientDisconnected() {
 		b.flushTimer = nil
 	}
 	scanning := b.scanning && !b.closed
+	generation := b.scanGen
 	if last && scanning {
 		b.wg.Add(1)
 	}
@@ -187,7 +191,14 @@ func (b *Bluetooth) ClientDisconnected() {
 			defer cancel()
 			b.opMu.Lock()
 			defer b.opMu.Unlock()
-			b.stopScanLocked(ctx)
+			// A client may have connected and started a scan of its own
+			// before this ran. Only the scan nobody is left to see is stopped.
+			b.mu.Lock()
+			stale := b.clients == 0 && b.scanGen == generation
+			b.mu.Unlock()
+			if stale {
+				logStopErr(b.stopScanLocked(ctx))
+			}
 		}()
 	}
 }
@@ -207,7 +218,7 @@ func (b *Bluetooth) Close() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), bluetoothCleanupTimeout)
 	b.opMu.Lock()
-	b.stopScanLocked(ctx)
+	logStopErr(b.stopScanLocked(ctx))
 	b.opMu.Unlock()
 	cancel()
 
@@ -293,6 +304,11 @@ func (b *Bluetooth) pairingCopyLocked() *models.DeviceBluetoothPairing {
 // State reads the stack and returns what clients are shown: paired devices,
 // devices heard by the current or last scan, and the latest pairing attempt.
 func (b *Bluetooth) State(ctx context.Context) (models.DeviceBluetoothState, error) {
+	// A scan started while the read is in flight must not be ended by a
+	// reading taken before it began.
+	b.mu.Lock()
+	generation := b.scanGen
+	b.mu.Unlock()
 	reading, err := b.ctl.Read(ctx)
 	if err != nil {
 		return models.DeviceBluetoothState{}, err //nolint:wrapcheck // callers branch on hoststatus errors
@@ -308,7 +324,7 @@ func (b *Bluetooth) State(ctx context.Context) (models.DeviceBluetoothState, err
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !reading.Discovering {
+	if !reading.Discovering && b.scanGen == generation {
 		// The stack ended the scan itself: a fault, a reset, or a restart
 		// of the stack that took Core's discovery session with it.
 		b.scanEndedLocked()
@@ -377,6 +393,13 @@ func (b *Bluetooth) StartScan(
 	}
 
 	b.opMu.Lock()
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if closed {
+		b.opMu.Unlock()
+		return models.DeviceBluetoothState{}, hoststatus.ErrUnsupported
+	}
 	err := b.ctl.StartDiscovery(ctx)
 	if err == nil {
 		b.mu.Lock()
@@ -402,11 +425,15 @@ func (b *Bluetooth) StartScan(
 	return b.State(ctx)
 }
 
-// StopScan stops discovery.
+// StopScan stops discovery. When the stack refuses, the scan keeps running,
+// Core tries again later, and the error is returned.
 func (b *Bluetooth) StopScan(ctx context.Context) (models.DeviceBluetoothState, error) {
 	b.opMu.Lock()
-	b.stopScanLocked(ctx)
+	err := b.stopScanLocked(ctx)
 	b.opMu.Unlock()
+	if err != nil {
+		return models.DeviceBluetoothState{}, err
+	}
 	return b.State(ctx)
 }
 
@@ -419,7 +446,13 @@ func (b *Bluetooth) scanExpired(generation uint64) {
 	current := b.scanGen == generation
 	b.mu.Unlock()
 	if current {
-		b.stopScanLocked(ctx)
+		logStopErr(b.stopScanLocked(ctx))
+	}
+}
+
+func logStopErr(err error) {
+	if err != nil {
+		log.Warn().Err(err).Msg("could not stop bluetooth discovery, trying again later")
 	}
 }
 
@@ -437,24 +470,50 @@ func (b *Bluetooth) scanEndedLocked() {
 	}
 }
 
-// stopScanLocked ends Core's scan. The caller holds opMu.
-func (b *Bluetooth) stopScanLocked(ctx context.Context) {
+// stopScanLocked ends Core's scan. The caller holds opMu. When the stack
+// refuses to stop, Core keeps the scan as its own and tries again after
+// bluetoothStopRetry, so discovery is never left running unowned. A stack or
+// adapter that has gone away has no scan to stop.
+func (b *Bluetooth) stopScanLocked(ctx context.Context) error {
 	b.mu.Lock()
 	wasScanning := b.scanning
-	b.scanning = false
+	b.mu.Unlock()
+	if !wasScanning {
+		return nil
+	}
+
+	// Remember what is in range now: the scan's finds stay listed after it
+	// ends, and devices heard since the last state read would be lost.
+	if reading, err := b.ctl.Read(ctx); err == nil {
+		b.mu.Lock()
+		for i := range reading.Devices {
+			if reading.Devices[i].InRange {
+				b.discovered[reading.Devices[i].Address] = true
+			}
+		}
+		b.mu.Unlock()
+	}
+
+	err := b.ctl.StopDiscovery(ctx)
+	if errors.Is(err, hoststatus.ErrUnsupported) || errors.Is(err, hoststatus.ErrBluetoothNoAdapter) {
+		err = nil
+	}
+
+	b.mu.Lock()
 	b.scanGen++
 	if b.scanTimer != nil {
 		b.scanTimer.Stop()
 		b.scanTimer = nil
 	}
+	if err != nil && !b.closed {
+		generation := b.scanGen
+		b.scanTimer = b.clock.AfterFunc(bluetoothStopRetry, func() { b.scanExpired(generation) })
+	} else {
+		b.scanning = false
+	}
 	b.mu.Unlock()
-	if !wasScanning {
-		return
-	}
-	if err := b.ctl.StopDiscovery(ctx); err != nil {
-		log.Warn().Err(err).Msg("could not stop bluetooth discovery")
-	}
 	b.changed()
+	return err //nolint:wrapcheck // callers branch on hoststatus errors
 }
 
 // Pair starts pairing with a device and returns at once. The outcome arrives
@@ -481,7 +540,8 @@ func (b *Bluetooth) Pair(ctx context.Context, address string) (models.DeviceBlue
 		b.opMu.Unlock()
 		return models.DeviceBluetoothState{}, err //nolint:wrapcheck // callers branch on hoststatus errors
 	}
-	b.stopScanLocked(ctx)
+	// Pairing goes ahead even if the scan will not stop; the retry ends it.
+	logStopErr(b.stopScanLocked(ctx))
 
 	attempt, cancel := context.WithCancelCause(b.base)
 	b.mu.Lock()
@@ -506,7 +566,20 @@ func (b *Bluetooth) Pair(ctx context.Context, address string) (models.DeviceBlue
 		b.runPair(attempt, address, number)
 	}()
 	b.changed()
-	return state, stateErr
+	if stateErr != nil {
+		// The attempt is running, so the request succeeded. Answer with what
+		// Core knows without the stack; the notification brings the rest.
+		log.Debug().Err(stateErr).Msg("could not read bluetooth state after starting pairing")
+		b.mu.Lock()
+		state = models.DeviceBluetoothState{
+			Devices:  []models.DeviceBluetoothDevice{},
+			Powered:  reading.Powered,
+			Scanning: b.scanning,
+			Pairing:  b.pairingCopyLocked(),
+		}
+		b.mu.Unlock()
+	}
+	return state, nil
 }
 
 func (b *Bluetooth) runPair(ctx context.Context, address string, number int) {
@@ -560,6 +633,13 @@ func pairErrorCode(ctx context.Context, err error) string {
 // Forget unpairs a device and removes it from the stack.
 func (b *Bluetooth) Forget(ctx context.Context, address string) (models.DeviceBluetoothState, error) {
 	b.opMu.Lock()
+	b.mu.Lock()
+	pairingIt := b.pairActive && b.pairing != nil && b.pairing.ID == address
+	b.mu.Unlock()
+	if pairingIt {
+		b.opMu.Unlock()
+		return models.DeviceBluetoothState{}, ErrBluetoothBusy
+	}
 	err := b.ctl.Remove(ctx, address)
 	b.opMu.Unlock()
 	if err != nil {
