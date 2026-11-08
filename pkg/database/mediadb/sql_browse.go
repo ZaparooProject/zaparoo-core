@@ -679,9 +679,9 @@ func sqlBrowseDirectoryRows(
 				return nil, cacheErr
 			}
 			if parentFound {
-				results = browseTruncateDirectories(
-					applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems), opts.Limit,
-				)
+				// Cut back below, after the path filter: a stale count can keep a
+				// hidden folder that the filter then drops.
+				results = applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems)
 				served = true
 			}
 		}

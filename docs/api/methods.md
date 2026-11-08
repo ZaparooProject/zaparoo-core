@@ -929,7 +929,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
 | offset     | number | No       | Start the page at this absolute position in the listing, directories first, then files. Must be 0 or greater. An offset at or past the end returns no entries with correct totals. Root `virtualEntries` of a `rootView: "contents"` listing are not counted and appear only on the cursorless first page. See [Positioned pages](#positioned-pages). |
-| anchorPath | string | No       | Non-empty path to locate in the listing. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a listed folder, at any depth, finds that folder, whether or not the path itself is still indexed or visible. See [Positioned pages](#positioned-pages). |
+| anchorPath | string | No       | Non-empty absolute path to locate in the listing, in the form entries report as `path`. The launcher-relative form accepted by `path` is not resolved here. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a listed folder, at any depth, finds that folder, whether or not the path itself is still indexed or visible. See [Positioned pages](#positioned-pages). |
 
 #### Result
 
@@ -970,7 +970,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | pageSize    | number | Yes      | The requested page size.                                 |
 | nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
 | offset      | number | No       | Absolute position of the first returned row, not counting root `virtualEntries`. Present on every cursorless page without `letter`, including 0, so a client can detect support from a normal first page. Absent on cursor and letter-filtered pages and on `live` listings. |
-| anchorIndex | number | No       | Absolute position of `anchorPath`. Absent when the path is not listed. |
+| anchorIndex | number | No       | Absolute position of `anchorPath`, or of the listed folder it sits below. Absent when neither is listed. |
 
 ##### Positioned pages
 
