@@ -228,12 +228,14 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 func buildNegativeOnlySystemMediaCountsQuery(
 	tags []zapscript.TagFilter,
 ) (query string, args []any) {
+	// A media is excluded when it carries any of the tags, whatever their
+	// types, so they form one OR group rather than one per type.
 	forbidden := make([]zapscript.TagFilter, len(tags))
 	for i := range tags {
 		forbidden[i] = tags[i]
 		forbidden[i].Operator = zapscript.TagOperatorOR
 	}
-	forbiddenClauses, args := BuildTagFilterSQL(forbidden)
+	forbiddenClause, args := orGroupInClause(expandCreditFilters(forbidden), "Media")
 
 	query = `
 		WITH TotalCounts AS (
@@ -245,7 +247,7 @@ func buildNegativeOnlySystemMediaCountsQuery(
 			SELECT Media.SystemDBID, COUNT(*) AS Count
 			FROM Media
 			WHERE Media.IsMissing = 0
-			AND ` + strings.Join(forbiddenClauses, " AND ") + `
+			AND ` + forbiddenClause + `
 			GROUP BY Media.SystemDBID
 		)
 		SELECT Systems.SystemID, TotalCounts.Count - COALESCE(ExcludedCounts.Count, 0)

@@ -300,23 +300,26 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 		}
 	}
 
-	// Check OR filters: must have AT LEAST ONE
-	if len(orFilters) > 0 {
-		hasAtLeastOne := false
-		for _, orTag := range orFilters {
-			if values, exists := resultTags[orTag.Type]; exists {
-				if _, ok := values[orTag.Value]; ok {
-					hasAtLeastOne = true
-					break
-				}
-			}
-		}
-		if !hasAtLeastOne {
+	// Check OR filters: AT LEAST ONE of every tag type's group
+	for _, group := range database.GroupORFiltersByType(orFilters) {
+		if !matchesAnyTag(resultTags, group) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// matchesAnyTag reports whether the result carries at least one of filters.
+func matchesAnyTag(resultTags map[string]map[string]struct{}, filters []zapscript.TagFilter) bool {
+	for _, f := range filters {
+		if values, exists := resultTags[f.Type]; exists {
+			if _, ok := values[f.Value]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FilterOutVariants removes demos, betas, prototypes, hacks, and other variants
@@ -721,27 +724,18 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 		}
 	}
 
-	// Check OR filters (need at least one match)
-	if len(orFilters) > 0 {
-		hasAtLeastOne := false
-		for _, orTag := range orFilters {
-			if values, exists := resultTags[orTag.Type]; exists {
-				if _, ok := values[orTag.Value]; ok {
-					hasAtLeastOne = true
-					matched++
-					break
-				}
-			}
-		}
-		if !hasAtLeastOne {
+	// Check OR filters: each tag type's group needs at least one match
+	orGroups := database.GroupORFiltersByType(orFilters)
+	for _, group := range orGroups {
+		if matchesAnyTag(resultTags, group) {
+			matched++
+		} else {
 			conflicts++
 		}
 	}
 
-	totalFilters := applicableAndFilters + len(notFilters)
-	if len(orFilters) > 0 {
-		totalFilters++ // OR group counts as one requirement
-	}
+	// Each OR group counts as one requirement
+	totalFilters := applicableAndFilters + len(notFilters) + len(orGroups)
 
 	if totalFilters == 0 {
 		return 1.0

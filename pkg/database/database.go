@@ -665,6 +665,28 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 	return and, not, or
 }
 
+// GroupORFiltersByType splits OR filters into one group per tag type, in the
+// order each type first appears. A media matches the OR filters when it
+// matches at least one filter of every group: "~genre:a ~genre:b ~region:us
+// ~region:jp" reads as (genre a or b) and (region us or jp).
+func GroupORFiltersByType(orFilters []zapscript.TagFilter) [][]zapscript.TagFilter {
+	if len(orFilters) == 0 {
+		return nil
+	}
+	groups := make([][]zapscript.TagFilter, 0, 1)
+	index := make(map[string]int, 1)
+	for _, f := range orFilters {
+		i, ok := index[f.Type]
+		if !ok {
+			i = len(groups)
+			index[f.Type] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], f)
+	}
+	return groups
+}
+
 // MediaCoverThumb is the recorded cover thumbnail resolution for one media
 // row. TypeTag is the image property type the thumbnail was built from,
 // SourceKey the thumbnail cache's key for that source image ("" when not

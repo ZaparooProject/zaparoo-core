@@ -252,6 +252,38 @@ func TestHasAllTagsOperators(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "OR operator - groups by type, one of each",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "jp"},
+					{Type: "lang", Tag: "en"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "ja", Operator: zapscript.TagOperatorOR},
+			},
+			expected: true,
+		},
+		{
+			name: "OR operator - groups by type, one group unmatched",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "jp"},
+					{Type: "lang", Tag: "fr"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "ja", Operator: zapscript.TagOperatorOR},
+			},
+			expected: false,
+		},
+		{
 			name: "mixed operators - AND + NOT",
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{

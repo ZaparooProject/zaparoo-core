@@ -21,7 +21,6 @@ package mediadb
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -462,7 +461,8 @@ func TestRandomHonoursExplicitHiddenFilter(t *testing.T) {
 
 // A required filter on any user list (liked, play later, ...) is an explicit
 // view of that list, so its hidden entries stay eligible for random selection,
-// as they do for favorites. An OR term is still ordinary discovery.
+// as they do for favorites. So is an OR group of user lists: OR filters group
+// by tag type, so every branch of it is one of the user's lists.
 func TestRandomFromUserListIncludesHiddenEntries(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -493,8 +493,22 @@ func TestRandomFromUserListIncludesHiddenEntries(t *testing.T) {
 		{Type: "user", Value: "liked", Operator: zapscript.TagOperatorOR},
 		{Type: "user", Value: "playlater", Operator: zapscript.TagOperatorOR},
 	}
-	_, err = f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}, Tags: likedOr})
-	require.ErrorIs(t, err, sql.ErrNoRows, "an OR view is ordinary discovery and skips hidden media")
+	for range 5 {
+		game, randErr := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{
+			Systems: []string{"NES"}, Tags: likedOr,
+		})
+		require.NoError(t, randErr, "an OR group of user lists keeps hidden media")
+		assert.Equal(t, root+"LikedHidden.nes", game.Path)
+	}
+
+	excluded := []zapscript.TagFilter{{Type: "user", Value: "playlater", Operator: zapscript.TagOperatorNOT}}
+	for range 5 {
+		game, randErr := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{
+			Systems: []string{"NES"}, Tags: excluded,
+		})
+		require.NoError(t, randErr)
+		assert.Equal(t, root+"Visible.nes", game.Path, "an excluded user list is ordinary discovery")
+	}
 
 	for range 5 {
 		game, randErr := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}})
