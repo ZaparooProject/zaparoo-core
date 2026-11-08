@@ -284,6 +284,20 @@ func TestHasAllTagsOperators(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "OR operator - credit group matches a developer",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "developer", Tag: "nintendo"},
+					{Type: "genre", Tag: "rpg"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "credit", Value: "nintendo", Operator: zapscript.TagOperatorOR},
+				{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
+			},
+			expected: true,
+		},
+		{
 			name: "mixed operators - AND + NOT",
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{

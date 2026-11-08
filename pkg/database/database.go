@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
@@ -668,7 +669,9 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 // GroupORFiltersByType splits OR filters into one group per tag type, in the
 // order each type first appears. A media matches the OR filters when it
 // matches at least one filter of every group: "~genre:a ~genre:b ~region:us
-// ~region:jp" reads as (genre a or b) and (region us or jp).
+// ~region:jp" reads as (genre a or b) and (region us or jp). Types are
+// compared after deprecated-alias canonicalization, so an alias joins the group
+// of the type it resolves to.
 func GroupORFiltersByType(orFilters []zapscript.TagFilter) [][]zapscript.TagFilter {
 	if len(orFilters) == 0 {
 		return nil
@@ -676,10 +679,11 @@ func GroupORFiltersByType(orFilters []zapscript.TagFilter) [][]zapscript.TagFilt
 	groups := make([][]zapscript.TagFilter, 0, 1)
 	index := make(map[string]int, 1)
 	for _, f := range orFilters {
-		i, ok := index[f.Type]
+		key, _, _ := strings.Cut(mediatags.CanonicalizeTagAlias(f.Type+":"+f.Value), ":")
+		i, ok := index[key]
 		if !ok {
 			i = len(groups)
-			index[f.Type] = i
+			index[key] = i
 			groups = append(groups, nil)
 		}
 		groups[i] = append(groups[i], f)

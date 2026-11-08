@@ -49,3 +49,22 @@ func TestGroupORFiltersByType(t *testing.T) {
 		{or("lang", "en")},
 	}, got)
 }
+
+func TestGroupORFiltersByTypeCanonicalizesAliases(t *testing.T) {
+	t.Parallel()
+
+	or := func(tagType, value string) zapscript.TagFilter {
+		return zapscript.TagFilter{Type: tagType, Value: value, Operator: zapscript.TagOperatorOR}
+	}
+
+	// addon:controller:rumble is a deprecated alias of embedded:vibration:rumble.
+	got := database.GroupORFiltersByType([]zapscript.TagFilter{
+		or("addon", "controller:rumble"),
+		or("embedded", "slot:jcart"),
+		or("addon", "barcode:barcodeboy"),
+	})
+	assert.Equal(t, [][]zapscript.TagFilter{
+		{or("addon", "controller:rumble"), or("embedded", "slot:jcart")},
+		{or("addon", "barcode:barcodeboy")},
+	}, got)
+}

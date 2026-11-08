@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -500,6 +501,16 @@ func TestRandomFromUserListIncludesHiddenEntries(t *testing.T) {
 		require.NoError(t, randErr, "an OR group of user lists keeps hidden media")
 		assert.Equal(t, root+"LikedHidden.nes", game.Path)
 	}
+
+	// A second OR group of another type must also match, so no media qualifies.
+	likedAndAction := []zapscript.TagFilter{
+		{Type: "user", Value: "liked", Operator: zapscript.TagOperatorOR},
+		{Type: "genre", Value: "action", Operator: zapscript.TagOperatorOR},
+	}
+	_, err = f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{
+		Systems: []string{"NES"}, Tags: likedAndAction,
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows)
 
 	excluded := []zapscript.TagFilter{{Type: "user", Value: "playlater", Operator: zapscript.TagOperatorNOT}}
 	for range 5 {

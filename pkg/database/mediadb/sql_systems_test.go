@@ -111,12 +111,19 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, orCounts)
 
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, snesMedia.MediaTitleDBID, []database.TagInfo{{
+		Type: "genre",
+		Tag:  "action",
+	}}))
 	sameTypeOrCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{
 		{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
-		{Type: "genre", Value: "platformer", Operator: zapscript.TagOperatorOR},
+		{Type: "genre", Value: "action", Operator: zapscript.TagOperatorOR},
 	}, false)
 	require.NoError(t, err)
-	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, sameTypeOrCounts)
+	assert.Equal(t, []database.SystemMediaCount{
+		{SystemID: "NES", Count: 2},
+		{SystemID: "SNES", Count: 1},
+	}, sameTypeOrCounts)
 
 	// A negative-only scope excludes media carrying any of the tags, across
 	// types, not only media carrying one of every type.

@@ -311,12 +311,20 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 }
 
 // matchesAnyTag reports whether the result carries at least one of filters.
+// A credit filter also matches the developer and publisher roles, as it does
+// in SQL.
 func matchesAnyTag(resultTags map[string]map[string]struct{}, filters []zapscript.TagFilter) bool {
+	has := func(tagType, value string) bool {
+		_, ok := resultTags[tagType][value]
+		return ok
+	}
 	for _, f := range filters {
-		if values, exists := resultTags[f.Type]; exists {
-			if _, ok := values[f.Value]; ok {
-				return true
-			}
+		if has(f.Type, f.Value) {
+			return true
+		}
+		if f.Type == string(tags.TagTypeCredit) &&
+			(has(string(tags.TagTypeDeveloper), f.Value) || has(string(tags.TagTypePublisher), f.Value)) {
+			return true
 		}
 	}
 	return false
