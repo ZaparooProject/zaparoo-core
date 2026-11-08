@@ -25,6 +25,7 @@ package cores
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -48,6 +49,12 @@ type amigaVisionLaunchTarget struct {
 }
 
 func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string) error {
+	// With same_dir, Main keeps the original core's folder, which already
+	// holds the BIOS.
+	if newCore.SetName == "" || newCore.SetNameSameDir {
+		return nil
+	}
+
 	var biosPath string
 
 	// TODO: this will not work on 100% of cores anymore because some core IDs
@@ -61,7 +68,7 @@ func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string)
 		}
 	}
 
-	if biosPath == "" || newCore.SetName == "" {
+	if biosPath == "" {
 		return nil
 	}
 
@@ -258,7 +265,13 @@ func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 	}
 
 	bootFile := filepath.Join(sharedPath, "ags_boot")
-	if err := os.WriteFile(bootFile, []byte(gameName+"\n"), 0o600); err != nil {
+	bootContent := []byte(gameName + "\n")
+	if fileHolds(afero.NewOsFs(), bootFile, bootContent) {
+		log.Debug().Str("boot_file", bootFile).Str("game", gameName).
+			Msg("AmigaVision boot file already set")
+		return "\t<setname>Amiga</setname>\n", nil
+	}
+	if err := os.WriteFile(bootFile, bootContent, 0o600); err != nil {
 		log.Error().Err(err).
 			Str("install_path", installPath).
 			Str("shared_path", sharedPath).
@@ -275,6 +288,17 @@ func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 		Msg("AmigaVision boot file written")
 
 	return "\t<setname>Amiga</setname>\n", nil
+}
+
+// fileHolds reports whether path is a regular file containing exactly want.
+// The size is checked first so an unexpected large file is never read.
+func fileHolds(fs afero.Fs, path string, want []byte) bool {
+	info, err := fs.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(want)) {
+		return false
+	}
+	existing, err := afero.ReadFile(fs, path)
+	return err == nil && bytes.Equal(existing, want)
 }
 
 func amigaVisionBootImagePath(path string) string {
@@ -429,10 +453,14 @@ func patchAmigaCD32(fs afero.Fs, configPath, path string) (string, error) {
 	if len(data) < pathOffset+maxPathLength || len(data) > maxConfigSize {
 		return "", errors.New("AmigaCD32.cfg has invalid size")
 	}
-	clear(data[pathOffset : pathOffset+maxPathLength])
-	copy(data[pathOffset:pathOffset+maxPathLength], gamePath)
-	if err := pathutil.WriteFileAtomic(fs, configPath, data, info.Mode().Perm()); err != nil {
-		return "", fmt.Errorf("failed to update AmigaCD32.cfg: %w", err)
+	field := make([]byte, maxPathLength)
+	copy(field, gamePath)
+	// Relaunching the same disc leaves the config as it is.
+	if !bytes.Equal(data[pathOffset:pathOffset+maxPathLength], field) {
+		copy(data[pathOffset:pathOffset+maxPathLength], field)
+		if err := pathutil.WriteFileAtomic(fs, configPath, data, info.Mode().Perm()); err != nil {
+			return "", fmt.Errorf("failed to update AmigaCD32.cfg: %w", err)
+		}
 	}
 
 	// Return setname override to prevent adding file tag

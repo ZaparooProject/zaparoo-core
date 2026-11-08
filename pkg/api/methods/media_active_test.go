@@ -25,12 +25,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -513,7 +515,7 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	assert.Equal(t, relPath, *resp.Active[0].RelPath)
 	assert.Equal(t, "song.mp3", resp.Active[0].Path)
 	assert.Equal(t, "Song", resp.Active[0].Name)
-	assert.Equal(t, "@Audio/Song", resp.Active[0].ZapScript)
+	assert.Equal(t, "song.mp3", resp.Active[0].ZapScript, "a background track plays again by its path")
 	assert.Equal(t, models.MediaPlaybackStatePaused, resp.Active[0].PlaybackState)
 	require.Len(t, resp.Playlists, 1)
 	assert.True(t, resp.Playlists[0].Playing, "playlist scheduler remains active while audio is auto-paused")
@@ -577,7 +579,9 @@ func TestHandleActiveMedia_BackgroundSlotParam(t *testing.T) {
 		Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
 		Params:   json.RawMessage(params),
 		PlaybackManager: newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{
+			Path:   "song.mp3",
 			Paused: true,
+			Meta:   &trackmeta.Meta{Title: "Real Title", Artist: "Artist", TrackNumber: 2, HasArt: true},
 		}),
 	}
 
@@ -589,8 +593,16 @@ func TestHandleActiveMedia_BackgroundSlotParam(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, mediaslot.Background, resp.Slot)
 	assert.Equal(t, "song.mp3", resp.Path)
-	assert.Equal(t, "Song", resp.Name)
+	assert.Equal(t, "Song", resp.Name, "the media name is unchanged by the tags")
+	assert.Equal(t, "song.mp3", resp.ZapScript, "a background track plays again by its path")
 	assert.Equal(t, models.MediaPlaybackStatePaused, resp.PlaybackState)
+	require.NotNil(t, resp.Track)
+	assert.Equal(t, models.TrackInfo{Title: "Real Title", Artist: "Artist", TrackNumber: 2, HasArt: true}, *resp.Track)
+
+	encoded, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded),
+		`"track":{"title":"Real Title","artist":"Artist","trackNumber":2,"hasArt":true}`)
 }
 
 // TestHandleActiveMedia_BackgroundSlotReturnsNilWhenNoneActive verifies that
@@ -631,9 +643,11 @@ func TestHandleActiveMedia_NativeAudioCarriesPlaybackState(t *testing.T) {
 	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID))
 
 	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
+		Path:     "other.mp3",
 		Position: 30 * time.Second,
 		Duration: 3 * time.Minute,
 		Playing:  true,
+		Meta:     &trackmeta.Meta{Title: "Other"},
 	})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -660,6 +674,7 @@ func TestHandleActiveMedia_NativeAudioCarriesPlaybackState(t *testing.T) {
 	assert.Equal(t, (30 * time.Second).Milliseconds(), *resp.PositionMs)
 	assert.Equal(t, (3 * time.Minute).Milliseconds(), *resp.DurationMs)
 	assert.Equal(t, models.MediaPlaybackStatePlaying, resp.PlaybackState)
+	assert.Nil(t, resp.Track, "tags of a track other than the entry's are not reported")
 }
 
 // TestHandleActiveMedia_NonNativeLauncherOmitsPlaybackState verifies that
@@ -1022,4 +1037,13 @@ func TestHandleUpdateActiveMedia_InvalidSystem(t *testing.T) {
 	_, err := HandleUpdateActiveMedia(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "looking up system")
+}
+
+func TestBackgroundTrackZapScript(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "/music/a.mp3", backgroundTrackZapScript("/music/a.mp3"))
+	escaped := backgroundTrackZapScript("/music/a||b.mp3")
+	assert.NotEqual(t, "/music/a||b.mp3", escaped, "syntax in a path is escaped")
+	assert.True(t, strings.HasPrefix(escaped, "**launch:"))
 }

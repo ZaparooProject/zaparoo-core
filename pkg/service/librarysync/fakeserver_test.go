@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,34 +41,45 @@ import (
 // fakeOnline implements the device side of the Library sync contract in
 // memory, closely enough to exercise every path Core takes.
 type fakeOnline struct {
-	decks         map[string]*fakeDeck
-	cards         map[string]fakeCard
-	takenDeckIDs  map[string]bool
-	t             *testing.T
-	stateRows     map[string]*fakeStateRow
-	ordinals      map[string]uint32
-	rejected      map[string]string
-	issued        map[uint32]bool
-	calls         map[string]int
-	edgeRefuse    map[string]bool
-	omitAnswer    map[string]bool
-	held          *fakeInventory
-	server        *httptest.Server
-	token         string
-	putError      string
-	resolveCode   string
-	rejectState   string
-	resolved      [][]database.MediaIdentity
-	deckPushHook  func(*fakeOnline)
+	decks        map[string]*fakeDeck
+	cards        map[string]fakeCard
+	takenDeckIDs map[string]bool
+	t            *testing.T
+	stateRows    map[string]*fakeStateRow
+	ordinals     map[string]uint32
+	rejected     map[string]string
+	issued       map[uint32]bool
+	calls        map[string]int
+	edgeRefuse   map[string]bool
+	omitAnswer   map[string]bool
+	held         *fakeInventory
+	server       *httptest.Server
+	token        string
+	putError     string
+	resolveCode  string
+	rejectState  string
+	resolved     [][]database.MediaIdentity
+	deckPushHook func(*fakeOnline)
+	// imageUploads maps a staged upload to its deck and bytes.
+	imageUploads map[string]fakeImageUpload
+	// stageCode and stageStatus make staging fail; expireUploads makes the
+	// next pushes that commit an upload find it expired.
+	stageCode     string
 	statePushes   [][]fakeStatePushItem
 	deckPushes    [][]fakeDeckPushRecord
+	savedDecks    []fakeSavedDeck
 	mu            syncutil.Mutex
 	resolveStatus int
+	savedStatus   int
+	deckPullFail  int
 	limitFirst    int
 	stateRevision int64
 	stateFloor    int64
 	deckRevision  int64
 	deckFloor     int64
+	stageStatus   int
+	expireUploads int
+	stagedCount   int
 	nextID        uint32
 }
 
@@ -120,6 +132,7 @@ type fakeStatePushItem struct {
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type fakeDeck struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ImageURL    *string         `json:"image_url,omitempty"`
 	DeckID      string          `json:"deck_id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -129,6 +142,36 @@ type fakeDeck struct {
 	ItemCount   int             `json:"item_count"`
 	IsLocked    bool            `json:"is_locked"`
 	Deleted     bool            `json:"deleted"`
+}
+
+// fakeSavedDeck is one deck the fake account saved from another account.
+//
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeSavedDeck struct {
+	Name    *string `json:"name,omitempty"`
+	OwnedBy *string `json:"owned_by,omitempty"`
+	DeckID  string  `json:"deck_id"`
+	Link    string  `json:"link"`
+	SavedAt string  `json:"saved_at"`
+}
+
+// saveDecks replaces the account's saved deck list.
+func (f *fakeOnline) saveDecks(items ...fakeSavedDeck) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.savedDecks = items
+}
+
+func (f *fakeOnline) failDeckPull(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckPullFail = status
+}
+
+func (f *fakeOnline) failSavedDecks(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.savedStatus = status
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -150,12 +193,14 @@ type fakeCard struct {
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type fakeDeckPushRecord struct {
-	Name         *string         `json:"name"`
-	Description  *string         `json:"description"`
-	Items        *[]fakeDeckItem `json:"items"`
-	DeckID       string          `json:"deck_id"`
-	BaseRevision int64           `json:"base_revision"`
-	Deleted      bool            `json:"deleted"`
+	Name          *string         `json:"name"`
+	Description   *string         `json:"description"`
+	Items         *[]fakeDeckItem `json:"items"`
+	DeckID        string          `json:"deck_id"`
+	ImageUploadID string          `json:"image_upload_id"`
+	BaseRevision  int64           `json:"base_revision"`
+	Deleted       bool            `json:"deleted"`
+	RemoveImage   bool            `json:"remove_image"`
 }
 
 type fakeInventory struct {
@@ -178,6 +223,7 @@ func newFakeOnline(t *testing.T) *fakeOnline {
 		decks:        make(map[string]*fakeDeck),
 		cards:        make(map[string]fakeCard),
 		takenDeckIDs: make(map[string]bool),
+		imageUploads: make(map[string]fakeImageUpload),
 		nextID:       100,
 		token:        "library-token",
 	}
@@ -263,6 +309,9 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/v1/device/library/inventory/") {
 		key = r.Method + " /v1/device/library/inventory/{sha256}"
 	}
+	if strings.HasPrefix(r.URL.Path, "/v1/device/decks/") && strings.HasSuffix(r.URL.Path, "/image-uploads") {
+		key = r.Method + " /v1/device/decks/{id}/image-uploads"
+	}
 	f.calls[key]++
 	if r.Header.Get("Authorization") != "Bearer "+f.token {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -288,8 +337,20 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleStatePull(w, r)
 	case "POST /v1/device/decks":
 		f.handleDeckPush(w, r)
+	case "POST /v1/device/decks/{id}/image-uploads":
+		f.handleStageDeckImage(w, r)
 	case "GET /v1/device/decks":
 		f.handleDeckPull(w, r)
+	case "GET /v1/device/saved-decks":
+		if f.savedStatus != 0 {
+			writeFakeError(w, f.savedStatus, "internal_error")
+			return
+		}
+		items := f.savedDecks
+		if items == nil {
+			items = []fakeSavedDeck{}
+		}
+		writeFakeJSON(w, map[string]any{"items": items})
 	default:
 		f.t.Errorf("unexpected request %s", key)
 		w.WriteHeader(http.StatusTeapot)
@@ -677,6 +738,88 @@ func mintedFakeDeckID(deckID string) bool {
 	return true
 }
 
+type fakeImageUpload struct {
+	deckID string
+	data   []byte
+}
+
+// handleStageDeckImage stages an image for a deck the account holds, as
+// POST /v1/device/decks/{deck_id}/image-uploads does.
+func (f *fakeOnline) handleStageDeckImage(w http.ResponseWriter, r *http.Request) {
+	deckID := strings.ToUpper(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/device/decks/"), "/image-uploads"))
+	if f.stageStatus != 0 {
+		writeFakeError(w, f.stageStatus, f.stageCode)
+		return
+	}
+	deck := f.decks[deckID]
+	if deck == nil || deck.Deleted {
+		writeFakeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if deck.IsLocked {
+		writeFakeError(w, http.StatusForbidden, "deck_locked")
+		return
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil || len(data) == 0 {
+		writeFakeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	f.stagedCount++
+	uploadID := fmt.Sprintf("00000000-0000-4000-8000-%012d", f.stagedCount)
+	f.imageUploads[uploadID] = fakeImageUpload{deckID: deckID, data: data}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"image_upload_id": uploadID, "preview_url": "https://img.example/preview/" + uploadID,
+		"expires_at": "2026-09-15T12:00:00Z",
+	})
+}
+
+// applyImageChange applies a record's image change, or returns the code it
+// is rejected with.
+func (f *fakeOnline) applyImageChange(record *fakeDeckPushRecord, deck *fakeDeck) string {
+	switch {
+	case record.ImageUploadID != "":
+		if f.expireUploads > 0 {
+			f.expireUploads--
+			delete(f.imageUploads, record.ImageUploadID)
+			return "image_upload_expired"
+		}
+		upload, ok := f.imageUploads[record.ImageUploadID]
+		if !ok || upload.deckID != deck.DeckID {
+			return "image_upload_not_found"
+		}
+		delete(f.imageUploads, record.ImageUploadID)
+		imageURL := "https://img.example/decks/" + record.ImageUploadID + ".png"
+		deck.ImageURL = &imageURL
+	case record.RemoveImage:
+		deck.ImageURL = nil
+	}
+	return ""
+}
+
+// imageChanges lists the image change of every pushed record, in order:
+// the upload ID, "remove", or "" for none.
+func (f *fakeOnline) imageChanges() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, push := range f.deckPushes {
+		for _, record := range push {
+			switch {
+			case record.ImageUploadID != "":
+				out = append(out, record.ImageUploadID)
+			case record.RemoveImage:
+				out = append(out, "remove")
+			default:
+				out = append(out, "")
+			}
+		}
+	}
+	return out
+}
+
 func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Items []fakeDeckPushRecord `json:"items"`
@@ -716,6 +859,14 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deck := f.decks[deckID]
+		if record.ImageUploadID != "" && record.RemoveImage {
+			writeFakeError(w, http.StatusBadRequest, "validation_error")
+			return
+		}
+		if record.BaseRevision == 0 && (record.ImageUploadID != "" || record.RemoveImage) {
+			result(i, "rejected", "image_needs_existing_deck", nil)
+			continue
+		}
 		if record.BaseRevision == 0 {
 			if deck != nil {
 				if deck.Deleted {
@@ -775,6 +926,12 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			result(i, "rejected", "unknown_card", nil)
 			continue
 		}
+		before := *deck
+		if code := f.applyImageChange(record, deck); code != "" {
+			*deck = before
+			result(i, "rejected", code, nil)
+			continue
+		}
 		// An update against a tombstone's revision brings the deck back.
 		deck.Deleted = false
 		if record.Name != nil {
@@ -795,6 +952,10 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
+	if f.deckPullFail != 0 {
+		writeFakeError(w, f.deckPullFail, "internal_error")
+		return
+	}
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 500 {

@@ -115,3 +115,24 @@ func (c *Instance) AudioPauseOnLaunch() bool {
 	}
 	return *entry.PauseOnLaunch
 }
+
+// SetAudioPauseOnLaunch sets whether background music is paused when a game
+// launches on the primary slot. It is stored as pause_on_launch on the Audio
+// entry of [[systems.default]], which is added when there is none.
+func (c *Instance) SetAudioPauseOnLaunch(pause bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// The first entry naming Audio is the one AudioPauseOnLaunch reads.
+	for i := range c.vals.Systems.Default {
+		system, err := systemdefs.LookupSystem(c.vals.Systems.Default[i].System)
+		if err != nil || !strings.EqualFold(system.ID, systemdefs.SystemAudio) {
+			continue
+		}
+		c.vals.Systems.Default[i].PauseOnLaunch = &pause
+		return
+	}
+	c.vals.Systems.Default = append(c.vals.Systems.Default, SystemsDefault{
+		System:        systemdefs.SystemAudio,
+		PauseOnLaunch: &pause,
+	})
+}

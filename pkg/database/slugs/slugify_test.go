@@ -22,6 +22,7 @@ package slugs
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -2036,4 +2037,55 @@ func TestExpandWordIfAbbreviationTypo(t *testing.T) {
 			assert.Equal(t, tt.wantExpansion, expansion)
 		})
 	}
+}
+
+// MiSTer, 2026-11-03: a full title found nothing when one of its words slugs
+// differently on its own ("The", "Ghosts'n", a trailing "Edition"). Query words
+// come from slugging the query whole, so they are pieces of the title's slug.
+func TestSlugifyQueryWords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{name: "leading article", query: "The King of Dragons", want: []string{"king", "of", "dragons"}},
+		{name: "glued 'n", query: "Ghosts'n Goblins", want: []string{"ghosts", "and", "goblins"}},
+		{name: "spaced 'n", query: "Roc'n Rope", want: []string{"roc", "and", "rope"}},
+		{
+			name:  "trailing edition",
+			query: "Street Fighter II' Champion Edition",
+			want:  []string{"street", "fighter", "2", "champion"},
+		},
+		{name: "lone article kept", query: "The", want: []string{"the"}},
+		{name: "partial word", query: "drag", want: []string{"drag"}},
+		{name: "cjk", query: "ドラゴンクエスト", want: []string{"ドラゴンクエスト"}},
+		{name: "punctuation word dropped", query: "Sonic !", want: []string{"sonic"}},
+		{name: "empty", query: "   ", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := SlugifyQueryWords(MediaTypeGame, tt.query)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, Slugify(MediaTypeGame, tt.query), strings.Join(got, ""),
+				"query words must concatenate to the query's slug")
+		})
+	}
+}
+
+func FuzzSlugifyQueryWords(f *testing.F) {
+	for _, seed := range []string{
+		"The King of Dragons", "Ghosts'n Goblins", "Street Fighter II' Champion Edition",
+		"ドラゴンクエストVII", "Pokémon: Red", "  ", "'n'", "1943 - The",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, query string) {
+		words := SlugifyQueryWords(MediaTypeGame, query)
+		if got, want := strings.Join(words, ""), Slugify(MediaTypeGame, query); got != want {
+			t.Fatalf("SlugifyQueryWords(%q) joins to %q, Slugify gives %q", query, got, want)
+		}
+	})
 }

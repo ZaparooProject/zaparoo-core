@@ -42,6 +42,7 @@ const (
 	LogFile     = "core.log"
 	// StderrFile holds panics and runtime fatal errors, which never reach zerolog.
 	StderrFile           = "core.stderr.log"
+	StderrPreviousFile   = "core.stderr.previous.log"
 	PidFile              = "core.pid"
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"

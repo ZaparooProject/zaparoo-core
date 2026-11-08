@@ -20,8 +20,14 @@
 package playlists
 
 import (
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -40,7 +46,10 @@ type Playlist struct {
 	// indirection like a ZapLink: opening one must not let its items reach
 	// commands the script that opened it could not run itself.
 	AllowedCommands tokens.CommandPolicy
-	ID              string
+	// Repeat, set only on a ModeChange update, is the repeat mode to switch
+	// the open playlist to: RepeatNone, RepeatAll or RepeatOne.
+	Repeat *string `json:"-"`
+	ID     string
 	// DeckID names the deck on this device the playlist was opened from. It
 	// is set only by the deck loader, never from a served playlist, so it is
 	// what ties an open playlist to its deck; the ID is whatever its source
@@ -53,7 +62,15 @@ type Playlist struct {
 	Name      string
 	Slot      string
 	Items     []PlaylistItem
-	Index     int
+	// Original is the order the items loaded in, kept only while Shuffled so
+	// turning shuffle off can put them back. It holds the same items as
+	// Items.
+	Original []PlaylistItem
+	Index    int
+	// Move identifies the move that stored the playlist, and so the launch
+	// it started. In-place changes that launch nothing, such as shuffle and
+	// repeat, keep it; any other update gets a new one. Zero is unstamped.
+	Move uint64 `json:"-"`
 	// Advance moves to the next item after this much playing time. Zero
 	// means the playlist does not rotate on a timer.
 	Advance time.Duration
@@ -68,6 +85,12 @@ type Playlist struct {
 	// EngineFromIndex is the item the engine moved this update away from, so
 	// the queue handler can drop a move the user has already overtaken.
 	EngineFromIndex int `json:"-"`
+	// Intent, when set, makes this an update that only plays or pauses the
+	// open playlist; the other fields are then ignored.
+	Intent Intent `json:"-"`
+	// SkipRun counts the items in a row a background playlist has stepped
+	// past because their launch failed. Any other move starts it over.
+	SkipRun int `json:"-"`
 	// StopSeq is the count of stops of the primary media when the update was
 	// issued, valid when StopStamped is set. A stop after that cancels an
 	// update that has not launched yet.
@@ -106,6 +129,15 @@ type Playlist struct {
 	// EngineFromArmed says the move was decided on a loaded playlist waiting
 	// to start rather than a playing one.
 	EngineFromArmed bool `json:"-"`
+	// ModeChange applies only the shuffle and repeat settings of this update,
+	// ShuffleSet with Shuffle and Repeat, to the playlist open in its slot at
+	// the time it is handled. It keeps the current item and playback and
+	// never launches anything.
+	ModeChange bool `json:"-"`
+	// ShuffleSet says this ModeChange update sets shuffle to Shuffle.
+	ShuffleSet bool `json:"-"`
+	// Shuffle is the shuffle state a ModeChange update with ShuffleSet asks for.
+	Shuffle bool `json:"-"`
 	// Refresh replaces the items and name of the active playlist with the
 	// same ID in place, keeping its position and playback state and never
 	// launching anything. It is ignored when no such playlist is active.
@@ -159,9 +191,14 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 // by a copy that forgot to list it. Clear, ForceRelaunch, Refresh and
 // FromPlaylistItem are the exception: they describe the single update that
 // delivered them to the queue handler, not the playlist, so they never
-// outlive it, and neither do EngineStarted, Reconfigure and Completed.
+// outlive it, and neither do EngineStarted, Reconfigure, ModeChange and
+// Completed.
 func transition(p *Playlist) *Playlist {
 	out := *p
+	out.ModeChange = false
+	out.ShuffleSet = false
+	out.Shuffle = false
+	out.Repeat = nil
 	out.Clear = false
 	out.ForceRelaunch = false
 	out.Refresh = false
@@ -182,6 +219,7 @@ func transition(p *Playlist) *Playlist {
 func moveTo(p *Playlist, idx int) *Playlist {
 	out := transition(p)
 	out.Index = idx
+	out.SkipRun = 0
 	if out.PausedByFailure {
 		out.Playing = true
 		out.PausedByFailure = false
@@ -195,6 +233,53 @@ func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		idx = 0
 	}
 	return moveTo(&p, idx)
+}
+
+// Intent is a request to play or pause whatever playlist is open in a slot,
+// resolved by the queue worker against the playlist as it is at that moment.
+type Intent int
+
+const (
+	// IntentNone marks an ordinary update that carries a whole playlist.
+	IntentNone Intent = iota
+	IntentPlay
+	IntentPause
+)
+
+// IntentUpdate returns an update that only plays or pauses the playlist open
+// in slot. It carries no playlist of its own, so it cannot overwrite a move,
+// shuffle or repeat change that lands before the worker reaches it.
+func IntentUpdate(slot string, playing bool) *Playlist {
+	intent := IntentPause
+	if playing {
+		intent = IntentPlay
+	}
+	return &Playlist{Slot: slot, Intent: intent}
+}
+
+// ApplyIntent resolves an intent-only update against the open playlist, or
+// returns nil when none is open.
+func ApplyIntent(open, update *Playlist) *Playlist {
+	if open == nil || update == nil || update.Intent == IntentNone {
+		return nil
+	}
+	if update.Intent == IntentPlay {
+		return Play(*open)
+	}
+	return Pause(*open)
+}
+
+// SkipFailed returns the move past p's current item after its launch failed,
+// or false when there is nowhere to go: the end of a playlist that does not
+// loop, or every item having failed in a row. It keeps count, which any other
+// move starts over.
+func SkipFailed(p Playlist) (*Playlist, bool) { //nolint:gocritic // value copy, as Next
+	if p.SkipRun+1 >= len(p.Items) || (p.Index+1 >= len(p.Items) && !p.Loop) {
+		return nil, false
+	}
+	out := Next(p)
+	out.SkipRun = p.SkipRun + 1
+	return out, true
 }
 
 func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
@@ -257,6 +342,123 @@ func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves imm
 	return out
 }
 
+// Repeat modes of a playlist, as the API names them.
+const (
+	RepeatNone = "none"
+	RepeatAll  = "all"
+	RepeatOne  = "one"
+)
+
+// ErrInvalidRepeat is returned for a repeat mode that is not one of the
+// Repeat constants.
+var ErrInvalidRepeat = errors.New("invalid repeat mode")
+
+// NormalizeRepeat returns the repeat mode named by mode, accepting "off" as
+// RepeatNone.
+func NormalizeRepeat(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case RepeatNone, "off":
+		return RepeatNone, nil
+	case RepeatAll:
+		return RepeatAll, nil
+	case RepeatOne:
+		return RepeatOne, nil
+	}
+	return "", fmt.Errorf("%w: %q", ErrInvalidRepeat, mode)
+}
+
+// RepeatMode returns the playlist's repeat mode.
+func (p *Playlist) RepeatMode() string {
+	switch {
+	case p.LoopOne:
+		return RepeatOne
+	case p.Loop:
+		return RepeatAll
+	}
+	return RepeatNone
+}
+
+// SetRepeat returns p switched to repeat mode, keeping its position and
+// playback.
+func SetRepeat(p *Playlist, mode string) (*Playlist, error) {
+	normalized, err := NormalizeRepeat(mode)
+	if err != nil {
+		return nil, err
+	}
+	out := transition(p)
+	out.Loop = normalized == RepeatAll
+	out.LoopOne = normalized == RepeatOne
+	return out, nil
+}
+
+// shuffleFunc puts items in a random order in place. Tests replace it.
+//
+//nolint:gochecknoglobals // swapped only by tests for deterministic orders
+var shuffleFunc = func(items []PlaylistItem) {
+	//nolint:gosec // Playlist order is not security sensitive.
+	rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+}
+
+// ShuffleItems puts the items of a playlist that was just loaded in a random
+// order and marks it shuffled, keeping the order they loaded in so shuffle
+// can be turned off again.
+func ShuffleItems(p *Playlist) {
+	p.Original = slices.Clone(p.Items)
+	items := slices.Clone(p.Items)
+	shuffleFunc(items)
+	p.Items = items
+	p.Shuffled = true
+}
+
+// SetShuffle returns p with shuffle turned on or off, keeping the current
+// item current and the playback as it is. Turning it on moves the current
+// item to the front and shuffles the rest behind it; turning it off puts the
+// items back in the order they loaded in. A playlist already in the asked
+// state is returned unchanged.
+func SetShuffle(p *Playlist, on bool) *Playlist {
+	out := transition(p)
+	if on == p.Shuffled {
+		return out
+	}
+	if on {
+		out.Original = slices.Clone(p.Items)
+		if len(p.Items) == 0 {
+			out.Items = nil
+			out.Index = 0
+			out.Shuffled = true
+			return out
+		}
+		cur := min(max(p.Index, 0), len(p.Items)-1)
+		items := make([]PlaylistItem, 0, len(p.Items))
+		items = append(items, p.Items[cur])
+		items = append(items, p.Items[:cur]...)
+		items = append(items, p.Items[cur+1:]...)
+		shuffleFunc(items[1:])
+		out.Items = items
+		out.Index = 0
+		out.Shuffled = true
+		return out
+	}
+
+	out.Shuffled = false
+	if len(p.Original) != len(p.Items) {
+		// Nothing to restore: the order stays as it is.
+		out.Original = nil
+		return out
+	}
+	current := p.Current()
+	out.Items = slices.Clone(p.Original)
+	out.Original = nil
+	// Items that are identical in every field cannot be told apart, so the
+	// first of them is the current one.
+	idx := slices.Index(out.Items, current)
+	if idx < 0 {
+		idx = LocateItem(out.Items, current.ZapScript, -1)
+	}
+	out.Index = max(idx, 0)
+	return out
+}
+
 // Current returns the item at the playlist's index, clamped into range. It
 // only reads: the stored playlist is shared between goroutines, so a read
 // that repaired an out-of-range index in place would be a data race.
@@ -265,6 +467,44 @@ func (p *Playlist) Current() PlaylistItem {
 		return PlaylistItem{}
 	}
 	return p.Items[min(max(p.Index, 0), len(p.Items)-1)]
+}
+
+// APIState returns the playlist as the API reports it.
+func (p *Playlist) APIState() models.PlaylistState {
+	items := make([]models.PlaylistItemInfo, 0, len(p.Items))
+	for _, item := range p.Items {
+		items = append(items, models.PlaylistItemInfo{
+			Name:      item.Name,
+			ZapScript: item.ZapScript,
+		})
+	}
+
+	state := models.PlaylistState{
+		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
+		Items:   items,
+		Index:   p.Index,
+		Total:   len(p.Items),
+		Playing: p.Playing,
+		Repeat:  p.RepeatMode(),
+		Unsafe:  p.Unsafe,
+		Shuffle: p.Shuffled,
+		Armed:   p.Armed,
+	}
+	if p.Advance > 0 {
+		ms := p.Advance.Milliseconds()
+		state.AdvanceMs = &ms
+	}
+	if p.Idle > 0 {
+		ms := p.Idle.Milliseconds()
+		state.IdleMs = &ms
+	}
+	if p.CountdownSet {
+		ms := p.Countdown.Milliseconds()
+		state.CountdownMs = &ms
+	}
+	return state
 }
 
 type PlaylistController struct {

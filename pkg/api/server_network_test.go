@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
 	"github.com/schollz/pake/v3"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -712,6 +713,38 @@ func TestSuppliedTCPListenerIsNotLocal(t *testing.T) {
 		_, answered := networkTestWebSocket(t, tcpDialer, wsURL, networkTestListenerKey)
 		assert.False(t, answered, "the listener key must not unlock plaintext over TCP")
 	})
+
+	server.stop(t)
+}
+
+// TestRemoteWebSocketRejectionIsLogged covers a LAN client turned away at the
+// WebSocket upgrade. The client only sees a failed connection, the same as a
+// firewalled host, so the rejection must reach the log.
+//
+//nolint:paralleltest // Replaces the process-wide configured API keys.
+func TestRemoteWebSocketRejectionIsLogged(t *testing.T) {
+	localIP := firstLocalIP(t)
+	fs := helpers.NewMemoryFS()
+	server := startAPITestServer(t, fs, localIP, 0, apiTestStandalone)
+	require.NoError(t, server.ready)
+	wsURL := "ws://" + net.JoinHostPort(localIP, strconv.Itoa(server.cfg.APIPort())) + "/api/v0.1"
+	dialer := &websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+	t.Cleanup(func() { networkTestSetConfiguredKeys(t, fs, server, "") })
+	logs := captureLogs(t, zerolog.InfoLevel)
+
+	status, answered := networkTestWebSocket(t, dialer, wsURL, "")
+	assert.Equal(t, http.StatusUnauthorized, status)
+	assert.False(t, answered)
+	output := logs.String()
+	assert.Contains(t, output, "rejected remote API connection")
+	assert.Contains(t, output, `"remote_ip":"`+localIP+`"`)
+	assert.Contains(t, output, `"reason":"`+rejectReasonUnencrypted+`"`)
+
+	networkTestSetConfiguredKeys(t, fs, server, `"`+networkTestConfigKey+`"`)
+	status, answered = networkTestWebSocket(t, dialer, wsURL, "wrong-key")
+	assert.Equal(t, http.StatusUnauthorized, status)
+	assert.False(t, answered)
+	assert.Contains(t, logs.String(), `"reason":"`+rejectReasonAPIKey+`"`)
 
 	server.stop(t)
 }

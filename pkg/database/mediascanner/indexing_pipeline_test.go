@@ -822,3 +822,51 @@ func TestGetPathFragments_TitleNumbersAreNotListNumbers(t *testing.T) {
 		assert.Equal(t, want, got.Title, path)
 	}
 }
+
+// MiSTer, 2026-11-03: every MRA in an Arcade alternatives folder starts with
+// its game's own number, so the folder was taken for a dated list and "1943
+// Midway Kaisen (Japan)" was indexed as "Midway Kaisen".
+func TestGetPathFragments_AlternativesFolderKeepsTitleNumber(t *testing.T) {
+	t.Parallel()
+
+	alternatives := string(filepath.Separator) + filepath.Join("media", "fat", "_Arcade", "_alternatives")
+	folders := map[string][]string{
+		"_1943 The Battle of Midway": {
+			"1943 Midway Kaisen (Japan).mra",
+			"1943 Midway Kaisen (Japan, Rev B).mra",
+			"1943 Midway Kaisen (Japan, no protection hack).mra",
+			"1943 The Battle of Midway (US).mra",
+			"1943 The Battle of Midway (US, Rev C).mra",
+		},
+		"_720_Degrees": {
+			"720 Degrees (German, rev 1).mra",
+			"720 Degrees (German, rev 2).mra",
+			"720 Degrees (rev 1).mra",
+			"720 Degrees (rev 2).mra",
+			"720 Degrees (rev 3).mra",
+		},
+	}
+	want := map[string]string{
+		"1943 Midway Kaisen (Japan).mra":     "1943 Midway Kaisen",
+		"1943 The Battle of Midway (US).mra": "1943 The Battle of Midway",
+		"720 Degrees (rev 1).mra":            "720 Degrees",
+	}
+
+	for folder, files := range folders {
+		paths := make([]string, len(files))
+		for i, file := range files {
+			paths[i] = filepath.Join(alternatives, folder, file)
+		}
+		policy := browseprefix.DetectPolicyForPaths(paths, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles)
+		assert.False(t, policy.Enabled, folder)
+
+		for i, file := range files {
+			title, ok := want[file]
+			if !ok {
+				continue
+			}
+			got := GetPathFragments(&PathFragmentParams{Path: paths[i], SystemID: "Arcade", PrefixPolicy: policy})
+			assert.Equal(t, title, got.Title, paths[i])
+		}
+	}
+}

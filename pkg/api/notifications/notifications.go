@@ -160,6 +160,35 @@ func UIChanged(publish func(models.Notification), payload models.UIStateResponse
 	publish(notification)
 }
 
+// PlaylistsChanged publishes the open playlists of every slot. It goes to the
+// broker directly, like UIChanged, so a full source queue cannot drop the
+// latest state.
+func PlaylistsChanged(publish func(models.Notification), payload models.PlaylistsChangedParams) {
+	if payload.Playlists == nil {
+		payload.Playlists = []models.PlaylistState{}
+	}
+	notification, ok := newNotification(models.NotificationPlaylistsChanged, payload)
+	if !ok {
+		return
+	}
+	publish(notification)
+}
+
+// MediaPlayback publishes the playback state of native audio in one slot,
+// shaped as media.active returns it for that slot. It goes to the broker
+// directly, like PlaylistsChanged, and is merged per slot, so one slot's
+// update never replaces the other's.
+//
+//nolint:gocritic // notification payload is copied before synchronous broker fan-out
+func MediaPlayback(publish func(models.Notification), payload models.ActiveMediaResponse) {
+	notification, ok := newNotification(models.NotificationMediaPlayback, payload)
+	if !ok {
+		return
+	}
+	notification.CoalesceKey = payload.Slot
+	publish(notification)
+}
+
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
 	sendNotification(ns, models.NotificationClientsPaired, payload)
 }
@@ -175,6 +204,12 @@ func ProfilesActiveChanged(ns chan<- models.Notification, payload models.Profile
 // unavailable on this platform/storage setup).
 func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesDataNotification) {
 	sendNotification(ns, models.NotificationProfilesData, payload)
+}
+
+// MediaTagsChanged broadcasts an item's user utility tags after they changed,
+// so clients update what they show for it without searching again.
+func MediaTagsChanged(ns chan<- models.Notification, payload models.MediaTagsChangedNotification) {
+	sendNotification(ns, models.NotificationMediaTagsChanged, payload)
 }
 
 // DecksChanged broadcasts that a deck was created, updated, deleted or

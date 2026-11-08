@@ -387,3 +387,53 @@ func TestHandleMediaBrowseIndex_EntryTypeDefaultsToMedia(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"entryType":"media"`)
 }
+
+// Rows indexed before the SortName column existed keep an empty SortName. The
+// file cursor must carry that empty keyset value rather than the display name
+// derived from the filename, or the next page seeks past every blank row and
+// the listing ends early (#1733).
+func TestHandleMediaBrowse_PagesFilesWithEmptySortName(t *testing.T) {
+	t.Parallel()
+
+	files := []string{
+		"Armor Attack.chd", "Bedlam.chd", "Berzerk.chd", "Blitz.chd",
+		"Clean Sweep.chd", "Cosmic Chasm.chd", "Fortress of Narzod.chd",
+		"Hyperchase.chd", "Mine Storm.chd", "Polar Rescue.chd", "Scramble.chd",
+		"Spike.chd",
+	}
+	cases := []struct {
+		name  string
+		blank string
+		sort  string
+	}{
+		{name: "all blank", blank: `UPDATE Media SET SortName = ''`},
+		{name: "all blank desc", blank: `UPDATE Media SET SortName = ''`, sort: "name-desc"},
+		{name: "half blank", blank: `UPDATE Media SET SortName = '' WHERE DBID % 2 = 0`},
+		{name: "half blank desc", blank: `UPDATE Media SET SortName = '' WHERE DBID % 2 = 0`, sort: "name-desc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newDirIndexFixture(t, [][]string{nil}, [][]string{files})
+			_, err := f.env.Database.MediaDB.UnsafeGetSQLDb().ExecContext(f.env.Context, tc.blank)
+			require.NoError(t, err)
+
+			scope := map[string]any{"path": filepath.Join(f.roots[0], "PSX"), "systems": []string{"PSX"}}
+			if tc.sort != "" {
+				scope["sort"] = tc.sort
+			}
+			first := f.browse(t, scope, nil)
+			assert.Equal(t, len(files), first.TotalFiles)
+
+			served := entriesOfType(f.walk(t, scope), "media")
+			seen := make(map[string]int, len(served))
+			for i := range served {
+				seen[served[i].Path]++
+			}
+			assert.Len(t, served, len(files))
+			for _, file := range files {
+				assert.Equalf(t, 1, seen[filepath.Join(f.roots[0], "PSX", file)], "%s served once", file)
+			}
+		})
+	}
+}

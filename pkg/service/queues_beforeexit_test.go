@@ -438,6 +438,10 @@ func (p *stubPlayback) Seek(string, time.Duration) error {
 	return nil
 }
 
+func (*stubPlayback) SetVolume(string, float64) error {
+	return nil
+}
+
 func (*stubPlayback) State(string) audio.PlaybackState {
 	return audio.PlaybackState{}
 }

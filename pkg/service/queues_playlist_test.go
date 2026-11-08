@@ -128,6 +128,10 @@ func (*servicePlaybackRecorder) Seek(string, time.Duration) error {
 	return nil
 }
 
+func (*servicePlaybackRecorder) SetVolume(string, float64) error {
+	return nil
+}
+
 func (r *servicePlaybackRecorder) State(slot string) audio.PlaybackState {
 	if r.states == nil {
 		return audio.PlaybackState{}
@@ -459,6 +463,7 @@ func TestHandlePlaylist_RefreshKeepsPositionAndPlayback(t *testing.T) {
 	active := makeServicePlaylist()
 	active.Index = 1
 	active.Playing = true
+	active.LoopOne = true
 	svc.State.SetActivePlaylist(active)
 
 	refresh := &playlists.Playlist{
@@ -479,8 +484,93 @@ func TestHandlePlaylist_RefreshKeepsPositionAndPlayback(t *testing.T) {
 	assert.Equal(t, "**test4", got.Items[2].ZapScript)
 	assert.Equal(t, 1, got.Index, "the position is kept")
 	assert.True(t, got.Playing, "playback state is kept")
-	assert.True(t, got.Loop)
+	assert.True(t, got.LoopOne, "the open playlist's repeat is kept")
+	assert.False(t, got.Loop, "a refresh never changes the repeat")
 	assert.Empty(t, recorder.played, "a refresh never launches")
+}
+
+func TestHandlePlaylist_RefreshReshufflesKeepingCurrentItem(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	active := playlists.SetShuffle(makeServicePlaylist(), true)
+	active = playlists.Goto(*active, 1)
+	current := active.Current()
+	svc.State.SetActivePlaylist(active)
+
+	newItems := []playlists.PlaylistItem{
+		{Name: "Item 5", ZapScript: "**test5"},
+		current,
+		{Name: "Item 6", ZapScript: "**test6"},
+	}
+	handlePlaylist(svc, &playlists.Playlist{ID: active.ID, Refresh: true, Items: newItems}, nil)
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.True(t, got.Shuffled)
+	assert.Equal(t, current, got.Current(), "the current item stays current")
+	assert.Equal(t, newItems, got.Original, "the refreshed items are the new load order")
+	assert.ElementsMatch(t, newItems, got.Items)
+	assert.Empty(t, recorder.played)
+}
+
+func TestHandlePlaylist_ModeChange(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	active := makeServicePlaylist()
+	active.Index = 1
+	active.Playing = true
+	active.Slot = mediaslot.Background
+	svc.State.SetBackgroundPlaylist(active)
+	current := active.Current()
+
+	repeat := playlists.RepeatOne
+	handlePlaylist(svc, &playlists.Playlist{
+		Slot: mediaslot.Background, ModeChange: true, ShuffleSet: true, Shuffle: true, Repeat: &repeat,
+	}, nil)
+
+	got := svc.State.GetBackgroundPlaylist()
+	require.NotNil(t, got)
+	assert.NotSame(t, active, got)
+	assert.Equal(t, active.ID, got.ID, "the open playlist is changed, not replaced")
+	assert.True(t, got.Shuffled)
+	assert.True(t, got.LoopOne)
+	assert.Equal(t, current, got.Current())
+	assert.True(t, got.Playing, "playback is kept")
+	assert.False(t, got.ModeChange, "the update's own flags are not stored")
+	assert.Nil(t, got.Repeat)
+	assert.Empty(t, recorder.played, "a mode change never launches")
+	assert.Empty(t, recorder.stopped)
+	assert.Nil(t, svc.State.GetActivePlaylist(), "the other slot is untouched")
+
+	off := playlists.RepeatNone
+	handlePlaylist(svc, &playlists.Playlist{
+		Slot: mediaslot.Background, ModeChange: true, ShuffleSet: true, Shuffle: false, Repeat: &off,
+	}, nil)
+	got = svc.State.GetBackgroundPlaylist()
+	assert.False(t, got.Shuffled)
+	assert.False(t, got.LoopOne)
+	assert.Equal(t, active.Items, got.Items, "the load order is back")
+	assert.Equal(t, current, got.Current())
+}
+
+func TestHandlePlaylist_ModeChangeWithNothingOpenIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	handlePlaylist(svc, &playlists.Playlist{ModeChange: true, ShuffleSet: true, Shuffle: true}, nil)
+	assert.Nil(t, svc.State.GetActivePlaylist(), "a mode change never opens a playlist")
+
+	bad := "sometimes"
+	active := makeServicePlaylist()
+	svc.State.SetActivePlaylist(active)
+	handlePlaylist(svc, &playlists.Playlist{ModeChange: true, Repeat: &bad}, nil)
+	assert.Same(t, active, svc.State.GetActivePlaylist(), "an invalid repeat changes nothing")
 }
 
 func TestHandlePlaylist_RefreshClampsIndexAndIgnoresOtherIDs(t *testing.T) {
@@ -648,7 +738,9 @@ func TestHandlePlaylist_BackgroundPlayRelaunchesWhenNoPlaybackSource(t *testing.
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
 	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
-	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+	// A background launch picks native audio itself when the launcher cache
+	// knows it, so the launcher is whatever the cache holds.
+	mockPlatform.On("LaunchMedia", svc.Config, path, mock.Anything, svc.DB,
 		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
 			return opts != nil && opts.Slot == mediaslot.Background
 		})).Return(nil).Once()
@@ -757,7 +849,9 @@ func TestRunTokenZapScript_BackgroundLaunchPreservesPrimaryPlaylist(t *testing.T
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
 	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
-	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+	// A background launch picks native audio itself when the launcher cache
+	// knows it, so the launcher is whatever the cache holds.
+	mockPlatform.On("LaunchMedia", svc.Config, path, mock.Anything, svc.DB,
 		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
 			return opts != nil && opts.Slot == mediaslot.Background
 		})).Return(nil).Once()
@@ -827,7 +921,9 @@ func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
 	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
-	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+	// A background launch picks native audio itself when it is known, so
+	// the launcher is whatever the launcher cache holds.
+	mockPlatform.On("LaunchMedia", svc.Config, path, mock.Anything, svc.DB,
 		mock.Anything).Return(nil).Once()
 
 	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 10)}
@@ -958,6 +1054,10 @@ func (s *statefulPlaybackStub) TogglePause(slot string) error {
 }
 
 func (*statefulPlaybackStub) Seek(string, time.Duration) error {
+	return nil
+}
+
+func (*statefulPlaybackStub) SetVolume(string, float64) error {
 	return nil
 }
 

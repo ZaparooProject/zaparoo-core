@@ -25,6 +25,8 @@ const (
 	LinuxFolder        = SDRootDir + "/linux"
 	StartupFile        = LinuxFolder + "/user-startup.sh"
 	ActiveGameFile     = "/tmp/ACTIVEGAME"
+	// LastLaunchFile is on the SD card rather than in /tmp on purpose: Main
+	// opens a launched core's OSD file browser in the MGL's directory.
 	LastLaunchFile     = SDRootDir + "/.LASTLAUNCH.mgl"
 	CoreNameFile       = "/tmp/CORENAME"
 	RBFNameFile        = "/tmp/RBFNAME"

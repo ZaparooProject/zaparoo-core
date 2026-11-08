@@ -1209,6 +1209,33 @@ func TestSqlDeleteInboxMessage_ExecError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlPruneInboxMessages_ExecError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox`).WillReturnError(sqlmock.ErrCancelled)
+
+	_, err = sqlPruneInboxMessages(context.Background(), db, time.Now(), time.Unix(0, 0), 100)
+	require.ErrorContains(t, err, "failed to prune inbox messages")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPruneInboxMessages_RowsAffectedError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox`).
+		WillReturnResult(sqlmock.NewErrorResult(sqlmock.ErrCancelled))
+
+	_, err = sqlPruneInboxMessages(context.Background(), db, time.Now(), time.Unix(0, 0), 100)
+	require.ErrorContains(t, err, "failed to get rows affected")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlDeleteAllInboxMessages_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()

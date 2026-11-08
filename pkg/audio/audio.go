@@ -33,11 +33,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/nativedec"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gopxl/beep/v2"
-	"github.com/gopxl/beep/v2/flac"
-	"github.com/gopxl/beep/v2/mp3"
-	"github.com/gopxl/beep/v2/vorbis"
 	"github.com/gopxl/beep/v2/wav"
 	"github.com/rs/zerolog/log"
 )
@@ -290,6 +288,12 @@ func decodeWAV(r io.ReadCloser) ([][2]float64, error) {
 	return drainStream(streamer, format), nil
 }
 
+// nativeFormat is the beep format a native decoder streams: always stereo,
+// at the file's own sample rate.
+func nativeFormat(d *nativedec.Decoder) beep.Format {
+	return beep.Format{SampleRate: beep.SampleRate(d.SampleRate()), NumChannels: 2, Precision: 4}
+}
+
 // decodeBytesByMagic decodes a buffer whose format is detected from leading bytes.
 func decodeBytesByMagic(data []byte) ([][2]float64, error) {
 	switch detectAudioFormat(data) {
@@ -300,27 +304,14 @@ func decodeBytesByMagic(data []byte) ([][2]float64, error) {
 		}
 		defer closeStreamer(streamer)
 		return drainStream(streamer, format), nil
-	case "ogg":
-		streamer, format, err := vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
+	case "ogg", "mp3", "flac":
+		kind, _ := nativedec.KindForExt("." + detectAudioFormat(data))
+		d, err := nativedec.OpenBytes(data, kind)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode OGG stream: %w", err)
+			return nil, fmt.Errorf("failed to decode %s stream: %w", strings.ToUpper(detectAudioFormat(data)), err)
 		}
-		defer closeStreamer(streamer)
-		return drainStream(streamer, format), nil
-	case "mp3":
-		streamer, format, err := mp3.Decode(io.NopCloser(bytes.NewReader(data)))
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MP3 stream: %w", err)
-		}
-		defer closeStreamer(streamer)
-		return drainStream(streamer, format), nil
-	case "flac":
-		streamer, format, err := flac.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode FLAC stream: %w", err)
-		}
-		defer closeStreamer(streamer)
-		return drainStream(streamer, format), nil
+		defer closeStreamer(d)
+		return drainStream(d, nativeFormat(d)), nil
 	default:
 		return nil, errors.New("unsupported audio format (expected WAV, OGG, MP3, or FLAC)")
 	}
@@ -333,16 +324,16 @@ func decodeBytesByExt(data []byte, ext string) ([][2]float64, error) {
 		format   beep.Format
 		err      error
 	)
-	switch ext {
-	case ".wav":
+	if kind, native := nativedec.KindForExt(ext); native {
+		var d *nativedec.Decoder
+		d, err = nativedec.OpenBytes(data, kind)
+		if err == nil {
+			streamer = d
+			format = nativeFormat(d)
+		}
+	} else if ext == ".wav" {
 		streamer, format, err = wav.Decode(io.NopCloser(bytes.NewReader(data)))
-	case ".mp3":
-		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
-	case ".ogg":
-		streamer, format, err = vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
-	case ".flac":
-		streamer, format, err = flac.Decode(bytes.NewReader(data))
-	default:
+	} else {
 		return nil, fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
 	}
 	if err != nil {

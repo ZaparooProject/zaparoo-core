@@ -223,3 +223,27 @@ func TestMarkScrapeTagCacheStale_AllSystems(t *testing.T) {
 	require.NoError(t, f.db.RefreshScrapeTagCache(ctx))
 	assert.True(t, hasTagInfo(f.systemTags(t), scrapedGenreTag))
 }
+
+// TestApplyScrapeResult_DropsTagFilteredListings covers the browse listing
+// cache: a tags filter lists by the tags a scrape writes, so its totals and
+// letter index must not outlive the write, while unfiltered listings keep
+// theirs through the run.
+func TestApplyScrapeResult_DropsTagFilteredListings(t *testing.T) {
+	f := setupScrapeTagCacheFixture(t)
+	cache := f.db.BrowseListingCache()
+	plain := database.BrowseListingKey{Path: "roms/nes/"}
+	filtered := database.BrowseListingKey{Path: "roms/nes/", Tags: scrapedGenreTag.Type + ":" + scrapedGenreTag.Tag}
+	ticket := cache.Begin("")
+	cache.StoreTotals(&plain, ticket, database.BrowseListingTotals{Files: 1})
+	cache.StoreTotals(&filtered, ticket, database.BrowseListingTotals{})
+
+	require.NoError(t, f.db.ApplyScrapeResult(context.Background(), f.mediaID, f.titleID, &database.ScrapeWrite{
+		Sentinel:  scrapeTagSentinel,
+		MediaTags: []database.TagInfo{scrapedGenreTag},
+	}))
+
+	_, ok := cache.Totals(&filtered)
+	assert.False(t, ok, "a tags filter must recount after the write")
+	_, ok = cache.Totals(&plain)
+	assert.True(t, ok, "an unfiltered listing is unchanged by a tag write")
+}

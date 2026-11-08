@@ -1105,10 +1105,16 @@ func (s *Service) waitForServicePidFile(expectedPID int, timeout time.Duration) 
 	}
 }
 
+// maxServiceStderrSize is the size past which the next start moves the
+// service stderr capture aside instead of appending to it.
+const maxServiceStderrSize = 1 << 20
+
 // openServiceStderr opens the file the service process's stdout and stderr are
 // pointed at. It appends and stamps each start, because the interesting case is
 // a service that keeps dying and the previous crash is worth keeping. It lives
 // in LogDir so the log-download and upload paths can ship it with the log.
+// Outside MiSTer LogDir is persistent storage, so once the file passes
+// maxServiceStderrSize it is moved over the single previous generation.
 func (s *Service) openServiceStderr() (*os.File, error) {
 	logDir := s.pl.Settings().LogDir
 	if logDir == "" {
@@ -1117,6 +1123,13 @@ func (s *Service) openServiceStderr() (*os.File, error) {
 		return nil, errors.New("no log directory configured")
 	}
 	path := filepath.Join(logDir, config.StderrFile)
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Size() > maxServiceStderrSize {
+		// On failure keep appending: losing the cap is better than losing the
+		// crash output the file holds.
+		if err := os.Rename(path, filepath.Join(logDir, config.StderrPreviousFile)); err != nil {
+			log.Warn().Err(err).Msg("error rotating service stderr file")
+		}
+	}
 	//nolint:gosec // Path is derived from the configured temp directory and fixed filename.
 	f, err := os.OpenFile(
 		path,

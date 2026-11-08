@@ -41,6 +41,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// waitForHTTPCommands makes the test wait for the requests its HTTP commands
+// sent before it ends, so none outlives it and logs into a later test.
+func waitForHTTPCommands(t *testing.T) {
+	t.Helper()
+	t.Cleanup(httpCmdRequests.Wait)
+}
+
 func TestRedactURL(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +113,7 @@ func TestRedactURL(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -139,6 +147,7 @@ func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AppliesBasicAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -175,6 +184,7 @@ func TestCmdHTTPGet_AppliesBasicAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_NoAuthWhenNotConfigured(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -205,6 +215,7 @@ func TestCmdHTTPGet_NoAuthWhenNotConfigured(t *testing.T) {
 }
 
 func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	type requestCapture struct {
 		headers     http.Header
 		contentType string
@@ -249,6 +260,7 @@ func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AllowListEmpty_AllAllowed(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -300,6 +312,7 @@ allow_http = ['https://example\.com/.*']`))
 }
 
 func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -351,6 +364,7 @@ allow_http = ['https://example\.com/.*']`))
 }
 
 func TestCmdHTTPPost_AllowListPermits(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -492,6 +506,7 @@ func TestCmdHTTPUnreachableURLIsNotReported(t *testing.T) {
 			original := log.Logger
 			log.Logger = zerolog.New(&output)
 			t.Cleanup(func() { log.Logger = original })
+			waitForHTTPCommands(t)
 
 			_, err := tc.run(platforms.CmdEnv{
 				Cfg: &config.Instance{},
@@ -534,6 +549,7 @@ func TestCmdHTTPInvalidURLIsNotReported(t *testing.T) {
 			original := log.Logger
 			log.Logger = zerolog.New(&output)
 			t.Cleanup(func() { log.Logger = original })
+			waitForHTTPCommands(t)
 
 			_, err := tc.run(platforms.CmdEnv{
 				Cfg: &config.Instance{},

@@ -131,6 +131,21 @@ func ParseServedPlaylist(body string) (zapscript.Command, PlaylistArg, bool) {
 // that script. A deck that changed has its membership tags queued, so the
 // tags and the files its items link to follow the fetch in the background.
 func StoreFetchedDeck(db *database.Database, sourceURL string, arg *PlaylistArg) (string, error) {
+	return keepFetchedDeck(db, sourceURL, arg, false, "")
+}
+
+// StoreSavedDeck is StoreFetchedDeck for a deck the linked account saved from
+// another account. A copy the link had not been kept under before is stored
+// already saved, under ownerName, so keeping it never removes another copy to
+// make room; a copy kept before is updated like any fetch and keeps whether
+// it is saved.
+func StoreSavedDeck(db *database.Database, sourceURL string, arg *PlaylistArg, ownerName string) (string, error) {
+	return keepFetchedDeck(db, sourceURL, arg, true, ownerName)
+}
+
+func keepFetchedDeck(
+	db *database.Database, sourceURL string, arg *PlaylistArg, saved bool, ownerName string,
+) (string, error) {
 	if db == nil || db.UserDB == nil {
 		return "", ErrNoUserDB
 	}
@@ -152,6 +167,7 @@ func StoreFetchedDeck(db *database.Database, sourceURL string, arg *PlaylistArg)
 	}
 	result, err := db.UserDB.UpsertFetchedDeck(&database.Deck{
 		Name: name, SourceURL: sourceURL, PlaylistID: arg.ID, Items: items,
+		Saved: saved, OwnerName: ownerName,
 	}, MaxFetchedDecks)
 	if err != nil {
 		return "", fmt.Errorf("store fetched deck: %w", err)

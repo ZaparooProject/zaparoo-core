@@ -212,18 +212,10 @@ func encodeSearchCursor(lastID int64, visibility searchVisibility) (string, erro
 func encodeSortedSearchCursor(
 	result *database.SearchResultWithCursor, sortOrder string, visibility searchVisibility,
 ) (string, error) {
-	sortValue := result.SortValue
-	if sortValue == "" {
-		if strings.HasPrefix(sortOrder, "filename-") {
-			sortValue = result.Path
-		} else {
-			sortValue = result.Name
-		}
-	}
 	return encodeMediaSearchCursorData(cursorData{
 		Version:             sortedSearchCursorVersion,
 		Sort:                sortOrder,
-		SortValue:           sortValue,
+		SortValue:           result.SortValue,
 		LastID:              result.MediaID,
 		IncludeHidden:       &visibility.IncludeHidden,
 		PreferencesRevision: visibility.Revision,
@@ -289,6 +281,7 @@ type indexingStatusVals struct {
 	totalFiles     int
 	scannedEntries int
 	indexing       bool
+	finished       bool
 }
 
 type indexingStatus struct {
@@ -301,6 +294,9 @@ type indexingStatus struct {
 	scannedEntries int
 	mu             syncutil.RWMutex
 	indexing       bool
+	// finished marks a run that has completed and announced it, while it
+	// still holds indexing until optimization takes over.
+	finished bool
 }
 
 func (s *indexingNotificationState) shouldSend(
@@ -345,6 +341,7 @@ func (s *indexingStatus) get() indexingStatusVals {
 		totalFiles:     s.totalFiles,
 		scannedEntries: s.scannedEntries,
 		scanPath:       s.scanPath,
+		finished:       s.finished,
 	}
 }
 
@@ -355,6 +352,7 @@ func (s *indexingStatus) startIfNotRunning() bool {
 		return false
 	}
 	s.indexing = true
+	s.finished = false
 	s.totalSteps = 0
 	s.currentStep = 0
 	s.currentDesc = ""
@@ -368,6 +366,7 @@ func (s *indexingStatus) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexing = false
+	s.finished = false
 	s.totalSteps = 0
 	s.currentStep = 0
 	s.currentDesc = ""
@@ -407,6 +406,7 @@ func (s *indexingStatus) set(vals indexingStatusVals) {
 	s.totalFiles = vals.totalFiles
 	s.scannedEntries = vals.scannedEntries
 	s.scanPath = vals.scanPath
+	s.finished = vals.finished
 }
 
 func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
@@ -418,7 +418,7 @@ func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
 func (s *indexingStatus) cancel() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cancelFunc != nil && s.indexing {
+	if s.cancelFunc != nil && s.indexing && !s.finished {
 		s.cancelFunc()
 		s.indexing = false // Set indexing to false after canceling
 		return true
@@ -436,6 +436,15 @@ func (s *indexingStatus) setRunning(running bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexing = running
+}
+
+// markFinished records that the run completed. Clients are told indexing
+// stopped before optimization takes over, so status reads must agree from
+// then on even though the run still holds indexing.
+func (s *indexingStatus) markFinished() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finished = true
 }
 
 func (s *indexingStatus) getCancelFunc() context.CancelFunc {
@@ -575,9 +584,12 @@ func WithMediaCounts(resp *models.IndexingStatusResponse, mediaDB database.Media
 	return resp
 }
 
-func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs.System, rebuild bool) {
+// invalidateIndexedThumbnails forgets resolved thumbnails for the indexed
+// systems once an index completes, since an index can move media to new rows.
+// Cached thumbnail files stay: they are named after their source image.
+func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 	if rebuild || len(systems) == 0 {
-		WipeMediaThumbCache(mediaDB)
+		InvalidateMediaThumbMemo()
 		return
 	}
 	requested := make(map[string]struct{}, len(systems))
@@ -594,7 +606,7 @@ func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs
 			}
 		}
 		if allRequested {
-			WipeMediaThumbCache(mediaDB)
+			InvalidateMediaThumbMemo()
 			return
 		}
 	}
@@ -602,7 +614,7 @@ func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs
 	for systemID := range requested {
 		systemIDs = append(systemIDs, systemID)
 	}
-	WipeMediaThumbCacheSystems(mediaDB, systemIDs)
+	InvalidateMediaThumbMemoSystems(systemIDs)
 }
 
 func GenerateMediaDB(
@@ -968,7 +980,8 @@ func startMediaDBGeneration(
 			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
 		}
 		mediaImageNoImages.clear()
-		invalidateIndexedThumbnails(db.MediaDB, systems, rebuild)
+		invalidateIndexedThumbnails(systems, rebuild)
+		statusInstance.markFinished()
 		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
@@ -1183,13 +1196,29 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		sortOrder = *params.Sort
 	}
 
+	grouped := params.GroupBy != nil && *params.GroupBy == searchGroupByTitle
+	if grouped && params.TitleID != nil {
+		return nil, models.ClientErrf("groupBy cannot be combined with titleId")
+	}
+	if grouped && (sortOrder == "filename-asc" || sortOrder == "filename-desc") {
+		return nil, models.ClientErrf("sort %q is not supported when grouping by title", sortOrder)
+	}
+
 	// Handle cursor-based pagination. Legacy unsorted requests keep their
 	// DBID-only cursor; explicit sorts use a compound sort-value/DBID cursor.
+	// Grouped searches page titles, so their cursor holds a title position.
 	var cursorStr string
 	if params.Cursor != nil {
 		cursorStr = *params.Cursor
 	}
-	cursor, sortCursor, err := decodeMediaSearchCursor(cursorStr, sortOrder)
+	var cursor *int64
+	var sortCursor *database.SearchCursor
+	var err error
+	if grouped {
+		sortCursor, err = decodeGroupedSearchCursor(cursorStr, sortOrder)
+	} else {
+		cursor, sortCursor, err = decodeMediaSearchCursor(cursorStr, sortOrder)
+	}
 	if err != nil {
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
@@ -1216,6 +1245,22 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	var addedFlag database.MediaUserFlag
+	if sortOrder == searchSortAddedDesc {
+		if grouped || params.TitleID != nil {
+			return nil, models.ClientErrf("sort %q cannot be combined with groupBy or titleId", sortOrder)
+		}
+		flag, ok := addedSortFlag(tagFilters)
+		if !ok {
+			return nil, models.ClientErrf(
+				"sort %q needs a user:favorite, user:liked, user:disliked or user:playlater tag", sortOrder)
+		}
+		if env.Database == nil || env.Database.UserDB == nil {
+			return nil, errors.New("user database is not available")
+		}
+		addedFlag = flag
+	}
+
 	// Normalize letter parameter (validation already done by struct tag)
 	var validatedLetter *string
 	if params.Letter != nil && *params.Letter != "" {
@@ -1233,9 +1278,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if system != nil {
 		systemIDs = *system
 	}
-	systems, resolveErr := resolveSystems(systemIDs, fuzzy)
-	if resolveErr != nil {
-		return nil, resolveErr
+	// A titleId search ignores systems, so it does not validate them either.
+	var systems []systemdefs.System
+	if params.TitleID == nil {
+		var resolveErr error
+		systems, resolveErr = resolveSystems(systemIDs, fuzzy)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 	}
 
 	visibility, err := validateSearchVisibility(
@@ -1259,16 +1309,61 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	searchStarted := time.Now()
-	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
-	searchDuration := time.Since(searchStarted)
-	if err != nil {
-		return nil, fmt.Errorf("error searching media with filters: %w", err)
+	var groups []database.SearchTitleGroup
+	var versionCounts []int
+	var hasNextPage bool
+	switch {
+	case grouped:
+		groups, err = env.Database.MediaDB.SearchMediaTitleGroups(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching media title groups: %w", err)
+		}
+		hasNextPage = len(groups) > maxResults
+		if hasNextPage {
+			groups = groups[:maxResults]
+		}
+		searchResults, versionCounts, err = defaultTitleVersions(&env, groups)
+		if err != nil {
+			return nil, fmt.Errorf("error choosing title defaults: %w", err)
+		}
+	case params.TitleID != nil:
+		// Folding container members needs the whole title, so the title's
+		// rows are read in one go and paged here.
+		searchFilters.TitleDBID = *params.TitleID
+		searchFilters.Cursor = nil
+		searchFilters.SortCursor = nil
+		searchFilters.Limit = titleVersionsLimit
+		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching title versions: %w", err)
+		}
+		if len(searchResults) >= titleVersionsLimit {
+			return nil, fmt.Errorf("title %d has more than %d versions", *params.TitleID, titleVersionsLimit-1)
+		}
+		versions, foldErr := foldContainerVersions(ctx, env.Database.MediaDB, searchResults)
+		if foldErr != nil {
+			return nil, fmt.Errorf("error folding title versions: %w", foldErr)
+		}
+		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
+	case addedFlag != "":
+		searchResults, err = searchByAdded(ctx, env.Database, addedFlag, &searchFilters, sortCursor, limit)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error searching media with filters: %w", err)
+		}
 	}
+	searchDuration := time.Since(searchStarted)
 
 	// Check if there are more results
-	hasNextPage := len(searchResults) > maxResults
-	if hasNextPage {
-		searchResults = searchResults[:maxResults]
+	if !grouped {
+		hasNextPage = len(searchResults) > maxResults
+		if hasNextPage {
+			searchResults = searchResults[:maxResults]
+		}
 	}
 
 	coverStarted := time.Now()
@@ -1340,8 +1435,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if coverStatusesKnown {
 			hasCover = coverStatuses[result.MediaID]
 		}
+		var versionCount *int
+		if versionCounts != nil {
+			versionCount = &versionCounts[i]
+		}
 		results = append(results, models.SearchResultMedia{
 			MediaID:            result.MediaID,
+			TitleID:            result.MediaTitleID,
+			VersionCount:       versionCount,
 			RelPath:            relPath,
 			HasCover:           hasCover,
 			System:             resultSystem,
@@ -1373,9 +1474,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			lastResult := searchResults[len(searchResults)-1]
 			var cursorStr string
 			var err error
-			if sortOrder == "" {
+			switch {
+			case grouped:
+				cursorStr, err = encodeGroupedSearchCursor(&groups[len(groups)-1], sortOrder, visibility)
+			case sortOrder == "":
 				cursorStr, err = encodeSearchCursor(lastResult.MediaID, visibility)
-			} else {
+			default:
 				cursorStr, err = encodeSortedSearchCursor(&lastResult, sortOrder, visibility)
 			}
 			if err != nil {
@@ -1526,20 +1630,22 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		enrichPlaybackState(&env, &bgEntry, mediaslot.Background)
 		resp.Active = append(resp.Active, models.ActiveMediaResponse{
 			ActiveMedia: bgEntry,
-			ZapScript:   database.BuildTitleZapScript(backgroundMedia.SystemID, backgroundMedia.Name, nil),
+			// A background track has no media database entry, and its title
+			// is not unique across albums, so its path is what plays it again.
+			ZapScript: backgroundTrackZapScript(backgroundMedia.Path),
 		})
 	}
 
 	// Populate active playlist state for both slots.
 	if activePL := env.State.GetActivePlaylist(); activePL != nil {
-		resp.Playlists = append(resp.Playlists, toPlaylistState(activePL))
+		resp.Playlists = append(resp.Playlists, activePL.APIState())
 	}
 	if bgPL := env.State.GetBackgroundPlaylist(); bgPL != nil {
-		resp.Playlists = append(resp.Playlists, toPlaylistState(bgPL))
+		resp.Playlists = append(resp.Playlists, bgPL.APIState())
 	}
 
 	status := statusInstance.get()
-	resp.Database.Indexing = status.indexing
+	resp.Database.Indexing = status.indexing && !status.finished
 
 	// Get persisted work statuses. Process-local status wins when present, but
 	// persisted DBConfig state lets clients show boot-time interrupted work before
@@ -1699,6 +1805,31 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	entry := ActiveMediaEntry(&env, slot)
+	if entry == nil {
+		return nil, nil //nolint:nilnil // nil response means no active media
+	}
+	return *entry, nil
+}
+
+// backgroundTrackZapScript is what plays path again: the bare path, which
+// launches as it stands, unless it holds ZapScript syntax, when it is
+// escaped into one launch command so it cannot split into several.
+func backgroundTrackZapScript(path string) string {
+	script := zapscript.Command{
+		Name: zapscript.ZapScriptCmdLaunch,
+		Args: []string{path},
+	}.String()
+	if script == "**"+zapscript.ZapScriptCmdLaunch+":"+path {
+		return path
+	}
+	return script
+}
+
+// ActiveMediaEntry returns what media.active reports for slot, a normalized
+// slot key, or nil when nothing is active there. The media.playback
+// notification carries the same object.
+func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMediaResponse {
 	var media *models.ActiveMedia
 	if slot == mediaslot.Background {
 		media = env.State.BackgroundMedia()
@@ -1706,7 +1837,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		media = env.State.ActiveMedia()
 	}
 	if media == nil {
-		return nil, nil //nolint:nilnil // nil response means no active media
+		return nil
 	}
 
 	// Media ID and disambiguated zapScript come from MediaDB for the primary
@@ -1714,13 +1845,15 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var mediaID int64
 	var zapScript string
 	if slot == mediaslot.Background {
-		zapScript = database.BuildTitleZapScript(media.SystemID, media.Name, nil)
+		// A background track's title is not unique across albums, so its
+		// path is what plays it again.
+		zapScript = backgroundTrackZapScript(media.Path)
 	} else {
-		mediaID, zapScript = activeMediaEnrichment(&env, media.SystemID, media.Path, media.Name)
+		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.Name)
 	}
 
 	entry := models.ActiveMedia{
-		RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
+		RelPath:          mediaResponseRelativePath(env, media.SystemID, media.Path),
 		Started:          media.Started,
 		LauncherID:       media.LauncherID,
 		SystemID:         media.SystemID,
@@ -1732,12 +1865,12 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		MediaID:          mediaID,
 	}
 
-	enrichPlaybackState(&env, &entry, slot)
+	enrichPlaybackState(env, &entry, slot)
 
-	return models.ActiveMediaResponse{
+	return &models.ActiveMediaResponse{
 		ActiveMedia: entry,
 		ZapScript:   zapScript,
-	}, nil
+	}
 }
 
 //nolint:gocritic,revive // single-use parameter in API handler

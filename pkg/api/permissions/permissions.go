@@ -106,6 +106,10 @@ const (
 	// device. It stops whatever is running for everyone using the device,
 	// so legacy and member roles do not receive it.
 	CapDevicePower Capability = "device.power"
+	// CapDeviceBluetooth covers scanning for, pairing and forgetting
+	// Bluetooth devices. A paired device can be a keyboard that types into
+	// the machine, so legacy and member roles do not receive it.
+	CapDeviceBluetooth Capability = "device.bluetooth"
 )
 
 // roleCapabilities maps authenticated and internal roles to capabilities.
@@ -113,13 +117,14 @@ const (
 //nolint:gochecknoglobals // immutable capability table
 var roleCapabilities = map[Role]map[Capability]bool{
 	RoleAdmin: {
-		CapProfilesManage: true,
-		CapSettingsWrite:  true,
-		CapScreenshot:     true,
-		CapInput:          true,
-		CapPlaytimeExtend: true,
-		CapUpdateApply:    true,
-		CapDevicePower:    true,
+		CapProfilesManage:  true,
+		CapSettingsWrite:   true,
+		CapScreenshot:      true,
+		CapInput:           true,
+		CapPlaytimeExtend:  true,
+		CapUpdateApply:     true,
+		CapDevicePower:     true,
+		CapDeviceBluetooth: true,
 	},
 	RoleMember: {
 		CapScreenshot: true,

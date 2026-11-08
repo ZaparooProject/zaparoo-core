@@ -22,10 +22,14 @@ package methods
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -126,10 +130,53 @@ func TestLoadMediaImageFileRoutesSourcePathsToTheSourceFileReader(t *testing.T) 
 	platform := &sourceFileReaderTestPlatform{content: content}
 	prop := &database.MediaProperty{Text: "source://abc/NES/media/boxart/game.png"}
 
-	data, stale, err := loadMediaImageFile(
-		context.Background(), nil, platform, sourceImageTestRow(), prop, true, "property:image-boxart", 1024,
+	probed := false
+	probe := func(string) bool {
+		probed = true
+		return true
+	}
+	file, stale, err := loadMediaImageFile(
+		context.Background(), nil, "", platform, sourceImageTestRow(), prop, true, "property:image-boxart", 1024, probe,
 	)
 	require.NoError(t, err)
 	assert.False(t, stale)
-	assert.Equal(t, content, data)
+	assert.Equal(t, content, file.data)
+	assert.Equal(t, dataThumbSourceKey("image/png", content), file.sourceKey,
+		"a source-root file cannot be stat'ed, so its content names its thumbnails")
+	assert.False(t, probed, "the bytes are needed for the key, so the read is never skipped")
+}
+
+// A local file's thumbnails are named by a stat, so a cached thumbnail lets
+// the file go unread; a replaced file gets a new key.
+func TestLoadMediaImageFileSkipsReadWhenThumbnailIsCached(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "boxart.png")
+	require.NoError(t, os.WriteFile(path, []byte("boxart bytes"), 0o600))
+	prop := &database.MediaProperty{Text: path}
+	load := func(probe mediaImageCacheProbe) ([]byte, string) {
+		file, stale, err := loadMediaImageFile(
+			context.Background(), afero.NewOsFs(), "", nil, sourceImageTestRow(), prop, true,
+			"property:image-boxart", 1024, probe,
+		)
+		require.NoError(t, err)
+		require.False(t, stale)
+		return file.data, file.sourceKey
+	}
+
+	data, key := load(func(string) bool { return false })
+	assert.Equal(t, []byte("boxart bytes"), data)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fileThumbSourceKey(path, info), key)
+
+	data, cachedKey := load(func(k string) bool { return k == key })
+	assert.Nil(t, data, "a cached thumbnail skips the read")
+	assert.Equal(t, key, cachedKey)
+
+	later := info.ModTime().Add(time.Minute)
+	require.NoError(t, os.Chtimes(path, later, later))
+	data, changedKey := load(func(k string) bool { return k == key })
+	assert.Equal(t, []byte("boxart bytes"), data, "a replaced file is read again")
+	assert.NotEqual(t, key, changedKey)
 }

@@ -218,12 +218,18 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 		counts[rest[:slash]]++
 	}
 	for i := range h.dirs {
-		if !h.dirs[i].countedUnder(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+		if !h.dirs[i].within(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
 			continue
 		}
-		// The folder is the named child itself or somewhere beneath it.
+		// The folder is the named child itself or somewhere beneath it. It is
+		// judged against the child's own aggregate, so a folder whose outer
+		// hidden folder is the browsed prefix still counts.
 		rest := h.dirs[i].Prefix[len(prefix):]
-		if slash := strings.Index(rest, "/"); slash > 0 {
+		slash := strings.Index(rest, "/")
+		if slash <= 0 {
+			continue
+		}
+		if h.dirs[i].countedUnder(prefix + rest[:slash+1]) {
 			counts[rest[:slash]] += h.dirs[i].Count
 		}
 	}
@@ -231,6 +237,28 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 		return nil
 	}
 	return counts
+}
+
+// hiddenChildDirNames returns the immediate children of prefix that are
+// hidden folders for one of systems, the only folders that can drop a row from
+// that prefix's listing by path.
+func (h *hiddenMedia) hiddenChildDirNames(prefix string, systems []systemdefs.System) []string {
+	if h == nil {
+		return nil
+	}
+	var names []string
+	for i := range h.dirs {
+		if !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+			continue
+		}
+		rest, ok := strings.CutPrefix(h.dirs[i].Prefix, prefix)
+		name, tail, found := strings.Cut(rest, "/")
+		if !ok || !found || name == "" || tail != "" || slices.Contains(names, name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // childNameCount counts the distinct child directories across prefixes that

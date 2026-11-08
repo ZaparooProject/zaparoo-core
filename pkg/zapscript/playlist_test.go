@@ -712,6 +712,7 @@ func (*playlistPlaybackStub) Stop(_ string) error                             { 
 func (*playlistPlaybackStub) Pause(_ string) error                            { return nil }
 func (*playlistPlaybackStub) Resume(_ string) error                           { return nil }
 func (*playlistPlaybackStub) TogglePause(_ string) error                      { return nil }
+func (*playlistPlaybackStub) SetVolume(_ string, _ float64) error             { return nil }
 func (p *playlistPlaybackStub) State(_ string) audio.PlaybackState            { return p.state }
 func (p *playlistPlaybackStub) Seek(slot string, offset time.Duration) error {
 	p.seekCalled = true
@@ -1424,7 +1425,7 @@ func TestReadPlaylistFolder_ReturnsItems(t *testing.T) {
 	}
 
 	mp := mocks.NewMockPlatform()
-	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir, nil)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 	assert.Equal(t, "alpha", items[0].Name)
@@ -1439,7 +1440,7 @@ func TestReadPlaylistFolder_HiddenFilesSkipped(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "visible.rom"), []byte{}, 0o600))
 
 	mp := mocks.NewMockPlatform()
-	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir, nil)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "visible", items[0].Name)
@@ -1454,7 +1455,7 @@ func TestReadPlaylistFolder_NonPlayableFilesFiltered(t *testing.T) {
 	}
 
 	mp := mocks.NewMockPlatform()
-	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir, nil)
 	require.NoError(t, err)
 	require.Len(t, items, 2, "only .mp3 and .ogg should survive the launcher filter")
 	assert.Equal(t, "track1", items[0].Name)
@@ -1469,7 +1470,7 @@ func TestReadPlaylistFolder_AllFilesFilteredReturnsError(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte{}, 0o600))
 
 	mp := mocks.NewMockPlatform()
-	_, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	_, err := readPlaylistFolder(&config.Instance{}, mp, dir, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no valid files found")
 }
@@ -1477,7 +1478,7 @@ func TestReadPlaylistFolder_AllFilesFilteredReturnsError(t *testing.T) {
 func TestReadPlaylistFolder_EmptyDir(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder(nil, nil, t.TempDir())
+	_, err := readPlaylistFolder(nil, nil, t.TempDir(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no valid files found")
 }
@@ -1596,6 +1597,10 @@ func TestLoadPlaylist_RepeatAllWithShuffle_BothApply(t *testing.T) {
 	require.NotNil(t, result.Playlist)
 	assert.True(t, result.Playlist.Loop, "repeat=all should set Loop")
 	assert.False(t, result.Playlist.LoopOne)
+	assert.True(t, result.Playlist.Shuffled, "mode=shuffle applies to an inline playlist too")
+	assert.Equal(t, []string{"**t1", "**t2"}, playlists.ItemScripts(result.Playlist.Original),
+		"the order the items loaded in is kept")
+	assert.ElementsMatch(t, []string{"**t1", "**t2"}, playlists.ItemScripts(result.Playlist.Items))
 	<-queue
 }
 
@@ -1615,7 +1620,7 @@ func TestLoadPlaylist_InvalidRepeat_ReturnsError(t *testing.T) {
 func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder(nil, nil, "")
+	_, err := readPlaylistFolder(nil, nil, "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no playlist path specified")
 }
@@ -1623,7 +1628,7 @@ func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder(nil, nil, filepath.Join("nonexistent", "path", "12345"))
+	_, err := readPlaylistFolder(nil, nil, filepath.Join("nonexistent", "path", "12345"), nil)
 	require.Error(t, err)
 }
 

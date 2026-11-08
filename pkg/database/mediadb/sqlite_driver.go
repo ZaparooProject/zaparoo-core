@@ -38,7 +38,7 @@ func registerMediaSQLiteCollations(conn *sqlite3.SQLiteConn) error {
 	if err := conn.RegisterCollation(browseTitleCollationName, compareBrowseTitles); err != nil {
 		return fmt.Errorf("register media title collation: %w", err)
 	}
-	if err := conn.RegisterCollation(browseDirectoryCollationName, compareBrowseDirectoryNames); err != nil {
+	if err := conn.RegisterCollation(browseDirectoryCollationName, CompareBrowseDirectoryNames); err != nil {
 		return fmt.Errorf("register media directory collation: %w", err)
 	}
 	return nil

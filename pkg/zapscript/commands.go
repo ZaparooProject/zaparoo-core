@@ -91,7 +91,15 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
-	errAmbiguousPath       = errors.New("ambiguous case-insensitive path")
+	// ErrWriteNotAlone is returned when a write shares a script with other
+	// commands. A write arms the next card scanned, which only works when it
+	// is the token's whole script.
+	ErrWriteNotAlone = errors.New("write must be the only command on a token")
+	// ErrWriteUnsupported is returned when a write that is a script's only
+	// command reaches the runner anyway, as it does from a control script.
+	// Only a scanned token or a run request arms writes.
+	ErrWriteUnsupported = errors.New("write can only run from a scanned token or run request")
+	errAmbiguousPath    = errors.New("ambiguous case-insensitive path")
 )
 
 // IsExpectedRunError reports whether a failed command or token run is an
@@ -122,6 +130,8 @@ var expectedRunErrors = []error{
 	ErrArgCount,
 	ErrRequiredArgs,
 	ErrUnknownCommand,
+	ErrWriteNotAlone,
+	ErrWriteUnsupported,
 	// Refusals by configuration are the setting working, not a bug.
 	ErrCommandBlocked,
 	ErrCommandNotPermitted,
@@ -212,6 +222,8 @@ func lookupCmd(name string) (cmdFunc, bool) {
 
 			zapscript.ZapScriptCmdPlaytimeExtend: cmdPlaytimeExtend,
 
+			zapscript.ZapScriptCmdWrite: cmdWrite,
+
 			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
 			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
 			zapscript.ZapScriptCmdMisterScript:    forwardCmd,
@@ -252,6 +264,7 @@ func isSensitiveCommand(cmdName string) bool {
 	switch cmdName {
 	case zapscript.ZapScriptCmdProfile,
 		zapscript.ZapScriptCmdPlaytimeExtend,
+		zapscript.ZapScriptCmdWrite,
 		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
 		zapscript.ZapScriptCmdInputKeyboard,
@@ -305,6 +318,19 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 func IsValidCommand(cmdName string) bool {
 	_, ok := lookupCmd(cmdName)
 	return ok
+}
+
+// cmdWrite handles a write that reached the command runner. A write on its
+// own is armed by the token pipeline before any command runs, so one that
+// gets here shares its script with other commands or came from a path that
+// does not arm writes.
+//
+//nolint:gocritic // single-use parameter in command handler
+func cmdWrite(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.TotalCommands != 1 {
+		return platforms.CmdResult{}, ErrWriteNotAlone
+	}
+	return platforms.CmdResult{}, ErrWriteUnsupported
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -413,11 +439,28 @@ func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
 	return roots
 }
 
-// Check all games folders for a relative path to a file
+// FindLaunchFile resolves a launch path with the lookup rules a launch uses:
+// an absolute path as is, a relative one under the games folders, and a
+// virtual entry a launcher vouches for. It returns ErrFileNotFound when
+// nothing matches.
+func FindLaunchFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
+	path string,
+) (string, error) {
+	return findFile(fs, pl, cfg, launchers, path)
+}
+
+// Check all games folders for a relative path to a file. A path that is not
+// on disk is still found when one of the platform's launchers vouches for it
+// as a virtual entry, such as a game named in a listing file.
 func findFile(
 	fs afero.Fs,
 	pl platforms.Platform,
 	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
 	path string,
 	pathRoots ...string,
 ) (string, error) {
@@ -457,6 +500,7 @@ func findFile(
 	}
 
 	var firstNonNotExistErr error
+	var missing []string
 	for _, candidate := range candidates {
 		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
 		if err == nil {
@@ -469,8 +513,25 @@ func findFile(
 		if errors.Is(err, errAmbiguousPath) {
 			return "", err
 		}
-		if !errors.Is(err, os.ErrNotExist) && firstNonNotExistErr == nil {
-			firstNonNotExistErr = err
+		if !errors.Is(err, os.ErrNotExist) {
+			if firstNonNotExistErr == nil {
+				firstNonNotExistErr = err
+			}
+			continue
+		}
+		if len(virtualParts) == 0 {
+			missing = append(missing, candidate)
+		}
+	}
+	if len(missing) > 0 {
+		all := launchers.Get(pl, cfg)
+		for _, candidate := range missing {
+			for i := range all {
+				if all[i].VirtualPathExists != nil && all[i].VirtualPathExists(cfg, candidate) {
+					log.Debug().Str("launcher", all[i].ID).Msgf("found virtual entry: %s", candidate)
+					return candidate, nil
+				}
+			}
 		}
 	}
 	if firstNonNotExistErr != nil {

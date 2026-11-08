@@ -135,16 +135,20 @@ type snapshot struct {
 	Name            string               `json:"name,omitempty"`
 	Slot            string               `json:"slot,omitempty"`
 	Items           []snapshotItem       `json:"items"`
-	Version         int                  `json:"version"`
-	Index           int                  `json:"index"`
-	AdvanceMs       int64                `json:"advanceMs,omitempty"`
-	IdleMs          int64                `json:"idleMs,omitempty"`
-	CountdownMs     int64                `json:"countdownMs,omitempty"`
-	CountdownSet    bool                 `json:"countdownSet,omitempty"`
-	Loop            bool                 `json:"loop,omitempty"`
-	LoopOne         bool                 `json:"loopOne,omitempty"`
-	Unsafe          bool                 `json:"unsafe,omitempty"`
-	Shuffled        bool                 `json:"shuffled,omitempty"`
+	// OriginalOrder is, for a shuffled playlist, where each item of the
+	// order it loaded in now sits in Items. Older snapshots lack it, and the
+	// playlist then cannot be unshuffled back to that order.
+	OriginalOrder []int `json:"originalOrder,omitempty"`
+	Version       int   `json:"version"`
+	Index         int   `json:"index"`
+	AdvanceMs     int64 `json:"advanceMs,omitempty"`
+	IdleMs        int64 `json:"idleMs,omitempty"`
+	CountdownMs   int64 `json:"countdownMs,omitempty"`
+	CountdownSet  bool  `json:"countdownSet,omitempty"`
+	Loop          bool  `json:"loop,omitempty"`
+	LoopOne       bool  `json:"loopOne,omitempty"`
+	Unsafe        bool  `json:"unsafe,omitempty"`
+	Shuffled      bool  `json:"shuffled,omitempty"`
 }
 
 // ErrSnapshotVersion is returned for a snapshot this build cannot read.
@@ -163,7 +167,7 @@ func EncodeSnapshot(p *Playlist) (string, error) {
 		Slot: p.Slot, Items: items, Index: p.Index, AdvanceMs: p.Advance.Milliseconds(),
 		IdleMs: p.Idle.Milliseconds(), CountdownMs: p.Countdown.Milliseconds(), CountdownSet: p.CountdownSet,
 		Loop: p.Loop, LoopOne: p.LoopOne, Unsafe: p.Unsafe, Shuffled: p.Shuffled,
-		AllowedCommands: p.AllowedCommands,
+		AllowedCommands: p.AllowedCommands, OriginalOrder: originalOrder(p),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode playlist snapshot: %w", err)
@@ -199,5 +203,49 @@ func DecodeSnapshot(data string) (*Playlist, error) {
 	p.Unsafe = snap.Unsafe
 	p.Shuffled = snap.Shuffled
 	p.AllowedCommands = snap.AllowedCommands
+	if p.Shuffled {
+		p.Original = restoreOriginal(items, snap.OriginalOrder)
+	}
 	return p, nil
+}
+
+// originalOrder maps each item of a shuffled playlist's load order to its
+// position in Items. Identical items are matched in turn. It is nil when the
+// playlist is not shuffled or its load order is not known.
+func originalOrder(p *Playlist) []int {
+	if !p.Shuffled || len(p.Original) == 0 || len(p.Original) != len(p.Items) {
+		return nil
+	}
+	positions := make(map[PlaylistItem][]int, len(p.Items))
+	for i, item := range p.Items {
+		positions[item] = append(positions[item], i)
+	}
+	order := make([]int, len(p.Original))
+	for i, item := range p.Original {
+		queue := positions[item]
+		if len(queue) == 0 {
+			return nil
+		}
+		order[i] = queue[0]
+		positions[item] = queue[1:]
+	}
+	return order
+}
+
+// restoreOriginal rebuilds a load order from originalOrder's mapping, or
+// returns nil when the mapping is not a permutation of items.
+func restoreOriginal(items []PlaylistItem, order []int) []PlaylistItem {
+	if len(order) == 0 || len(order) != len(items) {
+		return nil
+	}
+	seen := make([]bool, len(items))
+	out := make([]PlaylistItem, len(order))
+	for i, idx := range order {
+		if idx < 0 || idx >= len(items) || seen[idx] {
+			return nil
+		}
+		seen[idx] = true
+		out[i] = items[idx]
+	}
+	return out
 }

@@ -20,6 +20,7 @@
 package libretrothumbs
 
 import (
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
@@ -201,4 +202,36 @@ func TestImageUsesLocalFileThatDiffersOnlyInCase(t *testing.T) {
 
 	_, err = c.image(t.Context(), nesPlaylist, "Named_Snaps", name, false)
 	require.Error(t, err, "the case-folded lookup stays inside the one kind's folder")
+}
+
+// A property records a thumbnail by its images:// path, never by where the
+// image folder happens to be.
+func TestImagePathIsRelativeToTheImageFolder(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "images", "libretro")
+	c := newClient(afero.NewMemMapFs(), dir, "http://example.invalid")
+
+	got, err := c.imagePath(filepath.Join(dir, nesPlaylist, "Named_Boxarts", "A (USA).png"))
+	require.NoError(t, err)
+	assert.Equal(t, "images://libretro/"+nesPlaylist+"/Named_Boxarts/A (USA).png", got)
+
+	_, err = c.imagePath(filepath.Join(filepath.Dir(dir), "elsewhere.png"))
+	require.Error(t, err, "a file outside the libretro folder has no images:// path")
+}
+
+// Free space that cannot be read does not stop a download: the folder may
+// not exist yet, and the write reports any real failure.
+func TestCheckFreeSpace(t *testing.T) {
+	t.Parallel()
+	c := newClient(afero.NewMemMapFs(), "/d", "http://example.invalid")
+
+	c.freeSpace = func(string) (uint64, error) { return 0, errors.New("no such folder") }
+	require.NoError(t, c.checkFreeSpace())
+
+	c.freeSpace = func(string) (uint64, error) { return freeSpaceFloor, nil }
+	require.NoError(t, c.checkFreeSpace())
+
+	c.freeSpace = func(string) (uint64, error) { return freeSpaceFloor - 1, nil }
+	var lowSpace *lowDiskSpaceError
+	require.ErrorAs(t, c.checkFreeSpace(), &lowSpace)
 }

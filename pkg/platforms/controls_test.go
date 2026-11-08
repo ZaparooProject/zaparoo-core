@@ -37,6 +37,18 @@ func TestControlNames(t *testing.T) {
 			ControlStop: {}, ControlSaveState: {}, ControlReset: {},
 		}}),
 	)
+
+	available := false
+	l := &Launcher{Controls: map[string]Control{
+		ControlStop:  {},
+		ControlCheat: {Available: func() bool { return available }},
+	}}
+	assert.Equal(t, []string{ControlStop}, ControlNames(l))
+	available = true
+	assert.Equal(t, []string{ControlCheat, ControlStop}, ControlNames(l))
+	assert.Nil(t, ControlNames(&Launcher{Controls: map[string]Control{
+		ControlCheat: {Available: func() bool { return false }},
+	}}))
 }
 
 func TestSlotArg(t *testing.T) {

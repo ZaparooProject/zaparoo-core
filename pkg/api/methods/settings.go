@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,8 +33,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -70,6 +74,9 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
 		AudioVolume:               env.Config.AudioVolume(),
+		AudioMusicVolume:          env.Config.AudioMusicVolume(),
+		AudioMusicAutoplay:        env.Config.AudioMusicAutoplay(),
+		AudioMusicPauseOnLaunch:   env.Config.AudioPauseOnLaunch(),
 		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
 		ReadersScanMode:           env.Config.ReadersScan().Mode,
 		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
@@ -85,6 +92,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
 		ProfilesSwapData:          env.Config.ProfilesSwapData(),
+		MediaThumbCacheMaxMB:      env.Config.ThumbCacheMaxMB(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -102,6 +110,8 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		resp.LibrarySyncEnabled = &librarySyncEnabled
 		resp.RemoteControlEnabled = &remoteControlEnabled
 		resp.OnlineBaseURL = &onlineBaseURL
+		imageDir := requestImageDir(&env)
+		resp.MediaImageDir = &imageDir
 	}
 
 	return resp, nil
@@ -143,6 +153,8 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading settings")
 	}
 
+	ReloadMediaThumbCache(env.Config)
+
 	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)
 	err = env.Config.LoadMappings(mapDir)
 	if err != nil {
@@ -154,8 +166,23 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		env.Player.ClearFileCache()
 		env.Player.SetVolume(float64(env.Config.AudioVolume()) / 100.0)
 	}
+	applyMusicVolume(&env)
 
 	return NoContent{}, nil
+}
+
+// applyMusicVolume sets the configured music volume on whatever native audio
+// is playing in either slot, so a change is heard at once.
+func applyMusicVolume(env *requests.RequestEnv) {
+	if env.PlaybackManager == nil {
+		return
+	}
+	gain := platforms.MusicVolumeGain(env.Config)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		if err := env.PlaybackManager.SetVolume(slot, gain); err != nil {
+			log.Warn().Err(err).Str("slot", slot).Msg("failed to apply music volume")
+		}
+	}
 }
 
 // HandleSettingsZapScriptHold disables ZapScript for as long as the calling
@@ -207,6 +234,23 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 			return nil, models.ClientErrf("online settings require a local or admin client")
 		}
 	}
+	// The image folder decides where Core writes downloads and which folder's
+	// thumbs/ it empties, so it is held to the same bar.
+	if params.MediaImageDir != nil && !isLocalOrAdmin(&env) {
+		return nil, models.ClientErrf("the image folder can only be changed by a local or admin client")
+	}
+	if params.MediaImageDir != nil {
+		if err := validateMediaImageDir(*params.MediaImageDir, helpers.DataDir(env.Platform)); err != nil {
+			return nil, err
+		}
+		// A run reads the folder as it downloads but records paths relative
+		// to it, so a change mid-run leaves covers recorded against a folder
+		// their files are not in. Sending the current value changes nothing.
+		if *params.MediaImageDir != env.Config.ImageDirSetting() &&
+			scrapingStatusInstance.isRunningScraper(libretrothumbs.ScraperID) {
+			return nil, mediaBusyError("the image folder cannot be changed while images are downloading", nil)
+		}
+	}
 
 	releaseConfig := env.Config.AcquireUpdateLock()
 	defer releaseConfig()
@@ -246,6 +290,10 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := reloadConfigBeforeSave(env.Config, "settings update"); err != nil {
 		return nil, err
 	}
+	// The thumbnail cache follows the config however this request ends: the
+	// reload above can change its values as well as the request. Reloading
+	// is a no-op when neither value changed, so this is cheap.
+	defer ReloadMediaThumbCache(env.Config)
 
 	// Installing updates without checking for them is not a state the device
 	// can be in, so the combination is refused rather than stored and quietly
@@ -298,6 +346,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		if env.Player != nil {
 			env.Player.SetVolume(float64(*params.AudioVolume) / 100.0)
 		}
+	}
+
+	if params.AudioMusicVolume != nil {
+		log.Debug().Int("audioMusicVolume", *params.AudioMusicVolume).Msg("updating setting")
+		env.Config.SetAudioMusicVolume(*params.AudioMusicVolume)
+	}
+
+	if params.AudioMusicAutoplay != nil {
+		log.Debug().Bool("audioMusicAutoplay", *params.AudioMusicAutoplay).Msg("updating setting")
+		env.Config.SetAudioMusicAutoplay(*params.AudioMusicAutoplay)
 	}
 
 	if params.ReadersAutoDetect != nil {
@@ -409,19 +467,72 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		)
 	}
 
+	// After the system defaults, which hold where this is stored, so a
+	// request carrying both ends with the value it asked for.
+	if params.AudioMusicPauseOnLaunch != nil {
+		log.Debug().Bool("audioMusicPauseOnLaunch", *params.AudioMusicPauseOnLaunch).Msg("updating setting")
+		env.Config.SetAudioPauseOnLaunch(*params.AudioMusicPauseOnLaunch)
+	}
+
 	if params.LauncherPreference != nil {
 		log.Debug().Int("count", len(*params.LauncherPreference)).Msg("updating launchers.preference")
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
+	// The image folder and cache cap take effect as soon as they are set, so
+	// a failed save puts them back rather than leaving the running Core on
+	// values the file does not hold.
+	prevImageDir := env.Config.ImageDirSetting()
+	prevThumbCacheMaxMB := env.Config.ThumbCacheMaxMBSetting()
+	if params.MediaImageDir != nil {
+		log.Debug().Str("mediaImageDir", *params.MediaImageDir).Msg("updating setting")
+		env.Config.SetImageDir(*params.MediaImageDir)
+	}
+
+	if params.MediaThumbCacheMaxMB != nil {
+		log.Debug().Int("mediaThumbCacheMaxMb", *params.MediaThumbCacheMaxMB).Msg("updating setting")
+		env.Config.SetThumbCacheMaxMB(*params.MediaThumbCacheMaxMB)
+	}
+
 	err := env.Config.Save()
 	if err != nil {
+		env.Config.SetImageDir(prevImageDir)
+		env.Config.SetThumbCacheMaxMB(prevThumbCacheMaxMB)
 		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+	// Music follows audioVolume until it has a volume of its own. Applied
+	// only once the save succeeded, so a failed save leaves playback alone.
+	if params.AudioMusicVolume != nil || params.AudioVolume != nil {
+		applyMusicVolume(&env)
 	}
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()
 	}
 	return NoContent{}, nil
+}
+
+// validateMediaImageDir refuses an image folder Core could not use: a
+// filesystem root, whose thumbs folder Core would claim, a path that exists
+// and is not a directory, or one Core cannot check. A folder that does not exist yet is fine;
+// Core creates it on first use.
+func validateMediaImageDir(dir, dataDir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	resolved := config.ResolveImageDir(dir, dataDir)
+	if filepath.Dir(resolved) == resolved {
+		return models.ClientErrf("mediaImageDir cannot be a filesystem root")
+	}
+	info, err := os.Stat(resolved)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
+	case !info.IsDir():
+		return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
+	}
+	return nil
 }
 
 //nolint:gocritic // single-use parameter in API handler
@@ -561,6 +672,7 @@ func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []
 		}
 	}
 
+	carried := make(map[string]bool, len(updated))
 	for i := range updated {
 		system, err := systemdefs.LookupSystem(updated[i].System)
 		if err != nil {
@@ -568,7 +680,16 @@ func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []
 		}
 		if entry, ok := previous[system.ID]; ok {
 			updated[i].PauseOnLaunch = entry.PauseOnLaunch
+			carried[system.ID] = true
 		}
+	}
+
+	// A client that leaves Audio out of the list has not turned pausing for
+	// games back on; that lives on the Audio entry, so the entry stays.
+	entry, ok := previous[systemdefs.SystemAudio]
+	if ok && entry.PauseOnLaunch != nil && !carried[systemdefs.SystemAudio] {
+		pause := *entry.PauseOnLaunch
+		updated = append(updated, config.SystemsDefault{System: systemdefs.SystemAudio, PauseOnLaunch: &pause})
 	}
 	return updated
 }

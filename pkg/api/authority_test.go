@@ -67,14 +67,13 @@ func TestLegacyAdmissionMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			auth := apimiddleware.NewAuthConfig(func() []string { return tt.keys })
-			handler := apimiddleware.HTTPAuthMiddleware(auth)(
-				legacyAdmissionMiddleware(tt.platformID)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if tt.key != "" {
-						assert.True(t, apimiddleware.APIKeyAuthenticated(r))
-					}
-					w.WriteHeader(http.StatusNoContent)
-				})),
-			)
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.key != "" {
+					assert.True(t, apimiddleware.APIKeyAuthenticated(r))
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			handler := apimiddleware.HTTPAuthMiddleware(auth)(legacyAdmissionMiddleware(tt.platformID, nil)(next))
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.key != "" {
@@ -125,11 +124,26 @@ func TestMethodLegacyMetadataFailsClosed(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, denied.legacyAllowed)
 
+	online, ok := methodMap.getDefinition(models.MethodOnlineStatus)
+	require.True(t, ok)
+	assert.False(t, online.legacyAllowed)
+	assert.False(t, unauthenticatedBootstrapMethods[models.MethodOnlineStatus])
+	_, onlineErr := handleRequest(methodMap, requests.RequestEnv{
+		PlatformID: platformids.Mister,
+	}, models.RequestObject{JSONRPC: "2.0", Method: models.MethodOnlineStatus})
+	require.NotNil(t, onlineErr)
+	assert.Contains(t, onlineErr.Message, "client role does not permit")
+
 	for _, method := range []string{
 		models.MethodDeviceStatus,
 		models.MethodDevicePowerReboot,
 		models.MethodDevicePowerShutdown,
 		models.MethodDevicePowerSuspend,
+		models.MethodDeviceBluetoothDevices,
+		models.MethodDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothScanStop,
+		models.MethodDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget,
 	} {
 		definition, found := methodMap.getDefinition(method)
 		require.True(t, found, method)

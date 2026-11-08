@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -408,10 +409,13 @@ func TestCommandInterfaceWriter(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, misterconfig.CmdInterface, nil, 0o600))
 		command := []byte("load_core " + filepath.Join("media", "fat", "game.mgl") + "\n")
 
+		before := LoadsSent()
 		n, err := newCommandInterfaceWriter(fs).Write(command)
 
 		require.NoError(t, err)
 		require.Equal(t, len(command), n)
+		// Other tests can launch at the same time, so only growth is certain.
+		require.Greater(t, LoadsSent(), before)
 		got, err := afero.ReadFile(fs, misterconfig.CmdInterface)
 		require.NoError(t, err)
 		require.Equal(t, command, got)
@@ -420,15 +424,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("open failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return nil, assert.AnError
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed open sends nothing")
 		require.ErrorContains(t, err, "failed to open command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})
@@ -436,15 +443,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("write failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return errorWriteCloser{err: assert.AnError}, nil
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed write sends nothing")
 		require.ErrorContains(t, err, "write command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})
@@ -867,4 +877,83 @@ func TestReadMglMalformed(t *testing.T) {
 	_, err := ReadMgl(filepath.Join(dir, "missing.mgl"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	assert.NotErrorIs(t, err, ErrMalformedMGL)
+}
+
+func TestBuildLaunchMglNamesExactReleaseRBF(t *testing.T) {
+	t.Parallel()
+
+	rbf := func(name string) cores.RBFInfo {
+		return cores.RBFInfo{
+			Path:      "/media/fat/_Console/" + name + ".rbf",
+			Filename:  name + ".rbf",
+			ShortName: "PSX",
+			MglName:   "_Console/PSX",
+		}
+	}
+	unstable := cores.RBFInfo{
+		Path:      "/media/fat/_Console/PSX_unstable_20250101_abc123.rbf",
+		Filename:  "PSX_unstable_20250101_abc123.rbf",
+		ShortName: "PSX_unstable_20250101_abc123",
+		MglName:   "_Console/PSX_unstable_20250101_abc123",
+	}
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{rbf("PSX_20240101"), rbf("PSX_20241010"), unstable})
+
+	system, err := cores.GetCore("PSX")
+	require.NoError(t, err)
+	mgl, err := buildLaunchMgl(nil, cache, system, "/media/fat/games/PSX/game.cue", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/PSX_20241010</rbf>")
+}
+
+func TestBuildLaunchMglErrors(t *testing.T) {
+	t.Parallel()
+
+	nes, err := cores.GetCore("NES")
+	require.NoError(t, err)
+
+	t.Run("core not installed", func(t *testing.T) {
+		t.Parallel()
+		_, err := buildLaunchMgl(nil, &cores.RBFCache{}, nes, "/media/fat/games/NES/game.nes", nil)
+		require.ErrorContains(t, err, "resolving core RBF")
+	})
+
+	t.Run("no slot for file", func(t *testing.T) {
+		t.Parallel()
+		cache := &cores.RBFCache{}
+		cache.BuildFromRBFs([]cores.RBFInfo{{
+			Path:      "/media/fat/_Console/NES_20241010.rbf",
+			Filename:  "NES_20241010.rbf",
+			ShortName: "NES",
+			MglName:   "_Console/NES",
+		}})
+		_, err := buildLaunchMgl(nil, cache, nes, "/media/fat/games/NES/game.sfc", nil)
+		require.ErrorContains(t, err, "failed to generate MGL")
+	})
+}
+
+func TestBuildLaunchMglAppliesSystemHook(t *testing.T) {
+	t.Parallel()
+
+	neoGeo, err := cores.GetCore("NeoGeo")
+	require.NoError(t, err)
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{{
+		Path:      "/media/fat/_Console/NeoGeo_20241010.rbf",
+		Filename:  "NeoGeo_20241010.rbf",
+		ShortName: "NeoGeo",
+		MglName:   "_Console/NeoGeo",
+	}})
+
+	mgl, err := buildLaunchMgl(nil, cache, neoGeo, "/media/fat/games/NeoGeo/mslug.zip", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/NeoGeo_20241010</rbf>")
+	assert.Contains(t, mgl, `path="../../../../../media/fat/games/NeoGeo/mslug.zip"`)
+}
+
+func TestLaunchTempMglReportsMissingCore(t *testing.T) {
+	t.Parallel()
+
+	err := launchTempMgl(nil, &cores.Core{ID: "NotInstalled", RBF: "_Console/NotInstalled"}, "", nil)
+	require.ErrorContains(t, err, "resolving core RBF")
 }

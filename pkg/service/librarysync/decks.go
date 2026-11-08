@@ -72,6 +72,10 @@ type DecksResult struct {
 	Pushed    int
 	Conflicts int
 	Rejected  int
+	// Saved counts decks newly kept because the account saved them, and
+	// Unsaved the ones removed because it no longer lists them.
+	Saved   int
+	Unsaved int
 }
 
 // deckContent is what the account and this device agree on for a deck.
@@ -243,9 +247,50 @@ func indexOf(keys []string, key string) int {
 	return -1
 }
 
-// SyncDecks converges owned decks with the account: pull first so the bases
-// are current, then push what changed here.
+// SyncDecks converges owned decks with the account, pulling first so the
+// bases are current and then pushing what changed here, and then keeps the
+// decks the account saved from other accounts in step with its list.
 func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
+	result, ownedErr := s.syncOwnedDecks(ctx)
+	saved, savedErr := s.syncSavedDecks(ctx)
+	result.Saved, result.Unsaved = saved.Saved, saved.Unsaved
+	if err := deckPassError(ownedErr, savedErr); err != nil {
+		return result, err
+	}
+	if result.Pulled > 0 || result.Pushed > 0 || result.Conflicts > 0 || result.Saved > 0 || result.Unsaved > 0 {
+		log.Info().Int("pulled", result.Pulled).Int("pushed", result.Pushed).
+			Int("conflicts", result.Conflicts).Int("rejected", result.Rejected).
+			Int("saved", result.Saved).Int("unsaved", result.Unsaved).
+			Msg("decks synced")
+	}
+	return result, nil
+}
+
+// deckPassError reports the outcome of the owned and saved deck passes, which
+// run apart so a failure in one does not hold up the other. Real failures are
+// joined; an idle error is reported only when neither pass failed, so a pass
+// that had nothing to do never hides one that failed.
+func deckPassError(errs ...error) error {
+	var failures []error
+	var idle error
+	for _, err := range errs {
+		switch {
+		case err == nil:
+		case IsIdleError(err):
+			if idle == nil {
+				idle = err
+			}
+		default:
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	return idle
+}
+
+func (s *Service) syncOwnedDecks(ctx context.Context) (DecksResult, error) {
 	if err := s.lockDecks(ctx); err != nil {
 		return DecksResult{}, err
 	}
@@ -260,11 +305,7 @@ func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
 	if err := pass.push(ctx); err != nil {
 		return pass.result, err
 	}
-	if pass.result.Pulled > 0 || pass.result.Pushed > 0 || pass.result.Conflicts > 0 {
-		log.Info().Int("pulled", pass.result.Pulled).Int("pushed", pass.result.Pushed).
-			Int("conflicts", pass.result.Conflicts).Int("rejected", pass.result.Rejected).
-			Msg("decks synced")
-	}
+	s.pruneDeckCovers()
 	return pass.result, nil
 }
 
@@ -308,6 +349,7 @@ type deckPass struct {
 	svc    *Service
 	client *backup.OnlineClient
 	rows   map[string]*database.DeckSyncRow
+	covers coverPass
 	result DecksResult
 }
 
@@ -319,7 +361,7 @@ func (s *Service) newDeckPass() (*deckPass, error) {
 	if err != nil {
 		return nil, err
 	}
-	pass := &deckPass{svc: s, client: client}
+	pass := &deckPass{svc: s, client: client, covers: newCoverPass()}
 	if linkErr := pass.checkLink(); linkErr != nil {
 		return nil, linkErr
 	}
@@ -468,6 +510,12 @@ func (p *deckPass) applyPulled(remote *deckSync) error {
 	if err := p.writeLocal(deckID, remote, &target, local); err != nil {
 		return err
 	}
+	if remote.IsLocked && local != nil && local.CoverPending != "" {
+		// A locked deck takes no change from here, its cover included.
+		if err := p.discardCoverChange(deckID, remote); err != nil {
+			return err
+		}
+	}
 	next := &database.DeckSyncRow{
 		DeckID: deckID, Snapshot: server.encode(), Revision: remote.Revision, Locked: remote.IsLocked,
 	}
@@ -537,6 +585,9 @@ func (p *deckPass) writeLocal(
 		Metadata:    remote.Metadata,
 		Items:       items,
 	}
+	if remote.ImageURL != nil {
+		deck.ImageURL = *remote.ImageURL
+	}
 	changed, err := p.userDB().UpsertRemoteDeck(deck)
 	if err != nil {
 		return fmt.Errorf("store deck %s: %w", deckID, err)
@@ -589,7 +640,7 @@ func (p *deckPass) deleteLocal(deckID string) error {
 // deck deleted here that the account still holds.
 func (p *deckPass) push(ctx context.Context) error {
 	for range deckPushMaxRounds {
-		records, err := p.dirtyRecords()
+		records, err := p.dirtyRecords(ctx)
 		if err != nil {
 			return err
 		}
@@ -629,10 +680,16 @@ type pendingDeck struct {
 	content *deckContent
 	deckID  string
 	name    string
-	record  deckPushRecord
+	// coverPending and coverFile are the deck's cover change as it stood
+	// when the record was built, and coverSent whether the record carries
+	// it. A change not sent with a create goes in the next round.
+	coverPending string
+	coverFile    string
+	record       deckPushRecord
+	coverSent    bool
 }
 
-func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
+func (p *deckPass) dirtyRecords(ctx context.Context) ([]pendingDeck, error) {
 	list, err := p.userDB().ListDecks()
 	if err != nil {
 		return nil, fmt.Errorf("list decks: %w", err)
@@ -654,10 +711,16 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 			return nil, fmt.Errorf("read deck %s: %w", deckID, getErr)
 		}
 		content := localDeckContent(deck)
-		if row != nil && content.encode() == row.Snapshot {
+		coverPending, settleErr := p.settleUnneededRemoval(deck)
+		if settleErr != nil {
+			return nil, settleErr
+		}
+		contentClean := row != nil && content.encode() == row.Snapshot
+		if contentClean && coverPending == "" {
 			continue
 		}
-		if row != nil && row.RejectedHash != "" && row.RejectedHash == content.hash() {
+		if !contentClean && row != nil && row.RejectedHash != "" && row.RejectedHash == content.hash() &&
+			coverPending == "" {
 			continue
 		}
 		if pushIsCreate(row) && !database.IsMintedDeckID(deckID) {
@@ -679,7 +742,16 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 		if row != nil {
 			record.BaseRevision = row.Revision
 		}
-		pending = append(pending, pendingDeck{deckID: deckID, name: deck.Name, content: &content, record: record})
+		next := pendingDeck{
+			deckID: deckID, name: deck.Name, content: &content, record: record,
+			coverPending: coverPending, coverFile: deck.CoverFile,
+		}
+		p.attachCover(ctx, &next)
+		if contentClean && !next.coverSent {
+			// Only the cover changed, and it cannot go this round.
+			continue
+		}
+		pending = append(pending, next)
 	}
 	for deckID, row := range p.rows {
 		if owned[deckID] {
@@ -737,11 +809,19 @@ func (p *deckPass) handlePushResults(batch []pendingDeck, response *deckPushResp
 		case statusApplied:
 			p.result.Pushed++
 			err = p.handleApplied(pending, result.Deck)
+			if err == nil && pending.coverPending != "" && !pending.coverSent && !p.covers.held[pending.deckID] {
+				// A create carries no image: send the cover now the deck exists.
+				retry = true
+			}
 		case statusConflict:
 			p.result.Conflicts++
 			retry = true
 			err = p.handleConflict(pending, result.Deck)
 		case statusRejected:
+			if again, handled := p.handleCoverRejected(pending, &result); handled {
+				retry = retry || again
+				continue
+			}
 			var again bool
 			again, err = p.handleRejected(pending, &result)
 			retry = retry || again
@@ -785,7 +865,10 @@ func (p *deckPass) handleApplied(pending *pendingDeck, remote *deckSync) error {
 	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
-	return p.saveRow(row)
+	if err := p.saveRow(row); err != nil {
+		return err
+	}
+	return p.settleCover(pending, remote)
 }
 
 func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error {
@@ -836,6 +919,12 @@ func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error 
 	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
+	if remote.IsLocked && local != nil && local.CoverPending != "" {
+		// A locked deck takes no change from here, its cover included.
+		if err := p.discardCoverChange(pending.deckID, remote); err != nil {
+			return err
+		}
+	}
 	next := &database.DeckSyncRow{
 		DeckID: pending.deckID, Snapshot: server.encode(), Revision: remote.Revision,
 		Locked: remote.IsLocked, Conflicts: conflicts,
@@ -864,6 +953,9 @@ func (p *deckPass) handleRejected(pending *pendingDeck, result *deckPushResult) 
 		}
 		server := serverDeckContent(result.Deck)
 		if err := p.writeLocal(pending.deckID, result.Deck, &server, local); err != nil {
+			return false, err
+		}
+		if err := p.discardCoverChange(pending.deckID, result.Deck); err != nil {
 			return false, err
 		}
 		p.svc.notifyInbox("Deck locked on Zaparoo Online", fmt.Sprintf(
@@ -946,12 +1038,16 @@ type deckPushRequest struct {
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckPushRecord struct {
-	Name         *string              `json:"name,omitempty"`
-	Description  *string              `json:"description,omitempty"`
-	Items        *[]deckPushItemInput `json:"items,omitempty"`
-	DeckID       string               `json:"deck_id"`
-	BaseRevision int64                `json:"base_revision"`
-	Deleted      bool                 `json:"deleted,omitempty"`
+	Name        *string              `json:"name,omitempty"`
+	Description *string              `json:"description,omitempty"`
+	Items       *[]deckPushItemInput `json:"items,omitempty"`
+	DeckID      string               `json:"deck_id"`
+	// ImageUploadID commits an image staged for the deck as its image, and
+	// RemoveImage clears the deck's image. At most one is set.
+	ImageUploadID string `json:"image_upload_id,omitempty"`
+	BaseRevision  int64  `json:"base_revision"`
+	Deleted       bool   `json:"deleted,omitempty"`
+	RemoveImage   bool   `json:"remove_image,omitempty"`
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -984,6 +1080,7 @@ type deckPullResponse struct {
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckSync struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ImageURL    *string         `json:"image_url,omitempty"`
 	DeckID      string          `json:"deck_id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`

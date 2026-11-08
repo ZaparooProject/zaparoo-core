@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
@@ -46,6 +47,10 @@ type Database struct {
 	// MediaUserData rebuilds the MediaDB projection of media user data in the
 	// background. It is nil wherever DeckTags is.
 	MediaUserData MediaUserDataReconciler
+	// OnMediaUserFlagsChanged is told a media path's user data after an edit
+	// changed its flags, from any path that edits them. It is nil where
+	// nothing listens. It must not block.
+	OnMediaUserFlagsChanged func(systemID, path string, data *MediaUserData)
 	// UserDBRecovery is set when startup found the user database damaged and
 	// replaced it, so the user can be told. It is nil after a normal open.
 	UserDBRecovery *UserDBRecovery
@@ -252,6 +257,11 @@ type Mapping struct {
 	Added    int64 `json:"added"`
 	Enabled  bool  `json:"enabled"`
 }
+
+// InboxMessageLimit is how many inbox messages are listed, and so how many
+// are worth keeping: older ones can never be seen. GetInboxMessages applies
+// the same limit.
+const InboxMessageLimit = 100
 
 type InboxMessage struct {
 	CreatedAt time.Time `json:"createdAt"`
@@ -471,6 +481,21 @@ func (d *MediaUserData) ValidateFlags() error {
 	return nil
 }
 
+// MediaUserRef names one media path in UserDB. Path is canonical.
+type MediaUserRef struct {
+	SystemID string
+	Path     string
+}
+
+// MediaUserFlagTime is when one flag was last set on a media path, as a Unix
+// time in seconds. SetAt is 0 when the time is unknown, as for a flag set
+// before set times were recorded.
+type MediaUserFlagTime struct {
+	SystemID string
+	Path     string
+	SetAt    int64
+}
+
 // MediaTagUpdate is one file's tag edit in a batch: removals run before
 // additions, as in MediaDBI.UpdateMediaTags.
 type MediaTagUpdate struct {
@@ -641,18 +666,49 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 	return and, not, or
 }
 
+// GroupORFiltersByType splits OR filters into one group per tag type, in the
+// order each type first appears. A media matches the OR filters when it
+// matches at least one filter of every group: "~genre:a ~genre:b ~region:us
+// ~region:jp" reads as (genre a or b) and (region us or jp). Types are
+// compared after deprecated-alias canonicalization, so an alias joins the group
+// of the type it resolves to.
+func GroupORFiltersByType(orFilters []zapscript.TagFilter) [][]zapscript.TagFilter {
+	if len(orFilters) == 0 {
+		return nil
+	}
+	groups := make([][]zapscript.TagFilter, 0, 1)
+	index := make(map[string]int, 1)
+	for _, f := range orFilters {
+		key, _, _ := strings.Cut(mediatags.CanonicalizeTagAlias(f.Type+":"+f.Value), ":")
+		i, ok := index[key]
+		if !ok {
+			i = len(groups)
+			index[key] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], f)
+	}
+	return groups
+}
+
 // MediaCoverThumb is the recorded cover thumbnail resolution for one media
-// row. TypeTag is the image property type the thumbnail was built from and
-// Color its average colour as 0xRRGGBB, or nil when unknown. SystemID, Path
-// and ParentDir identify the row, and AvailableTypeTags lists the property
-// TypeTags present on the media row and its title so a caller can confirm
-// TypeTag is still the first match for its image preferences.
+// row. TypeTag is the image property type the thumbnail was built from,
+// SourceKey the thumbnail cache's key for that source image ("" when not
+// recorded), and Color its average colour as 0xRRGGBB, or nil when unknown.
+// SystemID, Path and ParentDir identify the row, and AvailableTypeTags lists
+// the property TypeTags present on the media row and its title so a caller can
+// confirm TypeTag is still the first match for its image preferences.
+// SourcePath is the file the TypeTag property currently resolves to (media
+// level before title level), or "" when it is blob-backed or absent, so a
+// caller can confirm SourceKey still names that file.
 type MediaCoverThumb struct {
 	Color             *uint32
 	SystemID          string
 	Path              string
 	ParentDir         string
 	TypeTag           string
+	SourceKey         string
+	SourcePath        string
 	AvailableTypeTags []string
 	MediaDBID         int64
 }
@@ -713,13 +769,15 @@ type SingletonAliasCandidate struct {
 // AfterName is the keyset cursor for directory pagination: only directories
 // whose Name sorts strictly after it are returned (directory names are unique
 // within a parent, so Name alone is a stable keyset). Limit caps the number of
-// directories returned; 0 means no limit (full listing).
+// directories returned; 0 means no limit (full listing). Offset skips that many
+// listed directories before Limit applies, for a page requested by position.
 type BrowseDirectoriesOptions struct {
 	PathPrefix    string
 	Overlay       *BrowseOverlay
 	AfterName     string
 	Systems       []systemdefs.System
 	Limit         int
+	Offset        int
 	ExcludeHidden bool
 }
 
@@ -767,15 +825,41 @@ type BrowseOverlay struct {
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
 type BrowseFilesOptions struct {
-	Cursor        *BrowseCursor
-	Letter        *string
-	PathPrefix    string
-	Overlay       *BrowseOverlay
-	Sort          string
-	Systems       []systemdefs.System
-	Tags          []zapscript.TagFilter
-	Limit         int
+	Cursor     *BrowseCursor
+	Letter     *string
+	PathPrefix string
+	Overlay    *BrowseOverlay
+	Sort       string
+	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
+	Limit      int
+	// Offset skips that many listed files before Limit applies, in the same
+	// order a cursor walk returns them. It is not combined with Cursor.
+	Offset        int
 	ExcludeHidden bool
+}
+
+// BrowseAnchorOptions locates one path in a browse listing. The scope fields
+// mean what they mean in BrowseFilesOptions. ListDirectories says the listing
+// pages directories ahead of files, which a flat virtual scheme does not.
+type BrowseAnchorOptions struct {
+	Overlay         *BrowseOverlay
+	PathPrefix      string
+	Path            string
+	Sort            string
+	Systems         []systemdefs.System
+	Tags            []zapscript.TagFilter
+	ListDirectories bool
+	ExcludeHidden   bool
+}
+
+// BrowseAnchorResult is where a path sits in its listing. Position counts within
+// the entry's own kind: listed directories before a directory, listed files
+// before a file. A path the listing does not show reports Found false.
+type BrowseAnchorResult struct {
+	Position    int
+	Found       bool
+	IsDirectory bool
 }
 
 // BrowseFileCountOptions contains parameters for the BrowseFileCount query.
@@ -932,6 +1016,10 @@ type SearchResultWithCursor struct {
 	MediaTitleID        int64 `json:"-"`
 	HasCover            bool
 }
+
+// SlugSearchLimit is the most media rows a slug search returns, which bounds
+// the candidates a title launch chooses from.
+const SlugSearchLimit = 50
 
 // TagTypeDisplayPriority orders the eligible disambiguation tag types from most to least
 // important for display. Clients render the emitted disambiguating tags left-to-right and
@@ -1112,8 +1200,19 @@ type SearchFilters struct {
 	Systems    []systemdefs.System   `json:"systems,omitempty"`
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 	Limit      int                   `json:"limit"`
+	// TitleDBID limits the search to the media rows of one title. Query,
+	// Systems and Letter are ignored when it is set.
+	TitleDBID int64 `json:"-"`
 	// ExcludeHidden is set only for discovery, never explicit launch resolution.
 	ExcludeHidden bool `json:"-"`
+}
+
+// SearchTitleGroup is one title of a grouped media search: the title's sort
+// position and every present media row of it that matched the filters.
+type SearchTitleGroup struct {
+	SortValue string
+	Rows      []SearchResultWithCursor
+	TitleDBID int64
 }
 
 // ScanStagedTag is one tag derived from a scanned file, staged for set-based
@@ -1285,6 +1384,8 @@ type UserDBI interface {
 	UpsertMediaUserData(data *MediaUserData) error
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)
+	ListMediaUserFlagTimes(flag MediaUserFlag) ([]MediaUserFlagTime, error)
+	GetMediaUserDataForPaths(refs []MediaUserRef) (map[MediaUserRef]MediaUserData, error)
 
 	// Library sync bookkeeping for personal state.
 	ListLibraryStateSync() ([]LibraryStateSyncRow, error)
@@ -1300,6 +1401,10 @@ type UserDBI interface {
 	DeleteDeck(deckID string) (bool, error)
 	UpsertRemoteDeck(deck *Deck) (bool, error)
 	UpsertFetchedDeck(deck *Deck, maxCopies int) (FetchedDeckResult, error)
+	SetDeckSaved(deckID string, saved bool, ownerName string) error
+	SettleDeckCoverPush(deckID, pushedPending, pushedCoverFile, imageURL string) error
+	DiscardDeckCover(deckID, imageURL string) error
+	FindDeckItemsByAnchor(systemID, path string) (map[string][]int64, error)
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	CountOwnedDecks() (int, error)
 	RenameDeck(oldID, newID string) error
@@ -1320,6 +1425,7 @@ type UserDBI interface {
 	GetInboxMessages() ([]InboxMessage, error)
 	DeleteInboxMessage(id int64) error
 	DeleteAllInboxMessages() (int64, error)
+	PruneInboxMessages(olderThan time.Duration, keep int) (int64, error)
 	CreateClient(c *Client) error
 	GetClientByToken(authToken string) (*Client, error)
 	ListClients() ([]Client, error)
@@ -1485,6 +1591,7 @@ type MediaDBI interface {
 
 	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
+	SearchMediaTitleGroups(ctx context.Context, filters *SearchFilters) ([]SearchTitleGroup, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
@@ -1524,18 +1631,22 @@ type MediaDBI interface {
 	// or title-level image exists; absent keys mean no cover.
 	GetMediaCoverStatus(ctx context.Context, refs []MediaRef) (map[int64]bool, error)
 
-	// Cover thumbnail records: the image type a media row's thumbnail resolved
-	// to and its average colour. They are disposable and cleared together with
-	// the thumbnail cache.
+	// Cover thumbnail records: the image type and source a media row's
+	// thumbnail resolved to and its average colour. They are disposable: a
+	// record is only trusted while its source key still matches, and a scrape
+	// that changes a row's images drops its record.
 	GetMediaCoverThumb(ctx context.Context, mediaDBID int64) (MediaCoverThumb, bool, error)
-	PutMediaCoverThumb(ctx context.Context, mediaDBID int64, typeTag string, color *uint32) error
+	PutMediaCoverThumb(ctx context.Context, mediaDBID int64, typeTag, sourceKey string, color *uint32) error
 	// GetMediaCoverColors returns the known 0xRRGGBB cover colours keyed by
 	// MediaDBID. Rows with no recorded colour are absent.
 	GetMediaCoverColors(ctx context.Context, mediaDBIDs []int64) (map[int64]uint32, error)
-	ClearMediaCoverThumbs(ctx context.Context) error
-	ClearMediaCoverThumbsForSystems(ctx context.Context, systemIDs []string) error
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
+	// BrowseAnchorPosition locates one path in a browse listing.
+	BrowseAnchorPosition(ctx context.Context, opts *BrowseAnchorOptions) (BrowseAnchorResult, error)
+	// BrowseListingCache returns the per-listing cache of letter indexes and
+	// totals. It lives as long as this database handle's rows stay unchanged.
+	BrowseListingCache() *BrowseListingCache
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)

@@ -60,7 +60,11 @@ func fullSnapshot() Snapshot {
 		Controllers: []hoststatus.Controller{{
 			ID: "input17", Name: "DualSense Wireless Controller", VendorID: "054c", ProductID: "0ce6",
 			Connection: hoststatus.ConnectionBluetooth,
-			Battery:    &hoststatus.ControllerBattery{Percent: &padPercent, Level: hoststatus.BatteryLevelFull},
+			Battery: &hoststatus.ControllerBattery{
+				Percent: &padPercent, Level: hoststatus.BatteryLevelFull, ChargeState: power.ChargeCharging,
+			},
+		}, {
+			ID: "xinput1", Battery: &hoststatus.ControllerBattery{Level: hoststatus.BatteryLevelLow},
 		}, {ID: "xinput0"}},
 		ControllersKnown: true,
 		Sections:         map[string]hoststatus.Availability{models.DeviceSectionPower: hoststatus.Supported},
@@ -93,10 +97,21 @@ func TestStatusResponse(t *testing.T) {
 	assert.Equal(t, []string{}, response.Network.Interfaces[1].Addresses, "no addresses is an empty list, not null")
 
 	require.NotNil(t, response.Controllers)
-	assert.Equal(t, 2, response.Controllers.Count)
-	bare := response.Controllers.Items[1]
+	assert.Equal(t, 3, response.Controllers.Count)
+	pad := response.Controllers.Items[0]
+	require.NotNil(t, pad.DisplayName)
+	assert.Equal(t, "DualSense", *pad.DisplayName)
+	require.NotNil(t, pad.Battery)
+	require.NotNil(t, pad.Battery.ChargeState)
+	assert.Equal(t, "charging", *pad.Battery.ChargeState)
+	coarse := response.Controllers.Items[1]
+	require.NotNil(t, coarse.Battery)
+	assert.Nil(t, coarse.Battery.ChargeState, "an unknown charge state is null")
+	assert.Nil(t, coarse.Battery.Percent)
+	bare := response.Controllers.Items[2]
 	assert.Nil(t, bare.Name)
 	assert.Nil(t, bare.VendorID)
+	assert.Nil(t, bare.DisplayName, "an unknown model has no display name")
 	assert.Nil(t, bare.Battery)
 	assert.Equal(t, hoststatus.ConnectionUnknown, bare.Connection)
 
@@ -175,6 +190,23 @@ func TestChangedParams_CarriesNothingIdentifying(t *testing.T) {
 	assert.ElementsMatch(t, []string{"present", "percent", "source", "chargeState"}, keys(decoded["power"]))
 	assert.ElementsMatch(t, []string{"docked"}, keys(decoded["display"]))
 	assert.ElementsMatch(t, []string{"clockReliable"}, keys(decoded["time"]))
+
+	controllers, ok := decoded["controllers"].(map[string]any)
+	require.True(t, ok)
+	items, ok := controllers["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 3)
+	assert.ElementsMatch(t, []string{
+		"id", "name", "displayName", "vendorId", "productId", "battery", "connection",
+	}, keys(items[0]))
+	known, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "DualSense", known["displayName"])
+	unknown, ok := items[2].(map[string]any)
+	require.True(t, ok)
+	value, present := unknown["displayName"]
+	assert.True(t, present, "an unknown model is null, not absent")
+	assert.Nil(t, value)
 }
 
 func keys(value any) []string {

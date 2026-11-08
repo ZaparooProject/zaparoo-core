@@ -367,6 +367,55 @@ func SlugifyWithTokens(mediaType MediaType, input string) SlugifyResult {
 	}
 }
 
+// SlugifyQueryWords slugifies a search query as one title and returns the slug
+// of each of its words. Parsing the whole query lets context-dependent rules
+// match the title slug: a leading "The" is dropped, "Ghosts'n Goblins" gives
+// "ghosts", "and", "goblins", and a trailing "Edition" is stripped. Slugifying
+// each word on its own would keep "the", "ghostsn" and "edition", none of which
+// appear in the title's slug.
+//
+// The words joined together equal Slugify(mediaType, query). A word of only
+// punctuation is left out; a word with letters or digits the slug filter drops
+// entirely comes back as "", so callers can tell the slug cannot represent it.
+func SlugifyQueryWords(mediaType MediaType, query string) []string {
+	normalized := ParseWithMediaType(mediaType, query)
+	s, ctx := normalizeInternal(normalized)
+	if s == "" {
+		return nil
+	}
+
+	script := ctx.script
+	if !ctx.scriptCached {
+		script = DetectScript(s)
+	}
+	unicodeSlug := needsUnicodeSlug(script)
+
+	// The slug filter works character by character and drops spaces, so
+	// filtering each space-separated field gives pieces that join to the slug.
+	fields := strings.Fields(s)
+	words := make([]string, 0, len(fields))
+	for _, field := range fields {
+		var word string
+		if unicodeSlug {
+			word = nonAlphanumKeepUnicodeRegex.ReplaceAllString(field, "")
+		} else {
+			word = stripNonAlphanumASCII(field)
+		}
+		if word == "" && !strings.ContainsFunc(field, isLetterOrNumber) {
+			continue
+		}
+		words = append(words, word)
+	}
+	if len(words) == 0 {
+		return nil
+	}
+	return words
+}
+
+func isLetterOrNumber(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
 // Slugify applies media-type-aware parsing before slugification.
 // It normalizes media titles based on their type (TV shows, movies, music, etc.)
 // to ensure consistent matching across different format variations.

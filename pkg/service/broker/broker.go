@@ -36,7 +36,7 @@ import (
 //
 // For coalesceable methods: if outChan is full when a notification arrives, the
 // notification is stored in the coalesced map (replacing any prior pending
-// notification for the same method) and the drain goroutine is signalled. This
+// notification for the same method and coalesce key) and the drain goroutine is signalled. This
 // means slow consumers see only the latest value for high-frequency progress
 // events rather than losing the update entirely.
 //
@@ -49,6 +49,7 @@ import (
 type subscriberState struct {
 	outChan      chan models.Notification
 	coalesced    map[string]models.Notification
+	inflight     map[string]bool // keys in the drain's current snapshot not yet delivered
 	signal       chan struct{}
 	stop         chan struct{}
 	stopped      chan struct{}
@@ -67,6 +68,7 @@ func newSubscriberState(bufferSize int, methods []string) *subscriberState {
 	s := &subscriberState{
 		outChan:      make(chan models.Notification, bufferSize),
 		coalesced:    make(map[string]models.Notification),
+		inflight:     make(map[string]bool),
 		signal:       make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 		stopped:      make(chan struct{}),
@@ -87,13 +89,19 @@ func (s *subscriberState) run() {
 			s.mu.Lock()
 			snapshot := s.coalesced
 			s.coalesced = make(map[string]models.Notification, len(snapshot))
+			for key := range snapshot {
+				s.inflight[key] = true
+			}
 			s.mu.Unlock()
-			for _, notif := range snapshot {
+			for key, notif := range snapshot {
 				select {
 				case s.outChan <- notif:
 				case <-s.stop:
 					return
 				}
+				s.mu.Lock()
+				delete(s.inflight, key)
+				s.mu.Unlock()
 			}
 		}
 	}
@@ -180,27 +188,55 @@ func (b *Broker) broadcast(notif models.Notification) {
 			continue
 		}
 
+		if coalesce {
+			sub.deliverCoalesceable(notif)
+			continue
+		}
 		select {
 		case sub.outChan <- notif:
 			// Delivered directly.
 		default:
-			if coalesce {
-				// Channel full: store latest and wake drain goroutine.
-				sub.mu.Lock()
-				sub.coalesced[notif.Method] = notif
-				sub.mu.Unlock()
-				select {
-				case sub.signal <- struct{}{}:
-				default: // Signal already pending; drain goroutine will pick it up.
-				}
-			} else {
-				log.Warn().
-					Int("subscriber_id", id).
-					Str("method", notif.Method).
-					Msg("subscriber channel full, dropping notification")
-			}
+			log.Warn().
+				Int("subscriber_id", id).
+				Str("method", notif.Method).
+				Msg("subscriber channel full, dropping notification")
 		}
 	}
+}
+
+// deliverCoalesceable sends directly when nothing older is waiting for the
+// same slot, and otherwise stores the notification as the slot's latest value
+// for the drain goroutine. A direct send never overtakes a pending or
+// in-flight update for the same slot, so a slot's updates arrive in order.
+// Unrelated slots keep delivering directly.
+func (s *subscriberState) deliverCoalesceable(notif models.Notification) {
+	key := coalesceKey(notif)
+	s.mu.Lock()
+	_, pending := s.coalesced[key]
+	if !pending && !s.inflight[key] {
+		select {
+		case s.outChan <- notif:
+			s.mu.Unlock()
+			return
+		default:
+		}
+	}
+	s.coalesced[key] = notif
+	s.mu.Unlock()
+	select {
+	case s.signal <- struct{}{}:
+	default: // Signal already pending; drain goroutine will pick it up.
+	}
+}
+
+// coalesceKey is the pending slot a coalesceable notification replaces: one
+// per method, or one per method and key for a method whose notifications
+// carry independent state.
+func coalesceKey(notif models.Notification) string {
+	if notif.CoalesceKey == "" {
+		return notif.Method
+	}
+	return notif.Method + "\x00" + notif.CoalesceKey
 }
 
 // Subscribe creates a new subscription and returns a channel that will receive

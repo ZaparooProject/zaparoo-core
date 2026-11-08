@@ -30,10 +30,9 @@ import (
 
 // DefaultLastSeenFlushInterval is how often the LastSeenTracker flushes
 // pending updates to the database when StartFlushLoop is used without an
-// explicit interval. 30s trades a small amount of database activity for a
-// "last seen" estimate that is fresh enough to be useful in the paired
-// clients list.
-const DefaultLastSeenFlushInterval = 30 * time.Second
+// explicit interval. Its only reader is the paired clients list, where a
+// few minutes of staleness is invisible, so writes are kept infrequent.
+const DefaultLastSeenFlushInterval = 5 * time.Minute
 
 // LastSeenTracker batches in-memory LastSeenAt updates and flushes to DB
 // periodically. High-frequency Touches collapse to one UPDATE per interval.

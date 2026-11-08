@@ -814,6 +814,103 @@ func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_BackgroundSlotUsesNativeAudioOverAudioCore(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	songPath := filepath.Join(rootDir, "Music", "song.mp3")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, songPath, []byte("mp3"), 0o600))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "Audio"
+launcher = "phosphor"
+`))
+
+	// An Audio core that plays mp3 files in the primary slot only, set as
+	// the Audio default, and listed first.
+	audioCore := platforms.Launcher{
+		ID:         "phosphor",
+		SystemID:   "Audio",
+		Folders:    []string{"Music"},
+		Extensions: []string{".mp3"},
+	}
+	native := platforms.NativeAudioLauncher(nil, nil, nil, nil)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{audioCore, native})
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir}).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, songPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == platforms.NativeAudioLauncherID
+		}),
+		(*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		}),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{songPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"slot": "background"}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_PrimarySlotKeepsAudioDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	songPath := filepath.Join(rootDir, "Music", "song.mp3")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, songPath, []byte("mp3"), 0o600))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "Audio"
+launcher = "phosphor"
+`))
+
+	audioCore := platforms.Launcher{
+		ID:         "phosphor",
+		SystemID:   "Audio",
+		Folders:    []string{"Music"},
+		Extensions: []string{".mp3"},
+	}
+	native := platforms.NativeAudioLauncher(nil, nil, nil, nil)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{audioCore, native})
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir}).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, songPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "phosphor"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", Args: []string{songPath}},
+		Cfg: cfg,
+	}
+
+	_, err := cmdLaunchWithFS(fs, mockPlatform, env)
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_AbsolutePathAppliesInferredSystemDefault(t *testing.T) {
 	t.Parallel()
 
@@ -2029,7 +2126,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2051,7 +2148,7 @@ func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o700))
 	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
 
-	result, err := findFile(fs, mockPlatform, cfg, absolutePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, absolutePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2074,7 +2171,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, txtPath, []byte("test"), 0o600))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedPath, result)
@@ -2093,12 +2190,12 @@ func TestFindFile_ResolvesGameInsideDiskImage(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, imagePath, []byte("test"), 0o600))
 
 	inside := filepath.Join(rootDir, "acornelectron", "BOOT.VHD", "Elite")
-	result, err := findFile(fs, mockPlatform, cfg, inside)
+	result, err := findFile(fs, mockPlatform, cfg, nil, inside)
 
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(imagePath, "Elite"), result)
 
-	bare, err := findFile(fs, mockPlatform, cfg, imagePath)
+	bare, err := findFile(fs, mockPlatform, cfg, nil, imagePath)
 
 	require.NoError(t, err)
 	assert.Equal(t, imagePath, bare)
@@ -2118,7 +2215,7 @@ func TestFindFile_ReturnsAmbiguousCaseInsensitivePathError(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(filepath.Join(rootDir, "NeoGeo"), 0o700))
 	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
 
-	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+	result, err := findFile(fs, mockPlatform, cfg, nil, relativePath)
 
 	require.Error(t, err)
 	assert.Empty(t, result)

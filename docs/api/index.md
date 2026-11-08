@@ -217,7 +217,7 @@ Core evaluates four public access states:
 
 - **Localhost** requests originate from Core's device and have full access.
 - Authenticated **admin** includes paired admin clients and requests carrying a valid configured static API key. API-key admin is not localhost and cannot invoke localhost-only methods.
-- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, apply updates, or reboot or shut down the device.
+- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, apply updates, reboot or shut down the device, or list, pair or forget Bluetooth devices.
 - Unauthenticated **legacy** clients are admitted only on MiSTer, MiSTeX, Batocera, LibreELEC, and ReplayOS. Legacy is a distinct compatibility state, never admin. Every other platform rejects legacy full-API access.
 
 Grandfathered legacy screenshot access exists on MiSTer and ReplayOS. Grandfathered legacy input exists on MiSTer, MiSTeX, Batocera, and ReplayOS. New methods and capabilities do not become legacy-accessible automatically.
@@ -287,6 +287,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.meta.update               | Update writable metadata for indexed media.                                           | All clients |
 | media.active                    | Return currently active media.                                                        | All clients |
 | media.active.update             | Update currently active media information.                                            | All clients |
+| media.active.image              | Return cover art of the audio track playing in a slot.                                | All clients |
 | media.clean.orphans             | Remove orphaned media database rows.                                                  | All clients |
 | media.history                   | Return paginated media play history.                                                  | All clients |
 | media.history.latest            | Return latest media play history entries.                                             | All clients |
@@ -301,6 +302,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.scrape.cancel             | Cancel active metadata scraping.                                                      | All clients |
 | media.scrape.resume             | Resume paused metadata scraping.                                                      | All clients |
 | media.control                   | Send control action to active media launcher.                                         | All clients |
+| playlists.update                | Change shuffle and repeat of the playlist open in a slot.                             | All clients |
 | media.title.parse               | Preview media title and slug parsing.                                                  | All clients |
 | settings                        | List current configuration settings.                                                  | Tiered |
 | settings.update                 | Update and save configuration settings.                                               | `settings.write` |
@@ -363,6 +365,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | settings.auth.link              | Start online account link.                                                            | All clients |
 | settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
 | settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
+| online.status                   | Return online account link state and reported account features.                      | All clients |
 | update.status                   | Report the last known update state without contacting the release server.             | Localhost or any paired client |
 | update.check                    | Check for newer Core version.                                                         | Localhost or any paired client |
 | update.apply                    | Apply latest update and restart gracefully.                                           | `update.apply` |
@@ -370,6 +373,11 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | device.power.reboot             | Restart the device.                                                                   | `device.power` |
 | device.power.shutdown           | Power the device off.                                                                 | `device.power` |
 | device.power.suspend            | Put the device to sleep.                                                              | `device.power` |
+| device.bluetooth.devices        | List paired Bluetooth devices and the ones a scan found.                              | `device.bluetooth` |
+| device.bluetooth.scan.start     | Start looking for Bluetooth devices.                                                  | `device.bluetooth` |
+| device.bluetooth.scan.stop      | Stop looking for Bluetooth devices.                                                   | `device.bluetooth` |
+| device.bluetooth.pair           | Pair with a Bluetooth device, trust it and connect it.                                | `device.bluetooth` |
+| device.bluetooth.forget         | Unpair a Bluetooth device and remove it.                                              | `device.bluetooth` |
 
 ## Notifications
 
@@ -386,7 +394,10 @@ Notifications let a server or client know an event has occurred. See the [API No
 | ui.changed             | Authoritative global UI event state changed.                                      |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
+| media.playback         | Native audio in a slot started, paused, resumed, seeked or had its tags read.     |
 | media.history.changed  | Play history was recorded outside the media started and stopped lifecycle.        |
+| media.tags.changed     | An item's user flags (favorite, liked, disliked, play later, hidden) changed.     |
+| playlists.changed      | An open playlist changed; carries every open playlist.                            |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |
 | media.scraping         | Progress updates emitted during media scraping (includes progress/status details). |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
@@ -396,3 +407,4 @@ Notifications let a server or client know an event has occurred. See the [API No
 | decks.changed          | A deck was created, edited, deleted or refreshed from its source.                 |
 | update.state           | Progress of an update being applied.                                              |
 | device.changed         | The state of the device Core runs on changed.                                     |
+| device.bluetooth.changed | Bluetooth devices, a scan or a pairing attempt changed.                         |

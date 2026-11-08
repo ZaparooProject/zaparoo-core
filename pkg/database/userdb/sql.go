@@ -716,6 +716,28 @@ func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
 	return rowsAffected, nil
 }
 
+func sqlPruneInboxMessages(
+	ctx context.Context, db *sql.DB, cutoff, reliableFrom time.Time, keep int,
+) (int64, error) {
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM Inbox
+		WHERE (CreatedAt < ? AND CreatedAt >= ?)
+		   OR DBID NOT IN (
+			SELECT DBID FROM Inbox ORDER BY CreatedAt DESC, DBID DESC LIMIT ?
+		   );
+	`, cutoff.Unix(), reliableFrom.Unix(), keep)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune inbox messages: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
+
 // ErrInvalidAuthToken rejects ':' in auth tokens (AAD uses `<token>:ws`;
 // also enforced by SQL CHECK).
 var ErrInvalidAuthToken = errors.New("auth token must not contain ':'")

@@ -66,6 +66,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/gorilla/websocket"
+	"github.com/jonboulle/clockwork"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -297,6 +298,7 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodProfilesVerify: true,
 	models.MethodDecks:          true, models.MethodDecksGet: true, models.MethodDecksNew: true,
 	models.MethodDecksUpdate: true, models.MethodDecksDelete: true, models.MethodDecksOpen: true,
+	models.MethodDecksImage:        true,
 	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
 	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
 }
@@ -419,6 +421,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaScrapeCancel:     methods.HandleMediaScrapeCancel,
 		models.MethodMediaScrapeResume:     methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:          methods.HandleMediaControl,
+		models.MethodMediaActiveImage:      methods.HandleMediaActiveImage,
+		models.MethodPlaylistsUpdate:       methods.HandlePlaylistsUpdate,
 		models.MethodMediaTitleParse:       methods.HandleMediaTitleParse,
 		// settings
 		models.MethodSettings:                    methods.HandleSettings,
@@ -501,6 +505,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodDecksUpdate: methods.HandleDecksUpdate,
 		models.MethodDecksDelete: methods.HandleDecksDelete,
 		models.MethodDecksOpen:   methods.HandleDecksOpen,
+		models.MethodDecksImage:  methods.HandleDecksImage,
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
@@ -513,6 +518,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsAuthLinkStatus: methods.HandleSettingsAuthLinkStatus,
 		models.MethodSettingsAuthLinkCancel: methods.HandleSettingsAuthLinkCancel,
 		models.MethodRemoteActivity:         methods.HandleRemoteActivity,
+		models.MethodOnlineStatus:           methods.HandleOnlineStatus,
 		// update
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)
@@ -528,6 +534,12 @@ func NewMethodMap() *MethodMap {
 		models.MethodDevicePowerReboot:   methods.HandleDevicePower(hoststatus.PowerReboot),
 		models.MethodDevicePowerShutdown: methods.HandleDevicePower(hoststatus.PowerShutdown),
 		models.MethodDevicePowerSuspend:  methods.HandleDevicePower(hoststatus.PowerSuspend),
+
+		models.MethodDeviceBluetoothDevices:   methods.HandleDeviceBluetoothDevices,
+		models.MethodDeviceBluetoothScanStart: methods.HandleDeviceBluetoothScanStart,
+		models.MethodDeviceBluetoothScanStop:  methods.HandleDeviceBluetoothScanStop,
+		models.MethodDeviceBluetoothPair:      methods.HandleDeviceBluetoothPair,
+		models.MethodDeviceBluetoothForget:    methods.HandleDeviceBluetoothForget,
 	}
 
 	for name, fn := range defaultMethods {
@@ -565,7 +577,10 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 // legacyAdmissionMiddleware rejects unauthenticated remote API transports on
 // platforms without an explicit compatibility policy. It runs after API-key
 // middleware so a valid key is recognized as admin authority.
-func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handler {
+func legacyAdmissionMiddleware(
+	platformID string,
+	rejections *remoteRejectionLog,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if apimiddleware.IsLocalRequest(r) ||
@@ -573,6 +588,7 @@ func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handle
 				next.ServeHTTP(w, r)
 				return
 			}
+			rejections.record(r, rejectReasonUnencrypted)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 		})
 	}
@@ -1165,6 +1181,7 @@ func privateNetworkAccessMiddleware(next http.Handler) http.Handler {
 func broadcastNotifications(
 	st *state.State,
 	session *melody.Melody,
+	platformID string,
 	notifications <-chan models.Notification,
 ) {
 	for {
@@ -1185,15 +1202,87 @@ func broadcastNotifications(
 				continue
 			}
 
-			broadcastToSessions(session, data)
+			broadcastToSessions(session, data, notificationAudience(notif.Method, platformID))
 		}
 	}
 }
 
-// broadcastToSessions sends a notification to every connected session,
-// encrypting per-session for sessions that have established encryption.
-// Errors on individual sessions are logged but do not stop the broadcast.
-func broadcastToSessions(session *melody.Melody, plaintext []byte) {
+// notificationCapabilities lists the notifications only some clients may
+// receive. device.bluetooth.changed names and addresses every device in
+// range, so it goes only to clients that may manage Bluetooth.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var notificationCapabilities = map[string]permissions.Capability{
+	models.NotificationDeviceBluetooth: permissions.CapDeviceBluetooth,
+}
+
+// authenticatedNotifications lists the notifications that repeat what a method
+// limited to authenticated clients returns, so they stay behind the same bar.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var authenticatedNotifications = map[string]bool{
+	models.NotificationDeviceChanged: true,
+}
+
+// notificationGated reports whether only some clients may receive a
+// notification.
+func notificationGated(method string) bool {
+	_, needsCapability := notificationCapabilities[method]
+	return needsCapability || authenticatedNotifications[method]
+}
+
+// notificationAllowed reports whether a client with this grant may receive a
+// notification.
+func notificationAllowed(method string, grant permissions.Grant) bool {
+	if authenticatedNotifications[method] && !grant.Authenticated() {
+		return false
+	}
+	capability, needsCapability := notificationCapabilities[method]
+	return !needsCapability || grant.Has(capability)
+}
+
+// notificationAudience returns which sessions may receive a notification, or
+// nil when every session may.
+func notificationAudience(method, platformID string) func(*melody.Session) bool {
+	if !notificationGated(method) {
+		return nil
+	}
+	return func(s *melody.Session) bool {
+		return notificationAllowed(method, sessionGrant(s.Request, getClientSession(s), platformID))
+	}
+}
+
+// sessionGrant builds a WebSocket session's grant the way its requests are
+// granted. A session that has not settled its transport yet has no paired
+// role, so a remote client misses gated notifications until it does.
+func sessionGrant(
+	r *http.Request,
+	cs *apimiddleware.ClientSession,
+	platformID string,
+) permissions.Grant {
+	grant := permissions.Grant{}
+	if r != nil {
+		grant.IsLocal = apimiddleware.IsLocalRequest(r)
+		grant.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(r)
+	}
+	if !grant.IsLocal {
+		grant.PlatformID = platformID
+	}
+	if cs != nil {
+		grant.Role = permissions.Role(cs.ClientRole())
+	}
+	return grant
+}
+
+// broadcastToSessions sends a notification to every connected session that
+// mayReceive admits (every one when it is nil), encrypting per-session for
+// sessions that have established encryption. Errors on individual sessions
+// are logged but do not stop the broadcast.
+func broadcastToSessions(
+	session *melody.Melody,
+	plaintext []byte,
+	mayReceive func(*melody.Session) bool,
+) {
 	sessions, err := session.Sessions()
 	if err != nil {
 		logWSWriteError(err, "fetching sessions for broadcast")
@@ -1201,6 +1290,9 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 	}
 	for _, s := range sessions {
 		if s == nil || s.IsClosed() {
+			continue
+		}
+		if mayReceive != nil && !mayReceive(s) {
 			continue
 		}
 		writeNotificationToSession(s, plaintext)
@@ -1274,8 +1366,10 @@ func notificationClientDisconnected(st *state.State) {
 // handleSSE returns an HTTP handler that streams notifications as Server-Sent
 // Events. Each connected client gets its own broker subscription which is
 // cleaned up on disconnect.
-func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
+func handleSSE(notifBroker *broker.Broker, st *state.State, platformID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// SSE has no paired sessions, so the request alone decides the grant.
+		grant := sessionGrant(r, nil, platformID)
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -1303,6 +1397,9 @@ func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
 			case notif, ok := <-notifs:
 				if !ok {
 					return
+				}
+				if !notificationAllowed(notif.Method, grant) {
+					continue
 				}
 
 				obj := models.NotificationObject{
@@ -2111,7 +2208,7 @@ func StartWithListener(
 		return err
 	}
 
-	waitThumbReap := methods.InitMediaThumbCache(platform)
+	waitThumbReap := methods.InitMediaThumbCache(platform, cfg)
 	defer waitThumbReap()
 
 	// Extract port from listen address or use default
@@ -2215,11 +2312,14 @@ func StartWithListener(
 	}
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
+	log.Info().Bool("encryption", cfg.EncryptionEnabled()).Msg("API remote connection encryption")
 
 	// Create origin validator that checks static origins + dynamic local IP/custom origins.
 	originValidator := makeOriginValidator(staticOrigins, localIPsProvider, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
+
+	remoteRejections := newRemoteRejectionLog(clockwork.NewRealClock())
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
@@ -2288,7 +2388,7 @@ func StartWithListener(
 	encGateway.StartCleanup(st.GetContext())
 
 	// LastSeen tracker batches paired-client activity in memory and
-	// flushes to Clients.LastSeenAt every 30 seconds. A final flush runs
+	// flushes to Clients.LastSeenAt every few minutes. A final flush runs
 	// on graceful shutdown via StartFlushLoop's ctx.Done() branch.
 	lastSeenTracker := apimiddleware.NewLastSeenTracker(db.UserDB)
 	lastSeenDone := lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
@@ -2355,7 +2455,7 @@ func StartWithListener(
 	})
 	wsNotifications, wsSubID := notifBroker.Subscribe(100)
 	go func() {
-		broadcastNotifications(st, session, wsNotifications)
+		broadcastNotifications(st, session, platform.ID(), wsNotifications)
 		notifBroker.Unsubscribe(wsSubID)
 	}()
 
@@ -2389,11 +2489,15 @@ func StartWithListener(
 	wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
 		if !cfg.EncryptionEnabled() {
 			if !apimiddleware.WebSocketAuthHandler(authConfig, r) {
+				if !apimiddleware.IsLocalRequest(r) {
+					remoteRejections.record(r, rejectReasonAPIKey)
+				}
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
 			if !apimiddleware.IsLocalRequest(r) &&
 				!apimiddleware.APIKeyAuthenticated(r) && !permissions.LegacyEnabled(platform.ID()) {
+				remoteRejections.record(r, rejectReasonUnencrypted)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
@@ -2482,11 +2586,11 @@ func StartWithListener(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
-		r.Use(legacyAdmissionMiddleware(platform.ID()))
+		r.Use(legacyAdmissionMiddleware(platform.ID(), remoteRejections))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 
-		sseHandler := handleSSE(notifBroker, st)
+		sseHandler := handleSSE(notifBroker, st, platform.ID())
 		r.Get("/api/events", sseHandler)
 		r.Get("/api/v0/events", sseHandler)
 		r.Get("/api/v0.1/events", sseHandler)

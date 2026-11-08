@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
@@ -88,9 +89,16 @@ type Options struct {
 	// Launchers returns the launchers of a system, used to pick the copy a
 	// launch would start when a pulled flag needs a home. Optional.
 	Launchers func(systemID string) []platforms.Launcher
+	// FetchDeck fetches the playlist a deck's link serves, for keeping a
+	// deck the account saved. Optional; without it saved decks are only
+	// removed, never added.
+	FetchDeck DeckFetcher
 	// Notifications receives decks.changed when a sync pass changes a deck.
 	// Optional.
 	Notifications chan<- models.Notification
+	// DeckCovers holds deck cover images, which a deck pass sends to the
+	// account. Optional; without it cover changes stay on the device.
+	DeckCovers *decks.Covers
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -106,8 +114,11 @@ type Service struct {
 	sendHeartbeat func(context.Context) error
 	now           func() time.Time
 	launchers     func(systemID string) []platforms.Launcher
+	fetchDeck     DeckFetcher
+	deckCovers    *decks.Covers
 	notifications chan<- models.Notification
 	deckSem       chan struct{}
+	savedSem      chan struct{}
 	resolvePace   time.Duration
 	lastDeckPull  atomic.Int64
 	inventoryMu   syncutil.Mutex
@@ -126,8 +137,11 @@ func New(opts *Options) *Service {
 		now:           opts.Now,
 		launchers:     opts.Launchers,
 		resolvePace:   opts.ResolvePace,
+		fetchDeck:     opts.FetchDeck,
+		deckCovers:    opts.DeckCovers,
 		notifications: opts.Notifications,
 		deckSem:       make(chan struct{}, 1),
+		savedSem:      make(chan struct{}, 1),
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -148,11 +162,15 @@ func (s *Service) Enabled() bool {
 const (
 	HintKindState = "state"
 	HintKindDecks = "decks"
+	// HintKindSavedDecks names a change to the decks the account saved from
+	// other accounts. The list has no cursor, so it is always read again.
+	HintKindSavedDecks = "saved_decks"
 )
 
 // HintNeedsPull reports whether a change hint names a write this device has
 // not pulled yet. A hint at or below the pull cursor for its kind is an echo
-// of something already seen; an unknown kind is always worth a pass.
+// of something already seen; a kind without a cursor, and an unknown kind,
+// is always worth a pass.
 func (s *Service) HintNeedsPull(kind string, revision int64) bool {
 	var key string
 	switch kind {
@@ -160,6 +178,8 @@ func (s *Service) HintNeedsPull(kind string, revision int64) bool {
 		key = DeviceStateKeyStateSince
 	case HintKindDecks:
 		key = DeviceStateKeyDecksSince
+	case HintKindSavedDecks:
+		return true
 	default:
 		return true
 	}

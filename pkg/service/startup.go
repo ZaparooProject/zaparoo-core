@@ -47,6 +47,11 @@ import (
 
 const zapLinkHostExpiration = 30 * 24 * time.Hour
 
+// inboxMessageMaxAge is how long an inbox message is kept. Categorized
+// messages refresh their creation time whenever they are raised again, so an
+// ongoing condition outlives this.
+const inboxMessageMaxAge = 90 * 24 * time.Hour
+
 const userDBBackupMaxAge = 24 * time.Hour
 
 // mediaDBSchemaReset reports that the media database was discarded, either
@@ -680,6 +685,20 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 		log.Info().Msgf("pruned %d expired non-supporting zaplink hosts", rowsDeleted)
 	default:
 		log.Debug().Msg("no expired zaplink hosts to prune")
+	}
+}
+
+// pruneInboxMessages removes inbox messages past inboxMessageMaxAge and any
+// beyond the number the inbox can list.
+func pruneInboxMessages(db *database.Database) {
+	rowsDeleted, err := db.UserDB.PruneInboxMessages(inboxMessageMaxAge, database.InboxMessageLimit)
+	switch {
+	case err != nil:
+		log.Error().Err(err).Msg("error pruning inbox messages")
+	case rowsDeleted > 0:
+		log.Info().Msgf("pruned %d old inbox messages", rowsDeleted)
+	default:
+		log.Debug().Msg("no old inbox messages to prune")
 	}
 }
 

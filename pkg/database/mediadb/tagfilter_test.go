@@ -158,7 +158,7 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
-		require.Len(t, clauses, 1) // All OR filters grouped into one clause
+		require.Len(t, clauses, 1) // One type: all OR filters in one clause
 		require.Len(t, args, 12)   // 3 filters * 2 args * 2 sources
 
 		// Should use one reverse-index union with OR conditions for both sources.
@@ -166,6 +166,42 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 		assert.Contains(t, clauses[0], "UNION")
 		assert.NotContains(t, clauses[0], "EXISTS (")
 		assert.Equal(t, 6, strings.Count(clauses[0], "TagTypes.Type = ?")) // 3 per source
+	})
+}
+
+func TestBuildTagFilterSQL_ORGroupsByType(t *testing.T) {
+	t.Run("Each type is its own group", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
+			{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+			{Type: "genre", Value: "platformer", Operator: zapscript.TagOperatorOR},
+			{Type: "region", Value: "jp", Operator: zapscript.TagOperatorOR},
+		}
+
+		clauses, args := BuildTagFilterSQL(filters)
+		require.Len(t, clauses, 2) // (genre rpg or platformer) and (region us or jp)
+		assert.Equal(t, 4, strings.Count(clauses[0], "TagTypes.Type = ?"))
+		assert.Equal(t, 4, strings.Count(clauses[1], "TagTypes.Type = ?"))
+		assert.Equal(t, []any{
+			"genre", "rpg", "genre", "platformer", "genre", "rpg", "genre", "platformer",
+			"region", "us", "region", "jp", "region", "us", "region", "jp",
+		}, args)
+	})
+
+	t.Run("OR credit stays one group across its three types", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "credit", Value: "nintendo", Operator: zapscript.TagOperatorOR},
+			{Type: "credit", Value: "capcom", Operator: zapscript.TagOperatorOR},
+			{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
+		}
+
+		clauses, args := BuildTagFilterSQL(filters)
+		require.Len(t, clauses, 2)
+		assert.Equal(t, 12, strings.Count(clauses[0], "TagTypes.Type = ?")) // 2 values * 3 types * 2 sources
+		assert.Equal(t, 2, strings.Count(clauses[1], "TagTypes.Type = ?"))
+		require.Len(t, args, 28)
+		assert.Equal(t, []any{"developer", "nintendo", "publisher", "nintendo"}, args[:4])
+		assert.Equal(t, []any{"genre", "rpg", "genre", "rpg"}, args[24:])
 	})
 }
 

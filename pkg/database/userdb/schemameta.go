@@ -36,7 +36,9 @@ import (
 // migrated this database.
 const schemaMetaAppVersion = "app_version"
 
-// recordSchemaProvenance notes which build just migrated this database.
+// recordSchemaProvenance notes which build just migrated this database. It
+// runs on every open, so an unchanged version is left alone rather than
+// rewritten.
 //
 // An older binary refuses a schema newer than it understands, which is right —
 // nothing can reconstruct history, mappings or profiles — but until this was
@@ -50,7 +52,8 @@ func recordSchemaProvenance(ctx context.Context, db *sql.DB) {
 	_, err := db.ExecContext(
 		ctx,
 		`insert into SchemaMeta (Key, Value, UpdatedAt) values (?, ?, ?)
-		 on conflict(Key) do update set Value = excluded.Value, UpdatedAt = excluded.UpdatedAt`,
+		 on conflict(Key) do update set Value = excluded.Value, UpdatedAt = excluded.UpdatedAt
+		 where SchemaMeta.Value is not excluded.Value`,
 		schemaMetaAppVersion, config.AppVersion, time.Now().Unix(),
 	)
 	if err != nil {

@@ -126,13 +126,13 @@ func promotionLosesRequestedTag(
 		}
 	}
 
-	// An OR group is satisfied by any one of its filters, so it is only lost
-	// when the selection matched something in the group and the promotion
-	// matches nothing in it. Comparing filter by filter would refuse a
-	// promotion that simply satisfies the group a different way.
-	if len(orFilters) > 0 {
+	// An OR group (one per tag type) is satisfied by any one of its filters,
+	// so it is only lost when the selection matched something in the group
+	// and the promotion matches nothing in it. Comparing filter by filter
+	// would refuse a promotion that simply satisfies the group a different way.
+	for _, group := range database.GroupORFiltersByType(orFilters) {
 		selectedMatches, promotedMatches := false, false
-		for _, filter := range orFilters {
+		for _, filter := range group {
 			if carries(selectedTags, filter) {
 				selectedMatches = true
 			}

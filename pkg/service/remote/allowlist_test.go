@@ -143,6 +143,9 @@ func TestTranslateSearchParams_RejectsUnknownAndCamelCaseFields(t *testing.T) {
 		`{"path_prefix":"/roms"}`,
 		`{"pathPrefix":"/roms"}`,
 		`{"sort":"name-asc"}`,
+		`{"groupBy":"title"}`,
+		`{"titleId":7}`,
+		`{"group_by":"system"}`,
 	} {
 		_, err := translateSearchParams(json.RawMessage(raw))
 		require.Error(t, err, raw)
@@ -169,7 +172,8 @@ func TestTranslateSearchParams_ProducesMethodParams(t *testing.T) {
 
 	translated, err := translateSearchParams(json.RawMessage(`{
 		"query": "sonic", "systems": ["Genesis", "SNES"], "fuzzy_system": true,
-		"max_results": 5, "cursor": "c1", "tags": ["genre:platformer"], "letter": "s"
+		"max_results": 5, "cursor": "c1", "tags": ["genre:platformer"], "letter": "s",
+		"group_by": "title", "title_id": 7
 	}`))
 	require.NoError(t, err)
 
@@ -189,6 +193,10 @@ func TestTranslateSearchParams_ProducesMethodParams(t *testing.T) {
 	assert.Equal(t, []string{"genre:platformer"}, *params.Tags)
 	require.NotNil(t, params.Letter)
 	assert.Equal(t, "s", *params.Letter)
+	require.NotNil(t, params.GroupBy)
+	assert.Equal(t, "title", *params.GroupBy)
+	require.NotNil(t, params.TitleID)
+	assert.Equal(t, int64(7), *params.TitleID)
 	assert.Nil(t, params.Sort, "sort is not part of the remote search surface")
 	assert.Nil(t, params.PathPrefix, "pathPrefix is not part of the remote search surface")
 

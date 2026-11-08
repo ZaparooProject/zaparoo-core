@@ -96,6 +96,14 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	return true
 }
 
+// isRunningScraper reports whether the named scraper is running. A cancelled
+// run counts until its goroutine has wound down, since it may still be writing.
+func (s *scrapingStatus) isRunningScraper(scraperID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.running && s.scraperID == scraperID
+}
+
 func (s *scrapingStatus) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -351,10 +359,10 @@ func scrapeCountStatusContext(parent context.Context) (context.Context, context.
 func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	systems, all := mediaDB.ConsumeScrapeImageChanges()
 	if all {
-		WipeMediaThumbCache(mediaDB)
+		InvalidateMediaThumbMemo()
 		return
 	}
-	WipeMediaThumbCacheSystems(mediaDB, systems)
+	InvalidateMediaThumbMemoSystems(systems)
 }
 
 // refreshScrapedTags makes tags written by a scrape visible to media.tags.

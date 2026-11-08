@@ -23,7 +23,7 @@ RUN set -eux; \
 # Install Go. Pinned to the release go.mod names: the Expr method profile
 # records the Go version it was generated with and the build checks it, so a
 # newer patch release here fails every build until the profile is regenerated.
-COPY --from=golang:1.27.2 /usr/local/go/ /usr/local/go/
+COPY --from=golang:1.27.3 /usr/local/go/ /usr/local/go/
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install Zig

@@ -56,6 +56,31 @@ func TestScheduledCheckAndOfferedVersionState(t *testing.T) {
 	assert.Equal(t, "2.11.0", lastOfferedVersion(dir))
 }
 
+// A check that concludes what the last one did must not rewrite state.json.
+func TestRecordCheckFindings_SkipsUnchangedFindings(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	path := filepath.Join(dir, stateFileName)
+	findings := lastCheckFindings{LatestVersion: "2.11.0", UpdateAvailable: true}
+	require.NoError(t, recordCheckFindings(dir, &findings))
+	old := time.Unix(1_000_000, 0)
+	require.NoError(t, os.Chtimes(path, old, old))
+
+	same := findings
+	require.NoError(t, recordCheckFindings(dir, &same))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(old), "unchanged findings must not be rewritten")
+
+	require.NoError(t, recordCheckFindings(dir, &lastCheckFindings{LatestVersion: "2.12.0"}))
+	st, err := loadStateWithError(dir)
+	require.NoError(t, err)
+	require.NotNil(t, st.LastCheck)
+	assert.Equal(t, "2.12.0", st.LastCheck.LatestVersion)
+	assert.False(t, st.LastCheck.UpdateAvailable)
+}
+
 func TestStateDirFor(t *testing.T) {
 	t.Parallel()
 

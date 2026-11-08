@@ -73,10 +73,9 @@ import (
 // scan over one ParentDir partition plus a transient btree for the folded-bucket
 // GROUP BY, ~0.3-0.6s for ~1k-1.4k direct files. The first call into a folder
 // also pays resolveBrowseSortMode's prefix-policy path scan (shared with
-// media.browse, cached after). If genuinely large *flat* partitions appear, the
-// lever is a per-(path,systems,sort) cache tied to the media DB generation
-// (DBConfigBrowseIndexVersion), invalidated on reindex — deliberately not added
-// yet since real catalogs fold large collections into letter subdirectories.
+// media.browse, cached after). A built index is kept in the media database's
+// BrowseListingCache, keyed per listing, so only the first call pays for the
+// facet until a media change or a visibility change clears it.
 
 // HandleMediaBrowseIndex handles the media.browse.index API method. It returns
 // the ordered first-character buckets for a browse scope, each with a count and
@@ -124,14 +123,14 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) {
 	// media.browse.index never takes a cursor: every call is a fresh request,
 	// so a preferences change mid-call always gets one rerun inside Core
 	// rather than an error handed back to the client.
-	return runBrowseVisibility(&env, nil, func() (any, error) {
-		return browseMediaIndexRequest(&env, &params, tagFilters)
+	return runBrowseVisibility(&env, nil, func(revision string) (any, error) {
+		return browseMediaIndexRequest(&env, &params, tagFilters, revision)
 	})
 }
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMediaIndexRequest(
-	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter,
+	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter, revision string,
 ) (any, error) {
 	var sortOrder string
 	if params.Sort != nil {
@@ -170,8 +169,12 @@ func browseMediaIndexRequest(
 		if len(sources) == 0 {
 			return emptyBrowseIndex(), nil
 		}
+		key := browseListingKey(
+			&browseListingScope{sources: sources, merged: true},
+			sortOrder, systems, tagFilters, revision, env.ExcludeHidden,
+		)
 		started := time.Now()
-		result, indexErr := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
+		result, indexErr := cachedBrowseIndex(env, &key, revision, &database.BrowseIndexOptions{
 			ExcludeHidden:     env.ExcludeHidden,
 			Overlay:           &database.BrowseOverlay{Sources: sources},
 			Sort:              sortOrder,
@@ -204,8 +207,11 @@ func browseMediaIndexRequest(
 		return nil, err
 	}
 
+	key := browseListingKey(
+		&browseListingScope{prefix: prefix}, sortOrder, systems, tagFilters, revision, env.ExcludeHidden,
+	)
 	started := time.Now()
-	result, err := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
+	result, err := cachedBrowseIndex(env, &key, revision, &database.BrowseIndexOptions{
 		ExcludeHidden: env.ExcludeHidden,
 		PathPrefix:    prefix,
 		Sort:          sortOrder,

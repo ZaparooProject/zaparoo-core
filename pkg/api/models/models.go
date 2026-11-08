@@ -36,6 +36,7 @@ const (
 	NotificationMediaScraping        = "media.scraping"
 	NotificationMediaVisibility      = "media.visibility"
 	NotificationMediaHistoryChanged  = "media.history.changed"
+	NotificationMediaTagsChanged     = "media.tags.changed"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
@@ -52,6 +53,9 @@ const (
 	NotificationUpdateState          = "update.state"
 	NotificationRunFailed            = "run.failed"
 	NotificationDeviceChanged        = "device.changed"
+	NotificationDeviceBluetooth      = "device.bluetooth.changed"
+	NotificationPlaylistsChanged     = "playlists.changed"
+	NotificationMediaPlayback        = "media.playback"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -137,6 +141,8 @@ const (
 	MethodMediaBrowseIndex            = "media.browse.index"
 	MethodMediaControl                = "media.control"
 	MethodMediaActiveUpdate           = "media.active.update"
+	MethodMediaActiveImage            = "media.active.image"
+	MethodPlaylistsUpdate             = "playlists.update"
 	MethodMediaCleanOrphans           = "media.clean.orphans"
 	MethodSettings                    = "settings"
 	MethodSettingsUpdate              = "settings.update"
@@ -173,6 +179,7 @@ const (
 	MethodDecksUpdate                 = "decks.update"
 	MethodDecksDelete                 = "decks.delete"
 	MethodDecksOpen                   = "decks.open"
+	MethodDecksImage                  = "decks.image"
 	MethodProfilesVerify              = "profiles.verify"
 	MethodSystems                     = "systems"
 	MethodLaunchers                   = "launchers"
@@ -205,10 +212,16 @@ const (
 	MethodScreenshot                  = "screenshot"
 	MethodMediaTitleParse             = "media.title.parse"
 	MethodRemoteActivity              = "remote.activity"
+	MethodOnlineStatus                = "online.status"
 	MethodDeviceStatus                = "device.status"
 	MethodDevicePowerReboot           = "device.power.reboot"
 	MethodDevicePowerShutdown         = "device.power.shutdown"
 	MethodDevicePowerSuspend          = "device.power.suspend"
+	MethodDeviceBluetoothDevices      = "device.bluetooth.devices"
+	MethodDeviceBluetoothScanStart    = "device.bluetooth.scan.start"
+	MethodDeviceBluetoothScanStop     = "device.bluetooth.scan.stop"
+	MethodDeviceBluetoothPair         = "device.bluetooth.pair"
+	MethodDeviceBluetoothForget       = "device.bluetooth.forget"
 )
 
 // MethodHasUnboundedRuntime reports whether a method may run without a fixed
@@ -244,8 +257,13 @@ type ResponseWithCallback struct {
 }
 
 type Notification struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+	Method string `json:"method"`
+	// CoalesceKey separates notifications of one method that carry
+	// independent state, such as one per media slot, so that merging a burst
+	// for a slow client keeps the latest of each rather than only the latest
+	// of the method. It is never sent.
+	CoalesceKey string          `json:"-"`
+	Params      json.RawMessage `json:"params"`
 }
 
 type NotificationObject struct {

@@ -158,3 +158,47 @@ func TestTransitionDropsCompleted(t *testing.T) {
 	p.Completed = true
 	assert.False(t, playlists.Next(*p).Completed)
 }
+
+func TestSnapshotRoundTripKeepsLoadOrder(t *testing.T) {
+	t.Parallel()
+
+	p := playlists.NewPlaylist("id", "name", items("a", "b", "c", "a"))
+	p.Index = 1
+	shuffled := playlists.SetShuffle(p, true)
+
+	data, err := playlists.EncodeSnapshot(shuffled)
+	require.NoError(t, err)
+	assert.Contains(t, data, `"version":1`)
+	assert.Contains(t, data, `"originalOrder"`)
+
+	restored, err := playlists.DecodeSnapshot(data)
+	require.NoError(t, err)
+	assert.True(t, restored.Shuffled)
+	assert.Equal(t, shuffled.Items, restored.Items)
+	assert.Equal(t, p.Items, restored.Original)
+
+	off := playlists.SetShuffle(restored, false)
+	assert.Equal(t, p.Items, off.Items)
+	assert.Equal(t, "b", off.Current().ZapScript)
+}
+
+func TestSnapshotWithoutLoadOrderStillDecodes(t *testing.T) {
+	t.Parallel()
+
+	data := `{"version":1,"items":[{"zapScript":"b"},{"zapScript":"a"}],"index":0,"shuffled":true}`
+	restored, err := playlists.DecodeSnapshot(data)
+	require.NoError(t, err)
+	assert.True(t, restored.Shuffled)
+	assert.Nil(t, restored.Original)
+
+	bad := `{"version":1,"items":[{"zapScript":"b"},{"zapScript":"a"}],"index":0,"shuffled":true,` +
+		`"originalOrder":[1,1]}`
+	restored, err = playlists.DecodeSnapshot(bad)
+	require.NoError(t, err)
+	assert.Nil(t, restored.Original, "an order that is not a permutation is dropped")
+
+	plain := playlists.NewPlaylist("id", "name", items("a", "b"))
+	data, err = playlists.EncodeSnapshot(plain)
+	require.NoError(t, err)
+	assert.NotContains(t, data, "originalOrder")
+}

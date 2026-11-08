@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -511,6 +512,95 @@ func scanResultPaths(results []platforms.ScanResult) []string {
 		paths = append(paths, r.Path)
 	}
 	return paths
+}
+
+// A launch of a listed game is checked against the listing, since the game is
+// not a file on disk. A name the listing does not hold is not vouched for,
+// even beside a boot image.
+func TestAmigaLauncher_VirtualPathExistsRequiresListedGame(t *testing.T) {
+	t.Parallel()
+
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	writeAmigaVisionInstall(t, installPath, "Turrican (OCS)[en]")
+	noListing := filepath.Join(t.TempDir(), "games", "Amiga")
+	require.NoError(t, os.MkdirAll(noListing, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(noListing, "AmigaVision.hdf"), []byte("test"), 0o600))
+	noBootImage := filepath.Join(t.TempDir(), "games", "Amiga")
+	writeAmigaListings(t, noBootImage, "Turrican (OCS)[en]")
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+	require.NotNil(t, amigaLauncher.VirtualPathExists)
+
+	assert.True(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Games", "Turrican (OCS)[en]")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Games", "Not Listed")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Demos", "Turrican (OCS)[en]")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(noListing, "Games", "Turrican (OCS)[en]")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(noBootImage, "Games", "Turrican (OCS)[en]")),
+		"a listing without a boot image is not an install that can boot the game")
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Turrican (OCS)[en]")))
+}
+
+// The home screen entry beside the install is vouched for while the SD card
+// MGL it stands for exists.
+func TestAmigaLauncher_VirtualPathExistsForHomeScreenMGL(t *testing.T) {
+	realMGL := filepath.Join(t.TempDir(), "Amiga.mgl")
+	require.NoError(t, os.WriteFile(realMGL, []byte("test"), 0o600))
+	oldPaths := amigaVisionMGLPaths
+	amigaVisionMGLPaths = []string{realMGL, filepath.Join(filepath.Dir(realMGL), "Amiga 500.mgl")}
+	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
+
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	writeAmigaVisionInstall(t, installPath, "Turrican (OCS)[en]")
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+
+	assert.True(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Amiga.mgl")))
+	assert.False(t, amigaLauncher.VirtualPathExists(nil, filepath.Join(installPath, "Amiga 500.mgl")))
+}
+
+// Launching the Amiga system boots AmigaVision's MGL when it is installed,
+// as the MiSTer menu does, instead of the bare Minimig core.
+func TestLaunchSystem_AmigaLoadsAmigaVisionMGL(t *testing.T) {
+	realMGL := filepath.Join(t.TempDir(), "Amiga.mgl")
+	require.NoError(t, os.WriteFile(realMGL, []byte("test"), 0o600))
+	oldPaths := amigaVisionMGLPaths
+	amigaVisionMGLPaths = []string{filepath.Join(filepath.Dir(realMGL), "Missing.mgl"), realMGL}
+	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
+
+	var launched []string
+	p := &Platform{launchBasicFile: func(path string) error {
+		launched = append(launched, path)
+		return nil
+	}}
+
+	require.NoError(t, p.LaunchSystem(&config.Instance{}, systemdefs.SystemAmiga))
+	assert.Equal(t, []string{realMGL}, launched)
+}
+
+// Without AmigaVision, launching the Amiga system loads the core as before.
+func TestLaunchSystem_AmigaWithoutAmigaVisionLoadsCore(t *testing.T) {
+	oldPaths := amigaVisionMGLPaths
+	amigaVisionMGLPaths = []string{filepath.Join(t.TempDir(), "Amiga.mgl")}
+	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
+
+	var launchedMGL bool
+	var loaded string
+	p := &Platform{
+		launchBasicFile: func(string) error {
+			launchedMGL = true
+			return nil
+		},
+		launchSystemCore: func(_ *config.Instance, _ platforms.Platform, system *cores.Core) error {
+			loaded = system.ID
+			return nil
+		},
+	}
+
+	require.NoError(t, p.LaunchSystem(&config.Instance{}, systemdefs.SystemAmiga))
+	assert.False(t, launchedMGL)
+	assert.Equal(t, systemdefs.SystemAmiga, loaded)
 }
 
 func writeAmigaVisionInstall(t *testing.T, path, game string) {

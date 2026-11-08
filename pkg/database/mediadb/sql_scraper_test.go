@@ -1274,6 +1274,50 @@ func TestApplyScrapeResults_TracksOnlyChangedImageProperties(t *testing.T) {
 	assert.False(t, all)
 }
 
+// A scrape that changes a row's artwork drops its cover record, so its old
+// placeholder colour is not served; an unchanged write keeps it.
+func TestApplyScrapeResults_DropsCoverRecordOfChangedImages(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	target := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			MediaProps: []database.MediaProperty{{
+				TypeTag: "property:image-boxart",
+				Text:    filepath.ToSlash(filepath.Join("media", "boxart", "mario.png")),
+			}},
+		},
+	}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	color := uint32(0x123456)
+	recorded := func() bool {
+		_, found, err := mediaDB.GetMediaCoverThumb(ctx, 1)
+		require.NoError(t, err)
+		return found
+	}
+
+	require.NoError(t, mediaDB.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:x", &color))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	assert.True(t, recorded(), "an identical write keeps the record")
+
+	target.Write.MediaProps[0].Text = filepath.ToSlash(filepath.Join("media", "boxart", "mario-v2.png"))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	assert.False(t, recorded(), "a changed media image drops the record")
+
+	require.NoError(t, mediaDB.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:x", &color))
+	target.Write.MediaProps = nil
+	target.Write.TitleProps = []database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.ToSlash(filepath.Join("media", "titles", "mario.png")),
+	}}
+	require.NoError(t, mediaDB.ApplyScrapeResult(ctx, 1, 1, target.Write))
+	assert.False(t, recorded(), "a changed title image drops the records of the title's media")
+}
+
 func TestApplyScrapeResults_ReplacesChangedExclusiveTitleTags(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

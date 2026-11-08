@@ -24,10 +24,12 @@ package mister
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -62,6 +65,7 @@ type readyHarness struct {
 	written   time.Time // when the core name file was last written
 	names     []string
 	writtenMu syncutil.Mutex
+	sent      atomic.Uint64 // launch commands the fake Main has received
 }
 
 // setCore has Main report core, written at at.
@@ -86,9 +90,10 @@ func newReadyHarness(t *testing.T) *readyHarness {
 		files:  map[string]int64{},
 	}
 	h.r = &coreReadiness{
-		clock:    h.clock,
-		launches: gamehandoff.NewLaunchLog(h.clock),
-		watch:    func(context.Context, string) (<-chan gamehandoff.Kind, error) { return h.events, nil },
+		clock:     h.clock,
+		launches:  gamehandoff.NewLaunchLog(h.clock),
+		loadsSent: h.sent.Load,
+		watch:     func(context.Context, string) (<-chan gamehandoff.Kind, error) { return h.events, nil },
 		stat: func(path string) (os.FileInfo, error) {
 			size, ok := h.files[path]
 			if !ok {
@@ -385,16 +390,15 @@ func TestCoreReadiness_OtherGameThanLaunchedIsReadyImmediately(t *testing.T) {
 func TestCoreReadiness_NoteLaunchesRecordsAndPassesThrough(t *testing.T) {
 	t.Parallel()
 	h := newReadyHarness(t)
-	boom := errors.New("launch failed")
 	var got string
 	launch := h.r.noteLaunches(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		got = path
-		return nil, boom
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 	})
 
 	_, err := launch(nil, genesisGame, nil)
 
-	require.ErrorIs(t, err, boom)
+	require.NoError(t, err)
 	assert.Equal(t, genesisGame, got)
 	assert.True(t, h.r.launches.Recent(genesisGame, readyLaunchFreshness))
 	assert.False(t, h.r.launches.Recent("/other.md", readyLaunchFreshness))
@@ -845,4 +849,125 @@ func TestCoreReadiness_OpenWindowWaitsForTheCore(t *testing.T) {
 	h.events <- gamehandoff.Open
 	h.events <- gamehandoff.Close
 	require.NoError(t, h.advanceUntilDone(t, done))
+}
+
+// A bare MGL launched through the Generic launcher is published as the game it
+// loads, under that game's launcher. Its probe must still wait for Main to
+// load the game, or controls sent with the launch reach Main mid-load and are
+// lost.
+func TestCoreReadiness_GenericMGLLaunchWaitsForItsGame(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.files[genesisGame] = 4 << 20
+	mglPath := "/media/fat/game.mgl"
+	h.r.readMGL = func(path string) (mgls.MGL, error) {
+		require.Equal(t, mglPath, path)
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+
+	var launchedPath string
+	launch := h.r.noteMGLGames(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		launchedPath = path
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	})
+	_, err := launch(nil, mglPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, mglPath, launchedPath)
+
+	done := make(chan error, 1)
+	probe := h.r.waitForReady(mustCore(t, "Genesis"), "")
+	go func() { done <- probe(t.Context(), nil, probeMedia(genesisGame)) }()
+
+	// A probe that did not find the launch returns at once instead of
+	// watching the game file.
+	select {
+	case h.events <- gamehandoff.Open:
+	case err := <-done:
+		t.Fatalf("probe finished before Main opened the game: %v", err)
+	}
+	h.events <- gamehandoff.Close
+	require.NoError(t, h.advanceUntilDone(t, done))
+}
+
+func TestCoreReadiness_GenericNonMGLLaunchNotesNothing(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		t.Fatal("only MGL files are read")
+		return mgls.MGL{}, nil
+	}
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	})
+	_, err := launch(nil, "/media/fat/_Console/SNES.rbf", nil)
+	require.NoError(t, err)
+	assert.False(t, h.r.launches.Recent("SNES.rbf", time.Minute))
+}
+
+func TestCoreReadiness_FailedGenericMGLLaunchIsForgotten(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+	errLaunch := errors.New("command interface not accessible")
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, errLaunch
+	})
+	_, err := launch(nil, "/media/fat/game.mgl", nil)
+	require.ErrorIs(t, err, errLaunch)
+
+	// The same game started outside Core must not wait for a load that
+	// was never sent.
+	assert.False(t, h.r.launches.Recent(genesisGame, time.Minute))
+	require.NoError(t, h.r.waitForReady(mustCore(t, "Genesis"), "")(t.Context(), nil, probeMedia(genesisGame)))
+}
+
+// The Generic launcher sends the load before setting the active game, so a
+// failure there still loads the game and the probe must keep waiting for it.
+func TestCoreReadiness_GenericMGLKeptWhenFailureFollowsLoad(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	h.r.readMGL = func(string) (mgls.MGL, error) {
+		var mgl mgls.MGL
+		mgl.File.Path = genesisGame
+		return mgl, nil
+	}
+	errActive := errors.New("write active game")
+	launch := h.r.noteMGLGames(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		h.sent.Add(1) // the load reached Main before the failure
+		return nil, fmt.Errorf("launch: %w", errActive)
+	})
+	_, err := launch(nil, "/media/fat/game.mgl", nil)
+	require.ErrorIs(t, err, errActive)
+	assert.True(t, h.r.launches.Recent(genesisGame, time.Minute))
+}
+
+func TestCoreReadiness_NoteLaunchesForgetsLaunchThatNeverReachedMain(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	errOpen := errors.New("failed to open command interface")
+	launch := h.r.noteLaunches(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		return nil, errOpen
+	})
+	_, err := launch(nil, genesisGame, nil)
+	require.ErrorIs(t, err, errOpen)
+	assert.False(t, h.r.launches.Recent(genesisGame, time.Minute))
+}
+
+func TestCoreReadiness_NoteLaunchesKeepsLaunchWhenFailureFollowsLoad(t *testing.T) {
+	t.Parallel()
+	h := newReadyHarness(t)
+	errActive := errors.New("write active game")
+	launch := h.r.noteLaunches(func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+		h.sent.Add(1) // the load reached Main before the failure
+		return nil, fmt.Errorf("launch: %w", errActive)
+	})
+	_, err := launch(nil, genesisGame, nil)
+	require.ErrorIs(t, err, errActive)
+	assert.True(t, h.r.launches.Recent(genesisGame, time.Minute))
 }

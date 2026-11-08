@@ -214,6 +214,19 @@ func TestLaunchLog(t *testing.T) {
 	assert.True(t, log.Recent("/games/b.nes", time.Minute))
 }
 
+func TestLaunchLog_Forget(t *testing.T) {
+	t.Parallel()
+	log := NewLaunchLog(clockwork.NewFakeClock())
+
+	log.Note("/games/a.nes")
+	log.Forget("/games/a.nes")
+	assert.False(t, log.Recent("/games/a.nes", time.Minute), "a failed launch is forgotten")
+
+	log.Note("/games/b.nes")
+	log.Forget("/games/a.nes")
+	assert.True(t, log.Recent("/games/b.nes", time.Minute), "forgetting an older launch keeps the newer one")
+}
+
 func TestWait_IdleOpenFileCountsAsHandedOver(t *testing.T) {
 	t.Parallel()
 	opts := Options{Settle: testSettle, OpenWindow: testWindow, UntilClose: true, IdleHandover: 2 * time.Second}

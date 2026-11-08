@@ -41,13 +41,14 @@ func (db *MediaDB) GetMediaCoverThumb(
 	thumb.MediaDBID = mediaDBID
 	var titleDBID int64
 	var color sql.NullInt64
+	var sourceKey sql.NullString
 	err = sqlDB.QueryRowContext(ctx, `
-		SELECT s.SystemID, m.Path, m.ParentDir, m.MediaTitleDBID, c.TypeTag, c.Color
+		SELECT s.SystemID, m.Path, m.ParentDir, m.MediaTitleDBID, c.TypeTag, c.SourceKey, c.Color
 		FROM MediaCoverThumbs c
 		JOIN Media m ON m.DBID = c.MediaDBID
 		JOIN Systems s ON s.DBID = m.SystemDBID
 		WHERE c.MediaDBID = ?`, mediaDBID,
-	).Scan(&thumb.SystemID, &thumb.Path, &thumb.ParentDir, &titleDBID, &thumb.TypeTag, &color)
+	).Scan(&thumb.SystemID, &thumb.Path, &thumb.ParentDir, &titleDBID, &thumb.TypeTag, &sourceKey, &color)
 	if errors.Is(err, sql.ErrNoRows) {
 		return database.MediaCoverThumb{}, false, nil
 	}
@@ -59,13 +60,56 @@ func (db *MediaDB) GetMediaCoverThumb(
 		value := uint32(color.Int64 & 0xffffff) //nolint:gosec // masked to 24 bits
 		thumb.Color = &value
 	}
+	thumb.SourceKey = sourceKey.String
 
 	thumb.AvailableTypeTags, err = mediaCoverPropertyTypes(ctx, sqlDB, mediaDBID, titleDBID)
 	if err != nil {
 		db.NoteCorruption(err)
 		return database.MediaCoverThumb{}, false, err
 	}
+	thumb.SourcePath, err = mediaCoverSourcePath(ctx, sqlDB, mediaDBID, titleDBID, thumb.TypeTag)
+	if err != nil {
+		db.NoteCorruption(err)
+		return database.MediaCoverThumb{}, false, err
+	}
 	return thumb, true, nil
+}
+
+// mediaCoverSourcePath returns the file a media row's typeTag image property
+// resolves to, in media.image's order: the media row's own property before its
+// title's. It is "" when the winning property is blob-backed or there is none.
+func mediaCoverSourcePath(
+	ctx context.Context, sqlDB *sql.DB, mediaDBID, titleDBID int64, typeTag string,
+) (string, error) {
+	var text string
+	var blobDBID sql.NullInt64
+	err := sqlDB.QueryRowContext(ctx, `
+		SELECT Text, BlobDBID FROM (
+			SELECT 0 AS Rank, mp.Text, mp.BlobDBID
+			FROM MediaProperties mp
+			JOIN Tags t ON t.DBID = mp.TypeTagDBID
+			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+			WHERE mp.MediaDBID = ? AND tt.Type || ':' || t.Tag = ?
+				AND (mp.Text != '' OR mp.BlobDBID IS NOT NULL)
+			UNION ALL
+			SELECT 1 AS Rank, mtp.Text, mtp.BlobDBID
+			FROM MediaTitleProperties mtp
+			JOIN Tags t ON t.DBID = mtp.TypeTagDBID
+			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+			WHERE mtp.MediaTitleDBID = ? AND tt.Type || ':' || t.Tag = ?
+				AND (mtp.Text != '' OR mtp.BlobDBID IS NOT NULL)
+		) ORDER BY Rank LIMIT 1`, mediaDBID, typeTag, titleDBID, typeTag,
+	).Scan(&text, &blobDBID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get media cover source path: %w", err)
+	}
+	if blobDBID.Valid {
+		return "", nil
+	}
+	return text, nil
 }
 
 // mediaCoverPropertyTypes lists the property TypeTags on a media row and its title.
@@ -105,26 +149,34 @@ func mediaCoverPropertyTypes(
 	return typeTags, nil
 }
 
-// PutMediaCoverThumb records the image type and average colour of a media
-// row's cover thumbnail. A nil color keeps any colour already recorded for
-// the same type.
-func (db *MediaDB) PutMediaCoverThumb(ctx context.Context, mediaDBID int64, typeTag string, color *uint32) error {
+// PutMediaCoverThumb records the image type, source key and average colour of
+// a media row's cover thumbnail. A nil color keeps any colour already recorded
+// for the same type and source.
+func (db *MediaDB) PutMediaCoverThumb(
+	ctx context.Context, mediaDBID int64, typeTag, sourceKey string, color *uint32,
+) error {
 	var colorValue any
 	if color != nil {
 		colorValue = int64(*color & 0xffffff)
 	}
+	var sourceKeyValue any
+	if sourceKey != "" {
+		sourceKeyValue = sourceKey
+	}
 	return db.libraryCacheWrite(ctx, "put media cover thumb", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO MediaCoverThumbs (MediaDBID, TypeTag, Color)
-			SELECT DBID, ?, ? FROM Media WHERE DBID = ?
+			INSERT INTO MediaCoverThumbs (MediaDBID, TypeTag, SourceKey, Color)
+			SELECT DBID, ?, ?, ? FROM Media WHERE DBID = ?
 			ON CONFLICT (MediaDBID) DO UPDATE SET
 				Color = CASE
 					WHEN excluded.Color IS NOT NULL THEN excluded.Color
-					WHEN MediaCoverThumbs.TypeTag = excluded.TypeTag THEN MediaCoverThumbs.Color
+					WHEN MediaCoverThumbs.TypeTag = excluded.TypeTag
+						AND MediaCoverThumbs.SourceKey IS excluded.SourceKey THEN MediaCoverThumbs.Color
 					ELSE NULL
 				END,
-				TypeTag = excluded.TypeTag`,
-			typeTag, colorValue, mediaDBID,
+				TypeTag = excluded.TypeTag,
+				SourceKey = excluded.SourceKey`,
+			typeTag, sourceKeyValue, colorValue, mediaDBID,
 		); err != nil {
 			return fmt.Errorf("upsert media cover thumb: %w", err)
 		}
@@ -179,39 +231,4 @@ func queryMediaCoverColors(ctx context.Context, sqlDB *sql.DB, ids []int64, colo
 		return fmt.Errorf("iterate media cover colors: %w", err)
 	}
 	return nil
-}
-
-// ClearMediaCoverThumbs drops every recorded cover thumbnail.
-func (db *MediaDB) ClearMediaCoverThumbs(ctx context.Context) error {
-	return db.libraryCacheWrite(ctx, "clear media cover thumbs", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM MediaCoverThumbs"); err != nil {
-			return fmt.Errorf("delete media cover thumbs: %w", err)
-		}
-		return nil
-	})
-}
-
-// ClearMediaCoverThumbsForSystems drops recorded cover thumbnails for media in
-// the given systems.
-func (db *MediaDB) ClearMediaCoverThumbsForSystems(ctx context.Context, systemIDs []string) error {
-	if len(systemIDs) == 0 {
-		return nil
-	}
-	return db.libraryCacheWrite(ctx, "clear media cover thumbs for systems", func(tx *sql.Tx) error {
-		for chunk := range slices.Chunk(systemIDs, batchLookupIDsPerQuery) {
-			args := make([]any, len(chunk))
-			for i, id := range chunk {
-				args[i] = id
-			}
-			//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM MediaCoverThumbs WHERE MediaDBID IN (
-					SELECT m.DBID FROM Media m
-					JOIN Systems s ON s.DBID = m.SystemDBID
-					WHERE s.SystemID IN (`+prepareVariadic("?", ",", len(chunk))+`))`, args...); err != nil {
-				return fmt.Errorf("delete media cover thumbs for systems: %w", err)
-			}
-		}
-		return nil
-	})
 }

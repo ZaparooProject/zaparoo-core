@@ -23,18 +23,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/nativedec"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
-	"github.com/gopxl/beep/v2/flac"
-	"github.com/gopxl/beep/v2/mp3"
-	"github.com/gopxl/beep/v2/vorbis"
 	"github.com/gopxl/beep/v2/wav"
 	"github.com/rs/zerolog/log"
 )
@@ -58,7 +58,7 @@ const (
 
 // PlaybackOptions configures a long-form Play call.
 type PlaybackOptions struct {
-	// Volume is the playback gain (0.0–2.0); 0 defaults to 1.0.
+	// Volume is the playback gain (0.0-2.0); 0 is silent.
 	Volume float64
 	// StartAt is how far into the track playback starts; 0 is the start.
 	StartAt time.Duration
@@ -70,6 +70,9 @@ type PlaybackOptions struct {
 
 // PlaybackState describes the current state of a slot.
 type PlaybackState struct {
+	// Meta is the track's tag metadata, nil until it has been read or when
+	// the file has none. It never holds picture bytes.
+	Meta     *trackmeta.Meta
 	Path     string
 	Position time.Duration
 	Duration time.Duration
@@ -85,18 +88,36 @@ type PlaybackManager interface {
 	Resume(slot string) error
 	TogglePause(slot string) error
 	Seek(slot string, offset time.Duration) error
+	// SetVolume changes the gain (0.0-2.0) of whatever is playing in slot,
+	// taking effect within one output buffer. It does nothing when the slot
+	// is empty.
+	SetVolume(slot string, volume float64) error
 	State(slot string) PlaybackState
 }
+
+// defaultTrackMetaMaxBytes bounds the tag data read for a track's metadata
+// when no limit has been set.
+const defaultTrackMetaMaxBytes = 2 << 20
 
 // LongformPlaybackManager manages primary and background long-form audio slots.
 // Each slot streams audio through the shared global output device via a ring-buffer
 // prefetch goroutine — no full-file decode into RAM.
 type LongformPlaybackManager struct {
-	primary         *streamingSource
-	background      *streamingSource
-	drainCallbacks  map[string]func(natural bool)
+	primary        *streamingSource
+	background     *streamingSource
+	drainCallbacks map[string]func(natural bool)
+	// failureCallbacks hear of a slot's track failing to decode.
+	failureCallbacks map[string]func()
+	onChange         atomic.Pointer[func(slot string)]
+	readMeta         func(path string, maxBytes int64) (*trackmeta.Meta, error)
+	// metaPending is the newest tag request of each slot, metaReaders how
+	// many workers are reading them; both are guarded by metaMu.
+	metaPending     map[string]*streamingSource
 	resampleQuality int
+	metaMaxBytes    atomic.Int64
 	mu              syncutil.Mutex
+	metaReaders     int
+	metaMu          syncutil.Mutex
 }
 
 // NewLongformPlaybackManager creates a new LongformPlaybackManager. lowPowerAudio
@@ -106,9 +127,22 @@ func NewLongformPlaybackManager(lowPowerAudio bool) *LongformPlaybackManager {
 	if lowPowerAudio {
 		quality = lowPowerResampleQuality
 	}
-	return &LongformPlaybackManager{
-		drainCallbacks:  make(map[string]func(natural bool)),
-		resampleQuality: quality,
+	m := &LongformPlaybackManager{
+		drainCallbacks:   make(map[string]func(natural bool)),
+		failureCallbacks: make(map[string]func()),
+		readMeta:         trackmeta.Read,
+		resampleQuality:  quality,
+	}
+	m.metaMaxBytes.Store(defaultTrackMetaMaxBytes)
+	return m
+}
+
+// SetTrackMetaLimit sets how many bytes of tag data a track may declare
+// before its metadata is not read at all. It is not part of the
+// PlaybackManager interface and is called at service startup.
+func (m *LongformPlaybackManager) SetTrackMetaLimit(maxBytes int64) {
+	if maxBytes > 0 {
+		m.metaMaxBytes.Store(maxBytes)
 	}
 }
 
@@ -125,18 +159,48 @@ func (m *LongformPlaybackManager) SetDrainCallback(slot string, fn func(natural 
 	m.mu.Unlock()
 }
 
+// SetDecodeFailureCallback registers fn to be called when the track on a slot
+// stops because it failed to decode, after the drain callback has reported it
+// as not natural. A track that was stopped or replaced first does not count.
+func (m *LongformPlaybackManager) SetDecodeFailureCallback(slot string, fn func()) {
+	key, err := m.slotKey(slot)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	m.failureCallbacks[key] = fn
+	m.mu.Unlock()
+}
+
+// SetChangeCallback registers fn to be called with the normalized slot each
+// time what a client sees of that slot's playback changes: a track starts
+// playing, pauses, resumes or seeks, or its tags finish reading. It is not
+// called for position progress or when a slot stops or drains. fn runs on the
+// goroutine that made the change, never on the audio thread and never with a
+// manager lock held, but it can run on an API request or a launch, so it must
+// only hand the event on. This is not part of the PlaybackManager interface
+// and is called at service startup.
+func (m *LongformPlaybackManager) SetChangeCallback(fn func(slot string)) {
+	if fn == nil {
+		m.onChange.Store(nil)
+		return
+	}
+	m.onChange.Store(&fn)
+}
+
+func (m *LongformPlaybackManager) notifyChange(key string) {
+	if fn := m.onChange.Load(); fn != nil {
+		(*fn)(key)
+	}
+}
+
 func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) error {
 	key, err := m.slotKey(slot)
 	if err != nil {
 		return err
 	}
 
-	volume := opts.Volume
-	if volume == 0 {
-		volume = 1.0
-	}
-
-	src, err := newStreamingSource(path, volume, m.resampleQuality)
+	src, err := newStreamingSource(path, opts.Volume, m.resampleQuality)
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
 	}
@@ -158,9 +222,13 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 			m.setSourceLocked(key, nil)
 		}
 		cb := m.drainCallbacks[key]
+		failed := m.failureCallbacks[key]
 		m.mu.Unlock()
 		if cb != nil {
 			cb(natural && current)
+		}
+		if failed != nil && current && src.decodeFailed.Load() {
+			failed()
 		}
 	}
 
@@ -175,6 +243,105 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	}
 
 	globalDevice.register(src)
+	m.notifyChange(key)
+
+	// Tags are read once per track, off the playback path and through a
+	// file handle of their own, so a slow or broken tag never delays sound.
+	m.queueMeta(key, src)
+	return nil
+}
+
+// maxMetaReaders bounds how many tag reads run at once, whatever the
+// playback does meanwhile.
+const maxMetaReaders = 2
+
+// queueMeta asks for the tags of the track src plays in slot key. Requests
+// never wait on one another or on playback: each slot keeps only its newest
+// request, so one for a track that has been replaced is dropped before it
+// reads anything, and at most maxMetaReaders workers read at a time.
+func (m *LongformPlaybackManager) queueMeta(key string, src *streamingSource) {
+	if m.readMeta == nil {
+		return
+	}
+	m.metaMu.Lock()
+	if m.metaPending == nil {
+		m.metaPending = make(map[string]*streamingSource)
+	}
+	m.metaPending[key] = src
+	start := m.metaReaders < maxMetaReaders
+	if start {
+		m.metaReaders++
+	}
+	m.metaMu.Unlock()
+	if start {
+		go m.metaWorker()
+	}
+}
+
+// metaWorker reads queued tags until none are left.
+func (m *LongformPlaybackManager) metaWorker() {
+	for {
+		m.metaMu.Lock()
+		var (
+			key string
+			src *streamingSource
+		)
+		for k, v := range m.metaPending {
+			key, src = k, v
+			delete(m.metaPending, k)
+			break
+		}
+		if src == nil {
+			m.metaReaders--
+			m.metaMu.Unlock()
+			return
+		}
+		m.metaMu.Unlock()
+		m.loadMeta(key, src)
+	}
+}
+
+// loadMeta reads the tags of the track src plays in slot key and attaches
+// them to it. A track that is no longer the slot's is skipped.
+func (m *LongformPlaybackManager) loadMeta(key string, src *streamingSource) {
+	readMeta := m.readMeta
+	if readMeta == nil {
+		return
+	}
+	m.mu.Lock()
+	current := m.getSourceLocked(key) == src
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	meta, err := readMeta(src.path, m.metaMaxBytes.Load())
+	if err != nil {
+		log.Debug().Err(err).Str("path", src.path).Msg("no track metadata")
+		return
+	}
+	if meta == nil {
+		return
+	}
+	src.meta.Store(meta)
+	m.mu.Lock()
+	current = m.getSourceLocked(key) == src
+	m.mu.Unlock()
+	// Tags of a track that has since been replaced or stopped change nothing
+	// a client can see.
+	if current {
+		m.notifyChange(key)
+	}
+}
+
+func (m *LongformPlaybackManager) SetVolume(slot string, volume float64) error {
+	src, err := m.readSource(slot)
+	if err != nil {
+		return err
+	}
+	if src == nil {
+		return nil
+	}
+	src.setVolume(volume)
 	return nil
 }
 
@@ -194,33 +361,39 @@ func (m *LongformPlaybackManager) Stop(slot string) error {
 }
 
 func (m *LongformPlaybackManager) Pause(slot string) error {
-	src, err := m.readSource(slot)
+	key, src, err := m.readSourceKey(slot)
 	if err != nil {
 		return err
 	}
 	if src == nil {
 		return nil
 	}
-	src.setPaused(true)
+	changed := src.setPaused(true)
 	globalDevice.releaseIfAllPaused()
+	if changed {
+		m.notifyChange(key)
+	}
 	return nil
 }
 
 func (m *LongformPlaybackManager) Resume(slot string) error {
-	src, err := m.readSource(slot)
+	key, src, err := m.readSourceKey(slot)
 	if err != nil {
 		return err
 	}
 	if src == nil {
 		return nil
 	}
-	src.setPaused(false)
+	changed := src.setPaused(false)
 	globalDevice.openIfNeeded()
+	if changed {
+		m.notifyChange(key)
+	}
 	return nil
 }
 
 func (m *LongformPlaybackManager) TogglePause(slot string) error {
-	src, err := m.readSource(slot)
+	key, src, err := m.readSourceKey(slot)
 	if err != nil {
 		return err
 	}
@@ -233,11 +406,12 @@ func (m *LongformPlaybackManager) TogglePause(slot string) error {
 	} else {
 		globalDevice.openIfNeeded()
 	}
+	m.notifyChange(key)
 	return nil
 }
 
 func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error {
-	src, err := m.readSource(slot)
+	key, src, err := m.readSourceKey(slot)
 	if err != nil {
 		return err
 	}
@@ -245,6 +419,7 @@ func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error 
 		return nil
 	}
 	src.seek(offset)
+	m.notifyChange(key)
 	return nil
 }
 
@@ -258,14 +433,20 @@ func (m *LongformPlaybackManager) State(slot string) PlaybackState {
 
 // readSource returns the current source for slot without holding the lock long.
 func (m *LongformPlaybackManager) readSource(slot string) (*streamingSource, error) {
+	_, s, err := m.readSourceKey(slot)
+	return s, err
+}
+
+// readSourceKey is readSource that also returns the normalized slot key.
+func (m *LongformPlaybackManager) readSourceKey(slot string) (string, *streamingSource, error) {
 	key, err := m.slotKey(slot)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	m.mu.Lock()
 	s := m.getSourceLocked(key)
 	m.mu.Unlock()
-	return s, nil
+	return key, s, nil
 }
 
 // getSourceLocked and setSourceLocked take a normalized slot key from slotKey,
@@ -301,26 +482,32 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 // background goroutine. This bounds memory use to ringBufferFrames regardless of
 // file length and keeps decoding off the malgo audio thread.
 type streamingSource struct {
-	streamer    beep.Streamer
-	decoder     beep.StreamSeekCloser
-	onDrain     func(natural bool)
-	file        *os.File
-	wakeCh      chan struct{}
-	doneCh      chan struct{}
-	cancelFn    context.CancelFunc
-	path        string
-	ring        [][2]float64
-	chunk       [][2]float64
-	volume      float64
-	totalFrames int64
+	streamer beep.Streamer
+	decoder  beep.StreamSeekCloser
+	onDrain  func(natural bool)
+	file     *os.File
+	wakeCh   chan struct{}
+	doneCh   chan struct{}
+	cancelFn context.CancelFunc
+	meta     atomic.Pointer[trackmeta.Meta]
+	path     string
+	ring     [][2]float64
+	chunk    [][2]float64
+	// appliedVolume is the gain the last mixAdd ended on. Only mixAdd reads
+	// or writes it, on the audio thread.
+	appliedVolume float64
+	totalFrames   int64
 	// tickInterval is how often the prefetch goroutine wakes on its own; zero
 	// means defaultPrefetchTick. Tests lengthen it so that a full ring can only
 	// be the result of a burst fill, never of one chunk per wake-up.
-	tickInterval   time.Duration
-	sourceRate     int
-	quality        int
-	mu             syncutil.Mutex
-	seekMu         syncutil.Mutex
+	tickInterval time.Duration
+	sourceRate   int
+	quality      int
+	mu           syncutil.Mutex
+	seekMu       syncutil.Mutex
+	// volumeBits is the target gain as math.Float64bits, set from any
+	// goroutine and read once per mixAdd.
+	volumeBits     atomic.Uint64
 	readPos        atomic.Uint64
 	writePos       atomic.Uint64
 	played         atomic.Int64
@@ -330,6 +517,7 @@ type streamingSource struct {
 	consumerActive atomic.Bool
 	underrunActive atomic.Bool
 	eof            atomic.Bool
+	decodeFailed   atomic.Bool
 	stopped        atomic.Bool
 	paused         atomic.Bool
 }
@@ -344,33 +532,36 @@ func streamerAtTargetSampleRate(source beep.Streamer, sourceRate beep.SampleRate
 // newStreamingSource opens path for streaming decode and returns a ready source.
 // The prefetch goroutine is not started yet; start it before device registration.
 func newStreamingSource(path string, volume float64, quality int) (*streamingSource, error) {
-	//nolint:gosec // G304: callers validate media paths before launching.
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open audio file: %w", err)
-	}
-
 	ext := strings.ToLower(filepath.Ext(path))
 	var (
 		decoder beep.StreamSeekCloser
 		format  beep.Format
+		f       *os.File
+		err     error
 	)
-	switch ext {
-	case ".wav":
+	if kind, native := nativedec.KindForExt(ext); native {
+		// MP3, FLAC and Vorbis decode natively, reading the file themselves.
+		var d *nativedec.Decoder
+		d, err = nativedec.Open(path, kind)
+		if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", ext, err)
+		}
+		decoder = d
+		format = nativeFormat(d)
+	} else {
+		if ext != ".wav" {
+			return nil, fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
+		}
+		//nolint:gosec // G304: callers validate media paths before launching.
+		f, err = os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open audio file: %w", err)
+		}
 		decoder, format, err = wav.Decode(f)
-	case ".mp3":
-		decoder, format, err = mp3.Decode(f)
-	case ".ogg":
-		decoder, format, err = vorbis.Decode(f)
-	case ".flac":
-		decoder, format, err = flac.Decode(f)
-	default:
-		_ = f.Close()
-		return nil, fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
-	}
-	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("decode %s: %w", ext, err)
+		if err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("decode %s: %w", ext, err)
+		}
 	}
 
 	totalFrames := int64(-1)
@@ -380,20 +571,42 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 
 	streamer := streamerAtTargetSampleRate(decoder, format.SampleRate, quality)
 
-	return &streamingSource{
-		ring:         make([][2]float64, ringBufferFrames),
-		path:         path,
-		volume:       volume,
-		totalFrames:  totalFrames,
-		tickInterval: defaultPrefetchTick,
-		sourceRate:   int(format.SampleRate),
-		quality:      quality,
-		wakeCh:       make(chan struct{}, 1),
-		decoder:      decoder,
-		file:         f,
-		streamer:     streamer,
-		chunk:        make([][2]float64, decodeChunkFrames),
-	}, nil
+	s := &streamingSource{
+		ring:          make([][2]float64, ringBufferFrames),
+		path:          path,
+		appliedVolume: clampVolume(volume),
+		totalFrames:   totalFrames,
+		tickInterval:  defaultPrefetchTick,
+		sourceRate:    int(format.SampleRate),
+		quality:       quality,
+		wakeCh:        make(chan struct{}, 1),
+		decoder:       decoder,
+		file:          f,
+		streamer:      streamer,
+		chunk:         make([][2]float64, decodeChunkFrames),
+	}
+	s.setVolume(volume)
+	return s, nil
+}
+
+// maxPlaybackVolume is the highest gain a source plays at.
+const maxPlaybackVolume = 2.0
+
+func clampVolume(v float64) float64 {
+	if math.IsNaN(v) || v < 0 {
+		return 0
+	}
+	return min(v, maxPlaybackVolume)
+}
+
+// setVolume sets the gain mixAdd moves to, from any goroutine.
+func (s *streamingSource) setVolume(v float64) {
+	s.volumeBits.Store(math.Float64bits(clampVolume(v)))
+}
+
+// volume returns the gain mixAdd moves to.
+func (s *streamingSource) volume() float64 {
+	return math.Float64frombits(s.volumeBits.Load())
 }
 
 // startPrefetch launches the background goroutine that fills the ring buffer.
@@ -415,6 +628,9 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 	defer func() {
 		if err := s.decoder.Close(); err != nil {
 			log.Warn().Err(err).Str("path", s.path).Msg("close audio decoder")
+		}
+		if s.file == nil {
+			return
 		}
 		if err := s.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 			log.Warn().Err(err).Str("path", s.path).Msg("close audio file")
@@ -438,7 +654,9 @@ prefetchLoop:
 		if s.seekPending.Load() {
 			s.seekMu.Lock()
 			seekFrame := s.seekSrcFrame.Load()
-			if err := s.decoder.Seek(int(seekFrame)); err != nil {
+			// An int is 32 bits on ARM32; a frame beyond it cannot be in a
+			// file whose length the decoder reported.
+			if err := s.decoder.Seek(int(min(seekFrame, int64(math.MaxInt)))); err != nil {
 				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
 			}
 			s.streamer = streamerAtTargetSampleRate(s.decoder, beep.SampleRate(s.sourceRate), s.quality)
@@ -487,7 +705,11 @@ prefetchLoop:
 			}
 			if !ok {
 				if err := s.decoder.Err(); err != nil {
-					log.Warn().Err(err).Str("path", s.path).Msg("audio decode error")
+					// A failed decode is not the track finishing: it drains
+					// as a stop, so the slot does not move on as if it had
+					// played to the end.
+					s.decodeFailed.Store(true)
+					log.Error().Err(err).Str("path", s.path).Msg("audio decode error")
 				}
 				// Publish EOF only after final frames. Loading EOF before writePos
 				// lets the consumer observe every frame before reporting drained.
@@ -558,10 +780,22 @@ func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
 	writePos := s.writePos.Load()
 	available := writePos - readPos
 	written := boundedFrameCount(available, n)
+	// A volume change ramps across this buffer rather than stepping, which
+	// would click.
+	from, target := s.appliedVolume, s.volume()
+	step := 0.0
+	if written > 0 && from != target {
+		step = (target - from) / float64(written)
+	}
+	gain := from
 	for i := range written {
+		gain += step
 		sample := s.ring[(readPos+uint64(i))%uint64(len(s.ring))]
-		buf[i][0] += sample[0] * s.volume
-		buf[i][1] += sample[1] * s.volume
+		buf[i][0] += sample[0] * gain
+		buf[i][1] += sample[1] * gain
+	}
+	if written > 0 {
+		s.appliedVolume = target
 	}
 	if written > 0 {
 		readPos += uint64(written)
@@ -607,11 +841,11 @@ func (s *streamingSource) fail() {
 }
 
 // onDrained is called by the device manager goroutine when this source drains.
-// It determines whether the drain was natural (track reached EOF) or explicit
-// (Stop/replace), then cancels the prefetch goroutine, which parks at EOF while
+// It determines whether the drain was natural (track reached EOF) or not
+// (Stop/replace, or a decode failure), then cancels the prefetch goroutine, which parks at EOF while
 // the ring tail plays out and would otherwise leak.
 func (s *streamingSource) onDrained() {
-	natural := !s.stopped.Swap(true)
+	natural := !s.stopped.Swap(true) && !s.decodeFailed.Load()
 	s.mu.Lock()
 	cancelFn := s.cancelFn
 	s.mu.Unlock()
@@ -624,13 +858,14 @@ func (s *streamingSource) onDrained() {
 	}
 }
 
-// setPaused sets the paused flag.
-func (s *streamingSource) setPaused(paused bool) {
-	s.paused.Store(paused)
+// setPaused sets the paused flag and reports whether it changed.
+func (s *streamingSource) setPaused(paused bool) bool {
+	was := s.paused.Swap(paused)
 	// Wake the prefetch goroutine on resume so it can refill the ring.
 	if !paused {
 		s.wakePrefetch()
 	}
+	return was != paused
 }
 
 // togglePause flips the paused state and returns the new value.
@@ -687,7 +922,7 @@ func (s *streamingSource) startAt(offset, expected time.Duration) {
 		return
 	}
 	if s.totalFrames > 0 {
-		length := sampleDuration(int(s.totalFrames))
+		length := sampleDuration(s.totalFrames)
 		if offset >= length {
 			return
 		}
@@ -731,15 +966,16 @@ func (s *streamingSource) state() PlaybackState {
 	stopped := s.stopped.Load()
 	eof := s.eof.Load()
 	return PlaybackState{
+		Meta:     s.meta.Load(),
 		Path:     s.path,
-		Position: sampleDuration(int(s.played.Load())),
-		Duration: sampleDuration(int(s.totalFrames)),
+		Position: sampleDuration(s.played.Load()),
+		Duration: sampleDuration(s.totalFrames),
 		Playing:  !paused && !stopped && (!eof || s.bufferedFrames() != 0),
 		Paused:   paused,
 	}
 }
 
-func sampleDuration(samples int) time.Duration {
+func sampleDuration(samples int64) time.Duration {
 	if samples <= 0 {
 		return 0
 	}

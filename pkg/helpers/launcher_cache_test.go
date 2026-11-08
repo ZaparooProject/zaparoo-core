@@ -429,3 +429,60 @@ func TestLauncherCache_ReaderStopsWaitingAfterTimeout(t *testing.T) {
 	assert.Empty(t, cache.GetAllLaunchers())
 	assert.Less(t, time.Since(started), 5*time.Second)
 }
+
+func TestToRelativePath_RebuildDropsCachedFolders(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes", SystemID: "snes", Folders: []string{"SNES"}},
+	})
+	roots := []string{"/roms"}
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"))
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"),
+		"the second lookup reads the cached folders")
+
+	// A rebuild with a different folder must not answer from the old list.
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes", SystemID: "snes", Folders: []string{"SuperNintendo"}},
+	})
+	assert.Equal(t, "/roms/SNES/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"))
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SuperNintendo/game.sfc"))
+
+	// Other root directories are their own list.
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath([]string{"/media"}, "snes", "/media/SuperNintendo/game.sfc"))
+}
+
+func TestToRelativePath_FolderBoundariesAndCase(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes", SystemID: "snes", Folders: []string{"SNES"}},
+	})
+	roots := []string{"/roms"}
+	assert.Equal(t, "/roms/SNES2/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES2/game.sfc"),
+		"a sibling folder sharing the prefix is not inside it")
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/ROMS/snes/game.sfc"),
+		"folders compare case-insensitively")
+}
+
+func BenchmarkToRelativePath_NoMatch(b *testing.B) {
+	cache := &LauncherCache{}
+	launchers := make([]platforms.Launcher, 0, 8)
+	for i := range 8 {
+		launchers = append(launchers, platforms.Launcher{
+			ID: "audio" + string(rune('a'+i)), SystemID: "Audio",
+			Folders: []string{"Music", "Audio", "MP3"},
+		})
+	}
+	cache.InitializeFromSlice(launchers)
+	roots := []string{
+		"/media/usb0", "/media/usb1", "/media/usb2", "/media/usb3", "/media/usb4",
+		"/media/usb5", "/media/usb6", "/media/usb7", "/media/fat/cifs", "/media/fat/games", "/media/fat",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = cache.ToRelativePath(roots, "Audio", "/media/fat/somewhere/else/Track 01.mp3")
+	}
+}

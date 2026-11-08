@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgl"
@@ -113,6 +114,28 @@ func TestPrepareCDTVConfigRejectsInvalidInputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrepareCDTVConfigSkipsUnchangedDisc(t *testing.T) {
+	t.Parallel()
+	// A real filesystem: afero's memory fs stamps mtime on closing any
+	// writable handle, even one that wrote nothing.
+	fs := afero.NewOsFs()
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "config", "CDTV.cfg")
+	mediaPath := filepath.Join(root, "games", "CDTV", "Game.chd")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(cfgPath), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(mediaPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, cfgPath, cdtvConfigFixture(minimigCDTVConfigSize), 0o600))
+	require.NoError(t, afero.WriteFile(fs, mediaPath, nil, 0o600))
+
+	require.NoError(t, prepareCDTVConfig(fs, cfgPath, mediaPath))
+	old := time.Unix(1_000_000, 0)
+	require.NoError(t, fs.Chtimes(cfgPath, old, old))
+	require.NoError(t, prepareCDTVConfig(fs, cfgPath, mediaPath))
+	info, err := fs.Stat(cfgPath)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(old), "relaunching the same disc must not rewrite the config")
 }
 
 func TestHookCDTVCoreOnlyAndSetName(t *testing.T) {

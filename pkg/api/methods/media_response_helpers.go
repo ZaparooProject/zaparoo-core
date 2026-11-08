@@ -28,11 +28,11 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -182,51 +182,27 @@ func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, sl
 	default:
 		entry.PlaybackState = models.MediaPlaybackStateStopped
 	}
+	// The tags belong to the track the slot is playing, which is only the
+	// entry's track while the two paths agree.
+	if state.Meta != nil && state.Path == entry.Path {
+		entry.Track = trackInfo(state.Meta)
+	}
 }
 
-// toPlaylistState converts the internal Playlist representation to the API model.
-func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
-	items := make([]models.PlaylistItemInfo, 0, len(p.Items))
-	for _, item := range p.Items {
-		items = append(items, models.PlaylistItemInfo{
-			Name:      item.Name,
-			ZapScript: item.ZapScript,
-		})
+func trackInfo(meta *trackmeta.Meta) *models.TrackInfo {
+	return &models.TrackInfo{
+		Title:       meta.Title,
+		Artist:      meta.Artist,
+		Album:       meta.Album,
+		AlbumArtist: meta.AlbumArtist,
+		Genre:       meta.Genre,
+		Year:        meta.Year,
+		TrackNumber: meta.TrackNumber,
+		TrackTotal:  meta.TrackTotal,
+		DiscNumber:  meta.DiscNumber,
+		DiscTotal:   meta.DiscTotal,
+		HasArt:      meta.HasArt,
 	}
-
-	repeat := "none"
-	switch {
-	case p.LoopOne:
-		repeat = "one"
-	case p.Loop:
-		repeat = "all"
-	}
-
-	state := models.PlaylistState{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   items,
-		Index:   p.Index,
-		Total:   len(p.Items),
-		Playing: p.Playing,
-		Repeat:  repeat,
-		Unsafe:  p.Unsafe,
-		Armed:   p.Armed,
-	}
-	if p.Advance > 0 {
-		ms := p.Advance.Milliseconds()
-		state.AdvanceMs = &ms
-	}
-	if p.Idle > 0 {
-		ms := p.Idle.Milliseconds()
-		state.IdleMs = &ms
-	}
-	if p.CountdownSet {
-		ms := p.Countdown.Milliseconds()
-		state.CountdownMs = &ms
-	}
-	return state
 }
 
 func resolveMediaPathIDs(

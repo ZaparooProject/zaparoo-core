@@ -922,7 +922,7 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	err := upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaDBID, typeDBID,
@@ -938,6 +938,10 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 		}
 		return nil
 	})
+	if err == nil {
+		db.browseListings.ClearTagFiltered()
+	}
+	return err
 }
 
 // UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
@@ -945,7 +949,7 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	err := upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		const q = `DELETE FROM MediaTitleTags` +
 			` WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
 		_, err := tx.ExecContext(ctx, q, mediaTitleDBID, typeDBID)
@@ -963,6 +967,10 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 		}
 		return nil
 	})
+	if err == nil {
+		db.browseListings.ClearTagFiltered()
+	}
+	return err
 }
 
 const (
@@ -1843,6 +1851,49 @@ LIMIT 1`, systemID, path, typeTagDBID).Scan(&exists)
 	return true, nil
 }
 
+// deleteChangedCoverThumbRecords drops the cover thumbnail records of media
+// whose images, or whose title's images, the write changed. media.image would
+// already refuse such a record, whose source no longer matches, but its colour
+// would keep being served as the placeholder until the cover is rebuilt.
+func deleteChangedCoverThumbRecords(ctx context.Context, writeCtx *scrapeWriteTxContext) error {
+	mediaIDs := make([]int64, 0, len(writeCtx.changedImageMediaIDs))
+	for id := range writeCtx.changedImageMediaIDs {
+		mediaIDs = append(mediaIDs, id)
+	}
+	for chunk := range slices.Chunk(mediaIDs, batchLookupIDsPerQuery) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+		if _, err := writeCtx.tx.ExecContext(ctx,
+			`DELETE FROM MediaCoverThumbs WHERE MediaDBID IN (`+prepareVariadic("?", ",", len(chunk))+`)`,
+			args...,
+		); err != nil {
+			return fmt.Errorf("delete changed media cover thumbs: %w", err)
+		}
+	}
+	titleIDs := make([]int64, 0, len(writeCtx.changedImageMediaTitleIDs))
+	for id := range writeCtx.changedImageMediaTitleIDs {
+		titleIDs = append(titleIDs, id)
+	}
+	for chunk := range slices.Chunk(titleIDs, batchLookupIDsPerQuery) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+		if _, err := writeCtx.tx.ExecContext(ctx, `
+			DELETE FROM MediaCoverThumbs WHERE MediaDBID IN (
+				SELECT DBID FROM Media WHERE MediaTitleDBID IN (`+prepareVariadic("?", ",", len(chunk))+`))`,
+			args...,
+		); err != nil {
+			return fmt.Errorf("delete changed title cover thumbs: %w", err)
+		}
+	}
+	return nil
+}
+
 func (db *MediaDB) requireFullScrapeImageInvalidation(err error, message string) {
 	db.scrapeImageChangesMu.Lock()
 	db.scrapeImageChangesAll = true
@@ -1943,6 +1994,7 @@ func (db *MediaDB) recordScrapeTagChanges(ctx context.Context, targets []databas
 	systemIDs, err := db.systemIDsForMediaOrTitles(ctx, mediaIDs, titleIDs)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to resolve systems with changed scrape tags; full tag cache refresh required")
+		db.browseListings.ClearTagFiltered()
 		db.scrapeTagChangesMu.Lock()
 		db.scrapeTagChangesAll = true
 		db.scrapeTagChangesMu.Unlock()
@@ -1951,10 +2003,14 @@ func (db *MediaDB) recordScrapeTagChanges(ctx context.Context, targets []databas
 	db.addScrapeTagSystems(systemIDs)
 }
 
+// addScrapeTagSystems records systems whose tags changed in committed writes.
+// A tags filter lists by those tags, so its cached listings go at once rather
+// than at the end of the run.
 func (db *MediaDB) addScrapeTagSystems(systemIDs []string) {
 	if len(systemIDs) == 0 {
 		return
 	}
+	db.browseListings.ClearTagFiltered()
 	db.scrapeTagChangesMu.Lock()
 	defer db.scrapeTagChangesMu.Unlock()
 	if db.scrapeTagSystems == nil {
@@ -1970,6 +2026,7 @@ func (db *MediaDB) addScrapeTagSystems(systemIDs []string) {
 // list marks every system.
 func (db *MediaDB) MarkScrapeTagCacheStale(systemIDs []string) {
 	if len(systemIDs) == 0 {
+		db.browseListings.ClearTagFiltered()
 		db.scrapeTagChangesMu.Lock()
 		db.scrapeTagChangesAll = true
 		db.scrapeTagChangesMu.Unlock()
@@ -2048,6 +2105,9 @@ func (db *MediaDB) ApplyScrapeResult(
 	if err := applyScrapeWriteTarget(ctx, writeCtx, target); err != nil {
 		return err
 	}
+	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("ApplyScrapeResult: commit: %w", err)
@@ -2108,6 +2168,9 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return err
 	}
 	stats.Begin = beginDuration
+	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {
+		return err
+	}
 
 	commitStart := time.Now()
 	if err := tx.Commit(); err != nil {

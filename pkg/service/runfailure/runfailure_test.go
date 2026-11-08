@@ -67,6 +67,14 @@ func TestClassify(t *testing.T) {
 		},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, category: models.ErrorCategoryInvalidScript},
 		{
+			name: "write with other commands", category: models.ErrorCategoryInvalidScript,
+			err: zapscript.ErrWriteNotAlone,
+		},
+		{
+			name: "write outside a token", category: models.ErrorCategoryInvalidScript,
+			err: zapscript.ErrWriteUnsupported,
+		},
+		{
 			name: "invalid advanced arguments", category: models.ErrorCategoryInvalidScript,
 			err: fmt.Errorf("%w: slot", zapscript.ErrInvalidArguments),
 		},

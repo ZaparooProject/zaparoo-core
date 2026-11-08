@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -381,6 +382,80 @@ func TestInbox_Limit_Integration(t *testing.T) {
 	messages, err := userDB.GetInboxMessages()
 	require.NoError(t, err)
 	assert.Len(t, messages, 100, "Should return at most 100 messages due to LIMIT")
+}
+
+func TestInbox_Prune_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	for i := range 5 {
+		_, err := userDB.AddInboxMessage(&database.InboxMessage{
+			Title:     "Stale",
+			CreatedAt: now.Add(-100*24*time.Hour - time.Duration(i)*time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	for i := range 12 {
+		_, err := userDB.AddInboxMessage(&database.InboxMessage{
+			Title:     fmt.Sprintf("Recent %02d", i),
+			CreatedAt: now.Add(-time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	// A categorized message refreshed today survives even though it was
+	// first raised long ago.
+	_, err := userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Ongoing", Category: "ongoing", CreatedAt: now.Add(-200 * 24 * time.Hour),
+	})
+	require.NoError(t, err)
+	_, err = userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Ongoing", Category: "ongoing", CreatedAt: now,
+	})
+	require.NoError(t, err)
+
+	// Raised before NTP set the clock: its age is unknown, so only the count
+	// limit may remove it.
+	_, err = userDB.AddInboxMessage(&database.InboxMessage{
+		Title: "Before clock set", CreatedAt: time.Unix(3600, 0),
+	})
+	require.NoError(t, err)
+
+	deleted, err := userDB.PruneInboxMessages(90*24*time.Hour, 20)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), deleted, "only the stale messages are past the age limit")
+	assert.ElementsMatch(t, append(recentTitles(12), "Ongoing", "Before clock set"), inboxTitles(t, userDB))
+
+	deleted, err = userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), deleted, "the cap removes the oldest, including the unknown-age message")
+	assert.ElementsMatch(t, append(recentTitles(9), "Ongoing"), inboxTitles(t, userDB))
+
+	deleted, err = userDB.PruneInboxMessages(90*24*time.Hour, 10)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
+}
+
+func recentTitles(n int) []string {
+	titles := make([]string, 0, n)
+	for i := range n {
+		titles = append(titles, fmt.Sprintf("Recent %02d", i))
+	}
+	return titles
+}
+
+func inboxTitles(t *testing.T, userDB *UserDB) []string {
+	t.Helper()
+	messages, err := userDB.GetInboxMessages()
+	require.NoError(t, err)
+	titles := make([]string, 0, len(messages))
+	for _, m := range messages {
+		titles = append(titles, m.Title)
+	}
+	return titles
 }
 
 func TestInbox_CategoryUpsert_Integration(t *testing.T) {

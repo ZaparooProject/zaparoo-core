@@ -1034,8 +1034,18 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
+		backgroundSlot := false
+		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {
+			backgroundSlot = true
+		}
 		switch {
 		case explicitLauncher:
+		case backgroundSlot:
+			// The background slot only plays native audio, so a system
+			// default, a preference or a launcher found for the path, such as
+			// an Audio core that only runs in the primary slot, would only
+			// fail the launch.
+			useNativeAudioForBackground(pl, env, target.path)
 		case launchables.IsURI(target.path):
 			// Only the launchable's own launcher can start a zaparoo:// URI,
 			// so a launcher chosen for the system's files (a default, the
@@ -1206,6 +1216,22 @@ func getLaunchClosure(
 	}
 }
 
+// useNativeAudioForBackground picks the native audio launcher for a
+// background slot launch of a file it can play.
+func useNativeAudioForBackground(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	native := findLauncher(pl, env, platforms.NativeAudioLauncherID)
+	if native == nil {
+		return
+	}
+	lower := strings.ToLower(path)
+	for _, ext := range native.Extensions {
+		if strings.HasSuffix(lower, strings.ToLower(ext)) {
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, native.ID)
+			return
+		}
+	}
+}
+
 func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool) {
 	u, err := url.Parse(s)
 	if err != nil {
@@ -1290,7 +1316,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// zip or virtual list by the archive itself, and resolves case the way a
 	// relative lookup does.
 	if filepath.IsAbs(path) {
-		found, findErr := findFile(fs, pl, env.Cfg, path, env.PathRoot)
+		found, findErr := findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot)
 		if findErr != nil {
 			return platforms.CmdResult{}, findErr
 		}
@@ -1314,7 +1340,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(fs, pl, env.Cfg, path, env.PathRoot); findErr == nil {
+	if p, findErr = findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot); findErr == nil {
 		p = indexedPathSpelling(pl, &env, requestedSystemID, p)
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
@@ -1450,7 +1476,7 @@ func findSystemFile(
 			continue
 		}
 		log.Debug().Msgf("checking system path: %s", systemPath)
-		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
+		fp, findErr := findFile(fs, pl, env.Cfg, env.Launchers, systemPath, env.PathRoot)
 		if findErr == nil {
 			return fp, folderSystemIDs[i], true
 		}
@@ -1637,7 +1663,7 @@ func cmdLaunchLastWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEn
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(fs, pl, env.Cfg, entry.MediaPath, env.PathRoot)
+	path, err := findFile(fs, pl, env.Cfg, env.Launchers, entry.MediaPath, env.PathRoot)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

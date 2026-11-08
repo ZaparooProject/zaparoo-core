@@ -190,6 +190,7 @@ const (
 	ControlNext        = "next"
 	ControlPrevious    = "previous"
 	ControlToggleTray  = "toggle_tray"
+	ControlCheat       = "cheat"
 )
 
 // ControlParams contains parameters for a control action.
@@ -204,8 +205,13 @@ type ControlFunc func(context.Context, *config.Instance, ControlParams) error
 // built-in launchers) or Script (zapscript string for custom launchers)
 // should be set, not both.
 type Control struct {
-	Func   ControlFunc // Native Go implementation
-	Script string      // ZapScript string executed via RunControlScript
+	Func ControlFunc // Native Go implementation
+	// Available reports whether the control can be offered right now, for a
+	// control that depends on something outside Core that can come and go.
+	// A nil Available means always. ControlNames leaves out an unavailable
+	// control; Func still checks for itself when it is called.
+	Available func() bool
+	Script    string // ZapScript string executed via RunControlScript
 }
 
 // MediaLaunchAccess is the state publication capability held for one launch.
@@ -523,9 +529,14 @@ type LaunchCommand struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	Controls           map[string]Control
-	Scanner            func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
-	Test               func(*config.Instance, string) bool
+	Controls map[string]Control
+	Scanner  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Test     func(*config.Instance, string) bool
+	// VirtualPathExists reports that a path which is not on disk names media
+	// this launcher can play, such as a game in a listing file. Optional. It
+	// must confirm the entry exists, not just that the path has its shape: a
+	// launch of a path that is neither on disk nor vouched for is refused.
+	VirtualPathExists  func(*config.Instance, string) bool
 	Availability       func(*config.Instance) error
 	Preflight          func(*config.Instance, string, *LaunchOptions) error
 	Kill               func(*config.Instance) error

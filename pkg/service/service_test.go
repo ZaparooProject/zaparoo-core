@@ -380,6 +380,14 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 
 type testDrainCallbackRegistrar struct {
 	callbacks map[string]func(natural bool)
+	failures  map[string]func()
+}
+
+func (r *testDrainCallbackRegistrar) SetDecodeFailureCallback(slot string, fn func()) {
+	if r.failures == nil {
+		r.failures = make(map[string]func())
+	}
+	r.failures[slot] = fn
 }
 
 func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func(natural bool)) {
@@ -563,6 +571,7 @@ func (*resumePlaybackStub) Stop(_ string) error                             { re
 func (*resumePlaybackStub) Pause(_ string) error                            { return nil }
 func (*resumePlaybackStub) TogglePause(_ string) error                      { return nil }
 func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*resumePlaybackStub) SetVolume(_ string, _ float64) error             { return nil }
 func (*resumePlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
 
 func (s *resumePlaybackStub) Resume(slot string) error {

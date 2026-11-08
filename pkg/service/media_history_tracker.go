@@ -63,7 +63,7 @@ func historyMediaName(active *models.ActiveMedia) string {
 }
 
 const (
-	mediaHistoryUpdateInterval = 15 * time.Second
+	mediaHistoryUpdateInterval = time.Minute
 	activePlaySyncInterval     = 5 * time.Minute
 	mediaIdentityLookupTimeout = 2 * time.Second
 )
@@ -379,7 +379,11 @@ func (t *mediaHistoryTracker) requestActivePlaySyncIfDue(dbid int64, now time.Ti
 	requestPlaySync()
 }
 
-// updatePlayTime periodically updates the current entry, limiting crash-loss to 15 seconds.
+// updatePlayTime periodically updates the current entry, limiting the play
+// time lost to a crash or power-off to one interval. MiSTer sessions usually
+// end by switching the console off, so this bounds how far they undercount;
+// limits enforcement does not depend on it because it tracks the running
+// session in memory.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 	ticker := t.clock.NewTicker(mediaHistoryUpdateInterval)
 	defer ticker.Stop()

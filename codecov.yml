@@ -1,3 +1,15 @@
 ignore:
   - "pkg/testing/**/*"
   - "pkg/readers/testutils/**/*"
+
+coverage:
+  status:
+    project:
+      floor:
+        target: 80%
+      regression:
+        target: auto
+        threshold: 0.5%
+    patch:
+      default:
+        target: 80%

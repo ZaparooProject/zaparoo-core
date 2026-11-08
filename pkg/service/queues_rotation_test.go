@@ -546,7 +546,90 @@ func TestEngineLaunchOvertaken(t *testing.T) {
 	fresh := *active
 	fresh.StopSeq = svc.State.UserStopSeq()
 	fresh.StopStamped = true
-	assert.True(t, launchOvertaken(svc, &fresh), "another playlist value is open")
+	assert.True(t, launchOvertaken(svc, &fresh), "another unrelated playlist value is open")
+}
+
+// A change of shuffle or repeat replaces the stored playlist value but is not
+// another move, so the launch started for the move still goes ahead. A launch
+// for a different move is still called off.
+func TestEngineLaunchOvertaken_SurvivesAModeChange(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeIdlePlaylist()
+	active.EngineStarted = true
+	active.StopStamped = true
+	active.StopSeq = svc.State.StopEpoch()
+	storePlaylist(svc, mediaslot.Primary, active)
+	require.False(t, launchOvertaken(svc, active))
+
+	repeat := playlists.RepeatOne
+	handlePlaylist(svc, &playlists.Playlist{ModeChange: true, ShuffleSet: true, Shuffle: true, Repeat: &repeat}, nil)
+	stored := svc.State.GetActivePlaylist()
+	require.NotSame(t, active, stored)
+	assert.False(t, launchOvertaken(svc, active), "a mode-only update does not overtake the launch")
+
+	other := *active
+	storePlaylist(svc, mediaslot.Primary, &other)
+	assert.True(t, launchOvertaken(svc, active), "another move overtakes it")
+}
+
+// An automatic move decided under repeat-all, then overtaken by a switch to
+// repeat-one before it was handled, repeats the current item and keeps
+// repeat-one.
+func TestHandlePlaylist_EngineMoveFollowsAModeChange(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.PlaybackManager = &servicePlaybackRecorder{}
+	active := makeServicePlaylist()
+	active.Index = 1
+	active.Playing = true
+	active.Loop = true
+	svc.State.SetActivePlaylist(active)
+
+	move := playlists.Next(*active)
+	move.Playing = true
+	move.EngineStarted = true
+	move.EngineFromIndex = 1
+	move.StopSeq = svc.State.StopEpoch()
+	move.StopStamped = true
+
+	repeat := playlists.RepeatOne
+	handlePlaylist(svc, &playlists.Playlist{ModeChange: true, Repeat: &repeat}, nil)
+	mockUserDB, ok := svc.DB.UserDB.(*testhelpers.MockUserDBI)
+	require.True(t, ok)
+	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Maybe()
+	handlePlaylist(svc, move, nil)
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Wait()
+	}
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.Equal(t, 1, got.Index, "the current item repeats")
+	assert.True(t, got.LoopOne, "repeat-one is not undone")
+	assert.False(t, got.Loop)
+}
+
+// A shuffled refresh that removes the playing item moves nothing: the index
+// names another item, which the old media must not stay bound to.
+func TestRefreshedPlaylist_ReportsARemovedCurrentItem(t *testing.T) {
+	t.Parallel()
+
+	active := playlists.SetShuffle(makeServicePlaylist(), true)
+	active = playlists.Goto(*active, 1)
+	current := active.Current()
+
+	kept := []playlists.PlaylistItem{current, {Name: "Item 7", ZapScript: "**test7"}}
+	got, currentKept := refreshedPlaylist(active, &playlists.Playlist{Items: kept})
+	assert.True(t, currentKept)
+	assert.Equal(t, current, got.Current())
+
+	gone := []playlists.PlaylistItem{{Name: "Item 8", ZapScript: "**test8"}, {Name: "Item 9", ZapScript: "**test9"}}
+	got, currentKept = refreshedPlaylist(active, &playlists.Playlist{Items: gone})
+	assert.False(t, currentKept)
+	assert.Equal(t, 1, got.Index)
 }
 
 // The launch is called off at the last point before it takes the launch gate:

@@ -314,6 +314,9 @@ func recordCheckFindings(dir string, findings *lastCheckFindings) error {
 	if err != nil {
 		return fmt.Errorf("loading updater state before recording check findings: %w", err)
 	}
+	if st.LastCheck != nil && *st.LastCheck == *findings {
+		return nil
+	}
 	st.LastCheck = findings
 	if err := saveState(dir, &st); err != nil {
 		return fmt.Errorf("recording update check findings: %w", err)

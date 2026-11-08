@@ -8,7 +8,7 @@ Current scraper implementations:
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, screenshots, title screens, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 - `mister-arcade` imports the MiSTer arcade catalog's metadata onto indexed `.mra` rows, keyed by the MAME set name declared inside each descriptor. It is registered on MiSTer and MiSTeX, reads the catalog those platforms already cache and embed, and runs automatically after arcade indexing.
-- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept under Core's data directory, `libretro-thumbnails/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
+- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept in the image folder (`[media] image_dir`, `images` under Core's data directory by default) as `libretro/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties holding a path relative to that folder, `images://libretro/<playlist>/<kind>/<name>.png`, so the folder can be moved by changing the setting. Core never copies or moves images when the setting changes: copy the folder yourself, or let a fill-missing run download what is absent. A PNG dropped into a `<kind>` folder is matched like a downloaded one. Before each download the run checks the image folder's free space and stops, reporting the reason in the scrape status, when less than 500 MB would be left. Older versions kept these files in `libretro-thumbnails/` under the data directory; Core moves that folder into the image folder once on startup when the two share a filesystem, and leaves it in place otherwise. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
 - `gamedatabase` fills in game facts from an embedded copy of [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase): genre, players, controls, save and add-on hardware, franchise, ports, compilation contents, release year, developer and publisher. It matches console titles by title slug and arcade sets by MAME set name, never by file hash, needs no network, and runs automatically after indexing. It is registered on every platform.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
@@ -227,6 +227,27 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 | `manual` | `MediaProperties: property:manual` | PDF path |
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
+
+### Media Subfolders
+
+Both the `gamelist.xml` filesystem fallback and `media-folder` search these subfolders of `<systemRootPath>/media/`, in order, for each image type. Folder names match case-insensitively, and each file is tried as `.png`, `.jpg`, `.jpeg`, then `.webp`. The list is `ArtworkDirCandidates` in `pkg/platforms/shared/esmedia/artwork.go`.
+
+| `media.image` type | Property | Subfolders searched |
+| :-- | :-- | :-- |
+| `image` | `property:image-image` | `image`, `images`, `miximages`, `custom` |
+| `boxart` | `property:image-boxart` | `boxart`, `boxart2d`, `box2d`, `boxart2dfront`, `box2dfront`, `cover`, `covers`, `boxarts`, `box`, `named_boxarts` |
+| `boxart3d` | `property:image-boxart3d` | `boxart3d`, `3dbox`, `3dboxes` |
+| `boxartside` | `property:image-boxartside` | `boxart2dside` |
+| `boxartback` | `property:image-boxartback` | `boxart2dback`, `backcover`, `backcovers` |
+| `screenshot` | `property:image-screenshot` | `screenshot`, `screenshots`, `snap`, `snaps`, `named_snaps` |
+| `thumbnail` | `property:image-thumbnail` | `thumbnail`, `thumbnails`, `box2dfront`, `boxart2dfront`, `supporttexture` |
+| `marquee` | `property:image-marquee` | `marquee`, `marquees` |
+| `wheel` | `property:image-wheel` | `wheel`, `wheels`, `logo`, `logos` |
+| `fanart` | `property:image-fanart` | `fanart`, `fanarts` |
+| `titleshot` | `property:image-titleshot` | `titleshot`, `titleshots`, `titlescreen`, `titlescreens`, `screenshottitle`, `title`, `titles`, `named_titles` |
+| `map` | `property:image-map` | `map`, `maps` |
+
+A directory's own `image` artwork is searched in `folders` and `folder` before the `image` subfolders above. Those two are only used for directories, never for a game file.
 
 ### Directory Entries
 

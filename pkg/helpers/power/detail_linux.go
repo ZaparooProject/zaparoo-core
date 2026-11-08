@@ -79,20 +79,29 @@ func batteryFrom(fs afero.Fs, dir, name string) Battery {
 		battery.Percent = &percent
 	}
 	status, _ := readSupplyField(fs, dir, "status")
-	switch status {
-	case "Charging":
-		battery.State = ChargeCharging
-	case "Discharging":
-		battery.State = ChargeDischarging
-	case "Full":
-		battery.State = ChargeFull
-	case "Not charging":
-		battery.State = ChargeNotCharging
-	}
+	battery.State = SysfsChargeState(status)
 	if battery.State == ChargeDischarging {
 		battery.TimeRemaining = timeToEmpty(fs, dir)
 	}
 	return battery
+}
+
+// SysfsChargeState maps a power supply's sysfs "status" value to a charge
+// state. Anything the kernel reports beyond the four known values, such as
+// "Unknown", is the empty state.
+func SysfsChargeState(status string) ChargeState {
+	switch status {
+	case "Charging":
+		return ChargeCharging
+	case "Discharging":
+		return ChargeDischarging
+	case "Full":
+		return ChargeFull
+	case "Not charging":
+		return ChargeNotCharging
+	default:
+		return ""
+	}
 }
 
 // timeToEmpty prefers the kernel's own estimate and otherwise derives one from
