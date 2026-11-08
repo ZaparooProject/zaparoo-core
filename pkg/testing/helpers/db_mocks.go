@@ -1224,6 +1224,7 @@ type MockMediaDBI struct {
 	mock.Mock
 	mediaWriteArbiter     atomic.Pointer[database.MediaWriteArbiter]
 	ScrapeImageSystems    []string
+	browseListings        database.BrowseListingCache
 	TransactionCount      int
 	OperationsOutsideTxn  int
 	ActiveTransaction     bool
@@ -3580,6 +3581,26 @@ func (m *MockMediaDBI) BrowseFileCount(
 		return 0, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return 0, nil
+}
+
+// BrowseListingCache is a real cache rather than a recorded call, so tests see
+// the same reuse a MediaDB gives and only have to expect the queries it saves.
+func (m *MockMediaDBI) BrowseListingCache() *database.BrowseListingCache {
+	return &m.browseListings
+}
+
+func (m *MockMediaDBI) BrowseAnchorPosition(
+	ctx context.Context, opts *database.BrowseAnchorOptions,
+) (database.BrowseAnchorResult, error) {
+	args := m.Called(ctx, opts)
+	result, ok := args.Get(0).(database.BrowseAnchorResult)
+	if !ok {
+		result = database.BrowseAnchorResult{}
+	}
+	if err := args.Error(1); err != nil {
+		return result, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return result, nil
 }
 
 //nolint:gocritic // Value options preserve the established MediaDBI method contract.

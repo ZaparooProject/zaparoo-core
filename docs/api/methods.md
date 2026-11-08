@@ -928,6 +928,8 @@ All parameters are optional. When called with no parameters, returns root entrie
 | tags       | string[] | No     | Filter direct media files by tags. Syntax and AND/NOT/OR operators match `media.search`. Directories remain unfiltered. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
+| offset     | number | No       | Start the page at this absolute position in the listing, directories first, then files. Must be 0 or greater. An offset at or past the end returns no entries with correct totals. Root `virtualEntries` of a `rootView: "contents"` listing are not counted and appear only on the cursorless first page. See [Positioned pages](#positioned-pages). |
+| anchorPath | string | No       | Non-empty path to locate in the listing. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a promoted folder finds that folder. See [Positioned pages](#positioned-pages). |
 
 #### Result
 
@@ -938,7 +940,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
 | totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
-| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
+| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Always present on a cursorless page of a listing without `letter`. Elsewhere, omitted when there are no file results. |
 
 ##### Browse entry object
 
@@ -967,6 +969,20 @@ All parameters are optional. When called with no parameters, returns root entrie
 | hasNextPage | bool   | Yes      | Whether more results exist beyond the current page.      |
 | pageSize    | number | Yes      | The requested page size.                                 |
 | nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
+| offset      | number | No       | Absolute position of the first returned row, not counting root `virtualEntries`. Present on every cursorless page without `letter`, including 0, so a client can detect support from a normal first page. Absent on cursor and letter-filtered pages and on `live` listings. |
+| anchorIndex | number | No       | Absolute position of `anchorPath`. Absent when the path is not listed. |
+
+##### Positioned pages
+
+`offset` and `anchorPath` read a listing by position instead of walking it with cursors. An offset page holds the same rows as the cursor page at that depth, for every `sort`, and its `nextCursor`, `totalDirs` and `totalFiles` work as on any other page.
+
+When `anchorPath` is not listed, the response is the cursorless first page without `anchorIndex`, and no error is returned. That covers a path that does not exist, lies outside the listing, or is hidden or removed by the request's `tags`, `systems` or `includeHidden`.
+
+Both return an invalid parameter error when:
+
+- combined with each other, `cursor`, `letter` or `live`
+- used on a listing with no position: no `path` and no `rootView: "contents"`
+- `offset` is negative or `anchorPath` is empty
 
 #### System route example
 
