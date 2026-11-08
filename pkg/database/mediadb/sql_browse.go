@@ -3178,7 +3178,36 @@ func sqlBrowseDirCount(
 			return max(count-emptied, 0), nil
 		}
 	}
+	if hidden.hidesChildDir(opts.PathPrefix) {
+		return sqlBrowseDirCountFromListing(ctx, db, opts, hidden)
+	}
 	return sqlBrowseDirCountFromMedia(ctx, db, opts)
+}
+
+// sqlBrowseDirCountFromListing counts the Media fallback's directories by
+// listing them. Media counts no folder as hidden, so when a hidden folder is a
+// child of the prefix the count has to drop it the way the listing does, or
+// the two disagree about how many directories there are to page through.
+func sqlBrowseDirCountFromListing(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+	hidden *hiddenMedia,
+) (int, error) {
+	listOpts := database.BrowseDirectoriesOptions{
+		PathPrefix:    opts.PathPrefix,
+		Systems:       opts.Systems,
+		ExcludeHidden: opts.ExcludeHidden,
+	}
+	dirs, err := sqlBrowseDirectoriesFromMediaFallback(ctx, db, listOpts)
+	if err != nil {
+		return 0, err
+	}
+	dirs, err = applyHiddenDirsToDirectories(ctx, db, listOpts, hidden, dirs)
+	if err != nil {
+		return 0, err
+	}
+	return len(dirs), nil
 }
 
 // sqlEmptiedChildDirCount reports how many immediate child directories hold

@@ -239,6 +239,21 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 	return counts
 }
 
+// hidesChildDir reports whether a hidden folder is an immediate child of
+// prefix, which is the only way one can drop a row from that prefix's listing.
+func (h *hiddenMedia) hidesChildDir(prefix string) bool {
+	if h == nil {
+		return false
+	}
+	for i := range h.dirs {
+		rest, ok := strings.CutPrefix(h.dirs[i].Prefix, prefix)
+		if ok && strings.Count(rest, "/") == 1 && strings.HasSuffix(rest, "/") && len(rest) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // childNameCount counts the distinct child directories across prefixes that
 // hold hidden media, which bounds how many rows a page can lose.
 func (h *hiddenMedia) childNameCount(prefixes []string, systems []systemdefs.System) int {

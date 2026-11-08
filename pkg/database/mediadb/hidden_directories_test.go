@@ -570,6 +570,18 @@ func TestHiddenDirectoriesDoNotShortenAPage(t *testing.T) {
 				})
 				require.NoError(t, err)
 				assert.Equal(t, []string{"E"}, dirNames(rest))
+
+				count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, 3, count, "the count agrees with the listing")
+
+				all, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+					PathPrefix: root, Systems: systems,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, 5, all, "a listing that includes hidden entries counts them")
 			})
 		}
 	}
@@ -598,15 +610,12 @@ func TestHiddenDirectoryInsideBrowsedHiddenFolderDoesNotShortenAPage(t *testing.
 			})
 			require.NoError(t, err)
 			assert.Equal(t, []string{"B", "C"}, dirNames(first))
-			if !cached {
-				return
-			}
 
 			count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
 				PathPrefix: parent, ExcludeHidden: true,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, 3, count, "the cached count agrees with the listing")
+			assert.Equal(t, 3, count, "the count agrees with the listing")
 		})
 	}
 }
