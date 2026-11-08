@@ -42,16 +42,22 @@ type SearchParams struct {
 }
 
 type BrowseParams struct {
-	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
-	Path          *string   `json:"path,omitempty"`
-	RootView      *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
-	MaxResults    *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
-	Cursor        *string   `json:"cursor,omitempty"`
-	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-	IncludeHidden bool      `json:"includeHidden,omitempty"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Path        *string   `json:"path,omitempty"`
+	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	// Offset starts the page at this absolute position in the listing,
+	// directories first, then files.
+	Offset *int `json:"offset,omitempty" validate:"omitempty,gte=0"`
+	// AnchorPath returns the page holding this path, starting at the largest
+	// multiple of the page size that is not after the path's position.
+	AnchorPath    *string `json:"anchorPath,omitempty" validate:"omitempty,min=1"`
+	IncludeHidden bool    `json:"includeHidden,omitempty"`
 	// Live lists Path straight from disk instead of from the media index,
 	// for folders the index does not cover.
 	Live bool `json:"live,omitempty"`

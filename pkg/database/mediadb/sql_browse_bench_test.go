@@ -448,6 +448,75 @@ func BenchmarkBrowseOverlayDeepPage(b *testing.B) {
 	}
 }
 
+// BenchmarkBrowsePositionLastPage measures what a position request costs at the
+// far end of a folder, where both a row OFFSET and an anchor's count are at their
+// most expensive: the OFFSET read of the last page, and the lookup of the listing's
+// last row. It covers one route and a two-route merge.
+func BenchmarkBrowsePositionLastPage(b *testing.B) {
+	const pageSize = 50
+
+	ctx := context.Background()
+	for _, rows := range []int{7000, 50000} {
+		mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+		large := seedBenchBrowseDB(b, mediaDB, rows, false)
+		small := seedBenchSecondRoute(b, mediaDB, 3)
+		require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+		require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+		sqlDB := mediaDB.sql.Load()
+
+		overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+			{PathPrefix: small, IncludeDirs: true},
+			{PathPrefix: large, IncludeDirs: true},
+		}}
+
+		for _, tc := range []struct {
+			overlay *database.BrowseOverlay
+			name    string
+			prefix  string
+			total   int
+		}{
+			{name: "single", prefix: large, total: rows},
+			{name: "merged", overlay: overlay, total: rows + 3},
+		} {
+			fileOpts := func() *database.BrowseFilesOptions {
+				return &database.BrowseFilesOptions{
+					Overlay:    tc.overlay,
+					PathPrefix: tc.prefix,
+					Limit:      pageSize,
+					Offset:     tc.total - pageSize,
+				}
+			}
+			lastPage, err := sqlBrowseFiles(ctx, sqlDB, fileOpts())
+			require.NoError(b, err)
+			require.Len(b, lastPage, pageSize)
+			anchor := &database.BrowseAnchorOptions{
+				Overlay:    tc.overlay,
+				PathPrefix: tc.prefix,
+				Path:       lastPage[pageSize-1].Path,
+			}
+
+			b.Run(fmt.Sprintf("%s/files_%d/offset", tc.name, rows), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					page, pageErr := sqlBrowseFiles(ctx, sqlDB, fileOpts())
+					require.NoError(b, pageErr)
+					require.Len(b, page, pageSize)
+				}
+			})
+			b.Run(fmt.Sprintf("%s/files_%d/anchor", tc.name, rows), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					result, anchorErr := sqlBrowseAnchorPosition(ctx, sqlDB, anchor)
+					require.NoError(b, anchorErr)
+					require.True(b, result.Found)
+					require.Equal(b, tc.total-1, result.Position)
+				}
+			})
+		}
+		cleanup()
+	}
+}
+
 // seedBenchSecondRoute adds a small second route for the same system, so the
 // merge has something to resolve names against.
 func seedBenchSecondRoute(b *testing.B, mediaDB *MediaDB, rows int) string {

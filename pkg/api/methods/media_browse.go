@@ -295,6 +295,10 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	if err := validateBrowsePosition(&params); err != nil {
+		return nil, err
+	}
+
 	// A live browse reads the disk rather than SQLite, so it takes its own
 	// concurrency slots instead of browseSem.
 	if params.Live {
@@ -317,14 +321,14 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 	}
 	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
 
-	return runBrowseVisibility(&env, params.Cursor, func() (any, error) {
-		return browseMediaRequest(&env, &params, tagFilters)
+	return runBrowseVisibility(&env, params.Cursor, func(revision string) (any, error) {
+		return browseMediaRequest(&env, &params, tagFilters, revision)
 	})
 }
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMediaRequest(
-	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter,
+	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter, revision string,
 ) (any, error) {
 	maxResults := defaultMaxResults
 	if params.MaxResults != nil && *params.MaxResults > 0 {
@@ -355,6 +359,8 @@ func browseMediaRequest(
 		}
 	}
 
+	pos := newBrowsePosition(params, cursor, revision, sort, systems, tagFilters, maxResults)
+
 	// No path → return root entries or an opt-in one-level contents overlay.
 	if params.Path == nil || *params.Path == "" {
 		rootView := browseRootViewRoutes
@@ -371,9 +377,9 @@ func browseMediaRequest(
 			if cursor != nil && cursor.RootView != browseRootViewContents {
 				return nil, models.ClientErrf("cursor does not match rootView contents")
 			}
-			return browseSystemRootContents(
-				env, systems, cursor, maxResults, params.Letter, sort, tagFilters,
-			)
+			return pos.finish(browseSystemRootContents(
+				env, systems, cursor, maxResults, params.Letter, sort, tagFilters, pos,
+			))
 		}
 		if len(systems) > 0 {
 			return browseSystemRoots(env, systems)
@@ -391,12 +397,14 @@ func browseMediaRequest(
 	// files browse below (not browseVirtual's flat listing), with its own
 	// validation since filepath.Clean/Join mangle "://".
 	if platforms.IsSourceScheme(path) {
-		return browseSourcePath(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+		return pos.finish(browseSourcePath(
+			env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters, pos,
+		))
 	}
 
 	// Virtual path (contains ://)
 	if strings.Contains(path, "://") {
-		return browseVirtual(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+		return pos.finish(browseVirtual(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters, pos))
 	}
 
 	// Launcher-relative path (SNES/USA): resolved to the indexed folder it
@@ -410,7 +418,7 @@ func browseMediaRequest(
 	}
 
 	// Filesystem path
-	return browseFilesystem(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+	return pos.finish(browseFilesystem(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters, pos))
 }
 
 // resolveRelativeBrowsePath turns a launcher-relative folder path, the shape
@@ -750,6 +758,7 @@ func browseSystemRootContents(
 	letter *string,
 	sortOrder string,
 	tags []zapscript.TagFilter,
+	pos *browsePosition,
 ) (any, error) {
 	// Resolving the scope means discovering every route the system could live
 	// under and counting each one to drop the empty ones. On MiSTer that is 21
@@ -780,6 +789,10 @@ func browseSystemRootContents(
 	if len(sources) > 0 {
 		overlayPath = sources[0].PathPrefix
 	}
+	cursor, err := pos.resolve(env, &browseListingScope{sources: sources, merged: true, listsDirectories: true}, cursor)
+	if err != nil {
+		return nil, err
+	}
 	if cursor != nil {
 		virtualEntries = nil
 	}
@@ -787,10 +800,7 @@ func browseSystemRootContents(
 		return models.BrowseResults{Entries: virtualEntries}, nil
 	}
 
-	var (
-		err                   error
-		totalDirs, totalFiles int
-	)
+	var totalDirs, totalFiles int
 	if cursor != nil {
 		totalDirs = cursor.TotalDirs
 		totalFiles = cursor.TotalFiles
@@ -808,6 +818,7 @@ func browseSystemRootContents(
 			AfterName:     afterName,
 			Systems:       systems,
 			Limit:         maxResults + 1,
+			Offset:        pos.dirOffset,
 		})
 		logBrowseTiming("root_contents_directories", overlayPath, started, len(dirs))
 		if dirsErr != nil {
@@ -892,6 +903,7 @@ func browseSystemRootContents(
 		Overlay:       overlay,
 		Cursor:        fileCursor,
 		Limit:         maxResults + 1,
+		Offset:        pos.fileOffset,
 		Letter:        letter,
 		Sort:          sortOrder,
 		Systems:       systems,
@@ -901,7 +913,7 @@ func browseSystemRootContents(
 	if filesErr != nil {
 		return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
 	}
-	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
+	if !pos.positioned && totalFiles == 0 && (len(files) > 0 || cursor != nil) {
 		totalFiles, err = browseRootContentsFileCount(env, sources, letter, systems, tags)
 		if err != nil {
 			return nil, err
@@ -1254,6 +1266,7 @@ func browseFilesystem(
 	sort string,
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
+	pos *browsePosition,
 ) (any, error) {
 	// Normalize the path
 	cleaned := filepath.ToSlash(filepath.Clean(path))
@@ -1274,7 +1287,7 @@ func browseFilesystem(
 		prefix += "/"
 	}
 
-	return browsePathPrefix(env, prefix, cleaned, cursor, maxResults, letter, sort, systems, tags)
+	return browsePathPrefix(env, prefix, cleaned, cursor, maxResults, letter, sort, systems, tags, pos)
 }
 
 // browsePathPrefix pages a directory-then-files listing for an already
@@ -1293,8 +1306,14 @@ func browsePathPrefix(
 	sort string,
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
+	pos *browsePosition,
 ) (any, error) {
 	ctx := env.Context
+
+	cursor, resolveErr := pos.resolve(env, &browseListingScope{prefix: prefix, listsDirectories: true}, cursor)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
 
 	// Counts are computed once on the first page and carried forward in the
 	// cursor so paging through a large directory does not rerun them.
@@ -1320,6 +1339,7 @@ func browsePathPrefix(
 			AfterName:     afterName,
 			Systems:       systems,
 			Limit:         maxResults + 1,
+			Offset:        pos.dirOffset,
 		})
 		logBrowseTiming("directories", prefix, started, len(dirs))
 		if err != nil {
@@ -1435,6 +1455,7 @@ func browsePathPrefix(
 		PathPrefix:    prefix,
 		Cursor:        fileCursor,
 		Limit:         maxResults + 1,
+		Offset:        pos.fileOffset,
 		Letter:        letter,
 		Sort:          sort,
 		Systems:       systems,
@@ -1448,7 +1469,7 @@ func browsePathPrefix(
 	// Get total file count. First-page cursors carry this forward so loading
 	// additional pages in large directories does not repeat the same count
 	// query, and a first page that holds every file needs no query at all.
-	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
+	if !pos.positioned && totalFiles == 0 && (len(files) > 0 || cursor != nil) {
 		if cursor == nil && len(files) <= maxResults {
 			totalFiles = len(files)
 		} else {
@@ -1483,6 +1504,7 @@ func browseSourcePath(
 	sort string,
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
+	pos *browsePosition,
 ) (any, error) {
 	// The bare scheme is the aggregated route media.browse's root discovery
 	// (BrowseVirtualSchemes) always surfaces for every granted source root
@@ -1493,7 +1515,7 @@ func browseSourcePath(
 		if _, ok := env.Platform.(platforms.SourceRootReader); !ok {
 			return nil, models.ClientErrf("platform does not support source root paths")
 		}
-		return browsePathPrefix(env, path, path, cursor, maxResults, letter, sort, systems, tags)
+		return browsePathPrefix(env, path, path, cursor, maxResults, letter, sort, systems, tags, pos)
 	}
 
 	// A client may send either form, same tolerance browseFilesystem gives a
@@ -1516,7 +1538,7 @@ func browseSourcePath(
 		return nil, models.ClientErrf("source root is no longer granted")
 	}
 
-	return browsePathPrefix(env, displayPath+"/", displayPath, cursor, maxResults, letter, sort, systems, tags)
+	return browsePathPrefix(env, displayPath+"/", displayPath, cursor, maxResults, letter, sort, systems, tags, pos)
 }
 
 // browseTotalFileCount returns the direct-child file count for a path prefix,
@@ -1581,6 +1603,7 @@ func browseVirtual(
 	sort string,
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
+	pos *browsePosition,
 ) (any, error) {
 	// Validate scheme is known
 	if !isKnownVirtualScheme(env, schemePath) {
@@ -1589,11 +1612,22 @@ func browseVirtual(
 
 	ctx := env.Context
 
+	cursor, err := pos.resolve(env, &browseListingScope{prefix: schemePath}, cursor)
+	if err != nil {
+		return nil, err
+	}
+	// A page by position has its place in Offset and only totals in its cursor.
+	fileCursor := cursor
+	if pos.positioned {
+		fileCursor = nil
+	}
+
 	opts := &database.BrowseFilesOptions{
 		ExcludeHidden: env.ExcludeHidden,
 		PathPrefix:    schemePath,
-		Cursor:        cursor,
+		Cursor:        fileCursor,
 		Limit:         maxResults + 1,
+		Offset:        pos.fileOffset,
 		Letter:        letter,
 		Sort:          sort,
 		Systems:       systems,
@@ -1608,7 +1642,7 @@ func browseVirtual(
 
 	var totalFiles int
 	switch {
-	case cursor != nil && cursor.TotalFiles > 0:
+	case pos.positioned, cursor != nil && cursor.TotalFiles > 0:
 		totalFiles = cursor.TotalFiles
 	case cursor == nil && len(files) <= maxResults:
 		// The first page holds every entry, so it is the count.

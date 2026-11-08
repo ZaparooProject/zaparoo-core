@@ -93,9 +93,13 @@ type SearchResultMedia struct {
 }
 
 type PaginationInfo struct {
-	NextCursor  *string `json:"nextCursor,omitempty"`
-	HasNextPage bool    `json:"hasNextPage"`
-	PageSize    int     `json:"pageSize"`
+	NextCursor *string `json:"nextCursor,omitempty"`
+	// Offset and AnchorIndex are media.browse only: the absolute position of
+	// the page's first row and of the requested anchor.
+	Offset      *int `json:"offset,omitempty"`
+	AnchorIndex *int `json:"anchorIndex,omitempty"`
+	HasNextPage bool `json:"hasNextPage"`
+	PageSize    int  `json:"pageSize"`
 }
 
 type SearchResults struct {

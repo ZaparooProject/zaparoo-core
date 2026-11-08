@@ -168,6 +168,7 @@ type systemMediaCountsSnapshot struct {
 }
 
 type MediaDB struct {
+	browseListings          database.BrowseListingCache
 	clock                   clockwork.Clock
 	ctx                     context.Context
 	pl                      platforms.Platform
@@ -302,6 +303,7 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	clearPrefixPolicyCache()
 	clearCoverAvailabilityCacheFor(db.sql.Load())
 	clearHiddenDirCountCacheFor(db.sql.Load())
+	db.browseListings.Clear()
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
 		clearImagePropertyTagCache()
@@ -605,6 +607,7 @@ func (db *MediaDB) Open() error {
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.browseListings.Clear()
 	db.systemMediaCountsCache.Store(nil)
 	db.systemMediaCountsGen.Add(1)
 	db.clearMediaSearchBounds()
@@ -2260,6 +2263,7 @@ func (db *MediaDB) Close() error {
 	unregisterCoverAvailabilityCacheOwner(sqlDB)
 	forgetHiddenDirCountCacheFor(sqlDB)
 	clearPrefixPolicyCacheFor(sqlDB)
+	db.browseListings.Clear()
 
 	closeErr := sqlDB.Close()
 	if closeErr != nil {
@@ -2310,6 +2314,7 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.browseListings.Clear()
 	db.clearMediaSearchBounds()
 	db.ctx = ctx
 	db.pl = platform
@@ -3432,6 +3437,34 @@ func (db *MediaDB) BrowseIndex(
 	return sqlBrowseIndex(ctx, call.conn, &opts)
 }
 
+// BrowseAnchorPosition locates one path in a browse listing, through the same
+// visibility scoping the listing itself runs under.
+func (db *MediaDB) BrowseAnchorPosition(
+	ctx context.Context, opts *database.BrowseAnchorOptions,
+) (database.BrowseAnchorResult, error) {
+	if db.sql.Load() == nil {
+		return database.BrowseAnchorResult{}, ErrNullSQL
+	}
+	call, err := db.beginBrowse(ctx, "browse anchor", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return database.BrowseAnchorResult{}, err
+	}
+	defer call.finish(db)
+	scoped := *opts
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
+	if err != nil {
+		return database.BrowseAnchorResult{}, err
+	}
+	result, err := sqlBrowseAnchorPosition(ctx, call.conn, &scoped)
+	db.NoteCorruption(err)
+	return result, err
+}
+
+// BrowseListingCache returns this handle's cache of letter indexes and totals.
+func (db *MediaDB) BrowseListingCache() *database.BrowseListingCache {
+	return &db.browseListings
+}
+
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
 func (db *MediaDB) BrowseVirtualSchemes(
 	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
@@ -3503,7 +3536,9 @@ func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
+	err := sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
+	db.browseListings.Clear()
+	return err
 }
 
 // PopulateBrowseCacheForSystems incrementally refreshes browse cache rows for
@@ -3546,7 +3581,9 @@ func (db *MediaDB) PopulateBrowseCacheForSystems(ctx context.Context, systemIDs 
 		return fmt.Errorf("browse cache: system DBID iteration error: %w", rowsErr)
 	}
 
-	return sqlPopulateBrowseCacheForSystems(plainCtx, db.sql.Load(), systemDBIDs)
+	err = sqlPopulateBrowseCacheForSystems(plainCtx, db.sql.Load(), systemDBIDs)
+	db.browseListings.Clear()
+	return err
 }
 
 // BrowseCacheNeedsRebuild reports whether the browse cache is stale or absent and
