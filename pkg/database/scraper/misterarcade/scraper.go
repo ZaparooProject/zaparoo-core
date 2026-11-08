@@ -260,7 +260,10 @@ func (s *scraperImpl) scrapeSystem(
 
 	// First fill of a shared title is deterministic, independent of query order.
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].path < candidates[j].path })
-	targets, stats := s.buildTargets(ctx, candidates, completed, opts)
+	targets, stats, err := s.buildTargets(ctx, candidates, completed, opts)
+	if err != nil {
+		return stats, err
+	}
 	for i := range targets {
 		targets[i].Write.FillMissing = opts.FillMissing
 	}
@@ -316,7 +319,11 @@ func (s *scraperImpl) scrapeScope(
 			})
 		}
 	}
-	writeTargets, _ := s.buildTargets(ctx, candidates, map[int64]struct{}{}, opts)
+	writeTargets, _, err := s.buildTargets(ctx, candidates, map[int64]struct{}{}, opts)
+	if err != nil {
+		ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+		return
+	}
 	for i := range writeTargets {
 		writeTargets[i].Write.FillMissing = opts.FillMissing
 	}
@@ -380,22 +387,24 @@ func (s *scraperImpl) loadDescriptors(ctx context.Context, systemID string) ([]d
 // buildTargets resolves every indexed descriptor to the write that enriches it.
 // A descriptor with no readable set name, or one the catalog does not list,
 // counts as skipped: the catalog omits hundreds of sets, most of them
-// alternates, and those rows simply have no metadata to import.
+// alternates, and those rows simply have no metadata to import. Reading a
+// descriptor yields to the pauser first, so a launch is never kept waiting on
+// the scrape's storage reads.
 func (s *scraperImpl) buildTargets(
 	ctx context.Context,
 	candidates []descriptorRow,
 	completed map[int64]struct{},
 	opts scraper.ScrapeOptions,
-) ([]database.ScrapeWriteTarget, matchStats) {
+) ([]database.ScrapeWriteTarget, matchStats, error) {
 	var targets []database.ScrapeWriteTarget
 	stats := matchStats{}
 	for i := range candidates {
-		if ctx.Err() != nil {
-			return targets, stats
-		}
 		row := &candidates[i]
 		if _, already := completed[row.dbid]; already {
 			continue
+		}
+		if err := waitForScrape(ctx, opts); err != nil {
+			return targets, stats, err
 		}
 		stats.Processed++
 		entry, found := s.entries[s.setName(row.path)]
@@ -409,7 +418,7 @@ func (s *scraperImpl) buildTargets(
 		})
 		stats.Matched++
 	}
-	return targets, stats
+	return targets, stats, nil
 }
 
 // setName resolves one descriptor's set name, preferring the platform's cache

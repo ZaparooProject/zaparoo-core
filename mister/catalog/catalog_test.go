@@ -140,6 +140,31 @@ func TestPathToMGLDef(t *testing.T) {
 	}
 }
 
+// The N64 core mounts 64DD disk images through its third file slot
+// ("F3,NDDndd,Load 64DD Disk"); cartridges stay on the first.
+func TestPathToMGLDefN64DDDisk(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Nintendo64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := catalog.PathToMGLDef(core, "Game Name.NDD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.Method != "f" || disk.Index != 3 {
+		t.Fatalf("ndd params: want f/3, got %#v", disk)
+	}
+	cart, err := catalog.PathToMGLDef(core, "Game Name.z64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cart.Method != "f" || cart.Index != 1 {
+		t.Fatalf("z64 params: want f/1, got %#v", cart)
+	}
+}
+
 // The Apple-II core mounts WOZ images in its first floppy drive (S0).
 func TestAppleIIWOZUsesFirstDrive(t *testing.T) {
 	t.Parallel()

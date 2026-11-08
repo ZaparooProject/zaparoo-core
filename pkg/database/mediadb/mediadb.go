@@ -2592,7 +2592,8 @@ func (db *MediaDB) ReconcileStagedSystem(
 	// A reconcile that changed nothing leaves the revision alone, which is
 	// what lets an index-triggered scrape tell the system holds nothing new.
 	if stats.TitlesInserted > 0 || stats.TitlesRenamed > 0 || stats.MediaUpserted > 0 ||
-		stats.MediaMissing > 0 || stats.TagLinksAdded > 0 || stats.TagLinksDeleted > 0 {
+		stats.MediaMissing > 0 || stats.TagLinksAdded > 0 || stats.TagLinksDeleted > 0 ||
+		stats.MediaLinksDeleted > 0 {
 		if bumpErr := sqlBumpLibraryRevision(ctx, db.conn(), systemID); bumpErr != nil {
 			return stats, bumpErr
 		}

@@ -2784,11 +2784,13 @@ func (m *MockMediaDBI) ForEachMediaBySystemID(
 	return nil
 }
 
-func (m *MockMediaDBI) SyncLinkedMedia(ctx context.Context, systemIDs []string) error {
+func (m *MockMediaDBI) SyncLinkedMedia(
+	ctx context.Context, systemIDs []string, scope *database.ScrapeScope,
+) error {
 	if !m.hasExpectedCall("SyncLinkedMedia") {
 		return nil
 	}
-	if err := m.Called(ctx, systemIDs).Error(0); err != nil {
+	if err := m.Called(ctx, systemIDs, scope).Error(0); err != nil {
 		return fmt.Errorf("mock SyncLinkedMedia failed: %w", err)
 	}
 	return nil

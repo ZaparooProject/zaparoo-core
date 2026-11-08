@@ -896,8 +896,8 @@ func TestN64LauncherExtensions(t *testing.T) {
 
 	require.NotNil(t, n64Launcher, "N64 launcher should exist")
 
-	// Verify all three N64 ROM formats are supported
-	expectedExts := []string{".n64", ".z64", ".v64"}
+	// Verify all three N64 ROM formats and 64DD disk images are supported
+	expectedExts := []string{".n64", ".z64", ".v64", ".ndd"}
 	for _, ext := range expectedExts {
 		assert.Contains(t, n64Launcher.Extensions, ext,
 			"N64 launcher should support %s extension", ext)

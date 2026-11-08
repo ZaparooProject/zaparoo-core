@@ -1288,7 +1288,10 @@ type ScanReconcileStats struct {
 	TagsInserted    int64
 	TagLinksAdded   int64
 	TagLinksDeleted int64
-	TouchedTitles   int64
+	// MediaLinksDeleted counts aliases unlinked from their target, which
+	// purges the data copied from it and leaves the alias needing a scrape.
+	MediaLinksDeleted int64
+	TouchedTitles     int64
 	// SystemKnown is false when the system has no DB row and nothing was staged,
 	// meaning the reconcile was a no-op and no Systems row was created.
 	SystemKnown bool
@@ -1750,8 +1753,9 @@ type MediaDBI interface {
 	// SyncLinkedMedia copies each linked row's target scraped data onto it,
 	// for the given systems or every system when none are given. A linked row
 	// is a symlink alias of other media, indexed by a launcher that opted into
-	// scan_duplicates. The streams above never return one.
-	SyncLinkedMedia(ctx context.Context, systemIDs []string) error
+	// scan_duplicates. The streams above never return one. A non-nil scope
+	// limits it to links of the media that scope selects.
+	SyncLinkedMedia(ctx context.Context, systemIDs []string, scope *ScrapeScope) error
 	// GetMediaLinkTarget returns the media a linked row is an alias of.
 	GetMediaLinkTarget(ctx context.Context, mediaDBID int64) (int64, bool, error)
 	// GetMediaSourcesForScrape returns source rows for a full system or optional scrape scope.

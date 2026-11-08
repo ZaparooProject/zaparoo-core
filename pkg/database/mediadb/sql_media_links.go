@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
@@ -134,11 +135,13 @@ func sqlSystemHasMediaLinks(ctx context.Context, db sqlQueryable, systemDBIDs []
 // and only the target's media-scope data is copied. Rows already matching
 // their target are not written. When captureTouched is set, titles whose
 // linked rows had tags change are added to ScanTouchedTitles for the
-// reconcile's disambiguation recompute.
+// reconcile's disambiguation recompute. A non-nil scope limits the sync to
+// links whose target the scope selects, or whose target shares a title with
+// media it selects, since scrapers write title data too.
 //
 //nolint:gocognit,funlen // linear statement sequence
 func sqlSyncMediaLinks(
-	ctx context.Context, db sqlQueryable, systemDBIDs []int64, captureTouched bool,
+	ctx context.Context, db sqlQueryable, systemDBIDs []int64, scope *database.ScrapeScope, captureTouched bool,
 ) (linkSyncResult, error) {
 	var result linkSyncResult
 	setup := []string{
@@ -186,6 +189,16 @@ func sqlSyncMediaLinks(
 		for _, id := range systemDBIDs {
 			linkArgs = append(linkArgs, id)
 		}
+	}
+	if scope != nil {
+		where, scopeArgs, err := scrapeScopePredicate(*scope)
+		if err != nil {
+			return result, err
+		}
+		systemFilter += " AND (l.TargetMediaDBID IN (SELECT m.DBID FROM Media m WHERE " + where + ")" +
+			" OR t.MediaTitleDBID IN (SELECT m.MediaTitleDBID FROM Media m WHERE " + where + "))"
+		linkArgs = append(linkArgs, scopeArgs...)
+		linkArgs = append(linkArgs, scopeArgs...)
 	}
 	if err := exec("collect links", `
 		INSERT INTO _mls_links (MediaDBID, TargetMediaDBID, TitleDBID, TargetTitleDBID, SystemDBID, SharesTitle)
@@ -434,7 +447,10 @@ func queryInt64s(ctx context.Context, db sqlQueryable, query string, args ...any
 // SyncLinkedMedia copies each linked row's target data onto it for the given
 // systems, or every system when none are given. Scrape runs call it once they
 // finish, because scrapers write only to the target and never select a link.
-func (db *MediaDB) SyncLinkedMedia(ctx context.Context, systemIDs []string) (retErr error) {
+// A non-nil scope limits it to links of the media that scope scraped.
+func (db *MediaDB) SyncLinkedMedia(
+	ctx context.Context, systemIDs []string, scope *database.ScrapeScope,
+) (retErr error) {
 	conn := db.sql.Load()
 	if conn == nil {
 		return ErrNullSQL
@@ -472,7 +488,7 @@ func (db *MediaDB) SyncLinkedMedia(ctx context.Context, systemIDs []string) (ret
 			_ = tx.Rollback()
 		}
 	}()
-	result, err := sqlSyncMediaLinks(ctx, tx, systemDBIDs, false)
+	result, err := sqlSyncMediaLinks(ctx, tx, systemDBIDs, scope, false)
 	if err != nil {
 		return err
 	}

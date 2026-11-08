@@ -860,8 +860,28 @@ func startMediaScrapeOperation(
 			// Scrapers write only to a linked row's target. Copying onto the
 			// links runs before the counts and caches below are refreshed, so
 			// they include it.
-			if syncErr := db.MediaDB.SyncLinkedMedia(env.State.GetContext(), params.Systems); syncErr != nil {
+			if syncErr := db.MediaDB.SyncLinkedMedia(
+				env.State.GetContext(), params.Systems, operation.Scope,
+			); syncErr != nil {
 				log.Warn().Err(syncErr).Str("scraper", scraperID).Msg("failed to sync linked media after scrape")
+				// The links still show what they had before, so the run did not
+				// finish. Failing it keeps the operation and its run markers, and
+				// the user sees why.
+				if finalStatus == mediadb.IndexingStatusCompleted {
+					finalStatus = mediadb.IndexingStatusFailed
+					failed := scrapingStatusInstance.getLatest()
+					if terminal != nil {
+						failed = *terminal
+					}
+					failed.ScraperID = scraperID
+					failed.Force = params.Force
+					failed.Scraping = false
+					failed.Paused = false
+					failed.Done = true
+					failed.State = scrapeStateFailed
+					failed.Error = "failed to update linked games"
+					terminal = &failed
+				}
 			}
 			if refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB) && terminal != nil {
 				// The terminal count was read before this refresh and may have come

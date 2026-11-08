@@ -990,7 +990,10 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		// A staged symlink alias of media in the same system points at its
 		// target's row. Runs after the upsert, so it does not matter whether
 		// the walk reached the alias or its target first. A target that is
-		// itself a link is refused, so a link always ends at real media.
+		// itself a link is refused, so a link always ends at real media. That
+		// covers a stored link the walk did not reach: an incomplete scan
+		// leaves it in place, and linking to it would build a chain. A stored
+		// link that was walked but not staged is unlinked below.
 		if _, err = execStep("upsert media links", `
 			INSERT INTO MediaLinks (MediaDBID, TargetMediaDBID)
 			SELECT a.DBID, t.DBID
@@ -999,6 +1002,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			JOIN Media t ON t.SystemDBID = ? AND t.Path = sl.TargetPath AND t.IsMissing = 0
 			WHERE t.DBID <> a.DBID
 			  AND NOT EXISTS (SELECT 1 FROM ScanStageLinks s2 WHERE s2.Path = t.Path)
+			  AND (NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = t.DBID)
+			       OR EXISTS (SELECT 1 FROM ScanStage st WHERE st.Path = t.Path))
 			ON CONFLICT(MediaDBID) DO UPDATE SET TargetMediaDBID = excluded.TargetMediaDBID
 			WHERE MediaLinks.TargetMediaDBID IS NOT excluded.TargetMediaDBID`,
 			systemDBID, systemDBID); err != nil {
@@ -1006,11 +1011,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 		hasLinks = true
 	}
-	// A walked row that is no longer a link to its stored target loses the
-	// data copied from that target, then the link itself. That covers a file
-	// that became real media and a link repointed at a target the upsert
-	// refused. Only walked rows are judged, so an incomplete scan never unlinks
-	// media it did not reach.
+	// A walked row that is no longer a valid link to its stored target loses
+	// the data copied from that target, then the link itself. That covers a
+	// file that became real media, a link repointed at a target the upsert
+	// refused, a target that went missing, and a target that has itself become
+	// a link, by the same rules the upsert applies. Only walked rows are
+	// judged, so an incomplete scan never unlinks media it did not reach.
 	if hasLinks {
 		unlinkedRows := `
 			SELECT l.MediaDBID FROM MediaLinks l
@@ -1020,7 +1026,11 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			  AND NOT EXISTS (
 				SELECT 1 FROM ScanStageLinks sl
 				JOIN Media t ON t.SystemDBID = a.SystemDBID AND t.Path = sl.TargetPath
+					AND t.IsMissing = 0
 				WHERE sl.Path = a.Path AND t.DBID = l.TargetMediaDBID
+				  AND NOT EXISTS (SELECT 1 FROM ScanStageLinks s2 WHERE s2.Path = t.Path)
+				  AND (NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = t.DBID)
+				       OR EXISTS (SELECT 1 FROM ScanStage st WHERE st.Path = t.Path))
 			  )`
 		// Losing the copied tags can change what disambiguates those titles.
 		if _, err = execStep("capture unlinked titles", `
@@ -1034,14 +1044,14 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		if err != nil {
 			return stats, err
 		}
-		if _, err = execStep("delete stale media links",
+		if stats.MediaLinksDeleted, err = execStep("delete stale media links",
 			`DELETE FROM MediaLinks WHERE MediaDBID IN (`+unlinkedRows+`)`, systemDBID); err != nil {
 			return stats, err
 		}
 		// New and changed links take their target's scraped data now rather
 		// than at the next scrape.
 		syncStart := clock.Now()
-		_, err = sqlSyncMediaLinks(ctx, db, []int64{systemDBID}, true)
+		_, err = sqlSyncMediaLinks(ctx, db, []int64{systemDBID}, nil, true)
 		recordStep("sync linked media", clock.Since(syncStart))
 		if err != nil {
 			return stats, err
