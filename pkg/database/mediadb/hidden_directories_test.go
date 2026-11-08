@@ -570,6 +570,18 @@ func TestHiddenDirectoriesDoNotShortenAPage(t *testing.T) {
 				})
 				require.NoError(t, err)
 				assert.Equal(t, []string{"E"}, dirNames(rest))
+
+				count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, 3, count, "the count agrees with the listing")
+
+				all, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+					PathPrefix: root, Systems: systems,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, 5, all, "a listing that includes hidden entries counts them")
 			})
 		}
 	}
@@ -598,15 +610,12 @@ func TestHiddenDirectoryInsideBrowsedHiddenFolderDoesNotShortenAPage(t *testing.
 			})
 			require.NoError(t, err)
 			assert.Equal(t, []string{"B", "C"}, dirNames(first))
-			if !cached {
-				return
-			}
 
 			count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
 				PathPrefix: parent, ExcludeHidden: true,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, 3, count, "the cached count agrees with the listing")
+			assert.Equal(t, 3, count, "the count agrees with the listing")
 		})
 	}
 }
@@ -637,4 +646,46 @@ func TestStaleCachedCountDoesNotShortenAPage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"B", "C"}, dirNames(first))
+
+	count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, count, "the count agrees with the listing")
+}
+
+// A folder hidden for another system hides nothing from a listing filtered to
+// this one, so the folder stays in the listing and in its count.
+func TestDirectoryHiddenForAnotherSystemKeepsItsCount(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, cleanup := setupMergeFixture(t, 1)
+			t.Cleanup(cleanup)
+			root := f.roots[0]
+			for _, name := range []string{"A", "B", "C"} {
+				f.insert(name+"Game", root+name+"/Game.nes")
+			}
+			f.commit(t, cached)
+			_, err := f.mediaDB.ReplaceHiddenDirectories(ctx, []database.HiddenDirectory{
+				{SystemID: "SNES", Path: root + "A"},
+			})
+			require.NoError(t, err)
+			systems := []systemdefs.System{f.system}
+
+			dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+				PathPrefix: root, Systems: systems, ExcludeHidden: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"A", "B", "C"}, dirNames(dirs))
+
+			count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+				PathPrefix: root, Systems: systems, ExcludeHidden: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 3, count)
+		})
+	}
 }

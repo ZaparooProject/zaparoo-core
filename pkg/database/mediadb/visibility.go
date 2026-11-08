@@ -239,6 +239,28 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 	return counts
 }
 
+// hiddenChildDirNames returns the immediate children of prefix that are
+// hidden folders for one of systems, the only folders that can drop a row from
+// that prefix's listing by path.
+func (h *hiddenMedia) hiddenChildDirNames(prefix string, systems []systemdefs.System) []string {
+	if h == nil {
+		return nil
+	}
+	var names []string
+	for i := range h.dirs {
+		if !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+			continue
+		}
+		rest, ok := strings.CutPrefix(h.dirs[i].Prefix, prefix)
+		name, tail, found := strings.Cut(rest, "/")
+		if !ok || !found || name == "" || tail != "" || slices.Contains(names, name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 // childNameCount counts the distinct child directories across prefixes that
 // hold hidden media, which bounds how many rows a page can lose.
 func (h *hiddenMedia) childNameCount(prefixes []string, systems []systemdefs.System) int {
