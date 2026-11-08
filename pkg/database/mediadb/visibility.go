@@ -218,12 +218,18 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 		counts[rest[:slash]]++
 	}
 	for i := range h.dirs {
-		if !h.dirs[i].countedUnder(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+		if !h.dirs[i].within(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
 			continue
 		}
-		// The folder is the named child itself or somewhere beneath it.
+		// The folder is the named child itself or somewhere beneath it. It is
+		// judged against the child's own aggregate, so a folder whose outer
+		// hidden folder is the browsed prefix still counts.
 		rest := h.dirs[i].Prefix[len(prefix):]
-		if slash := strings.Index(rest, "/"); slash > 0 {
+		slash := strings.Index(rest, "/")
+		if slash <= 0 {
+			continue
+		}
+		if h.dirs[i].countedUnder(prefix + rest[:slash+1]) {
 			counts[rest[:slash]] += h.dirs[i].Count
 		}
 	}
