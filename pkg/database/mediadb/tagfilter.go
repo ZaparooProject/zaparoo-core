@@ -48,7 +48,11 @@ func resolveFilter(filterType, filterValue string) (tagType, tagValue string) {
 // developer, publisher, and credit tag types, implementing union-match semantics:
 //   - AND credit → passed through unchanged; BuildTagFilterSQL generates a per-filter EXISTS clause
 //   - NOT credit → three NOT filters (absent from all credit types)
-//   - OR credit → three OR filters (union with other OR conditions)
+//   - OR credit → three OR filters (union with the rest of its OR group)
+//
+// OR filters must be grouped by type before expansion (see splitTagFilters), so
+// the three expanded filters stay in the credit group instead of forming groups
+// of their own.
 func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
 	expanded := make([]zapscript.TagFilter, 0, len(filters))
 	for _, f := range filters {
@@ -70,6 +74,34 @@ func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
 		}
 	}
 	return expanded
+}
+
+// splitTagFilters groups filters by operator and the OR filters by tag type as
+// written, then expands credit filters. Each OR group becomes one clause: a
+// media must match at least one filter of every group.
+func splitTagFilters(
+	filters []zapscript.TagFilter,
+) (andFilters, notFilters []zapscript.TagFilter, orGroups [][]zapscript.TagFilter) {
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	notFilters = expandCreditFilters(notFilters)
+	orGroups = database.GroupORFiltersByType(orFilters)
+	for i := range orGroups {
+		orGroups[i] = expandCreditFilters(orGroups[i])
+	}
+	return andFilters, notFilters, orGroups
+}
+
+// orGroupCondition is the "(type = ? AND tag = ?) OR ..." condition matching
+// any filter of group, and its arguments in order.
+func orGroupCondition(group []zapscript.TagFilter) (condition string, args []any) {
+	conditions := make([]string, 0, len(group))
+	args = make([]any, 0, len(group)*2)
+	for _, f := range group {
+		typ, val := resolveFilter(f.Type, f.Value)
+		conditions = append(conditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
+		args = append(args, typ, val)
+	}
+	return strings.Join(conditions, " OR "), args
 }
 
 func candidateTagExistsSQL(condition, mediaRef string) string {
@@ -175,8 +207,7 @@ func buildCandidateTagFilterSQLForRef(
 		return nil, nil
 	}
 
-	filters = expandCreditFilters(filters)
-	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	andFilters, notFilters, orGroups := splitTagFilters(filters)
 	clauses = make([]string, 0, len(filters))
 	args = make([]any, 0, len(filters)*4)
 
@@ -208,21 +239,12 @@ func buildCandidateTagFilterSQLForRef(
 		args = append(args, typ, val, typ, val)
 	}
 
-	if len(orFilters) > 0 {
-		orConditions := make([]string, 0, len(orFilters))
-		orTypes := make([]string, 0, len(orFilters))
-		orValues := make([]string, 0, len(orFilters))
-		for _, f := range orFilters {
-			typ, val := resolveFilter(f.Type, f.Value)
-			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
-			orTypes = append(orTypes, typ)
-			orValues = append(orValues, val)
-			args = append(args, typ, val)
-		}
-		for i := range orTypes {
-			args = append(args, orTypes[i], orValues[i])
-		}
-		clauses = append(clauses, candidateTagExistsSQL("("+strings.Join(orConditions, " OR ")+")", mediaRef))
+	for _, group := range orGroups {
+		condition, groupArgs := orGroupCondition(group)
+		clauses = append(clauses, candidateTagExistsSQL("("+condition+")", mediaRef))
+		// candidateTagExistsSQL repeats the condition, once per tag table.
+		args = append(args, groupArgs...)
+		args = append(args, groupArgs...)
 	}
 
 	return clauses, args
@@ -232,7 +254,7 @@ func buildCandidateTagFilterSQLForRef(
 // using a hybrid strategy optimized for SQLite performance:
 //   - AND filters: INTERSECT pattern
 //   - NOT filters: forward NOT IN anti-set
-//   - OR filters: EXISTS with OR conditions
+//   - OR filters: one forward IN set per tag type, each with OR conditions
 //
 // Returns a slice of WHERE clause strings and corresponding arguments.
 // Clauses should be joined with " AND " and appended to the main query's WHERE conditions.
@@ -245,10 +267,7 @@ func buildTagFilterSQLForRef(filters []zapscript.TagFilter, mediaRef string) (cl
 		return nil, nil
 	}
 
-	filters = expandCreditFilters(filters)
-
-	// Group filters by operator using shared logic
-	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	andFilters, notFilters, orGroups := splitTagFilters(filters)
 
 	clauses = make([]string, 0, len(filters))
 	args = make([]any, 0, len(filters)*4)
@@ -347,39 +366,37 @@ func buildTagFilterSQLForRef(filters []zapscript.TagFilter, mediaRef string) (cl
 		args = append(args, typ, val, typ, val)
 	}
 
-	// Resolve all OR matches through reverse tag indexes once. Correlating OR
-	// probes against the outer Media scan makes even sparse unions O(all media)
-	// on MiSTer and can exceed the API timeout.
-	if len(orFilters) > 0 {
-		orConditions := make([]string, 0, len(orFilters))
-		orTypes := make([]string, 0, len(orFilters))
-		orValues := make([]string, 0, len(orFilters))
-		for _, f := range orFilters {
-			typ, val := resolveFilter(f.Type, f.Value)
-			orTypes = append(orTypes, typ)
-			orValues = append(orValues, val)
-			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
-			args = append(args, typ, val)
-		}
-		orJoined := strings.Join(orConditions, " OR ")
-		for i := range orTypes {
-			args = append(args, orTypes[i], orValues[i])
-		}
-
-		orClause := fmt.Sprintf(`%s.DBID IN (
-			SELECT MediaDBID FROM MediaTags
-			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE %s
-			UNION
-			SELECT m.DBID AS MediaDBID FROM Media m
-			JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
-			JOIN Tags ON mtt.TagDBID = Tags.DBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE %s
-		)`, mediaRef, orJoined, orJoined)
-		clauses = append(clauses, orClause)
+	// Resolve each OR group's matches through reverse tag indexes once.
+	// Correlating OR probes against the outer Media scan makes even sparse
+	// unions O(all media) on MiSTer and can exceed the API timeout.
+	for _, group := range orGroups {
+		clause, groupArgs := orGroupInClause(group, mediaRef)
+		clauses = append(clauses, clause)
+		args = append(args, groupArgs...)
 	}
 
 	return clauses, args
+}
+
+// orGroupInClause is a forward "mediaRef.DBID IN (...)" clause matching media
+// that carry any filter of group, regardless of the filters' operators and
+// types, and its arguments.
+func orGroupInClause(group []zapscript.TagFilter, mediaRef string) (clause string, args []any) {
+	condition, conditionArgs := orGroupCondition(group)
+	args = make([]any, 0, len(conditionArgs)*2)
+	args = append(args, conditionArgs...)
+	args = append(args, conditionArgs...)
+	clause = fmt.Sprintf(`%s.DBID IN (
+		SELECT MediaDBID FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE %s
+		UNION
+		SELECT m.DBID AS MediaDBID FROM Media m
+		JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+		JOIN Tags ON mtt.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE %s
+	)`, mediaRef, condition, condition)
+	return clause, args
 }

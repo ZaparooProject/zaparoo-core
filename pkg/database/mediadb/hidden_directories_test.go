@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
@@ -175,6 +176,16 @@ func TestHiddenDirectoryLeavesSearchAndRandom(t *testing.T) {
 	require.Len(t, counts, 1)
 	assert.Equal(t, 2, counts[0].Count)
 	counts, err = f.mediaDB.SystemMediaCounts(ctx, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, 4, counts[0].Count)
+
+	// A filter made only of exclusions still leaves the hidden folder out.
+	notRPG := []zapscript.TagFilter{{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorNOT}}
+	counts, err = f.mediaDB.SystemMediaCounts(ctx, notRPG, true)
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	assert.Equal(t, 2, counts[0].Count)
+	counts, err = f.mediaDB.SystemMediaCounts(ctx, notRPG, false)
 	require.NoError(t, err)
 	assert.Equal(t, 4, counts[0].Count)
 }

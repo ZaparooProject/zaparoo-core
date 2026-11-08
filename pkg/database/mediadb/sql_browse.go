@@ -1485,7 +1485,7 @@ func sqlBrowseScopeRows(
 
 // browseTagDriverCandidates returns the filters that could be resolved from the
 // tag side. Only required filters qualify: NOT filters already resolve to a
-// forward anti-set, OR filters are one grouped clause, and credit filters match
+// forward anti-set, OR filters are one clause per tag type, and credit filters match
 // across three tag types, which the bounded count below does not model.
 func browseTagDriverCandidates(filters []zapscript.TagFilter) []zapscript.TagFilter {
 	candidates := make([]zapscript.TagFilter, 0, len(filters))

@@ -27,15 +27,17 @@ import (
 )
 
 // IncludesHidden identifies an explicit view of the user's own lists: a
-// required user tag such as user:favorite, user:liked or user:hidden. Hidden
-// entries stay in those lists, as they do in favorites. An OR term does not
-// qualify: other branches of that query are still ordinary discovery.
+// required user tag such as user:favorite, user:liked or user:hidden, or an
+// OR group of user tags (~user:favorite ~user:liked). OR filters group by tag
+// type, so every branch of a user OR group is itself one of the user's lists.
+// Hidden entries stay in those lists, as they do in favorites. An excluded
+// user tag does not qualify.
 func IncludesHidden(filters []zapscript.TagFilter, includeHidden bool) bool {
 	if includeHidden {
 		return true
 	}
 	for _, filter := range filters {
-		if filter.Type == string(tags.TagTypeUser) && filter.Operator == zapscript.TagOperatorAND {
+		if filter.Type == string(tags.TagTypeUser) && filter.Operator != zapscript.TagOperatorNOT {
 			return true
 		}
 	}

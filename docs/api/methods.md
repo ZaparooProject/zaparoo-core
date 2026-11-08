@@ -674,7 +674,7 @@ Every field is omitted when the track does not have it.
 
 **Access:** All clients.
 
-Query the media database and return matching indexed media. Hidden entries, and everything under a hidden folder, are excluded before pagination unless `includeHidden` is true. A search whose `pathPrefix` is a hidden folder, or a path inside one, addresses that folder directly and still searches it. Explicit required user tag filters (`user:favorite`, `user:liked`, `user:hidden` and the other user tags) also include hidden entries; OR/NOT user tag filters do not enable this exception.
+Query the media database and return matching indexed media. Hidden entries, and everything under a hidden folder, are excluded before pagination unless `includeHidden` is true. A search whose `pathPrefix` is a hidden folder, or a path inside one, addresses that folder directly and still searches it. Explicit required user tag filters (`user:favorite`, `user:liked`, `user:hidden` and the other user tags) and `~` groups of user tags (`~user:favorite ~user:liked`) also include hidden entries; `-` user tag filters do not enable this exception.
 
 **Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
@@ -690,7 +690,7 @@ An object:
 | pathPrefix | string   | No       | Recursively restrict results beneath a filesystem directory or virtual route. Matching respects path boundaries, so `/roms/SNES` does not include `/roms/SNES2`; `%` and `_` are literal path characters. |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
-| tags       | string[] | No       | Filter results by case-sensitive tags. Maximum 50 tags, each up to 128 characters. Default and `+` filters require matches, `-` excludes matches, and `~` joins alternatives. Can be used without query or systems for tag-only searches. |
+| tags       | string[] | No       | Filter results by case-sensitive tags. Maximum 50 tags, each up to 128 characters. Default and `+` filters require matches, `-` excludes matches, and `~` joins alternatives of the same tag type: a result must match at least one `~` filter of every type given, so `~genre:rpg ~genre:platformer ~region:us ~region:jp` means (rpg or platformer) and (us or jp). Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
 | sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, `filename-desc` or `added-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. `added-desc` orders by when each game got a flag; see [Sorting by date added](#sorting-by-date-added). Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
@@ -3127,7 +3127,7 @@ Set `tags` to return only systems containing matching non-missing media. Tagged 
 
 | Key  | Type     | Required | Description                                                                                     |
 | :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
-| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required user tag filters also include hidden entries. |
+| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required user tag filters and `~` groups of user tags also include hidden entries. |
 | all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 | tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 

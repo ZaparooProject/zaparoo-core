@@ -94,6 +94,25 @@ func TestBuildCandidateTagFilterSQL(t *testing.T) {
 		assert.Equal(t, []any{"lang", "en", "lang", "ja", "lang", "en", "lang", "ja"}, args)
 	})
 
+	t.Run("OR filters get one candidate lookup per type", func(t *testing.T) {
+		t.Parallel()
+		filters := []zapscript.TagFilter{
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "ja", Operator: zapscript.TagOperatorOR},
+		}
+
+		clauses, args := buildCandidateTagFilterSQL(filters)
+
+		require.Len(t, clauses, 2)
+		assert.Equal(t, 4, strings.Count(clauses[0], "TagTypes.Type = ?"))
+		assert.Equal(t, 2, strings.Count(clauses[1], "TagTypes.Type = ?"))
+		assert.Equal(t, []any{
+			"lang", "en", "lang", "ja", "lang", "en", "lang", "ja",
+			"region", "us", "region", "us",
+		}, args)
+	})
+
 	t.Run("AND credit searches all credit roles", func(t *testing.T) {
 		t.Parallel()
 		filters := []zapscript.TagFilter{
