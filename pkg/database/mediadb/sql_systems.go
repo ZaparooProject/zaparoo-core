@@ -228,25 +228,39 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 func buildNegativeOnlySystemMediaCountsQuery(
 	tags []zapscript.TagFilter,
 ) (query string, args []any) {
+	// A hidden folder is a path exclusion, not a tag: it keeps its media out of
+	// both the totals and the excluded counts.
+	var dirClauses strings.Builder
+	var dirArgs []any
 	// A media is excluded when it carries any of the tags, whatever their
 	// types, so they form one OR group rather than one per type.
-	forbidden := make([]zapscript.TagFilter, len(tags))
+	forbidden := make([]zapscript.TagFilter, 0, len(tags))
 	for i := range tags {
-		forbidden[i] = tags[i]
-		forbidden[i].Operator = zapscript.TagOperatorOR
+		if clause, clauseArgs, ok := hiddenDirFilterSQL(tags[i], "Media"); ok {
+			_, _ = dirClauses.WriteString(" AND " + clause)
+			dirArgs = append(dirArgs, clauseArgs...)
+			continue
+		}
+		f := tags[i]
+		f.Operator = zapscript.TagOperatorOR
+		forbidden = append(forbidden, f)
 	}
-	forbiddenClause, args := orGroupInClause(expandCreditFilters(forbidden), "Media")
+	forbiddenClause := "0"
+	var forbiddenArgs []any
+	if len(forbidden) > 0 {
+		forbiddenClause, forbiddenArgs = orGroupInClause(expandCreditFilters(forbidden), "Media")
+	}
 
 	query = `
 		WITH TotalCounts AS (
 			SELECT Media.SystemDBID, COUNT(*) AS Count
 			FROM Media INDEXED BY media_system_present_path_idx
-			WHERE Media.IsMissing = 0
+			WHERE Media.IsMissing = 0` + dirClauses.String() + `
 			GROUP BY Media.SystemDBID
 		), ExcludedCounts AS (
 			SELECT Media.SystemDBID, COUNT(*) AS Count
 			FROM Media
-			WHERE Media.IsMissing = 0
+			WHERE Media.IsMissing = 0` + dirClauses.String() + `
 			AND ` + forbiddenClause + `
 			GROUP BY Media.SystemDBID
 		)
@@ -256,6 +270,10 @@ func buildNegativeOnlySystemMediaCountsQuery(
 		LEFT JOIN ExcludedCounts ON ExcludedCounts.SystemDBID = TotalCounts.SystemDBID
 		WHERE TotalCounts.Count > COALESCE(ExcludedCounts.Count, 0)
 		ORDER BY Systems.SystemID`
+	args = make([]any, 0, 2*len(dirArgs)+len(forbiddenArgs))
+	args = append(args, dirArgs...)
+	args = append(args, dirArgs...)
+	args = append(args, forbiddenArgs...)
 	return query, args
 }
 
