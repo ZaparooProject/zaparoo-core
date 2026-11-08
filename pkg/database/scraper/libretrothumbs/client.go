@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/rs/zerolog/log"
@@ -57,6 +59,24 @@ var pngMagic = []byte("\x89PNG\r\n\x1a\n")
 // errNotFound is a thumbnail the server does not have.
 var errNotFound = errors.New("thumbnail not found")
 
+// freeSpaceFloor is the free space a download must leave on the image
+// folder's filesystem. A variable so tests can lower it.
+var freeSpaceFloor = uint64(config.MinFreeDiskBytes)
+
+// lowDiskSpaceError stops a run before a download would fill the image
+// folder's filesystem. It ends the run rather than one row, since every
+// later download would hit it too.
+type lowDiskSpaceError struct {
+	dir  string
+	free uint64
+	need uint64
+}
+
+func (e *lowDiskSpaceError) Error() string {
+	return fmt.Sprintf("not enough free space for images in %s: %d MB free, need at least %d MB",
+		e.dir, e.free/(1024*1024), e.need/(1024*1024))
+}
+
 // client fetches playlist indexes and images and keeps both under dir, so a
 // later run reuses them instead of downloading again.
 type client struct {
@@ -67,18 +87,49 @@ type client struct {
 	// the spelling of the PNG already stored there. localNames fills it while
 	// an index is built, so image can find a file whose name differs from the
 	// listed one only in letter case without listing the folder again.
-	local   map[string]string
-	baseURL string
-	dir     string
-	localMu syncutil.RWMutex
+	local map[string]string
+	// freeSpace reports the free bytes on the filesystem holding a path.
+	freeSpace func(string) (uint64, error)
+	baseURL   string
+	dir       string
+	localMu   syncutil.RWMutex
 }
 
 func newClient(fs afero.Fs, dir, baseURL string) *client {
 	return &client{
 		http: &http.Client{Timeout: requestWait, Transport: useragent.Transport(nil)},
-		fs:   fs, now: time.Now, local: make(map[string]string),
+		fs:   fs, now: time.Now, local: make(map[string]string), freeSpace: helpers.FreeDiskSpace,
 		baseURL: strings.TrimRight(baseURL, "/"), dir: dir,
 	}
+}
+
+// checkFreeSpace answers a lowDiskSpaceError when the image folder's
+// filesystem is below freeSpaceFloor. A folder whose free space cannot be
+// read, such as one not created yet, is not held up: the write that follows
+// reports any real failure.
+func (c *client) checkFreeSpace() error {
+	if c.freeSpace == nil {
+		return nil
+	}
+	free, err := c.freeSpace(c.dir)
+	if err != nil {
+		log.Debug().Err(err).Str("dir", c.dir).Msg("libretro thumbnails: free space unknown")
+		return nil
+	}
+	if free < freeSpaceFloor {
+		return &lowDiskSpaceError{dir: c.dir, free: free, need: freeSpaceFloor}
+	}
+	return nil
+}
+
+// imagePath is the images:// path a property records for a file under dir,
+// which is the libretro folder of the image folder.
+func (c *client) imagePath(file string) (string, error) {
+	rel, err := filepath.Rel(c.dir, file)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside %s", file, c.dir)
+	}
+	return config.ImagePath(config.ImageLibretroDir + "/" + filepath.ToSlash(rel)), nil
 }
 
 func (c *client) get(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
@@ -346,7 +397,8 @@ func mergeNames(listed, local []string) []string {
 
 // image returns the local path of one thumbnail, downloading it unless an
 // earlier run already did (or force asks again). It answers errNotFound when
-// the server has no such image.
+// the server has no such image, and a lowDiskSpaceError instead of starting
+// a download that would leave the filesystem short of space.
 func (c *client) image(ctx context.Context, playlist, kind, name string, force bool) (string, error) {
 	path := filepath.Join(c.dir, playlist, kind, name+".png")
 	if info, err := c.fs.Stat(path); err == nil && info.Size() > 0 && !force {
@@ -361,6 +413,9 @@ func (c *client) image(ctx context.Context, playlist, kind, name string, force b
 		if info, err := c.fs.Stat(alt); err == nil && info.Size() > 0 {
 			return alt, nil
 		}
+	}
+	if err := c.checkFreeSpace(); err != nil {
+		return "", err
 	}
 	data, err := c.get(ctx, c.folderURL(playlist, kind)+url.PathEscape(name+".png"), imageMaxBytes)
 	if err != nil {

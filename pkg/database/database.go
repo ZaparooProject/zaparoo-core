@@ -743,13 +743,15 @@ type SingletonAliasCandidate struct {
 // AfterName is the keyset cursor for directory pagination: only directories
 // whose Name sorts strictly after it are returned (directory names are unique
 // within a parent, so Name alone is a stable keyset). Limit caps the number of
-// directories returned; 0 means no limit (full listing).
+// directories returned; 0 means no limit (full listing). Offset skips that many
+// listed directories before Limit applies, for a page requested by position.
 type BrowseDirectoriesOptions struct {
 	PathPrefix    string
 	Overlay       *BrowseOverlay
 	AfterName     string
 	Systems       []systemdefs.System
 	Limit         int
+	Offset        int
 	ExcludeHidden bool
 }
 
@@ -797,15 +799,41 @@ type BrowseOverlay struct {
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
 type BrowseFilesOptions struct {
-	Cursor        *BrowseCursor
-	Letter        *string
-	PathPrefix    string
-	Overlay       *BrowseOverlay
-	Sort          string
-	Systems       []systemdefs.System
-	Tags          []zapscript.TagFilter
-	Limit         int
+	Cursor     *BrowseCursor
+	Letter     *string
+	PathPrefix string
+	Overlay    *BrowseOverlay
+	Sort       string
+	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
+	Limit      int
+	// Offset skips that many listed files before Limit applies, in the same
+	// order a cursor walk returns them. It is not combined with Cursor.
+	Offset        int
 	ExcludeHidden bool
+}
+
+// BrowseAnchorOptions locates one path in a browse listing. The scope fields
+// mean what they mean in BrowseFilesOptions. ListDirectories says the listing
+// pages directories ahead of files, which a flat virtual scheme does not.
+type BrowseAnchorOptions struct {
+	Overlay         *BrowseOverlay
+	PathPrefix      string
+	Path            string
+	Sort            string
+	Systems         []systemdefs.System
+	Tags            []zapscript.TagFilter
+	ListDirectories bool
+	ExcludeHidden   bool
+}
+
+// BrowseAnchorResult is where a path sits in its listing. Position counts within
+// the entry's own kind: listed directories before a directory, listed files
+// before a file. A path the listing does not show reports Found false.
+type BrowseAnchorResult struct {
+	Position    int
+	Found       bool
+	IsDirectory bool
 }
 
 // BrowseFileCountOptions contains parameters for the BrowseFileCount query.
@@ -1588,6 +1616,11 @@ type MediaDBI interface {
 	GetMediaCoverColors(ctx context.Context, mediaDBIDs []int64) (map[int64]uint32, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
+	// BrowseAnchorPosition locates one path in a browse listing.
+	BrowseAnchorPosition(ctx context.Context, opts *BrowseAnchorOptions) (BrowseAnchorResult, error)
+	// BrowseListingCache returns the per-listing cache of letter indexes and
+	// totals. It lives as long as this database handle's rows stay unchanged.
+	BrowseListingCache() *BrowseListingCache
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)

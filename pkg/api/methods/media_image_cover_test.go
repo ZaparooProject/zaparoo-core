@@ -49,7 +49,7 @@ func newMemThumbCache() *mediaThumbCache {
 	return &mediaThumbCache{
 		fs: afero.NewMemMapFs(),
 		dir: filepath.Join(
-			string(filepath.Separator), "cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir(),
+			string(filepath.Separator), "images", mediaThumbCacheDirName, mediaThumbCacheVersionDir(),
 		),
 		resolved: make(map[string]resolvedThumb),
 	}
@@ -378,7 +378,7 @@ func TestMediaThumbCache_ResizeConcurrencyFollowsPlatform(t *testing.T) {
 		pl.On("Settings").Return(platforms.Settings{
 			DataDir: t.TempDir(), HostManagedPaths: true, ResourceConstrained: constrained,
 		})
-		cache := newMediaThumbCacheWithFS(pl, afero.NewMemMapFs())
+		cache := newMediaThumbCacheWithFS(pl, nil, afero.NewMemMapFs())
 		want := mediaImageResizeConcurrency
 		if constrained {
 			want = mediaImageResizeConcurrencyConstrained
@@ -393,7 +393,7 @@ func TestMediaThumbCache_ResizeConcurrencyFollowsPlatform(t *testing.T) {
 func TestReapStaleVersions_KeepsTemporaryFilesNewerThanCache(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()
-	live := filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir())
+	live := filepath.Join("images", "thumbs", mediaThumbCacheVersionDir())
 	systemDir := filepath.Join(live, "ab")
 	require.NoError(t, fs.MkdirAll(systemDir, 0o750))
 	createdAt := time.Now()
@@ -419,7 +419,7 @@ func TestInitMediaThumbCache_UsableBeforeReapFinishes(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true})
-	waitReap := InitMediaThumbCache(pl)
+	waitReap := InitMediaThumbCache(pl, nil)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 	cache := mediaThumbCachePointer.Load()
 	require.NotNil(t, cache)

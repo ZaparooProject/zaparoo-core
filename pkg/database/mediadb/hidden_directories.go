@@ -449,6 +449,7 @@ func (db *MediaDB) ReplaceHiddenDirectories(
 		return false, fmt.Errorf("commit hidden directories: %w", err)
 	}
 	committed = true
+	db.browseListings.Clear()
 	return true, nil
 }
 

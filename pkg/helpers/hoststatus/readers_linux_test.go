@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/godbus/dbus/v5"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -342,6 +343,11 @@ func TestLinuxDisplay_Read(t *testing.T) {
 	})
 }
 
+// An Xbox Wireless Controller over Bluetooth LE, as read on a
+// MiSTer, 2026-11-07.
+const xboxLEAlias = "input:b0005v045Ep0B13e0523-e0,1,3,4,15,kA7,130,131,132,133,134," +
+	"135,136,137,138,139,13A,13B,13C,13D,13E,ra0,1,2,5,9,A,10,11,m4,lsf50,51,58,59,5A,60,w"
+
 func TestLinuxControllers_Read(t *testing.T) {
 	t.Parallel()
 
@@ -362,6 +368,10 @@ func TestLinuxControllers_Read(t *testing.T) {
 		// A wired pad with no battery, listed out of order.
 		filepath.Join(inputRoot, "input5", "modalias"): xboxAlias + "\n",
 		filepath.Join(inputRoot, "input5", "name"):     "Microsoft X-Box 360 pad\n",
+		// An Xbox pad over Bluetooth LE, which BlueZ forwards through uhid.
+		filepath.Join(inputRoot, "input23", "modalias"): xboxLEAlias + "\n",
+		filepath.Join(inputRoot, "input23", "name"):     "Xbox Wireless Controller\n",
+		filepath.Join(inputRoot, "input23", "uniq"):     "44:16:22:D0:7B:4D\n",
 		// A keyboard.
 		filepath.Join(inputRoot, "input2", "modalias"): keyboardAlias + "\n",
 		filepath.Join(inputRoot, "input2", "name"):     "Keyboard\n",
@@ -375,6 +385,7 @@ func TestLinuxControllers_Read(t *testing.T) {
 		// The pad's battery, the machine's battery, and a mouse's.
 		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff", "scope"):    "Device\n",
 		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff", "capacity"): "80\n",
+		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff", "status"):   "Charging\n",
 		filepath.Join(powerRoot, "BAT0", "capacity"):                                    "50\n",
 		filepath.Join(powerRoot, "hidpp_battery_0", "scope"):                            "Device\n",
 		filepath.Join(powerRoot, "hidpp_battery_0", "capacity"):                         "10\n",
@@ -385,6 +396,8 @@ func TestLinuxControllers_Read(t *testing.T) {
 		filepath.Join(inputRoot, "input5"):  filepath.Join(devices, "pci0000:00", "usb1", "1-2", "input", "input5"),
 		filepath.Join(inputRoot, "input30"): filepath.Join(devices, "virtual", "input", "input30"),
 		filepath.Join(inputRoot, "input31"): filepath.Join(devices, "virtual", "input", "input31"),
+		filepath.Join(inputRoot, "input23"): filepath.Join(
+			devices, "virtual", "misc", "uhid", "0005:045E:0B13.0007", "input", "input23"),
 		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff"): filepath.Join(
 			padDevice, "power_supply", "ps-controller-battery-aa:bb:cc:dd:ee:ff"),
 		filepath.Join(powerRoot, "hidpp_battery_0"): filepath.Join(
@@ -413,8 +426,14 @@ func TestLinuxControllers_Read(t *testing.T) {
 		},
 		{
 			ID: "input17", Name: "DualSense Wireless Controller", VendorID: "054c", ProductID: "0ce6",
-			Connection: ConnectionBluetooth,
-			Battery:    &ControllerBattery{Percent: &percent, Level: BatteryLevelFull},
+			Connection: ConnectionBluetooth, Address: "aa:bb:cc:dd:ee:ff",
+			Battery: &ControllerBattery{
+				Percent: &percent, Level: BatteryLevelFull, ChargeState: power.ChargeCharging,
+			},
+		},
+		{
+			ID: "input23", Name: "Xbox Wireless Controller", VendorID: "045e", ProductID: "0b13",
+			Connection: ConnectionBluetooth, Address: "44:16:22:d0:7b:4d",
 		},
 	}, controllers)
 }
@@ -495,6 +514,124 @@ func TestLinuxControllers_BatteryMatchedByAddress(t *testing.T) {
 	require.NotNil(t, controllers[0].Battery)
 	assert.Equal(t, 12, *controllers[0].Battery.Percent)
 	assert.Equal(t, BatteryLevelEmpty, controllers[0].Battery.Level)
+	assert.Empty(t, controllers[0].Battery.ChargeState, "no status file is an unknown charge state")
+}
+
+func TestLinuxControllers_BatteryFromBlueZ(t *testing.T) {
+	t.Parallel()
+
+	inputRoot := sys("class", "input")
+	powerRoot := sys("class", "power_supply")
+	fs := afero.NewMemMapFs()
+	writeFiles(t, fs, map[string]string{
+		filepath.Join(inputRoot, "input3", "modalias"):                                  dualSenseAlias,
+		filepath.Join(inputRoot, "input3", "name"):                                      "Kernel battery",
+		filepath.Join(inputRoot, "input3", "uniq"):                                      "AA:BB:CC:DD:EE:FF",
+		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff", "scope"):    "Device",
+		filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff", "capacity"): "12",
+		filepath.Join(inputRoot, "input4", "modalias"):                                  dualSenseAlias,
+		filepath.Join(inputRoot, "input4", "name"):                                      "BlueZ battery",
+		filepath.Join(inputRoot, "input4", "uniq"):                                      "44:16:22:D0:7B:4D",
+		filepath.Join(inputRoot, "input5", "modalias"):                                  dualSenseAlias,
+		filepath.Join(inputRoot, "input5", "name"):                                      "No battery",
+		filepath.Join(inputRoot, "input5", "uniq"):                                      "11:22:33:44:55:66",
+	})
+	reads := 0
+	reader := &LinuxControllers{
+		Fs:        fs,
+		Resolve:   func(string) (string, error) { return "", errors.New("no links here") },
+		InputRoot: inputRoot,
+		PowerRoot: powerRoot,
+		Batteries: func() map[string]int {
+			reads++
+			return map[string]int{"aa:bb:cc:dd:ee:ff": 90, "44:16:22:d0:7b:4d": 83}
+		},
+	}
+
+	controllers, err := reader.Read()
+	require.NoError(t, err)
+	require.Len(t, controllers, 3)
+	require.NotNil(t, controllers[0].Battery)
+	assert.Equal(t, 12, *controllers[0].Battery.Percent, "the kernel's reading wins")
+	require.NotNil(t, controllers[1].Battery)
+	assert.Equal(t, 83, *controllers[1].Battery.Percent)
+	assert.Equal(t, BatteryLevelFull, controllers[1].Battery.Level)
+	assert.Empty(t, controllers[1].Battery.ChargeState, "BlueZ has no charge state")
+	assert.Nil(t, controllers[2].Battery)
+	assert.Equal(t, 1, reads, "BlueZ is read once per pass")
+}
+
+func TestLinuxControllers_BatteryChargeState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status string
+		want   power.ChargeState
+	}{
+		{status: "Charging\n", want: power.ChargeCharging},
+		{status: "Discharging\n", want: power.ChargeDischarging},
+		{status: "Full\n", want: power.ChargeFull},
+		{status: "Not charging\n", want: power.ChargeNotCharging},
+		{status: "Unknown\n", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			inputRoot := sys("class", "input")
+			powerRoot := sys("class", "power_supply")
+			supply := filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff")
+			fs := afero.NewMemMapFs()
+			writeFiles(t, fs, map[string]string{
+				filepath.Join(inputRoot, "input3", "modalias"): dualSenseAlias,
+				filepath.Join(inputRoot, "input3", "uniq"):     "aa:bb:cc:dd:ee:ff",
+				filepath.Join(supply, "scope"):                 "Device",
+				filepath.Join(supply, "capacity"):              "100",
+				filepath.Join(supply, "status"):                tt.status,
+			})
+			reader := &LinuxControllers{
+				Fs:        fs,
+				Resolve:   func(string) (string, error) { return "", errors.New("no links here") },
+				InputRoot: inputRoot,
+				PowerRoot: powerRoot,
+			}
+
+			controllers, err := reader.Read()
+			require.NoError(t, err)
+			require.Len(t, controllers, 1)
+			require.NotNil(t, controllers[0].Battery)
+			assert.Equal(t, tt.want, controllers[0].Battery.ChargeState)
+		})
+	}
+}
+
+func TestLinuxControllers_BlueZBatteryKeepsSysfsChargeState(t *testing.T) {
+	t.Parallel()
+
+	inputRoot := sys("class", "input")
+	powerRoot := sys("class", "power_supply")
+	supply := filepath.Join(powerRoot, "ps-controller-battery-aa:bb:cc:dd:ee:ff")
+	fs := afero.NewMemMapFs()
+	writeFiles(t, fs, map[string]string{
+		filepath.Join(inputRoot, "input3", "modalias"): dualSenseAlias,
+		filepath.Join(inputRoot, "input3", "uniq"):     "aa:bb:cc:dd:ee:ff",
+		filepath.Join(supply, "scope"):                 "Device",
+		filepath.Join(supply, "capacity"):              "unknown",
+		filepath.Join(supply, "status"):                "Charging\n",
+	})
+	reader := &LinuxControllers{
+		Fs:        fs,
+		Resolve:   func(string) (string, error) { return "", errors.New("no links here") },
+		InputRoot: inputRoot,
+		PowerRoot: powerRoot,
+		Batteries: func() map[string]int { return map[string]int{"aa:bb:cc:dd:ee:ff": 40} },
+	}
+
+	controllers, err := reader.Read()
+	require.NoError(t, err)
+	require.Len(t, controllers, 1)
+	require.NotNil(t, controllers[0].Battery)
+	assert.Equal(t, 40, *controllers[0].Battery.Percent)
+	assert.Equal(t, power.ChargeCharging, controllers[0].Battery.ChargeState)
 }
 
 func TestLinuxControllers_NoInputClass(t *testing.T) {

@@ -160,7 +160,7 @@ func TestMediaThumbCache_GetSet(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	cache := newTestThumbCache(fs, filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	cache := newTestThumbCache(fs, filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
 	key := "f:10:20:/media/boxart/mario.png"
 
 	_, _, found := cache.get(key, 100)
@@ -189,7 +189,7 @@ func TestMediaThumbCache_GetSet(t *testing.T) {
 func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
 	t.Parallel()
 
-	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
 	_, err := cache.set("d:abc", 100, []byte("not an image"), "text/plain")
 	require.Error(t, err)
 	_, _, found := cache.get("d:abc", 100)
@@ -253,7 +253,7 @@ func seedThumbMemo(t *testing.T, cache *mediaThumbCache, systems ...string) map[
 }
 
 func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
-	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 	refs := seedThumbMemo(t, cache, "SNES", "Genesis")
@@ -284,7 +284,7 @@ func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cache := newTestThumbCache(
-				afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
+				afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()),
 			)
 			mediaThumbCachePointer.Store(cache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -306,7 +306,7 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	thumbs := filepath.Join("cache", "thumbs")
+	thumbs := filepath.Join("images", "thumbs")
 	// Leftovers from older builds and prior versions, plus a crash-abandoned
 	// moved-aside wipe directory.
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "current"), 0o750))
@@ -351,9 +351,9 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 func newReapTestCache(t *testing.T, maxBytes int64) (*mediaThumbCache, *clockwork.FakeClock) {
 	t.Helper()
 	clock := clockwork.NewFakeClockAt(time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC))
-	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()))
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
 	cache.clock = clock
-	cache.maxBytes = maxBytes
+	cache.maxBytes.Store(maxBytes)
 	return cache, clock
 }
 
@@ -1473,7 +1473,7 @@ func TestHandleMediaImage_DirectoryMediaRefThumbMemoFollowsDisc(t *testing.T) {
 	t.Cleanup(mediaImageNoImages.clear)
 	cache := &mediaThumbCache{
 		fs:       afero.NewMemMapFs(),
-		dir:      filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
@@ -1515,7 +1515,7 @@ func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
 		fs:       fs,
-		dir:      filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)

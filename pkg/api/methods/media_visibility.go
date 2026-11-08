@@ -172,7 +172,8 @@ func stampBrowseVisibility(result any, revision string, includeHidden bool) (any
 
 // runBrowseVisibility runs one browse or browse-index call under the
 // preferences revision that was current when it started, and stamps the
-// result with that revision on the way out.
+// result with that revision on the way out. browse receives the revision it
+// runs under, which scopes anything it caches.
 //
 // A cursor request is a continuation of a specific earlier page: if the
 // revision moved underneath it, that continuation is no longer valid and the
@@ -185,7 +186,7 @@ func stampBrowseVisibility(result any, revision string, includeHidden bool) (any
 // visibility partway through, so a changed-again result is discarded rather
 // than stamped and handed back.
 func runBrowseVisibility(
-	env *requests.RequestEnv, cursor *string, browse func() (any, error),
+	env *requests.RequestEnv, cursor *string, browse func(revision string) (any, error),
 ) (any, error) {
 	hasCursor := cursor != nil && *cursor != ""
 	revision, err := validateBrowseVisibility(env, cursor)
@@ -193,7 +194,7 @@ func runBrowseVisibility(
 		return nil, err
 	}
 
-	result, err := browse()
+	result, err := browse(revision)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +212,7 @@ func runBrowseVisibility(
 	log.Debug().Str("from", revision).Str("to", current).
 		Msg("preferences revision changed during a cursorless browse; rerunning once")
 	revision = current
-	result, err = browse()
+	result, err = browse(revision)
 	if err != nil {
 		return nil, err
 	}

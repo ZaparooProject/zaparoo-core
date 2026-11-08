@@ -613,9 +613,20 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	results, err := sqlBrowseDirectoryRows(ctx, db, opts)
+	// A page by position lists everything and slices it, because the rows have
+	// to be settled against hidden folders before they can be numbered: a LIMIT
+	// and OFFSET in the statement would count rows the listing goes on to drop.
+	rowOpts := opts
+	if opts.Offset > 0 {
+		rowOpts.Limit = 0
+	}
+	results, err := sqlBrowseDirectoryRows(ctx, db, rowOpts)
 	if err != nil {
 		return nil, err
+	}
+	if opts.Offset > 0 {
+		results = results[min(opts.Offset, len(results)):]
+		results = browseTruncateDirectories(results, opts.Limit)
 	}
 
 	// Decorate what the caller will actually see. Attaching cover flags before
@@ -668,14 +679,20 @@ func sqlBrowseDirectoryRows(
 				return nil, cacheErr
 			}
 			if parentFound {
-				results = browseTruncateDirectories(
-					applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems), opts.Limit,
-				)
+				// Cut back below, after the path filter: a stale count can keep a
+				// hidden folder that the filter then drops.
+				results = applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems)
 				served = true
 			}
 		}
 		if !served {
-			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+			// Media counts no folder as hidden, so a hidden folder would take a
+			// row of the page and its lookahead until it is dropped below.
+			scoped := opts
+			scoped.Limit = browseHiddenFetchLimit(
+				opts.Limit, hidden.childNameCount([]string{opts.PathPrefix}, opts.Systems),
+			)
+			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, scoped)
 			if err != nil {
 				return nil, err
 			}
@@ -688,7 +705,11 @@ func sqlBrowseDirectoryRows(
 			}
 		}
 	}
-	return applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+	results, err = applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+	if err != nil {
+		return nil, err
+	}
+	return browseTruncateDirectories(results, opts.Limit), nil
 }
 
 // applyHiddenDirsToDirectories settles the hidden folders among a listing's
@@ -2090,7 +2111,9 @@ func browseOverlayMergedFilesQuery(
 			ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + `
 			LIMIT ?
 		)`
-		args = append(args, opts.Limit)
+		// The rows a page skips can all come from one route, so each branch has
+		// to reach past them.
+		args = append(args, opts.Limit+opts.Offset)
 	}
 
 	// A subquery column carries no explicit collation, so the merge has to name
@@ -2111,7 +2134,36 @@ func browseOverlayMergedFilesQuery(
 	INNER JOIN Systems s ON m.SystemDBID = s.DBID
 	INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 	ORDER BY ` + mergeOrder + ` ` + direction + `, m.DBID ` + direction + `
-	LIMIT ?`, append(args, opts.Limit)
+	LIMIT ?` + browseOffsetClause(opts.Offset), append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
+}
+
+// browseOffsetClause is left out for an ordinary page, so its statement stays
+// the one the query-plan tests measure.
+func browseOffsetClause(offset int) string {
+	if offset <= 0 {
+		return ""
+	}
+	return " OFFSET ?"
+}
+
+func browseOffsetArgs(offset int) []any {
+	if offset <= 0 {
+		return nil
+	}
+	return []any{offset}
+}
+
+// browseOverlaySort maps a requested sort to the merge's ordered expression, its
+// direction, and the comparison that seeks past a row in that direction.
+func browseOverlaySort(sortOrder string) (sortExpr, direction, cursorOp string) {
+	sortExpr = browseTitleSortExpr()
+	if sortOrder == "filename-asc" || sortOrder == "filename-desc" {
+		sortExpr = browseFilenameExpr()
+	}
+	if sortOrder == "name-desc" || sortOrder == "filename-desc" {
+		return sortExpr, "DESC", "<"
+	}
+	return sortExpr, "ASC", ">"
 }
 
 // browseOverlayFilesQuery builds the overlay file-listing statement and its
@@ -2121,14 +2173,7 @@ func browseOverlayMergedFilesQuery(
 func browseOverlayFilesQuery(
 	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
 ) (query string, args []any) {
-	sortExpr := browseTitleSortExpr()
-	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
-		sortExpr = browseFilenameExpr()
-	}
-	direction, cursorOp := "ASC", ">"
-	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
-		direction, cursorOp = "DESC", "<"
-	}
+	sortExpr, direction, cursorOp := browseOverlaySort(opts.Sort)
 
 	sole, single := browseOverlaySoleSource(opts.Overlay)
 	if !single {
@@ -2153,8 +2198,9 @@ func browseOverlayFilesQuery(
 		query += browseOverlayCursorCondition(route.orderExpr, cursorOp)
 		args = append(args, route.cursorValue, route.cursorValue, opts.Cursor.LastID)
 	}
-	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
-	return query, append(args, opts.Limit)
+	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction +
+		` LIMIT ?` + browseOffsetClause(opts.Offset)
+	return query, append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
 }
 
 func sqlBrowseOverlayFilesFromMedia(
@@ -2222,8 +2268,8 @@ func browseFilesQuery(
 		query += browseCursorCondition(sortMode)
 		args = append(args, browseCursorArgs(opts.Cursor)...)
 	}
-	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?`
-	return query, append(args, opts.Limit)
+	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?` + browseOffsetClause(opts.Offset)
+	return query, append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
 }
 
 func sqlBrowseFilesFromMedia(

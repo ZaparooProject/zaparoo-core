@@ -63,19 +63,21 @@ func controllersWire(snap *Snapshot) *models.DeviceControllers {
 	for i := range snap.Controllers {
 		controller := &snap.Controllers[i]
 		item := models.DeviceController{
-			ID:         controller.ID,
-			Name:       optional(controller.Name),
-			VendorID:   optional(controller.VendorID),
-			ProductID:  optional(controller.ProductID),
-			Connection: controller.Connection,
+			ID:          controller.ID,
+			Name:        optional(controller.Name),
+			DisplayName: optional(hoststatus.ControllerDisplayName(controller.VendorID, controller.ProductID)),
+			VendorID:    optional(controller.VendorID),
+			ProductID:   optional(controller.ProductID),
+			Connection:  controller.Connection,
 		}
 		if item.Connection == "" {
 			item.Connection = hoststatus.ConnectionUnknown
 		}
 		if controller.Battery != nil {
 			item.Battery = &models.DeviceControllerBattery{
-				Percent: controller.Battery.Percent,
-				Level:   controller.Battery.Level,
+				Percent:     controller.Battery.Percent,
+				ChargeState: optional(controller.Battery.ChargeState),
+				Level:       controller.Battery.Level,
 			}
 		}
 		items = append(items, item)

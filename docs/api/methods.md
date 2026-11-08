@@ -15,6 +15,7 @@ Each method below identifies which clients may call it:
 - **`screenshot`:** localhost, member, and admin. Legacy screenshot capture is grandfathered only on MiSTer and ReplayOS.
 - **`update.apply`:** localhost and authenticated admin. Member and legacy do not receive it.
 - **`device.power`:** localhost and authenticated admin. Member and legacy do not receive it.
+- **`device.bluetooth`:** localhost and authenticated admin. Member and legacy do not receive it.
 - **Localhost or admin:** localhost, paired admin, and API-key admin. Member and legacy are rejected.
 - **Localhost only:** requests originating from Core's device. All remote clients are rejected.
 
@@ -927,6 +928,8 @@ All parameters are optional. When called with no parameters, returns root entrie
 | tags       | string[] | No     | Filter direct media files by tags. Syntax and AND/NOT/OR operators match `media.search`. Directories remain unfiltered. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
+| offset     | number | No       | Start the page at this absolute position in the listing, directories first, then files. Must be 0 or greater. An offset at or past the end returns no entries with correct totals. Root `virtualEntries` of a `rootView: "contents"` listing are not counted and appear only on the cursorless first page. See [Positioned pages](#positioned-pages). |
+| anchorPath | string | No       | Non-empty absolute path to locate in the listing, in the form entries report as `path`. The launcher-relative form accepted by `path` is not resolved here. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a listed folder, at any depth, finds that folder, whether or not the path itself is still indexed or visible. See [Positioned pages](#positioned-pages). |
 
 #### Result
 
@@ -937,7 +940,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
 | totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
-| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
+| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Always present on a cursorless page without `letter` of a `path` or `rootView: "contents"` listing. Never present on a route listing (no `path`, default `rootView`). Elsewhere, omitted when the page has no entries. |
 
 ##### Browse entry object
 
@@ -966,6 +969,20 @@ All parameters are optional. When called with no parameters, returns root entrie
 | hasNextPage | bool   | Yes      | Whether more results exist beyond the current page.      |
 | pageSize    | number | Yes      | The requested page size.                                 |
 | nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
+| offset      | number | No       | Absolute position of the first returned row, not counting root `virtualEntries`. Present on every cursorless page without `letter`, including 0, so a client can detect support from a normal first page. Absent on cursor and letter-filtered pages and on `live` listings. |
+| anchorIndex | number | No       | Absolute position of `anchorPath`, or of the listed folder it sits below. Absent when neither is listed. |
+
+##### Positioned pages
+
+`offset` and `anchorPath` read a listing by position instead of walking it with cursors. An offset page holds the same rows as the cursor page at that depth, for every `sort`, and its `nextCursor`, `totalDirs` and `totalFiles` work as on any other page.
+
+When `anchorPath` is not listed and is not below a listed folder, the response is the cursorless first page without `anchorIndex`, and no error is returned. That covers a path that does not exist, lies outside the listing, or is hidden or removed by the request's `tags`, `systems` or `includeHidden`.
+
+Both return an invalid parameter error when:
+
+- combined with each other, `cursor`, `letter` or `live`
+- used on a listing with no position: no `path` and no `rootView: "contents"`
+- `offset` is negative or `anchorPath` is empty
 
 #### System route example
 
@@ -2229,7 +2246,7 @@ Single requests return the existing single `media` response shape. Batch request
 
 | Key         | Type   | Required | Description                                                            |
 | :---------- | :----- | :------- | :--------------------------------------------------------------------- |
-| text        | string | Yes      | Text value or source path for the property.                            |
+| text        | string | Yes      | Text value or source path for the property. Images Core downloaded are given relative to Core's image folder as `images://<path>`, for example `images://libretro/<playlist>/Named_Boxarts/<name>.png`; fetch them with `media.image`. |
 | contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
 | blobSize    | number | No       | Size in bytes for binary-backed properties. |
@@ -2588,7 +2605,7 @@ When a resized thumbnail is built for a request whose image type preference list
     "delivery": "localPath",
     "contentType": "image/webp",
     "extension": "webp",
-    "localPath": "/media/fat/zaparoo/cache/thumbs/v2/U05FUw/example.webp",
+    "localPath": "/media/fat/zaparoo/images/thumbs/v3/4f/4f2a9c1e0b7d.webp",
     "typeTag": "property:image-boxart"
   }
 }
@@ -3223,7 +3240,7 @@ Returns `null` on success. Asking for a slot with no playlist open is an error.
 
 ### settings
 
-**Access:** All accepted clients. Online backup, play-history sync, and remote-control fields are returned only to localhost or authenticated admin.
+**Access:** All accepted clients. Online backup, play-history sync, remote-control and image folder fields are returned only to localhost or authenticated admin.
 
 List currently set configuration settings.
 
@@ -3255,6 +3272,7 @@ None.
 | launcherPreference        | string[]                                  | Yes      | Global launcher preference (`[launchers] preference`), in order. Each entry is a launcher ID or group name. When a launch names no launcher and the system has no `systemDefaults` launcher, the first entry with an available launcher for the media's system is used. Empty when unset. |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
+| mediaThumbCacheMaxMb      | number                                    | Yes      | Size cap of the generated thumbnail cache in MiB (`[media] thumb_cache_max_mb`). Defaults to 1024. It covers only the resized covers Core generates, never scraped images. |
 | updateChannel             | string                                    | Yes      | Release channel used for update checks: `stable` or `beta`. Defaults to `stable`. |
 | updateCheck               | boolean                                   | Yes      | Whether the service looks for new releases on its own. Defaults to true on every platform, including installs a package manager owns. |
 | updateInstall             | boolean                                   | Yes      | Whether the device downloads and installs updates on its own, rather than only telling the user one exists. Defaults to false, and is always false while `updateCheck` is off. |
@@ -3263,6 +3281,7 @@ None.
 | librarySyncEnabled        | boolean                                   | No       | Whether the user explicitly enabled Library sync. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
 | remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
+| mediaImageDir             | string                                    | No       | Absolute path of the image folder (`[media] image_dir`), where scraped images (`libretro/`) and the generated thumbnail cache (`thumbs/`) are stored. Defaults to `images` under Core's data directory. Only returned to localhost and authenticated admin clients. |
 | onlineBaseUrl             | string                                    | No       | Base URL of the Zaparoo Online service every online feature uses: account linking, cloud backup, play history sync, Library sync and remote control (read-only, set as `online_base_url` under `[service]` in the config file). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
@@ -3325,7 +3344,7 @@ None.
 
 ### settings.update
 
-**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup, play-history sync, and remote-control settings require localhost or authenticated admin, so legacy clients cannot change them.
+**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup, play-history sync, remote-control and image folder settings require localhost or authenticated admin, so legacy clients cannot change them.
 
 Update one or more settings in-memory and save changes to disk.
 
@@ -3358,6 +3377,8 @@ An object containing any of the following optional keys:
 | updateChannel             | string                                    | No       | Release channel used for update checks: `stable` or `beta`. |
 | updateCheck               | boolean                                   | No       | Whether the service looks for new releases on its own. |
 | updateInstall             | boolean                                   | No       | Whether the device installs updates on its own. Setting it to true while update checking is off is refused; send `updateCheck: true` in the same call to turn both on. |
+| mediaImageDir             | string                                    | No       | Image folder for scraped images and the generated thumbnail cache. `""` restores the default. A relative path resolves against the folder holding the Core executable, like `[launchers] media_dir`. A filesystem root or an existing file is refused. Core never moves or copies images to a new folder; covers already scraped stay where they are until copied by hand or downloaded again by a fill-missing run, and the thumbnail cache starts empty there. Takes effect at once. Refused with category `busy` while the `libretro-thumbnails` scraper runs. Requires localhost or an authenticated admin client. |
+| mediaThumbCacheMaxMb      | number                                    | No       | Size cap of the generated thumbnail cache in MiB, up to 1048576. `0` restores the default of 1024. Takes effect at once; a lower cap is trimmed in the background, keeping thumbnails used within the last day. |
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
 | librarySyncEnabled        | boolean                                   | No       | Explicitly enable or disable Library sync, which uploads the list of games this device holds and keeps favorites, play-later, likes, dislikes and decks in step with the linked Zaparoo Online account. Disabling removes this device's game list from the account; local favorites and decks are kept. The linked account is told within a minute. Requires localhost or an authenticated admin client. |
@@ -4085,7 +4106,7 @@ None.
 | linked                | boolean | No       | Whether device has usable remote credentials. |
 | deviceName            | string  | No       | Linked remote device name. |
 | linkedAt              | string  | No       | Device link time. |
-| availability          | string  | No       | Cached remote service availability. |
+| availability          | string  | No       | Cached remote service availability: `available` when the account has the `cloud_backup` feature, `unavailable` when it does not, `unknown` before a check succeeds or after one fails. |
 | availabilityCheckedAt | string  | No       | Latest availability check time. |
 
 #### Example
@@ -5991,6 +6012,56 @@ Returns `null` on success.
 }
 ```
 
+## Online account
+
+### online.status
+
+**Access:** All clients. Localhost and paired admin requests may trigger a background refresh of stale remote availability, the same as `settings.backup.status`; the response never waits for that network request.
+
+Report whether the device is linked to a Zaparoo Online account and which account features the Online service last reported for it. Core answers from stored state. Feature names are strings such as `cloud_backup` or `custom_branding`, passed through as the service lists them (deduplicated and sorted). Core itself reads only `cloud_backup`, which decides remote backup availability; other names are for clients. Core records them each time it checks the device with the Online service, which happens at startup, on link, before remote backups, on a daily heartbeat, and in the background refresh above. A failed check keeps the last reported features. Linking or unlinking the account clears them.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key               | Type     | Required | Description                                                                                                                                       |
+| :---------------- | :------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| linked            | boolean  | Yes      | Whether the device holds an online account credential that the server has not rejected. Matches `remote.linked` from `settings.backup.status`.   |
+| deviceName        | string   | No       | Name of this device on the Online account. Omitted when unlinked or unknown.                                                                      |
+| linkedAt          | string   | No       | RFC 3339 time the device was linked. Omitted when unlinked or unknown.                                                                            |
+| features          | string[] | Yes      | Account features the Online service reported in its last successful check. Always an array; empty when unlinked or before the first check.       |
+| featuresCheckedAt | string   | Yes      | RFC 3339 time of the last successful check, or `null` when no check has succeeded since the account was linked. An empty `features` list with a non-null time means the service reported no features. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "online-status-1",
+  "method": "online.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "online-status-1",
+  "result": {
+    "linked": true,
+    "deviceName": "Living Room MiSTer",
+    "linkedAt": "2026-11-01T09:30:00Z",
+    "features": ["cloud_backup", "custom_branding"],
+    "featuresCheckedAt": "2026-11-06T12:00:00Z"
+  }
+}
+```
+
 ## Remote control
 
 Remote control lets the Zaparoo Online account a device is linked to send a fixed set of commands to it (search and browse the media library, list systems and launchers, launch, stop, run a MiSTer script) through the Zaparoo Online API. It is off until the device owner turns on `remoteControlEnabled` in [settings.update](#settingsupdate), and is turned off again automatically whenever the account is linked or unlinked. Every command that reaches the device is recorded in a local ledger.
@@ -6447,6 +6518,8 @@ A key that is absent from either object means unsupported. Later versions of Cor
 
 `actions` is worked out for the calling client. `notPermitted` means either the client lacks the capability the method requires, or the device's operating system refuses Core.
 
+`device.bluetooth.scan.start`, `device.bluetooth.pair` and `device.bluetooth.forget` are listed only where Core can manage Bluetooth devices and an adapter is present: on Linux, through BlueZ. They stay `supported` while the adapter is switched off; `bluetooth.powered` says whether it is on.
+
 ##### Power object
 
 | Key           | Type            | Required | Description                                                                                             |
@@ -6480,7 +6553,7 @@ Some hardware reports only a charge level. `source` and `chargeState` are then `
 | present | boolean          | Yes      | Whether the device has a Bluetooth adapter.                        |
 | powered | boolean \| null  | Yes      | Whether the adapter is switched on, where that can be read.        |
 
-Core reads the adapter's state and never changes it.
+Core never switches the adapter on or off. Scanning, pairing and forgetting devices go through the [`device.bluetooth`](#devicebluetoothdevices) methods.
 
 ##### Storage object
 
@@ -6511,14 +6584,15 @@ Each volume has `path` (where it is mounted, or a directory on it when that is n
 | :------------- | :-------------- | :------- | :------------------------------------------------------------------------------------------- |
 | id             | string          | Yes      | Identifies the controller only while it stays connected.                                     |
 | name           | string \| null  | Yes      | The name the controller reports.                                                             |
+| displayName    | string \| null  | Yes      | The controller's model name, such as `DualShock 4`, from Core's table of well-known controllers by vendor and product ID. `null` when the model is not known; show `name` then. Never includes an address or index, so two of the same model share it. |
 | vendorId       | string \| null  | Yes      | USB vendor ID, four lowercase hex digits.                                                    |
 | productId      | string \| null  | Yes      | USB product ID, four lowercase hex digits.                                                   |
 | connection     | string          | Yes      | `usb`, `bluetooth` or `unknown`.                                                             |
-| battery        | object \| null  | Yes      | `percent` (number or `null`) and `level` (`empty`, `low`, `medium` or `full`).               |
+| battery        | object \| null  | Yes      | `percent` (number or `null`), `level` (`empty`, `low`, `medium` or `full`) and `chargeState` (`charging`, `discharging`, `full`, `notCharging` or `null` when not known). |
 
 Virtual controllers, including the one Core creates for [`input.gamepad`](#inputgamepad), are not listed.
 
-On Windows, controllers are read through XInput: at most four, with no name or IDs, and a battery `level` without a `percent`. XInput cannot tell a virtual gamepad made by another program, such as one from ViGEm, from a real one, so Core lists it as a wired controller.
+On Windows, controllers are read through XInput: at most four, with no name or IDs, and a battery `level` without a `percent` or `chargeState`. XInput cannot tell a virtual gamepad made by another program, such as one from ViGEm, from a real one, so Core lists it as a wired controller.
 
 ##### Time object
 
@@ -6573,7 +6647,10 @@ On Windows, controllers are read through XInput: at most four, with no name or I
       "actions": {
         "device.power.reboot": "supported",
         "device.power.shutdown": "supported",
-        "device.power.suspend": "supported"
+        "device.power.suspend": "supported",
+        "device.bluetooth.scan.start": "supported",
+        "device.bluetooth.pair": "supported",
+        "device.bluetooth.forget": "supported"
       }
     },
     "power": {
@@ -6614,10 +6691,11 @@ On Windows, controllers are read through XInput: at most four, with no name or I
         {
           "id": "input17",
           "name": "DualSense Wireless Controller",
+          "displayName": "DualSense",
           "vendorId": "054c",
           "productId": "0ce6",
           "connection": "bluetooth",
-          "battery": { "percent": 80, "level": "full" }
+          "battery": { "percent": 80, "level": "full", "chargeState": "charging" }
         }
       ]
     },
@@ -6688,3 +6766,285 @@ Power the device off. Access, parameters, result and errors are the same as [`de
 **Access:** Requires `device.power`.
 
 Put the device to sleep. Access, parameters, result and errors are the same as [`device.power.reboot`](#devicepowerreboot).
+
+### device.bluetooth.devices
+
+**Access:** Requires `device.bluetooth`.
+
+List paired Bluetooth devices and the devices the current or last scan found. Offer pairing only when `capabilities.actions["device.bluetooth.pair"]` in [`device.status`](#devicestatus) is `supported` and `bluetooth.present` is `true`.
+
+While a client holds a WebSocket or SSE connection, Core sends [`device.bluetooth.changed`](notifications.md#devicebluetoothchanged) whenever this state changes. Call this method once, then follow the notification. Both carry the names and addresses of nearby devices, so both need the `device.bluetooth` capability.
+
+#### Parameters
+
+None.
+
+#### Result
+
+A [Bluetooth state](#bluetooth-state-object).
+
+##### Bluetooth state object
+
+| Key      | Type                                    | Required | Description                                                         |
+| :------- | :-------------------------------------- | :------- | :------------------------------------------------------------------ |
+| powered  | boolean                                 | Yes      | Whether the adapter is switched on.                                 |
+| scanning | boolean                                 | Yes      | Whether the adapter is searching for devices.                       |
+| devices  | [BluetoothDevice](#bluetooth-device-object)[] | Yes | Paired devices first, then devices found by the current or last scan. |
+| pairing  | [Pairing](#pairing-object) \| null      | Yes      | The latest pairing attempt, or `null` before the first one.         |
+
+A scan lists only gamepads and joysticks besides paired devices, unless it was started with `all: true`. Starting a scan while none is running forgets what the last one found; extending a running scan keeps it.
+
+##### Bluetooth device object
+
+| Key          | Type            | Required | Description                                                                                         |
+| :----------- | :-------------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| id           | string          | Yes      | The device's Bluetooth address, upper case, such as `AA:BB:CC:DD:EE:FF`.                            |
+| name         | string \| null  | Yes      | The device's name, or `null` when it has not given one.                                             |
+| displayName  | string \| null  | Yes      | The device's model name, as for a [controller](#controllers-object). `null` when the model is not known; show `name` then. |
+| vendorId     | string \| null  | Yes      | Vendor ID from the device's modalias, four lowercase hex digits, or `null` when it has not given one. |
+| productId    | string \| null  | Yes      | Product ID from the device's modalias, four lowercase hex digits, or `null` when it has not given one. |
+| paired       | boolean         | Yes      | Whether the device is paired.                                                                       |
+| connected    | boolean         | Yes      | Whether the device is connected.                                                                    |
+| trusted      | boolean         | Yes      | Whether the device may reconnect by itself.                                                         |
+| gamepad      | boolean         | Yes      | Whether the device identifies itself as a gamepad or joystick.                                      |
+| controllerId | string \| null  | Yes      | The `id` of the matching entry in `device.status` `controllers` while connected, otherwise `null`.  |
+
+##### Pairing object
+
+| Key     | Type           | Required | Description                                                                                                                                                          |
+| :------ | :------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| id      | string         | Yes      | Address of the device being paired.                                                                                                                                  |
+| state   | string         | Yes      | `pairing`, `paired` or `failed`.                                                                                                                                     |
+| error   | string \| null | Yes      | Why the attempt failed. `null` unless `state` is `failed`.                                                                                                           |
+| attempt | number         | Yes      | Counts pair requests since Core started. A later attempt has a higher number, so a repeat outcome, and a reply that arrives after a notification, can be told apart. |
+
+`error` is one of:
+
+| Error         | Meaning                                                                                   |
+| :------------ | :---------------------------------------------------------------------------------------- |
+| `pinRequired` | The device asked for a PIN or passkey. Core cannot show or enter one.                     |
+| `notPowered`  | The adapter is switched off.                                                              |
+| `timeout`     | The device did not answer, or the attempt took longer than 30 seconds.                    |
+| `rejected`    | The device or the Bluetooth stack refused the pairing.                                    |
+| `notFound`    | The device is no longer known, usually because it stopped advertising.                    |
+| `failed`      | Any other failure.                                                                        |
+
+The pairing object keeps the result of the last attempt until the next one starts.
+
+#### Errors
+
+| Category      | Meaning                                                              |
+| :------------ | :------------------------------------------------------------------- |
+| `unsupported` | Core cannot manage Bluetooth devices here, or there is no adapter.   |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8d2c6b1e-1f0a-4c3e-9b7d-5a6e4f3c2b1a",
+  "method": "device.bluetooth.devices"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8d2c6b1e-1f0a-4c3e-9b7d-5a6e4f3c2b1a",
+  "result": {
+    "powered": true,
+    "scanning": true,
+    "devices": [
+      {
+        "id": "A4:AE:12:00:11:22",
+        "name": "DualSense Wireless Controller",
+        "displayName": "DualSense",
+        "vendorId": "054c",
+        "productId": "0ce6",
+        "paired": true,
+        "connected": true,
+        "trusted": true,
+        "gamepad": true,
+        "controllerId": "input17"
+      },
+      {
+        "id": "E4:17:D8:33:44:55",
+        "name": "8BitDo Pro 2",
+        "displayName": "8BitDo Pro 2",
+        "vendorId": "2dc8",
+        "productId": "6006",
+        "paired": false,
+        "connected": false,
+        "trusted": false,
+        "gamepad": true,
+        "controllerId": null
+      }
+    ],
+    "pairing": null
+  }
+}
+```
+
+### device.bluetooth.scan.start
+
+**Access:** Requires `device.bluetooth`.
+
+Start looking for Bluetooth devices, or extend the scan already running. Devices appear through [`device.bluetooth.changed`](notifications.md#devicebluetoothchanged) as they are found.
+
+Calling it while a scan is running sets that scan to end `timeoutSeconds` from now and keeps the devices it has found. To keep a search going, call it again before the scan ends. The found list starts empty only when a scan starts while none is running.
+
+A scan stops by itself when its timeout passes, when the last client holding a WebSocket or SSE connection goes, and when pairing starts. Stop it with [`device.bluetooth.scan.stop`](#devicebluetoothscanstop) as soon as the user leaves the screen showing it. Core never switches the adapter on to scan.
+
+#### Parameters
+
+| Key            | Type    | Required | Description                                                                  |
+| :------------- | :------ | :------- | :--------------------------------------------------------------------------- |
+| all            | boolean | No       | List every device found, not only gamepads and joysticks. Default `false`.   |
+| timeoutSeconds | number  | No       | How long the scan runs, 1 to 120. Default 60.                                |
+
+#### Result
+
+The [Bluetooth state](#bluetooth-state-object), with `scanning` set.
+
+#### Errors
+
+| Category      | Meaning                                                              |
+| :------------ | :------------------------------------------------------------------- |
+| `unsupported` | Core cannot manage Bluetooth devices here, or there is no adapter.   |
+| `unavailable` | The adapter is switched off. The message is `bluetooth adapter is powered off`. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3f9a1c7e-2b4d-4e6f-8a0b-1c2d3e4f5a6b",
+  "method": "device.bluetooth.scan.start",
+  "params": { "timeoutSeconds": 60 }
+}
+```
+
+##### Response
+
+The result is a [Bluetooth state](#bluetooth-state-object), as in the [`device.bluetooth.devices`](#devicebluetoothdevices) example.
+
+### device.bluetooth.scan.stop
+
+**Access:** Requires `device.bluetooth`.
+
+Stop the scan Core started. Scans started by other programs on the device are not affected. Stopping when no scan is running is not an error.
+
+#### Parameters
+
+None.
+
+#### Result
+
+The [Bluetooth state](#bluetooth-state-object). The devices the scan found stay listed until a new scan starts.
+
+#### Errors
+
+| Category           | Meaning                                                                 |
+| :----------------- | :---------------------------------------------------------------------- |
+| `unsupported`      | Core cannot manage Bluetooth devices here, or there is no adapter.      |
+| `execution_failed` | The Bluetooth stack refused to stop. The scan keeps running, and Core tries to stop it again 30 seconds later. |
+
+### device.bluetooth.pair
+
+**Access:** Requires `device.bluetooth`.
+
+Pair with a device, then mark it trusted so it reconnects by itself, and connect it. The method returns at once with `pairing.state` set to `pairing`; the outcome arrives through [`device.bluetooth.changed`](notifications.md#devicebluetoothchanged). A running scan is stopped first.
+
+Core answers the pairing itself without user input ("Just Works"). That covers most game controllers. A device that asks for a PIN or passkey, such as a keyboard or an original Wii Remote, fails with `pinRequired`. A whole attempt is limited to 30 seconds.
+
+Only one attempt runs at a time.
+
+#### Parameters
+
+| Key | Type   | Required | Description                                      |
+| :-- | :----- | :------- | :----------------------------------------------- |
+| id  | string | Yes      | The device's address, such as `AA:BB:CC:DD:EE:FF`. |
+
+#### Result
+
+The [Bluetooth state](#bluetooth-state-object), with `pairing` set to the new attempt.
+
+#### Errors
+
+| Category      | Meaning                                                              |
+| :------------ | :------------------------------------------------------------------- |
+| `unsupported` | Core cannot manage Bluetooth devices here, or there is no adapter.   |
+| `unavailable` | The adapter is switched off. The message is `bluetooth adapter is powered off`. |
+| `busy`        | Another pairing attempt is running.                                  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+  "method": "device.bluetooth.pair",
+  "params": { "id": "E4:17:D8:33:44:55" }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+  "result": {
+    "powered": true,
+    "scanning": false,
+    "devices": [
+      {
+        "id": "E4:17:D8:33:44:55",
+        "name": "8BitDo Pro 2",
+        "displayName": "8BitDo Pro 2",
+        "vendorId": "2dc8",
+        "productId": "6006",
+        "paired": false,
+        "connected": false,
+        "trusted": false,
+        "gamepad": true,
+        "controllerId": null
+      }
+    ],
+    "pairing": { "id": "E4:17:D8:33:44:55", "state": "pairing", "error": null, "attempt": 1 }
+  }
+}
+```
+
+### device.bluetooth.forget
+
+**Access:** Requires `device.bluetooth`.
+
+Unpair a device and remove it from the device's Bluetooth stack. It has to be paired again before it can reconnect.
+
+#### Parameters
+
+| Key | Type   | Required | Description                                      |
+| :-- | :----- | :------- | :----------------------------------------------- |
+| id  | string | Yes      | The device's address, such as `AA:BB:CC:DD:EE:FF`. |
+
+#### Result
+
+The [Bluetooth state](#bluetooth-state-object), without the device.
+
+#### Errors
+
+| Category      | Meaning                                                              |
+| :------------ | :------------------------------------------------------------------- |
+| `unsupported` | Core cannot manage Bluetooth devices here, or there is no adapter.   |
+| `busy`        | Core is pairing with this device. Wait for the attempt to end.       |
+
+An `id` the Bluetooth stack does not know is refused with the message `bluetooth device not found`.

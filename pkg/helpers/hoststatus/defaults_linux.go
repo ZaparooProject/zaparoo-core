@@ -22,11 +22,13 @@
 package hoststatus
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -46,7 +48,9 @@ func NewDefaults(opts DefaultOptions) Readers {
 	}
 	bluetooth := &LinuxBluetooth{Fs: fs, bus: bus, SysRoot: filepath.Join(sysClass, "bluetooth")}
 	display := &LinuxDisplay{Fs: fs, DRMRoot: filepath.Join(sysClass, "drm")}
+	bluez := NewBlueZ()
 	controllers := &LinuxControllers{
+		Batteries:   bluezBatteries(bluez),
 		Fs:          fs,
 		Resolve:     filepath.EvalSymlinks,
 		InputRoot:   filepath.Join(sysClass, "input"),
@@ -73,5 +77,20 @@ func NewDefaults(opts DefaultOptions) Readers {
 		Controllers:  controllers.Read,
 		System:       system.Read,
 		PowerControl: powerControl,
+
+		BluetoothControl: bluez,
+	}
+}
+
+// bluezBatteries reads BlueZ's battery levels within the quick call limit. A
+// failed read, such as no bluetoothd, means no readings.
+func bluezBatteries(bluez *BlueZ) func() map[string]int {
+	return func() map[string]int {
+		batteries, err := bluez.Batteries(context.Background())
+		if err != nil {
+			log.Debug().Err(err).Msg("reading bluetooth batteries")
+			return nil
+		}
+		return batteries
 	}
 }

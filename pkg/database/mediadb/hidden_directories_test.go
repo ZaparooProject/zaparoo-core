@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -533,4 +534,107 @@ func TestRootCandidatesFollowHiddenCounts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"FilesHidden", "FolderHidden", "Mixed", "Partly"}, all.Children[root])
+}
+
+// Folders hidden by path that sort first must not take the page's rows, or a
+// page comes back short and the listing ends early. The cached aggregates and
+// the Media fallbacks, with and without a system filter, have to agree.
+func TestHiddenDirectoriesDoNotShortenAPage(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{true, false} {
+		for _, bySystem := range []bool{true, false} {
+			t.Run(fmt.Sprintf("cached=%t/systems=%t", cached, bySystem), func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				f, cleanup := setupMergeFixture(t, 1)
+				t.Cleanup(cleanup)
+				root := f.roots[0]
+				for _, name := range []string{"A", "B", "C", "D", "E"} {
+					f.insert(name+"Game", root+name+"/Game.nes")
+				}
+				f.commit(t, cached)
+				hideDirs(t, f.mediaDB, root+"A", root+"B")
+				var systems []systemdefs.System
+				if bySystem {
+					systems = []systemdefs.System{f.system}
+				}
+
+				first, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true, Limit: 2,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, []string{"C", "D"}, dirNames(first))
+
+				rest, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true, AfterName: "D", Limit: 2,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, []string{"E"}, dirNames(rest))
+			})
+		}
+	}
+}
+
+// Browsing a hidden folder directly lists it, and a folder hidden inside it
+// is still dropped from that listing. It must not take one of the page's rows.
+func TestHiddenDirectoryInsideBrowsedHiddenFolderDoesNotShortenAPage(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, cleanup := setupMergeFixture(t, 1)
+			t.Cleanup(cleanup)
+			root := f.roots[0]
+			parent := root + "Outer/"
+			for _, name := range []string{"A", "B", "C", "D"} {
+				f.insert(name+"Game", parent+name+"/Game.nes")
+			}
+			f.commit(t, cached)
+			hideDirs(t, f.mediaDB, root+"Outer", parent+"A")
+
+			first, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+				PathPrefix: parent, ExcludeHidden: true, Limit: 2,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"B", "C"}, dirNames(first))
+			if !cached {
+				return
+			}
+
+			count, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+				PathPrefix: parent, ExcludeHidden: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 3, count, "the cached count agrees with the listing")
+		})
+	}
+}
+
+// A cached count that has gone stale can keep a hidden folder past the count
+// filter. The path filter still drops it, and the page must not have been cut
+// to size before that.
+func TestStaleCachedCountDoesNotShortenAPage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("AOne", root+"A/One.nes")
+	f.insert("ATwo", root+"A/Two.nes")
+	for _, name := range []string{"B", "C", "D"} {
+		f.insert(name+"Game", root+name+"/Game.nes")
+	}
+	f.commit(t, true)
+	// The cached aggregate still counts both of A's files.
+	_, err := f.mediaDB.sql.Load().ExecContext(ctx,
+		"UPDATE Media SET IsMissing = 1 WHERE Path = ?", root+"A/Two.nes")
+	require.NoError(t, err)
+	hideDirs(t, f.mediaDB, root+"A")
+
+	first, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true, Limit: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"B", "C"}, dirNames(first))
 }

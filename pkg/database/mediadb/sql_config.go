@@ -62,6 +62,9 @@ const (
 	DBConfigDisambiguationBackfillCursor    = "DisambiguationBackfillCursor"
 	DBConfigCanonicalTagVocabHash           = "CanonicalTagVocabHash"
 	DBConfigLibraryInventoryState           = "LibraryInventoryState"
+	// DBConfigImagePathsMigrated marks a database whose image properties have
+	// been through RewriteImagePropertyPrefix.
+	DBConfigImagePathsMigrated = "ImagePathsMigrated"
 
 	temporaryRepairParentDirVersion = "1"
 

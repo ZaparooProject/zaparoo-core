@@ -281,6 +281,7 @@ type indexingStatusVals struct {
 	totalFiles     int
 	scannedEntries int
 	indexing       bool
+	finished       bool
 }
 
 type indexingStatus struct {
@@ -293,6 +294,9 @@ type indexingStatus struct {
 	scannedEntries int
 	mu             syncutil.RWMutex
 	indexing       bool
+	// finished marks a run that has completed and announced it, while it
+	// still holds indexing until optimization takes over.
+	finished bool
 }
 
 func (s *indexingNotificationState) shouldSend(
@@ -337,6 +341,7 @@ func (s *indexingStatus) get() indexingStatusVals {
 		totalFiles:     s.totalFiles,
 		scannedEntries: s.scannedEntries,
 		scanPath:       s.scanPath,
+		finished:       s.finished,
 	}
 }
 
@@ -347,6 +352,7 @@ func (s *indexingStatus) startIfNotRunning() bool {
 		return false
 	}
 	s.indexing = true
+	s.finished = false
 	s.totalSteps = 0
 	s.currentStep = 0
 	s.currentDesc = ""
@@ -360,6 +366,7 @@ func (s *indexingStatus) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexing = false
+	s.finished = false
 	s.totalSteps = 0
 	s.currentStep = 0
 	s.currentDesc = ""
@@ -399,6 +406,7 @@ func (s *indexingStatus) set(vals indexingStatusVals) {
 	s.totalFiles = vals.totalFiles
 	s.scannedEntries = vals.scannedEntries
 	s.scanPath = vals.scanPath
+	s.finished = vals.finished
 }
 
 func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
@@ -410,7 +418,7 @@ func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
 func (s *indexingStatus) cancel() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cancelFunc != nil && s.indexing {
+	if s.cancelFunc != nil && s.indexing && !s.finished {
 		s.cancelFunc()
 		s.indexing = false // Set indexing to false after canceling
 		return true
@@ -428,6 +436,15 @@ func (s *indexingStatus) setRunning(running bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexing = running
+}
+
+// markFinished records that the run completed. Clients are told indexing
+// stopped before optimization takes over, so status reads must agree from
+// then on even though the run still holds indexing.
+func (s *indexingStatus) markFinished() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finished = true
 }
 
 func (s *indexingStatus) getCancelFunc() context.CancelFunc {
@@ -964,6 +981,7 @@ func startMediaDBGeneration(
 		}
 		mediaImageNoImages.clear()
 		invalidateIndexedThumbnails(systems, rebuild)
+		statusInstance.markFinished()
 		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
@@ -1627,7 +1645,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	}
 
 	status := statusInstance.get()
-	resp.Database.Indexing = status.indexing
+	resp.Database.Indexing = status.indexing && !status.finished
 
 	// Get persisted work statuses. Process-local status wins when present, but
 	// persisted DBConfig state lets clients show boot-time interrupted work before

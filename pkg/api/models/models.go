@@ -53,6 +53,7 @@ const (
 	NotificationUpdateState          = "update.state"
 	NotificationRunFailed            = "run.failed"
 	NotificationDeviceChanged        = "device.changed"
+	NotificationDeviceBluetooth      = "device.bluetooth.changed"
 	NotificationPlaylistsChanged     = "playlists.changed"
 	NotificationMediaPlayback        = "media.playback"
 )
@@ -211,10 +212,16 @@ const (
 	MethodScreenshot                  = "screenshot"
 	MethodMediaTitleParse             = "media.title.parse"
 	MethodRemoteActivity              = "remote.activity"
+	MethodOnlineStatus                = "online.status"
 	MethodDeviceStatus                = "device.status"
 	MethodDevicePowerReboot           = "device.power.reboot"
 	MethodDevicePowerShutdown         = "device.power.shutdown"
 	MethodDevicePowerSuspend          = "device.power.suspend"
+	MethodDeviceBluetoothDevices      = "device.bluetooth.devices"
+	MethodDeviceBluetoothScanStart    = "device.bluetooth.scan.start"
+	MethodDeviceBluetoothScanStop     = "device.bluetooth.scan.stop"
+	MethodDeviceBluetoothPair         = "device.bluetooth.pair"
+	MethodDeviceBluetoothForget       = "device.bluetooth.forget"
 )
 
 // MethodHasUnboundedRuntime reports whether a method may run without a fixed

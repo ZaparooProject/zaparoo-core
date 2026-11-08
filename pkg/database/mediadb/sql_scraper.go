@@ -922,7 +922,7 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	err := upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaDBID, typeDBID,
@@ -938,6 +938,10 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 		}
 		return nil
 	})
+	if err == nil {
+		db.browseListings.ClearTagFiltered()
+	}
+	return err
 }
 
 // UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
@@ -945,7 +949,7 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	err := upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		const q = `DELETE FROM MediaTitleTags` +
 			` WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
 		_, err := tx.ExecContext(ctx, q, mediaTitleDBID, typeDBID)
@@ -963,6 +967,10 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 		}
 		return nil
 	})
+	if err == nil {
+		db.browseListings.ClearTagFiltered()
+	}
+	return err
 }
 
 const (
@@ -1986,6 +1994,7 @@ func (db *MediaDB) recordScrapeTagChanges(ctx context.Context, targets []databas
 	systemIDs, err := db.systemIDsForMediaOrTitles(ctx, mediaIDs, titleIDs)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to resolve systems with changed scrape tags; full tag cache refresh required")
+		db.browseListings.ClearTagFiltered()
 		db.scrapeTagChangesMu.Lock()
 		db.scrapeTagChangesAll = true
 		db.scrapeTagChangesMu.Unlock()
@@ -1994,10 +2003,14 @@ func (db *MediaDB) recordScrapeTagChanges(ctx context.Context, targets []databas
 	db.addScrapeTagSystems(systemIDs)
 }
 
+// addScrapeTagSystems records systems whose tags changed in committed writes.
+// A tags filter lists by those tags, so its cached listings go at once rather
+// than at the end of the run.
 func (db *MediaDB) addScrapeTagSystems(systemIDs []string) {
 	if len(systemIDs) == 0 {
 		return
 	}
+	db.browseListings.ClearTagFiltered()
 	db.scrapeTagChangesMu.Lock()
 	defer db.scrapeTagChangesMu.Unlock()
 	if db.scrapeTagSystems == nil {
@@ -2013,6 +2026,7 @@ func (db *MediaDB) addScrapeTagSystems(systemIDs []string) {
 // list marks every system.
 func (db *MediaDB) MarkScrapeTagCacheStale(systemIDs []string) {
 	if len(systemIDs) == 0 {
+		db.browseListings.ClearTagFiltered()
 		db.scrapeTagChangesMu.Lock()
 		db.scrapeTagChangesAll = true
 		db.scrapeTagChangesMu.Unlock()
