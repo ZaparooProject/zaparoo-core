@@ -232,6 +232,12 @@ func TestBrowseOverlayAnchorMatchesTheMerge(t *testing.T) {
 				})
 				require.NoError(t, err)
 				assert.Equal(t, database.BrowseAnchorResult{Found: true, IsDirectory: true}, result, root)
+
+				filesOnly, err := f.mediaDB.BrowseAnchorPosition(ctx, &database.BrowseAnchorOptions{
+					Overlay: f.overlay(), Path: root + "Folder/Folder Game.rom", Systems: systems,
+				})
+				require.NoError(t, err)
+				assert.False(t, filesOnly.IsDirectory, "a listing without folders has none to land on")
 			}
 
 			outside, err := f.mediaDB.BrowseAnchorPosition(ctx, &database.BrowseAnchorOptions{

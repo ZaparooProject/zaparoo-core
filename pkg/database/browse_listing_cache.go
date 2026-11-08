@@ -87,6 +87,22 @@ func (c *BrowseListingCache) Clear() {
 	c.clearLocked()
 }
 
+// ClearTagFiltered forgets the listings read through a tags filter, the only
+// ones a tag write can change, and invalidates outstanding tickets. A scrape
+// writes tags for every game it visits, so clearing everything would leave
+// unfiltered listings with no cache for the whole run.
+func (c *BrowseListingCache) ClearTagFiltered() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, element := range c.entries {
+		if key.Tags != "" {
+			c.order.Remove(element)
+			delete(c.entries, key)
+		}
+	}
+	c.generation++
+}
+
 // Len returns the number of listings held.
 func (c *BrowseListingCache) Len() int {
 	c.mu.Lock()

@@ -74,7 +74,10 @@ func sqlBrowseAnchorPosition(
 	if sources := browseOverlaySources(opts.Overlay); len(sources) > 0 {
 		position, found, err = sqlBrowseOverlayFileAnchor(ctx, db, opts)
 		for i := range sources {
-			if rest, ok := browseAnchorBelow(opts.Path, sources[i].PathPrefix); ok && sources[i].IncludeDirs {
+			if !opts.ListDirectories || !sources[i].IncludeDirs {
+				continue
+			}
+			if rest, ok := browseAnchorBelow(opts.Path, sources[i].PathPrefix); ok {
 				dirNames = append(dirNames, browseAnchorDirName(rest))
 			}
 		}

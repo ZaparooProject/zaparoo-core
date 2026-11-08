@@ -2032,6 +2032,10 @@ func (m *MockMediaDBI) SetMediaTagMembership(
 	if err := args.Error(1); err != nil {
 		return false, fmt.Errorf("mock operation failed: %w", err)
 	}
+	// A change clears the listing cache, as MediaDB's does.
+	if args.Bool(0) {
+		m.browseListings.Clear()
+	}
 	return args.Bool(0), nil
 }
 
@@ -2602,6 +2606,9 @@ func (m *MockMediaDBI) ReplaceHiddenDirectories(
 		return false, nil // default mock behavior for tests that hide no folders
 	}
 	args := m.Called(ctx, dirs)
+	if args.Bool(0) && args.Error(1) == nil {
+		m.browseListings.Clear()
+	}
 	return args.Bool(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 

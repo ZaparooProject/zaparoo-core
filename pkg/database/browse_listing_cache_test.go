@@ -130,6 +130,30 @@ func TestBrowseListingCacheClearDropsListingsAndOpenReads(t *testing.T) {
 	assert.Equal(t, 2, totals.Files)
 }
 
+func TestBrowseListingCacheClearTagFilteredKeepsUnfilteredListings(t *testing.T) {
+	t.Parallel()
+	var cache BrowseListingCache
+	plain := browseListingTestKey("/a/", "r1")
+	tagged := browseListingTestKey("/a/", "r1")
+	tagged.Tags = "genre:action"
+	ticket := cache.Begin("r1")
+	cache.StoreTotals(plain, ticket, BrowseListingTotals{Files: 3})
+	cache.StoreTotals(tagged, ticket, BrowseListingTotals{Files: 1})
+
+	cache.ClearTagFiltered()
+	assert.Equal(t, 1, cache.Len())
+	totals, ok := cache.Totals(plain)
+	require.True(t, ok)
+	assert.Equal(t, 3, totals.Files)
+	_, ok = cache.Totals(tagged)
+	assert.False(t, ok)
+
+	// A filtered read that began before the write counted the old tags.
+	cache.StoreTotals(tagged, ticket, BrowseListingTotals{Files: 1})
+	_, ok = cache.Totals(tagged)
+	assert.False(t, ok)
+}
+
 func TestBrowseListingCacheNewRevisionEmptiesIt(t *testing.T) {
 	t.Parallel()
 	var cache BrowseListingCache

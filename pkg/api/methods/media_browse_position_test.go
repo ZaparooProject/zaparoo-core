@@ -420,6 +420,54 @@ func TestBrowseAnchorRespectsHiddenRows(t *testing.T) {
 	assertOffsetsMatchWalk(t, f, withHidden, 3)
 }
 
+// Folders hidden by path lead the listing, so every page boundary of the
+// visible folders falls after rows the listing has to skip.
+func TestBrowsePositionSkipsStoredHiddenFolders(t *testing.T) {
+	t.Parallel()
+	f := newBrowsePositionFixture(t)
+	scope := map[string]any{"path": filepath.Join(f.roots[0], "PSX"), "systems": []string{"PSX"}}
+	flat := flattenPages(walkPages(t, f, scope, 100))
+	require.Equal(t, "directory", flat[2].Type, "the fixture lists more than two folders")
+
+	hidden := flat[:2]
+	for i := range hidden {
+		require.Equal(t, "directory", hidden[i].Type)
+		_, err := HandleMediaTagsUpdate(withParams(&f.env, fmt.Sprintf(
+			`{"system":"PSX","path":%q,"add":["user:hidden"]}`, hidden[i].Path)))
+		require.NoError(t, err)
+	}
+	want := append([]models.BrowseEntry{}, flat[2:]...)
+
+	for _, size := range []int{1, 2, 3} {
+		assert.Equal(t, want, flattenPages(walkPages(t, f, scope, size)), "cursor walk at size %d", size)
+		var byOffset []models.BrowseEntry
+		for offset := 0; offset < len(want); offset += size {
+			page := f.browse(t, scope, map[string]any{"maxResults": size, "offset": offset})
+			byOffset = append(byOffset, page.Entries...)
+		}
+		assert.Equal(t, want, byOffset, "offset pages at size %d", size)
+		assertOffsetsMatchWalk(t, f, scope, size)
+		assertAnchorsFindEveryEntry(t, f, scope, want, size)
+	}
+
+	for i := range hidden {
+		got := f.browse(t, scope, map[string]any{"maxResults": 2, "anchorPath": hidden[i].Path})
+		assert.Nil(t, got.Pagination.AnchorIndex, hidden[i].Path)
+		assert.Equal(t, 0, *got.Pagination.Offset, hidden[i].Path)
+	}
+
+	// With hidden rows shown, the folders come back in place, tagged hidden.
+	withHidden := mergeParams(scope, map[string]any{"includeHidden": true})
+	paths := func(entries []models.BrowseEntry) []string {
+		out := make([]string, len(entries))
+		for i := range entries {
+			out[i] = entries[i].Path
+		}
+		return out
+	}
+	assert.Equal(t, paths(flat), paths(flattenPages(walkPages(t, f, withHidden, 2))))
+}
+
 func TestBrowsePositionRespectsTagFilters(t *testing.T) {
 	t.Parallel()
 	f := newBrowsePositionFixture(t)

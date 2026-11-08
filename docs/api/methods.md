@@ -940,7 +940,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
 | totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
-| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Always present on a cursorless page of a listing without `letter`. Elsewhere, omitted when there are no file results. |
+| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Always present on a cursorless page without `letter` of a `path` or `rootView: "contents"` listing. Never present on a route listing (no `path`, default `rootView`). Elsewhere, omitted when the page has no entries. |
 
 ##### Browse entry object
 
