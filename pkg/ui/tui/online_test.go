@@ -110,6 +110,7 @@ func TestBuildOnlineSettingsMenu_CustomServerShowsWarning_Integration(t *testing
 	defer runner.Stop()
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(true, ""))
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettings("https://custom.example.com"))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
@@ -130,6 +131,7 @@ func TestBuildOnlineSettingsMenu_DefaultServerShowsNoWarning_Integration(t *test
 	defer runner.Stop()
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(true, ""))
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
@@ -191,13 +193,31 @@ func startOnlinePage(t *testing.T, runner *TestAppRunner, mockSvc *MockSettingsS
 	return pages
 }
 
+// onlineTestStatus returns an online.status response. warp is warpAvailable
+// (cloud_backup listed), warpUnavailable (checked, not listed) or anything
+// else for a check that has not completed.
+func onlineTestStatus(linked bool, warp string) *models.OnlineStatusResponse {
+	status := &models.OnlineStatusResponse{Linked: linked, Features: []string{}}
+	if !linked {
+		return status
+	}
+	checkedAt := "2026-08-30T01:02:03Z"
+	switch warp {
+	case warpAvailable:
+		status.FeaturesCheckedAt = &checkedAt
+		status.Features = []string{models.OnlineFeatureCloudBackup}
+	case warpUnavailable:
+		status.FeaturesCheckedAt = &checkedAt
+	}
+	return status
+}
+
 // linkedOnlineMock returns a service mock for a linked device with the given
 // Warp availability and settings.
 func linkedOnlineMock(availability string, settings *models.SettingsResponse) *MockSettingsService {
 	mockSvc := NewMockSettingsService()
-	status := backupTestStatus(true)
-	status.Remote.Availability = availability
-	mockSvc.SetupGetBackupStatus(status)
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(true, availability))
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(settings)
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	return mockSvc
@@ -222,6 +242,7 @@ func TestBuildOnlineSettingsMenu_NotLinkedDisablesFeatures_Integration(t *testin
 	runner := NewTestAppRunner(t, 80, 25)
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(false, ""))
 	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateUnlinked))
@@ -300,6 +321,7 @@ func TestBuildOnlineSettingsMenu_RemoteStatusExplainsSlot_Integration(t *testing
 	runner := NewTestAppRunner(t, 80, 25)
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(true, ""))
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	activity := onlineTestActivity(state.RemoteStateNotRemoteDevice)
@@ -328,6 +350,7 @@ func TestBuildOnlineSettingsMenu_RemoteStatusLoadFailureIsNotFatal_Integration(t
 	runner := NewTestAppRunner(t, 80, 25)
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetOnlineStatus(onlineTestStatus(true, ""))
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.On("GetRemoteActivity", mock.Anything).Return(nil, errors.New("api unavailable"))
@@ -454,12 +477,9 @@ func TestBuildOnlineSettingsMenu_EnableAllWaitsForWarpCheck_Integration(t *testi
 	runner := NewTestAppRunner(t, 80, 25)
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
-	unknown := backupTestStatus(true)
-	unknown.Remote.Availability = "unknown"
-	available := backupTestStatus(true)
-	available.Remote.Availability = warpAvailable
-	mockSvc.On("GetBackupStatus", mock.Anything).Return(unknown, nil).Once()
-	mockSvc.On("GetBackupStatus", mock.Anything).Return(available, nil)
+	mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(true, ""), nil).Once()
+	mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(true, warpAvailable), nil)
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(allFeatureSettings(false))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	updates := recordUpdateSettings(mockSvc, nil)
@@ -525,10 +545,11 @@ func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T)
 	runner := NewTestAppRunner(t, 80, 25)
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
-	status := backupTestStatus(true)
+	online := onlineTestStatus(true, "")
 	deviceName := "Living Room MiSTer"
-	status.Remote.DeviceName = &deviceName
-	mockSvc.SetupGetBackupStatus(status)
+	online.DeviceName = &deviceName
+	mockSvc.SetupGetOnlineStatus(online)
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	startOnlinePage(t, runner, mockSvc)
@@ -556,6 +577,8 @@ func TestBuildOnlineSettingsMenu_UnlinkConfirmFlow_Integration(t *testing.T) {
 	defer runner.Stop()
 	mockSvc := NewMockSettingsService()
 	// First build: linked. After unlinking the page rebuilds: not linked.
+	mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(true, ""), nil).Once()
+	mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(false, ""), nil)
 	mockSvc.On("GetBackupStatus", mock.Anything).Return(backupTestStatus(true), nil).Once()
 	mockSvc.On("GetBackupStatus", mock.Anything).Return(backupTestStatus(false), nil)
 	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
@@ -634,6 +657,60 @@ func TestAllOnlineFeaturesUpdate(t *testing.T) {
 	assert.Equal(t, onlineFeatures{}, next)
 }
 
+func TestApplyAllOnlineFeatures_ReportsSkippedCloudBackup_Integration(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, warp string) (*TestAppRunner, *MockSettingsService, <-chan onlineFeatures) {
+		t.Helper()
+		runner := NewTestAppRunner(t, 80, 25)
+		t.Cleanup(runner.Stop)
+		pages := tview.NewPages().AddPage("base", tview.NewBox(), true, true)
+		runner.Start(pages)
+		mockSvc := NewMockSettingsService()
+		mockSvc.On("UpdateSettings", mock.Anything, mock.Anything).Return(nil).Once()
+		done := make(chan onlineFeatures, 1)
+		runner.QueueUpdateDraw(func() {
+			applyAllOnlineFeatures(mockSvc, pages, runner.App(), onlineFeatures{}, true, warp,
+				func(next onlineFeatures, err error) {
+					assert.NoError(t, err)
+					done <- next
+				})
+		})
+		return runner, mockSvc, done
+	}
+
+	t.Run("unknown Warp waits on a modal after saving the others", func(t *testing.T) {
+		t.Parallel()
+		runner, mockSvc, done := run(t, "")
+		require.True(t, runner.WaitForText("Cloud backup wasn't turned on", uiSettleTimeout))
+		assert.Empty(t, done, "the caller takes focus back only after the modal is dismissed")
+
+		params, ok := mockSvc.Calls[0].Arguments[1].(*models.UpdateSettingsParams)
+		require.True(t, ok)
+		assert.Nil(t, params.BackupRemoteEnabled)
+		assert.True(t, boolIs(params.LibrarySyncEnabled, true))
+
+		runner.SimulateEnter()
+		select {
+		case next := <-done:
+			assert.False(t, next.cloudBackup)
+			assert.True(t, next.library)
+		case <-time.After(uiSettleTimeout):
+			require.Fail(t, "dismissing the modal did not finish the update")
+		}
+	})
+
+	t.Run("known Warp finishes without a modal", func(t *testing.T) {
+		t.Parallel()
+		for _, warp := range []string{warpAvailable, warpUnavailable} {
+			runner, _, done := run(t, warp)
+			next := <-done
+			assert.Equal(t, warp == warpAvailable, next.cloudBackup)
+			assert.False(t, runner.ContainsText("Cloud backup wasn't turned on"))
+		}
+	})
+}
+
 func TestResolveWarpAvailability(t *testing.T) {
 	t.Parallel()
 
@@ -642,30 +719,26 @@ func TestResolveWarpAvailability(t *testing.T) {
 		mockSvc := NewMockSettingsService()
 		assert.Equal(t, warpUnavailable,
 			resolveWarpAvailability(context.Background(), mockSvc, warpUnavailable, 3, time.Millisecond))
-		mockSvc.AssertNotCalled(t, "GetBackupStatus", mock.Anything)
+		mockSvc.AssertNotCalled(t, "GetOnlineStatus", mock.Anything)
 	})
 
 	t.Run("re-reads until the check completes", func(t *testing.T) {
 		t.Parallel()
 		mockSvc := NewMockSettingsService()
-		unknown := backupTestStatus(true)
-		unknown.Remote.Availability = "unknown"
-		available := backupTestStatus(true)
-		available.Remote.Availability = warpAvailable
-		mockSvc.On("GetBackupStatus", mock.Anything).Return(unknown, nil).Once()
-		mockSvc.On("GetBackupStatus", mock.Anything).Return(available, nil).Once()
+		mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(true, ""), nil).Once()
+		mockSvc.On("GetOnlineStatus", mock.Anything).Return(onlineTestStatus(true, warpAvailable), nil).Once()
 		assert.Equal(t, warpAvailable,
 			resolveWarpAvailability(context.Background(), mockSvc, "unknown", 5, time.Millisecond))
-		mockSvc.AssertNumberOfCalls(t, "GetBackupStatus", 2)
+		mockSvc.AssertNumberOfCalls(t, "GetOnlineStatus", 2)
 	})
 
 	t.Run("gives up while still unknown", func(t *testing.T) {
 		t.Parallel()
 		mockSvc := NewMockSettingsService()
-		mockSvc.On("GetBackupStatus", mock.Anything).Return(nil, errors.New("offline")).Times(3)
+		mockSvc.On("GetOnlineStatus", mock.Anything).Return(nil, errors.New("offline")).Times(3)
 		assert.Equal(t, "unknown",
 			resolveWarpAvailability(context.Background(), mockSvc, "unknown", 3, time.Millisecond))
-		mockSvc.AssertNumberOfCalls(t, "GetBackupStatus", 3)
+		mockSvc.AssertNumberOfCalls(t, "GetOnlineStatus", 3)
 	})
 
 	t.Run("stops when cancelled", func(t *testing.T) {
@@ -674,7 +747,7 @@ func TestResolveWarpAvailability(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		assert.Empty(t, resolveWarpAvailability(ctx, mockSvc, "", 5, time.Hour))
-		mockSvc.AssertNotCalled(t, "GetBackupStatus", mock.Anything)
+		mockSvc.AssertNotCalled(t, "GetOnlineStatus", mock.Anything)
 	})
 }
 

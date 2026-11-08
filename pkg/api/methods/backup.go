@@ -183,6 +183,23 @@ func HandleBackupStatus(env requests.RequestEnv) (any, error) {
 	return mgr.Status(), nil
 }
 
+// HandleOnlineStatus returns the online account link state and the account
+// features the Online service last reported. It answers from stored state;
+// like settings.backup.status, local and admin requests may start a
+// background refresh when the last check is stale.
+//
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleOnlineStatus(env requests.RequestEnv) (any, error) {
+	if err := requireBackupRuntime(&env); err != nil {
+		return nil, err
+	}
+	mgr := newBackupManager(&env)
+	if isLocalOrAdmin(&env) {
+		mgr.RefreshRemoteAvailabilityIfStaleAsync()
+	}
+	return mgr.OnlineStatus(), nil
+}
+
 //nolint:gocritic // API dispatch requires RequestEnv by value.
 func HandleBackupRestore(env requests.RequestEnv) (any, error) {
 	if err := requireBackupAccess(&env); err != nil {

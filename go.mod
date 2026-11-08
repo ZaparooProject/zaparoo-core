@@ -27,7 +27,7 @@ require (
 	github.com/expr-lang/expr v1.17.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/gen2brain/malgo v0.11.26
+	github.com/gen2brain/malgo v0.11.27
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/getsentry/sentry-go/zerolog v0.50.0
 	github.com/go-chi/chi/v5 v5.5.0

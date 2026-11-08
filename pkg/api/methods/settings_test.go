@@ -645,6 +645,7 @@ func TestHandleSettings_UpdateCheckRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 			mockPlatform.On("ID").Return("test-platform").Maybe()
 			mockPlatform.On("ManagedByPackageManager").Return(tt.packaged).Maybe()
 
@@ -1475,6 +1476,7 @@ func launcherPreferenceEnv(
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
@@ -1719,6 +1721,7 @@ func TestHandleSettings_OnlineBaseURLGatedToLocal(t *testing.T) {
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
@@ -1756,6 +1759,8 @@ func TestHandleSettings_ReportsCustomOnlineServer(t *testing.T) {
 	require.NoError(t, cfg.SetOnlineBaseURL("https://custom.example.com"))
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	// A local client is also told the image folder, which lives under DataDir.
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
 
@@ -1772,6 +1777,7 @@ func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
@@ -2083,6 +2089,7 @@ func TestHandleSettings_ReaderConnectionScanModeRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
@@ -2499,8 +2506,12 @@ func TestHandleSettings_MusicDefaults(t *testing.T) {
 	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
 	require.NoError(t, err)
 	cfg.SetAudioVolume(70)
+	env := musicSettingsEnv(t, cfg, nil)
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
 
-	result, err := HandleSettings(musicSettingsEnv(t, cfg, nil))
+	result, err := HandleSettings(env)
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)

@@ -68,6 +68,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -522,6 +523,7 @@ func startServiceWithOptions(
 		models.NotificationMediaIndexing,
 		models.NotificationUIChanged,
 		models.NotificationDeviceChanged,
+		models.NotificationDeviceBluetooth,
 		models.NotificationPlaylistsChanged,
 		// Merged per slot through the notification's coalesce key, so one
 		// slot's latest playback never replaces the other's.
@@ -652,6 +654,10 @@ func startServiceWithOptions(
 		)
 	}
 	closeHangingMediaHistoryOnStartup(db)
+	// Before the API starts, so no request reads an image mid-move and the
+	// thumbnail cache opens in its new folder.
+	migrateImageStorage(st.GetContext(), afero.NewOsFs(), helpers.DataDir(pl),
+		cfg.ImageDir(helpers.DataDir(pl)), db.MediaDB)
 	deckTagger := decks.NewTagger(&decks.ResolveDeps{
 		MediaDB: db.MediaDB,
 		UserDB:  db.UserDB,

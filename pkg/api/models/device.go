@@ -108,17 +108,21 @@ type DeviceDisplay struct {
 }
 
 type DeviceControllerBattery struct {
-	Percent *int   `json:"percent"`
-	Level   string `json:"level"`
+	Percent     *int    `json:"percent"`
+	ChargeState *string `json:"chargeState"`
+	Level       string  `json:"level"`
 }
 
 type DeviceController struct {
-	Name       *string                  `json:"name"`
-	VendorID   *string                  `json:"vendorId"`
-	ProductID  *string                  `json:"productId"`
-	Battery    *DeviceControllerBattery `json:"battery"`
-	ID         string                   `json:"id"`
-	Connection string                   `json:"connection"`
+	Name *string `json:"name"`
+	// DisplayName is the controller's model name when Core knows its vendor
+	// and product IDs. Clients fall back to Name.
+	DisplayName *string                  `json:"displayName"`
+	VendorID    *string                  `json:"vendorId"`
+	ProductID   *string                  `json:"productId"`
+	Battery     *DeviceControllerBattery `json:"battery"`
+	ID          string                   `json:"id"`
+	Connection  string                   `json:"connection"`
 }
 
 type DeviceControllers struct {
@@ -186,4 +190,62 @@ type DeviceChangedNotification struct {
 	Display     *DeviceChangedDisplay `json:"display"`
 	Controllers *DeviceControllers    `json:"controllers"`
 	Time        *DeviceChangedTime    `json:"time"`
+}
+
+// Bluetooth pairing states reported in DeviceBluetoothPairing.State.
+const (
+	BluetoothPairingPairing = "pairing"
+	BluetoothPairingPaired  = "paired"
+	BluetoothPairingFailed  = "failed"
+)
+
+// Bluetooth pairing failures reported in DeviceBluetoothPairing.Error.
+const (
+	BluetoothErrorPinRequired = "pinRequired"
+	BluetoothErrorNotPowered  = "notPowered"
+	BluetoothErrorTimeout     = "timeout"
+	BluetoothErrorRejected    = "rejected"
+	BluetoothErrorNotFound    = "notFound"
+	BluetoothErrorFailed      = "failed"
+)
+
+// DeviceBluetoothDevice is one Bluetooth device. ID is its address.
+type DeviceBluetoothDevice struct {
+	Name *string `json:"name"`
+	// DisplayName is the device's model name when Core knows its vendor and
+	// product IDs. Clients fall back to Name.
+	DisplayName *string `json:"displayName"`
+	// VendorID and ProductID are four lowercase hex digits, from the device's
+	// modalias.
+	VendorID  *string `json:"vendorId"`
+	ProductID *string `json:"productId"`
+	// ControllerID is the matching device.status controller while the device
+	// is connected.
+	ControllerID *string `json:"controllerId"`
+	ID           string  `json:"id"`
+	Paired       bool    `json:"paired"`
+	Connected    bool    `json:"connected"`
+	Trusted      bool    `json:"trusted"`
+	Gamepad      bool    `json:"gamepad"`
+}
+
+// DeviceBluetoothPairing is the latest pairing attempt. Error is set only
+// when State is failed.
+type DeviceBluetoothPairing struct {
+	Error *string `json:"error"`
+	ID    string  `json:"id"`
+	State string  `json:"state"`
+	// Attempt numbers pair requests in the order Core accepted them, so a
+	// client can tell a repeat outcome from the one before it and a reply
+	// from a later notification.
+	Attempt int `json:"attempt"`
+}
+
+// DeviceBluetoothState is the result of the device.bluetooth methods and the
+// payload of device.bluetooth.changed.
+type DeviceBluetoothState struct {
+	Pairing  *DeviceBluetoothPairing `json:"pairing"`
+	Devices  []DeviceBluetoothDevice `json:"devices"`
+	Powered  bool                    `json:"powered"`
+	Scanning bool                    `json:"scanning"`
 }

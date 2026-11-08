@@ -54,7 +54,7 @@ type plainPlatform struct {
 func TestResolveDeviceReaders_GenericWhenPlatformHasNone(t *testing.T) {
 	t.Parallel()
 
-	readers := platforms.ResolveDeviceReaders(plainPlatform{}, genericReaders())
+	readers := platforms.ResolveDeviceReaders(plainPlatform{}, new(genericReaders()))
 
 	_, err := readers.Power()
 	require.ErrorIs(t, err, errGeneric)
@@ -78,7 +78,7 @@ func TestResolveDeviceReaders_GenericWhenPlatformHasNone(t *testing.T) {
 func TestResolveDeviceReaders_PlatformProvidersWin(t *testing.T) {
 	t.Parallel()
 
-	readers := platforms.ResolveDeviceReaders(mocks.NewMockPlatform(), genericReaders())
+	readers := platforms.ResolveDeviceReaders(mocks.NewMockPlatform(), new(genericReaders()))
 
 	detail, err := readers.Power()
 	require.NoError(t, err)

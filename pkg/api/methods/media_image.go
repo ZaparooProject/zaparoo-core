@@ -67,9 +67,10 @@ const (
 	mediaImageNoImageMax      = 4096
 	mediaImageDeliveryInline  = "inline"
 	mediaImageDeliveryPath    = "localPath"
-	// mediaThumbCacheDirName is the sub-directory under the core cache dir where
-	// resized thumbnail files are persisted across restarts.
-	mediaThumbCacheDirName = "thumbs"
+	// mediaThumbCacheDirName is the sub-directory of the image folder where
+	// resized thumbnail files are persisted across restarts. Core owns it:
+	// reapStaleVersions removes everything in it but the live version.
+	mediaThumbCacheDirName = config.ImageThumbsDir
 	// mediaThumbCacheVersion identifies the on-disk encode scheme. The live cache
 	// directory is thumbs/v<N>; bumping this constant changes the live directory
 	// so a new build invalidates the cache automatically (the old v<N-1> dir is
@@ -116,14 +117,13 @@ var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
 const (
 	// mediaThumbMemoMax bounds the in-memory resolved-thumbnail memo.
 	mediaThumbMemoMax = 8192
-	// mediaThumbCacheMaxBytes is a soft cap on the disk space the cache takes,
-	// counted in allocated blocks (see thumbFileDiskBytes). Past the cap, the
-	// reaper removes the least recently used files until the cache is back down
-	// to mediaThumbCacheTrimPercent of it, but never one used within
+	// The cache's size cap ([media] thumb_cache_max_mb, 1 GiB by default) is
+	// soft and counted in allocated blocks (see thumbFileDiskBytes). Past the
+	// cap, the reaper removes the least recently used files until the cache is
+	// back down to mediaThumbCacheTrimPercent of it, but never one used within
 	// mediaThumbCacheMinAge, so a day of heavy browsing can hold it above the
-	// cap. On a MiSTer, where every thumbnail takes a 128 KiB cluster, it holds
-	// about 8,000.
-	mediaThumbCacheMaxBytes    = int64(1 << 30)
+	// cap. On a MiSTer, where every thumbnail takes a 128 KiB cluster, 1 GiB
+	// holds about 8,000.
 	mediaThumbCacheTrimPercent = 80
 	// mediaThumbCacheMinAge protects recently used files from the reaper. A
 	// hit refreshes a file's mtime once it is older than this, so a file handed
@@ -183,7 +183,8 @@ type mediaThumbCache struct {
 	reapDone  chan struct{}
 	dir       string
 	reapWG    sync.WaitGroup
-	maxBytes  int64
+	// maxBytes is the size cap; a settings change updates it in place.
+	maxBytes atomic.Int64
 	// clusterBytes rounds file sizes up to the volume's allocation unit
 	// where a stat does not report allocated blocks (Windows).
 	clusterBytes int64
@@ -253,30 +254,58 @@ func snapThumbMaxSize(requested int32) int32 {
 	return mediaThumbSizeTiers[len(mediaThumbSizeTiers)-1]
 }
 
-func newMediaThumbCache(pl platforms.Platform) *mediaThumbCache {
-	return newMediaThumbCacheWithFS(pl, nil)
+// mediaImageDir is the configured image folder. A nil config, which only
+// tests pass, falls back to the default under the data directory.
+func mediaImageDir(pl platforms.Platform, cfg *config.Instance) string {
+	if pl == nil {
+		return ""
+	}
+	dataDir := helpers.DataDir(pl)
+	if cfg == nil {
+		return config.ResolveImageDir("", dataDir)
+	}
+	return cfg.ImageDir(dataDir)
 }
 
-func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCache {
+// requestImageDir is mediaImageDir for a request.
+func requestImageDir(env *requests.RequestEnv) string {
+	return mediaImageDir(env.Platform, env.Config)
+}
+
+// mediaThumbCacheDir is the live cache directory under the image folder.
+func mediaThumbCacheDir(pl platforms.Platform, cfg *config.Instance) string {
+	return filepath.Join(mediaImageDir(pl, cfg), mediaThumbCacheDirName, mediaThumbCacheVersionDir())
+}
+
+// mediaThumbCacheMaxBytes is the configured size cap of the cache.
+func mediaThumbCacheMaxBytes(cfg *config.Instance) int64 {
+	if cfg == nil {
+		return int64(config.DefaultThumbCacheMaxMB) << 20
+	}
+	return cfg.ThumbCacheMaxBytes()
+}
+
+func newMediaThumbCacheWithFS(pl platforms.Platform, cfg *config.Instance, fs afero.Fs) *mediaThumbCache {
 	if fs == nil {
 		fs = afero.NewOsFs()
 	}
-	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, mediaThumbCacheVersionDir())
+	dir := mediaThumbCacheDir(pl, cfg)
 	concurrency := mediaImageResizeConcurrency
 	if pl != nil && pl.Settings().ResourceConstrained {
 		concurrency = mediaImageResizeConcurrencyConstrained
 	}
 	clock := clockwork.NewRealClock()
-	return &mediaThumbCache{
+	cache := &mediaThumbCache{
 		fs:           fs,
 		clock:        clock,
 		dir:          dir,
 		resolved:     make(map[string]resolvedThumb),
 		resizeSem:    make(chan struct{}, concurrency),
-		maxBytes:     mediaThumbCacheMaxBytes,
 		clusterBytes: thumbCacheClusterBytes(dir),
 		createdAt:    clock.Now(),
 	}
+	cache.maxBytes.Store(mediaThumbCacheMaxBytes(cfg))
+	return cache
 }
 
 // reapStaleVersions ensures the live versioned directory exists and removes
@@ -295,6 +324,22 @@ func (c *mediaThumbCache) reapStaleVersions() {
 	}
 	parent := filepath.Dir(c.dir)
 	live := filepath.Base(c.dir)
+	// The parent sits in a user-chosen image folder beside scraped images.
+	// Only ever empty Core's own thumbs folder, whatever c.dir was built from.
+	if filepath.Base(parent) != mediaThumbCacheDirName || live != mediaThumbCacheVersionDir() {
+		log.Warn().Str("dir", c.dir).Msg("media.image: thumb cache: not reaping outside the thumbs folder")
+		return
+	}
+	// A thumbs folder that is a link points somewhere Core does not own, so
+	// its other entries are left alone.
+	if lstater, ok := c.fs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(parent)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			log.Warn().Err(err).Str("dir", parent).
+				Msg("media.image: thumb cache: not reaping a linked thumbs folder")
+			return
+		}
+	}
 	entries, err := afero.ReadDir(c.fs, parent)
 	if err != nil {
 		log.Debug().Err(err).Str("dir", parent).Msg("media.image: thumb cache: failed to read parent for reap")
@@ -422,13 +467,14 @@ func (c *mediaThumbCache) reapOrphans(ctx context.Context) {
 		return
 	}
 	defer func() { c.cacheBytes.Store(total) }()
-	if total <= c.maxBytes {
+	maxBytes := c.maxBytes.Load()
+	if total <= maxBytes {
 		log.Debug().Int("files", len(files)).Int64("bytes", total).
 			Msg("media.image: thumb cache: under size cap")
 		return
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
-	target := c.maxBytes * mediaThumbCacheTrimPercent / 100
+	target := maxBytes * mediaThumbCacheTrimPercent / 100
 	removed := 0
 	var removedBytes int64
 	for _, file := range files {
@@ -509,9 +555,14 @@ func (c *mediaThumbCache) clearResolved(systems map[string]struct{}) {
 // a replaced file gets a new key without being read. A replacement that keeps
 // the size and modification time is only told apart by the change time, which
 // exFAT and FAT (and Windows) do not provide.
+//
+// An images:// path is used as it is, not resolved, so a thumbnail survives
+// the image folder moving with its modification times intact.
 func fileThumbSourceKey(path string, info os.FileInfo) string {
-	return fmt.Sprintf("f:%d:%d:%d:%s", info.Size(), info.ModTime().UnixNano(), thumbFileChangeNanos(info),
-		filepath.ToSlash(filepath.Clean(path)))
+	if !config.IsImagePath(path) {
+		path = filepath.ToSlash(filepath.Clean(path))
+	}
+	return fmt.Sprintf("f:%d:%d:%d:%s", info.Size(), info.ModTime().UnixNano(), thumbFileChangeNanos(info), path)
 }
 
 // dataThumbSourceKey identifies an image by its content, for sources that
@@ -695,22 +746,31 @@ func (c *mediaThumbCache) noteWritten(path string) {
 	if err != nil {
 		return
 	}
-	if c.cacheBytes.Add(thumbFileDiskBytes(info, c.clusterBytes)) > c.maxBytes {
+	if c.cacheBytes.Add(thumbFileDiskBytes(info, c.clusterBytes)) > c.maxBytes.Load() {
 		c.requestReap(mediaThumbCapReapInterval)
 	}
 }
 
-// InitMediaThumbCache creates or replaces the process-wide thumb cache for the
-// given platform. Must be called once during service start, before any
-// media.image requests are handled. The cache is usable as soon as this
-// returns; stale-version directories and abandoned temporary files are reaped
-// in the background so a large cache does not delay startup, followed after
-// mediaThumbStartupReapDelay by the first orphan reap. The returned function
-// cancels pending reaps and waits for them, so a stopping service does not
-// leave them writing to the data directory. Uses atomic store so concurrent
-// StartWithReady calls in tests do not race.
-func InitMediaThumbCache(pl platforms.Platform) (stop func()) {
-	cache := newMediaThumbCache(pl)
+// mediaThumbCacheRun owns the caches one InitMediaThumbCache started: the
+// live one and any a settings change replaced whose reaps are still winding
+// down, so stopping the service waits for all of them.
+type mediaThumbCacheRun struct {
+	pl      platforms.Platform
+	stop    func()
+	retired sync.WaitGroup
+	mu      syncutil.Mutex
+	stopped bool
+}
+
+// activeMediaThumbCacheRun is the run ReloadMediaThumbCache moves, the one
+// the most recent InitMediaThumbCache started.
+var activeMediaThumbCacheRun atomic.Pointer[mediaThumbCacheRun]
+
+// startMediaThumbCache builds a cache from the config, installs it as the
+// process-wide cache and starts its background reaps. The returned function
+// cancels them and waits for them to return.
+func startMediaThumbCache(pl platforms.Platform, cfg *config.Instance) (stop func()) {
+	cache := newMediaThumbCacheWithFS(pl, cfg, nil)
 	if err := cache.fs.MkdirAll(cache.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
 		log.Debug().Err(err).Str("dir", cache.dir).Msg("media.image: thumb cache: failed to create dir")
 	}
@@ -732,6 +792,79 @@ func InitMediaThumbCache(pl platforms.Platform) (stop func()) {
 		cache.stopReaps(cancel)
 		<-cache.reapDone
 	}
+}
+
+// InitMediaThumbCache creates or replaces the process-wide thumb cache for the
+// given platform, in the image folder and with the size cap cfg sets. Must be
+// called once during service start, before any media.image requests are
+// handled. The cache is usable as soon as this returns; stale-version
+// directories and abandoned temporary files are reaped in the background so a
+// large cache does not delay startup, followed after
+// mediaThumbStartupReapDelay by the first orphan reap. The returned function
+// cancels pending reaps and waits for them, including those of a cache that
+// ReloadMediaThumbCache replaced, so a stopping service does not leave them
+// writing to the image folder. Uses atomic store so concurrent StartWithReady
+// calls in tests do not race.
+func InitMediaThumbCache(pl platforms.Platform, cfg *config.Instance) (stop func()) {
+	run := &mediaThumbCacheRun{pl: pl}
+	run.mu.Lock()
+	run.stop = startMediaThumbCache(pl, cfg)
+	run.mu.Unlock()
+	activeMediaThumbCacheRun.Store(run)
+	return func() {
+		activeMediaThumbCacheRun.CompareAndSwap(run, nil)
+		run.mu.Lock()
+		run.stopped = true
+		stopCache := run.stop
+		run.stop = nil
+		run.mu.Unlock()
+		if stopCache != nil {
+			stopCache()
+		}
+		run.retired.Wait()
+	}
+}
+
+// ReloadMediaThumbCache applies a changed image folder or size cap to the
+// running cache and reports whether anything changed. A new cap is applied in
+// place. A new folder gets a new cache there: it replaces the old one at once,
+// and the old one's reaps are stopped in the background. Files are never
+// moved or copied; the old folder's thumbnails are simply no longer used.
+func ReloadMediaThumbCache(cfg *config.Instance) bool {
+	run := activeMediaThumbCacheRun.Load()
+	if run == nil {
+		return false
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if run.stopped {
+		return false
+	}
+	current := mediaThumbCachePointer.Load()
+	maxBytes := mediaThumbCacheMaxBytes(cfg)
+	if current != nil && current.dir == mediaThumbCacheDir(run.pl, cfg) {
+		if current.maxBytes.Swap(maxBytes) == maxBytes {
+			return false
+		}
+		log.Info().Int64("maxBytes", maxBytes).Msg("media.image: thumb cache: size cap changed")
+		if current.cacheBytes.Load() > maxBytes {
+			current.requestReap(0)
+		}
+		return true
+	}
+	stopOld := run.stop
+	run.stop = startMediaThumbCache(run.pl, cfg)
+	if next := mediaThumbCachePointer.Load(); next != nil {
+		log.Info().Str("dir", next.dir).Msg("media.image: thumb cache: moved to a new folder")
+	}
+	if stopOld != nil {
+		run.retired.Add(1)
+		go func() {
+			defer run.retired.Done()
+			stopOld()
+		}()
+	}
+	return true
 }
 
 // InvalidateMediaThumbMemo forgets every resolved thumbnail so the next request
@@ -1557,7 +1690,7 @@ func recordedThumbResponse(
 		(helpers.IsZip(thumb.Path) || helpers.IsZip(strings.TrimSuffix(thumb.ParentDir, "/"))) {
 		return models.MediaImageResponse{}, false
 	}
-	if !recordedSourceCurrent(afero.NewOsFs(), &thumb) {
+	if !recordedSourceCurrent(afero.NewOsFs(), requestImageDir(env), &thumb) {
 		return models.MediaImageResponse{}, false
 	}
 	response, resolved, cached := cachedMediaImageResponse(
@@ -1575,12 +1708,22 @@ func recordedThumbResponse(
 // the image a full lookup would load. Only file-backed sources qualify: one
 // stat proves the file the recorded type resolves to now is the one recorded,
 // with the same size and modification time. Anything else needs the full path.
-func recordedSourceCurrent(fs afero.Fs, thumb *database.MediaCoverThumb) bool {
+// An images:// source is statted in imageDir but keyed by its images:// path,
+// as loadMediaImageFile keys it.
+func recordedSourceCurrent(fs afero.Fs, imageDir string, thumb *database.MediaCoverThumb) bool {
 	if !isFileThumbSourceKey(thumb.SourceKey) || thumb.SourcePath == "" ||
 		platforms.IsSourcePath(thumb.SourcePath) {
 		return false
 	}
-	info, err := fs.Stat(thumb.SourcePath)
+	statPath := thumb.SourcePath
+	if config.IsImagePath(statPath) {
+		resolved, ok := config.ResolveImagePath(imageDir, statPath)
+		if !ok {
+			return false
+		}
+		statPath = resolved
+	}
+	info, err := fs.Stat(statPath)
 	if err != nil || !info.Mode().IsRegular() {
 		return false
 	}
@@ -1769,7 +1912,8 @@ func loadRawMediaImageDirectory(
 		},
 	}
 	raw, err = selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), env.Platform, db, directoryRow, nil, directoryProps, prefs, maxBytes, probe,
+		env.Context, afero.NewOsFs(), requestImageDir(env), env.Platform, db, directoryRow, nil, directoryProps,
+		prefs, maxBytes, probe,
 	)
 	if notFound, fileBacked := mediaImageNotFound(err); notFound {
 		return nil, fileBacked, nil
@@ -1860,7 +2004,8 @@ func loadRawMediaImageRow(
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 	return selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), env.Platform, db, row, mediaPropSources, titleProps, prefs, maxBytes, probe,
+		env.Context, afero.NewOsFs(), requestImageDir(env), env.Platform, db, row, mediaPropSources, titleProps,
+		prefs, maxBytes, probe,
 	)
 }
 
@@ -1889,7 +2034,8 @@ func loadRawMediaImageByID(
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 	return selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), env.Platform, db, row, mediaPropSources, titleProps, prefs, maxBytes, probe,
+		env.Context, afero.NewOsFs(), requestImageDir(env), env.Platform, db, row, mediaPropSources, titleProps,
+		prefs, maxBytes, probe,
 	)
 }
 
@@ -1967,6 +2113,7 @@ func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow)
 func selectRawMediaImageFromSources(
 	ctx context.Context,
 	fs afero.Fs,
+	imageDir string,
 	platform platforms.Platform,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
@@ -2001,7 +2148,7 @@ func selectRawMediaImageFromSources(
 				fileBackedCandidatesChecked = true
 			}
 			raw, stale, err := loadRawMediaImageProperty(
-				ctx, fs, platform, db, row, &prop, src, typeTag, maxBytes, probe,
+				ctx, fs, imageDir, platform, db, row, &prop, src, typeTag, maxBytes, probe,
 			)
 			if stale {
 				delete(src.propMap, typeTag)
@@ -2036,6 +2183,7 @@ func selectRawMediaImageFromSources(
 func loadRawMediaImageProperty(
 	ctx context.Context,
 	fs afero.Fs,
+	imageDir string,
 	platform platforms.Platform,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
@@ -2078,7 +2226,7 @@ func loadRawMediaImageProperty(
 		sourceKey = dataThumbSourceKey(contentType, binary)
 	case prop.Text != "":
 		file, stale, err := loadMediaImageFile(
-			ctx, fs, platform, row, prop, src.isMedia, typeTag, maxBytes, probe,
+			ctx, fs, imageDir, platform, row, prop, src.isMedia, typeTag, maxBytes, probe,
 		)
 		if stale || err != nil {
 			return nil, stale, err
@@ -2104,6 +2252,7 @@ func loadRawMediaImageProperty(
 func loadMediaImageFile(
 	ctx context.Context,
 	fs afero.Fs,
+	imageDir string,
 	platform platforms.Platform,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
@@ -2122,21 +2271,32 @@ func loadMediaImageFile(
 			sourceKey: dataThumbSourceKey(mediaContentType(prop.ContentType, prop.Text), data),
 		}, false, nil
 	}
-	info, err := fs.Stat(prop.Text)
+	// An images:// path names a file in the image folder. It is read from
+	// there, but keyed and reported by its images:// path.
+	path := prop.Text
+	if config.IsImagePath(path) {
+		resolved, ok := config.ResolveImagePath(imageDir, path)
+		if !ok {
+			logStaleMediaImageProperty(row, prop, isMedia, typeTag, "image path outside the image folder")
+			return mediaImageFile{}, true, nil
+		}
+		path = resolved
+	}
+	info, err := fs.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			logStaleMediaImageProperty(row, prop, isMedia, typeTag, err.Error())
 			return mediaImageFile{}, true, nil
 		}
-		return mediaImageFile{}, false, mediaImageReadError(prop.Text, err)
+		return mediaImageFile{}, false, mediaImageReadError(path, err)
 	}
 	if !info.Mode().IsRegular() {
-		err := fmt.Errorf("media binary file %q is not a regular file", prop.Text)
-		return mediaImageFile{}, false, mediaImageReadError(prop.Text, err)
+		err := fmt.Errorf("media binary file %q is not a regular file", path)
+		return mediaImageFile{}, false, mediaImageReadError(path, err)
 	}
 	if info.Size() > maxBytes {
-		return mediaImageFile{}, false, mediaImageReadError(prop.Text, &mediaBinaryTooLargeError{
-			path: prop.Text,
+		return mediaImageFile{}, false, mediaImageReadError(path, &mediaBinaryTooLargeError{
+			path: path,
 			size: info.Size(),
 			max:  maxBytes,
 		})
@@ -2146,15 +2306,15 @@ func loadMediaImageFile(
 		return file, false, nil
 	}
 	readStart := time.Now()
-	data, readErr := readMediaBinaryFile(fs, prop.Text, maxBytes)
+	data, readErr := readMediaBinaryFile(fs, path, maxBytes)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
 			logStaleMediaImageProperty(row, prop, isMedia, typeTag, readErr.Error())
 			return mediaImageFile{}, true, nil
 		}
-		return mediaImageFile{}, false, mediaImageReadError(prop.Text, readErr)
+		return mediaImageFile{}, false, mediaImageReadError(path, readErr)
 	}
-	log.Debug().Dur("duration", time.Since(readStart)).Int("bytes", len(data)).Str("path", prop.Text).
+	log.Debug().Dur("duration", time.Since(readStart)).Int("bytes", len(data)).Str("path", path).
 		Msg("media.image: read source image")
 	file.data = data
 	return file, false, nil

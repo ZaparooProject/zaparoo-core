@@ -93,9 +93,13 @@ type SearchResultMedia struct {
 }
 
 type PaginationInfo struct {
-	NextCursor  *string `json:"nextCursor,omitempty"`
-	HasNextPage bool    `json:"hasNextPage"`
-	PageSize    int     `json:"pageSize"`
+	NextCursor *string `json:"nextCursor,omitempty"`
+	// Offset and AnchorIndex are media.browse only: the absolute position of
+	// the page's first row and of the requested anchor.
+	Offset      *int `json:"offset,omitempty"`
+	AnchorIndex *int `json:"anchorIndex,omitempty"`
+	HasNextPage bool `json:"hasNextPage"`
+	PageSize    int  `json:"pageSize"`
 }
 
 type SearchResults struct {
@@ -195,6 +199,7 @@ type SettingsResponse struct {
 	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
+	MediaImageDir             *string            `json:"mediaImageDir,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
@@ -203,6 +208,7 @@ type SettingsResponse struct {
 	LauncherPreference        []string           `json:"launcherPreference"`
 	AudioVolume               int                `json:"audioVolume"`
 	AudioMusicVolume          int                `json:"audioMusicVolume"`
+	MediaThumbCacheMaxMB      int                `json:"mediaThumbCacheMaxMb"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
@@ -1132,6 +1138,22 @@ type SettingsAuthClaimResponse struct {
 
 type SettingsAuthStatusResponse struct {
 	Linked bool `json:"linked"`
+}
+
+// OnlineFeatureCloudBackup is the account feature that allows remote
+// backups. Core reads it to decide whether remote backups are available.
+const OnlineFeatureCloudBackup = "cloud_backup"
+
+// OnlineStatusResponse reports the online account link, the name and link
+// time the Online service knows this device by, and the account features it
+// last listed. Features is never null; FeaturesCheckedAt is null until a
+// check succeeds after linking.
+type OnlineStatusResponse struct {
+	FeaturesCheckedAt *string  `json:"featuresCheckedAt"`
+	DeviceName        *string  `json:"deviceName,omitempty"`
+	LinkedAt          *string  `json:"linkedAt,omitempty"`
+	Features          []string `json:"features"`
+	Linked            bool     `json:"linked"`
 }
 
 // SettingsAuthUnlinkResponse lists the domains whose credentials were

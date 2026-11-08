@@ -86,8 +86,8 @@ type DeviceStatusPusher interface {
 
 // ResolveDeviceReaders returns the reader for each section of device status,
 // preferring the platform's own where it has one.
-func ResolveDeviceReaders(pl Platform, defaults hoststatus.Readers) hoststatus.Readers {
-	readers := defaults
+func ResolveDeviceReaders(pl Platform, defaults *hoststatus.Readers) hoststatus.Readers {
+	readers := *defaults
 	if provider, ok := pl.(DevicePowerProvider); ok {
 		readers.Power = provider.DevicePower
 	}

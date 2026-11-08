@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -80,6 +81,41 @@ func TestHandleMedia_ReportsFolderScanProgress(t *testing.T) {
 
 // A stalled scan tells the user once, naming the system and folder and how to
 // exclude it. It is deduplicated by category, so a repeat replaces it.
+// A completed run tells clients indexing stopped, then keeps holding
+// indexing until optimization takes over. A status read in that gap must
+// not report indexing again, or clients see the run finish twice.
+func TestHandleMedia_FinishedRunReportsNotIndexing(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
+	testState, _ := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	statusInstance.set(indexingStatusVals{indexing: true, totalSteps: 2, currentStep: 2})
+	statusInstance.setCancelFunc(func() {})
+	statusInstance.markFinished()
+	t.Cleanup(ClearIndexingStatus)
+
+	result, err := HandleMedia(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: &helpers.MockUserDBI{}},
+		State:    testState,
+	})
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok)
+	assert.False(t, response.Database.Indexing)
+
+	assert.True(t, statusInstance.isRunning(), "the run keeps indexing until the handoff")
+	assert.False(t, statusInstance.cancel(), "a finished run has nothing to cancel")
+	assert.True(t, statusInstance.isRunning())
+
+	require.False(t, statusInstance.startIfNotRunning())
+	statusInstance.clear()
+	require.True(t, statusInstance.startIfNotRunning())
+	assert.False(t, statusInstance.get().finished, "a new run starts unfinished")
+}
+
 func TestReportStalledScan_AddsInboxMessage(t *testing.T) {
 	// Not parallel: sets the package inbox.
 	userDB := helpers.NewMockUserDBI()

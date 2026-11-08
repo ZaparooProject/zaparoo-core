@@ -141,6 +141,7 @@ type Options struct {
 // were last told. With nobody connected it does nothing at all.
 type Monitor struct {
 	readers       hoststatus.Readers
+	bluetooth     *Bluetooth
 	probeDue      time.Time
 	clock         clockwork.Clock
 	prober        InternetProber
@@ -199,6 +200,14 @@ func NewMonitor(opts *Options) *Monitor {
 		monitor.readers.PowerControl = hoststatus.NoPowerControl{}
 	}
 	_, monitor.pushed = opts.Platform.(platforms.DeviceStatusPusher)
+	if opts.Readers.BluetoothControl != nil {
+		monitor.bluetooth = NewBluetooth(&BluetoothOptions{
+			Control:     opts.Readers.BluetoothControl,
+			Clock:       monitor.clock,
+			Publish:     opts.Publish,
+			Controllers: monitor.lastControllers,
+		})
+	}
 
 	column := 0
 	if opts.Platform.Settings().ResourceConstrained {
@@ -220,8 +229,24 @@ func (m *Monitor) PowerControl() hoststatus.PowerController {
 	return m.readers.PowerControl
 }
 
+// Bluetooth returns the Bluetooth manager, or nil when Core cannot manage
+// Bluetooth devices here.
+func (m *Monitor) Bluetooth() *Bluetooth {
+	return m.bluetooth
+}
+
+// lastControllers is the controller list last read, without reading again.
+func (m *Monitor) lastControllers() []hoststatus.Controller {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]hoststatus.Controller(nil), m.snap.Controllers...)
+}
+
 // ClientConnected records that a client is now listening for notifications.
 func (m *Monitor) ClientConnected() {
+	if m.bluetooth != nil {
+		m.bluetooth.ClientConnected()
+	}
 	m.mu.Lock()
 	m.clients++
 	first := m.clients == 1
@@ -240,6 +265,9 @@ func (m *Monitor) ClientConnected() {
 
 // ClientDisconnected records that a client has gone.
 func (m *Monitor) ClientDisconnected() {
+	if m.bluetooth != nil {
+		m.bluetooth.ClientDisconnected()
+	}
 	m.mu.Lock()
 	if m.clients > 0 {
 		m.clients--
@@ -280,6 +308,9 @@ func (m *Monitor) Run(ctx context.Context) {
 	defer func() {
 		m.stopProbe()
 		m.probeWG.Wait()
+		if m.bluetooth != nil {
+			m.bluetooth.Close()
+		}
 	}()
 
 	for {
@@ -682,5 +713,10 @@ func (m *Monitor) publishIfChanged() {
 
 	if changed && m.publish != nil {
 		m.publish(models.Notification{Method: models.NotificationDeviceChanged, Params: payload})
+	}
+	if changed && m.bluetooth != nil {
+		// A controller that connected or went away changes which Bluetooth
+		// device it belongs to.
+		m.bluetooth.changed()
 	}
 }

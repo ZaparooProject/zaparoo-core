@@ -136,7 +136,7 @@ func TestLoadMediaImageFileRoutesSourcePathsToTheSourceFileReader(t *testing.T) 
 		return true
 	}
 	file, stale, err := loadMediaImageFile(
-		context.Background(), nil, platform, sourceImageTestRow(), prop, true, "property:image-boxart", 1024, probe,
+		context.Background(), nil, "", platform, sourceImageTestRow(), prop, true, "property:image-boxart", 1024, probe,
 	)
 	require.NoError(t, err)
 	assert.False(t, stale)
@@ -156,7 +156,7 @@ func TestLoadMediaImageFileSkipsReadWhenThumbnailIsCached(t *testing.T) {
 	prop := &database.MediaProperty{Text: path}
 	load := func(probe mediaImageCacheProbe) ([]byte, string) {
 		file, stale, err := loadMediaImageFile(
-			context.Background(), afero.NewOsFs(), nil, sourceImageTestRow(), prop, true,
+			context.Background(), afero.NewOsFs(), "", nil, sourceImageTestRow(), prop, true,
 			"property:image-boxart", 1024, probe,
 		)
 		require.NoError(t, err)
