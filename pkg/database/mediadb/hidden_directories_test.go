@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -533,4 +534,43 @@ func TestRootCandidatesFollowHiddenCounts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"FilesHidden", "FolderHidden", "Mixed", "Partly"}, all.Children[root])
+}
+
+// Folders hidden by path that sort first must not take the page's rows, or a
+// page comes back short and the listing ends early. The cached aggregates and
+// the Media fallbacks, with and without a system filter, have to agree.
+func TestHiddenDirectoriesDoNotShortenAPage(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{true, false} {
+		for _, bySystem := range []bool{true, false} {
+			t.Run(fmt.Sprintf("cached=%t/systems=%t", cached, bySystem), func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				f, cleanup := setupMergeFixture(t, 1)
+				t.Cleanup(cleanup)
+				root := f.roots[0]
+				for _, name := range []string{"A", "B", "C", "D", "E"} {
+					f.insert(name+"Game", root+name+"/Game.nes")
+				}
+				f.commit(t, cached)
+				hideDirs(t, f.mediaDB, root+"A", root+"B")
+				var systems []systemdefs.System
+				if bySystem {
+					systems = []systemdefs.System{f.system}
+				}
+
+				first, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true, Limit: 2,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, []string{"C", "D"}, dirNames(first))
+
+				rest, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+					PathPrefix: root, Systems: systems, ExcludeHidden: true, AfterName: "D", Limit: 2,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, []string{"E"}, dirNames(rest))
+			})
+		}
+	}
 }

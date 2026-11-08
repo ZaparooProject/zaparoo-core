@@ -686,7 +686,13 @@ func sqlBrowseDirectoryRows(
 			}
 		}
 		if !served {
-			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+			// Media counts no folder as hidden, so a hidden folder would take a
+			// row of the page and its lookahead until it is dropped below.
+			scoped := opts
+			scoped.Limit = browseHiddenFetchLimit(
+				opts.Limit, hidden.childNameCount([]string{opts.PathPrefix}, opts.Systems),
+			)
+			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, scoped)
 			if err != nil {
 				return nil, err
 			}
@@ -699,7 +705,11 @@ func sqlBrowseDirectoryRows(
 			}
 		}
 	}
-	return applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+	results, err = applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+	if err != nil {
+		return nil, err
+	}
+	return browseTruncateDirectories(results, opts.Limit), nil
 }
 
 // applyHiddenDirsToDirectories settles the hidden folders among a listing's

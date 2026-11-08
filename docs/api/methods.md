@@ -929,7 +929,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
 | offset     | number | No       | Start the page at this absolute position in the listing, directories first, then files. Must be 0 or greater. An offset at or past the end returns no entries with correct totals. Root `virtualEntries` of a `rootView: "contents"` listing are not counted and appear only on the cursorless first page. See [Positioned pages](#positioned-pages). |
-| anchorPath | string | No       | Non-empty path to locate in the listing. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a promoted folder finds that folder. See [Positioned pages](#positioned-pages). |
+| anchorPath | string | No       | Non-empty path to locate in the listing. Returns the page starting at the largest multiple of `maxResults` not after its position. A path below a listed folder, at any depth, finds that folder, whether or not the path itself is still indexed or visible. See [Positioned pages](#positioned-pages). |
 
 #### Result
 
@@ -976,7 +976,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 `offset` and `anchorPath` read a listing by position instead of walking it with cursors. An offset page holds the same rows as the cursor page at that depth, for every `sort`, and its `nextCursor`, `totalDirs` and `totalFiles` work as on any other page.
 
-When `anchorPath` is not listed, the response is the cursorless first page without `anchorIndex`, and no error is returned. That covers a path that does not exist, lies outside the listing, or is hidden or removed by the request's `tags`, `systems` or `includeHidden`.
+When `anchorPath` is not listed and is not below a listed folder, the response is the cursorless first page without `anchorIndex`, and no error is returned. That covers a path that does not exist, lies outside the listing, or is hidden or removed by the request's `tags`, `systems` or `includeHidden`.
 
 Both return an invalid parameter error when:
 
