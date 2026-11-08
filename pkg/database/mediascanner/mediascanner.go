@@ -2208,6 +2208,7 @@ func NewNamesIndexWithSources(
 				Int64("tagsInserted", reconcileStats.TagsInserted).
 				Int64("tagLinksAdded", reconcileStats.TagLinksAdded).
 				Int64("tagLinksDeleted", reconcileStats.TagLinksDeleted).
+				Int64("mediaLinksDeleted", reconcileStats.MediaLinksDeleted).
 				Int64("touchedTitles", reconcileStats.TouchedTitles).
 				Msg("reconciled staged system")
 			pendingSystems = append(pendingSystems, systemID)

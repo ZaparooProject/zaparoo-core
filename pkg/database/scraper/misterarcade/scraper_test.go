@@ -23,13 +23,16 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
@@ -575,4 +578,68 @@ func TestScopedScrapeWritesOnlyTheSelectedRow(t *testing.T) {
 	assert.Equal(t, int64(100), (*writes)[0].MediaDBID)
 	mediaDB.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
 	mediaDB.AssertExpectations(t)
+}
+
+// A paused scrape reads no descriptor until the pause lifts, so a launch never
+// competes with the scrape for slow storage.
+func TestBuildTargetsWaitsWhilePaused(t *testing.T) {
+	t.Parallel()
+	var reads atomic.Int32
+	impl := &scraperImpl{
+		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
+		cache: func(string) (string, bool) {
+			reads.Add(1)
+			return "1941", true
+		},
+	}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		err     error
+		targets []database.ScrapeWriteTarget
+	}
+	done := make(chan result, 1)
+	go func() {
+		targets, _, err := impl.buildTargets(ctx, []descriptorRow{
+			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
+		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		done <- result{targets: targets, err: err}
+	}()
+
+	assert.Never(t, func() bool { return reads.Load() > 0 }, 50*time.Millisecond, 5*time.Millisecond,
+		"no descriptor is read while the scrape is paused")
+	pauser.Resume()
+	res := <-done
+	require.NoError(t, res.err)
+	assert.Len(t, res.targets, 1)
+	assert.Equal(t, int32(1), reads.Load())
+}
+
+// A scoped scrape cancelled while paused stops without reading a descriptor.
+func TestBuildTargetsCancelledWhilePaused(t *testing.T) {
+	t.Parallel()
+	var reads atomic.Int32
+	impl := &scraperImpl{
+		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
+		cache: func(string) (string, bool) {
+			reads.Add(1)
+			return "1941", true
+		},
+	}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := impl.buildTargets(ctx, []descriptorRow{
+			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
+		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		done <- err
+	}()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	assert.Zero(t, reads.Load())
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -93,6 +94,57 @@ func TestCDTVLauncherMatching(t *testing.T) {
 			assert.True(t, matcher.MatchSystemFileForScan("CommodoreCDTV", path))
 		}
 	}
+}
+
+// 64DD disk images go to the N64 core's third file slot; cartridges stay on
+// the first. Both must resolve to the primary N64 launcher.
+func TestN64DDDiskLaunch(t *testing.T) {
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	root := filepath.Join(misterconfig.SDRootDir, "games")
+	pl.On("RootDirs", cfg).Return([]string{root})
+	launchers := CreateLaunchers(pl)
+	oldCache := helpers.GlobalLauncherCache
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
+	t.Cleanup(func() { helpers.GlobalLauncherCache = oldCache })
+	helpers.GlobalLauncherCache.InitializeFromSlice(launchers)
+
+	core, err := catalog.Get(systemdefs.SystemNintendo64)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		file  string
+		index int
+	}{
+		{filepath.Join("3 64DD Disk Drive", "Game Name.ndd"), 3},
+		{filepath.Join("3 64DD Disk Drive", "Game Name.NDD"), 3},
+		{"Game Name.z64", 1},
+	} {
+		path := filepath.Join(root, "N64", tc.file)
+
+		got, err := helpers.FindLauncher(cfg, pl, path)
+		require.NoError(t, err, tc.file)
+		assert.Equal(t, systemdefs.SystemNintendo64, got.ID, tc.file)
+		matcher := helpers.NewLauncherMatcher(cfg, pl)
+		assert.True(t, matcher.MatchSystemFileForScan(systemdefs.SystemNintendo64, path), tc.file)
+
+		document, err := mgls.GenerateMgl(core, core.RBF, path, "")
+		require.NoError(t, err, tc.file)
+		var decoded struct {
+			File mglFileAttrs `xml:"file"`
+		}
+		require.NoError(t, xml.Unmarshal([]byte(document), &decoded), tc.file)
+		assert.Equal(t, "f", decoded.File.Method, tc.file)
+		assert.Equal(t, tc.index, decoded.File.Index, tc.file)
+		assert.True(t, strings.HasSuffix(decoded.File.Path, filepath.Base(tc.file)), decoded.File.Path)
+	}
+}
+
+type mglFileAttrs struct {
+	Method string `xml:"type,attr"`
+	Path   string `xml:"path,attr"`
+	Index  int    `xml:"index,attr"`
 }
 
 func TestDVDAndNGPCMediaDefinitions(t *testing.T) {

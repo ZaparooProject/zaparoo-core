@@ -41,19 +41,28 @@ func scrapeScopePredicate(scope database.ScrapeScope) (predicate string, values 
 	where := "m.IsMissing = 0 AND m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)" +
 		" AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = m.DBID)"
 	args := []any{scope.SystemID}
-	pathExpr := "m.Path"
 	path := scope.Path
-	if runtime.GOOS == "windows" && !strings.Contains(path, "://") {
-		pathExpr = "replace(m.Path, char(92), '/')"
+	pathExpr := func(column string) string {
+		if runtime.GOOS == "windows" && !strings.Contains(path, "://") {
+			return "replace(" + column + ", char(92), '/')"
+		}
+		return column
 	}
 	if scope.Subtree {
 		prefix := strings.TrimRight(path, "/") + "/"
 		// '/' is ASCII 47 and '0' is 48, so this range contains exactly
-		// descendants of prefix, including filesystem/volume roots.
-		where += " AND " + pathExpr + " >= ? AND " + pathExpr + " < ?"
-		args = append(args, prefix, strings.TrimSuffix(prefix, "/")+"0")
+		// descendants of prefix, including filesystem/volume roots. A linked
+		// row in the range stands for its target, the same swap a single-game
+		// scope makes, so a folder holding only aliases still refreshes the
+		// games they show. One range read covers both cases.
+		where += ` AND m.DBID IN (
+			SELECT COALESCE(l.TargetMediaDBID, a.DBID) FROM Media a
+			LEFT JOIN MediaLinks l ON l.MediaDBID = a.DBID
+			WHERE a.IsMissing = 0 AND a.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+			  AND ` + pathExpr("a.Path") + " >= ? AND " + pathExpr("a.Path") + " < ?)"
+		args = append(args, scope.SystemID, prefix, strings.TrimSuffix(prefix, "/")+"0")
 	} else {
-		where += " AND m.DBID = ? AND " + pathExpr + " = ?"
+		where += " AND m.DBID = ? AND " + pathExpr("m.Path") + " = ?"
 		args = append(args, scope.MediaID, path)
 	}
 	return where, args, nil

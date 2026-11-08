@@ -2598,6 +2598,13 @@ func (db *MediaDB) streamMediaTitlesWithoutSentinel(
 	if err != nil {
 		return err
 	}
+	// A link's sentinel is a copy of its target's, so only the title's own
+	// media say whether the title was scraped.
+	sentinelLinkFilter := ""
+	if linkFilter != "" {
+		sentinelLinkFilter = `
+			  AND NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = m.DBID)`
+	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
 	stmt, err := db.sql.Load().PrepareContext(queryCtx, `
@@ -2609,7 +2616,7 @@ func (db *MediaDB) streamMediaTitlesWithoutSentinel(
 			FROM Media m
 			JOIN MediaTags mtag ON m.DBID = mtag.MediaDBID
 			WHERE m.MediaTitleDBID = mt.DBID
-			  AND mtag.TagDBID IN (`+placeholders+`)
+			  AND mtag.TagDBID IN (`+placeholders+`)`+sentinelLinkFilter+`
 		  )
 	`)
 	if err != nil {

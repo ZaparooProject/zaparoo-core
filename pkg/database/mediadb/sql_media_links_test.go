@@ -183,7 +183,7 @@ func TestMediaLinks_RenamedOrganizerAliasShowsTargetArt(t *testing.T) {
 	db.WaitForBackgroundOperations()
 
 	scrapeLinkTestTarget(t, db, target)
-	require.NoError(t, db.SyncLinkedMedia(ctx, []string{systemdefs.SystemArcade}))
+	require.NoError(t, db.SyncLinkedMedia(ctx, []string{systemdefs.SystemArcade}, nil))
 
 	assert.Equal(t, []string{
 		string(tags.TagPropertyImageBoxart) + "=" + linkTestBoxart,
@@ -209,7 +209,7 @@ func TestMediaLinks_RenamedOrganizerAliasShowsTargetArt(t *testing.T) {
 
 	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	require.NoError(t, err)
-	result, err := sqlSyncMediaLinks(ctx, tx, nil, false)
+	result, err := sqlSyncMediaLinks(ctx, tx, nil, nil, false)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	assert.False(t, result.changed(), "a second sync has nothing to write")
@@ -235,7 +235,7 @@ func TestMediaLinks_SharedTitleCopiesOnlyMediaScope(t *testing.T) {
 	require.Equal(t, target.MediaTitleDBID, alias.MediaTitleDBID)
 
 	scrapeLinkTestTarget(t, db, target)
-	require.NoError(t, db.SyncLinkedMedia(ctx, nil))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
 
 	assert.Equal(t, []string{string(tags.TagPropertyImageScreenshot) + "=" + linkTestScreenshot},
 		linkTestProperties(t, db, alias.DBID))
@@ -288,7 +288,7 @@ func TestMediaLinks_SyncKeepsRowOwnData(t *testing.T) {
 	insertLink(target.DBID, tags.TagTypeRev, string(tags.TagRev2), 1)
 
 	scrapeLinkTestTarget(t, db, target)
-	require.NoError(t, db.SyncLinkedMedia(ctx, nil))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
 
 	assert.Contains(t, linkTestProperties(t, db, alias.DBID), string(tags.TagPropertyLauncherOverride)+"=Arcade")
 	aliasTags := linkTestTags(t, db, alias.DBID)
@@ -316,7 +316,7 @@ func TestMediaLinks_UnlinkedRowLosesCopies(t *testing.T) {
 	target := linkTestMedia(t, db, targetPath)
 	alias := linkTestMedia(t, db, aliasPath)
 	scrapeLinkTestTarget(t, db, target)
-	require.NoError(t, db.SyncLinkedMedia(ctx, nil))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
 	require.NotEmpty(t, linkTestProperties(t, db, alias.DBID))
 
 	// An incomplete scan that never reached the alias proves nothing.
@@ -353,7 +353,7 @@ func TestMediaLinks_RepointedToRefusedTargetUnlinks(t *testing.T) {
 	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
 		target, other, stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", targetPath))
 	scrapeLinkTestTarget(t, db, linkTestMedia(t, db, targetPath))
-	require.NoError(t, db.SyncLinkedMedia(ctx, nil))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
 	alias := linkTestMedia(t, db, aliasPath)
 	require.NotEmpty(t, linkTestProperties(t, db, alias.DBID))
 
@@ -362,6 +362,186 @@ func TestMediaLinks_RepointedToRefusedTargetUnlinks(t *testing.T) {
 	_, linked := linkTestTarget(t, db, alias.DBID)
 	assert.False(t, linked)
 	assert.Empty(t, linkTestProperties(t, db, alias.DBID), "the old target's art must not stay")
+}
+
+// A folder of the Organizer holds only aliases. Scraping it refreshes the
+// games they show, never the aliases themselves, and leaves media outside
+// the folder that no alias in it points at.
+func TestMediaLinks_SubtreeScopeSelectsAliasTargets(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	asoPath := arcadeLinkPath("ASO.mra")
+	otherPath := arcadeLinkPath("Other.mra")
+	folder := arcadeLinkPath("_Organized", "_2 Year", "1985")
+	aliasPath := arcadeLinkPath("_Organized", "_2 Year", "1985", "ASO.mra")
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		stagedLinkTestMedia(asoPath, "ASO", ""),
+		stagedLinkTestMedia(otherPath, "Other", ""),
+		stagedLinkTestMedia(aliasPath, "ASO", asoPath),
+	)
+
+	rows, err := db.GetScrapeMedia(ctx, database.ScrapeScope{
+		SystemID: systemdefs.SystemArcade, Path: folder, Subtree: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, asoPath, rows[0].Path)
+
+	rows, err = db.GetScrapeMedia(ctx, database.ScrapeScope{
+		SystemID: systemdefs.SystemArcade, Path: arcadeLinkPath(), Subtree: true,
+	})
+	require.NoError(t, err)
+	paths := make([]string, 0, len(rows))
+	for i := range rows {
+		paths = append(paths, rows[i].Path)
+	}
+	assert.Equal(t, []string{asoPath, otherPath}, paths, "the whole tree lists each game once")
+}
+
+// A scrape of one game syncs that game's aliases and leaves the aliases of
+// every other game untouched, even when their targets have unsynced data.
+func TestMediaLinks_ScopedSyncTouchesOnlyScopedTargets(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	asoPath := arcadeLinkPath("ASO.mra")
+	otherPath := arcadeLinkPath("Other.mra")
+	asoAlias := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+	otherAlias := arcadeLinkPath("_Organized", "_4 N-Z", "Other - The Game.mra")
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		stagedLinkTestMedia(asoPath, "ASO", ""),
+		stagedLinkTestMedia(otherPath, "Other", ""),
+		stagedLinkTestMedia(asoAlias, "ASO - Armored Scrum Object", asoPath),
+		stagedLinkTestMedia(otherAlias, "Other - The Game", otherPath),
+	)
+	aso := linkTestMedia(t, db, asoPath)
+	scrapeLinkTestTarget(t, db, aso)
+	scrapeLinkTestTarget(t, db, linkTestMedia(t, db, otherPath))
+
+	require.NoError(t, db.SyncLinkedMedia(ctx, []string{systemdefs.SystemArcade}, &database.ScrapeScope{
+		SystemID: systemdefs.SystemArcade, Path: asoPath, MediaID: aso.DBID,
+	}))
+	assert.NotEmpty(t, linkTestProperties(t, db, linkTestMedia(t, db, asoAlias).DBID))
+	assert.Empty(t, linkTestProperties(t, db, linkTestMedia(t, db, otherAlias).DBID),
+		"an alias of a game outside the scope is not synced")
+
+	require.NoError(t, db.SyncLinkedMedia(ctx, []string{systemdefs.SystemArcade}, nil))
+	assert.NotEmpty(t, linkTestProperties(t, db, linkTestMedia(t, db, otherAlias).DBID),
+		"an unscoped sync covers every alias")
+}
+
+// A target that has itself become a link is refused for an existing link the
+// same way it is for a new one, so a stored link never turns into a chain.
+func TestMediaLinks_TargetBecameLinkUnlinks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	middlePath := arcadeLinkPath("_1 A-E", "ASO.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+	target := stagedLinkTestMedia(targetPath, "ASO", "")
+	alias := stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", middlePath)
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, stagedLinkTestMedia(middlePath, "ASO", ""), alias)
+	aliasRow := linkTestMedia(t, db, aliasPath)
+	_, linked := linkTestTarget(t, db, aliasRow.DBID)
+	require.True(t, linked)
+
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, stagedLinkTestMedia(middlePath, "ASO", targetPath), alias)
+	_, linked = linkTestTarget(t, db, aliasRow.DBID)
+	assert.False(t, linked, "a link whose target became a link is dropped")
+	got, linked := linkTestTarget(t, db, linkTestMedia(t, db, middlePath).DBID)
+	assert.True(t, linked)
+	assert.Equal(t, linkTestMedia(t, db, targetPath).DBID, got)
+}
+
+// An incomplete scan that did not reach a stored link cannot tell whether it
+// is still a link, so it is never accepted as a new link's target.
+func TestMediaLinks_IncompleteScanRefusesUnwalkedLinkTarget(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	middlePath := arcadeLinkPath("_1 A-E", "ASO.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+	target := stagedLinkTestMedia(targetPath, "ASO", "")
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target,
+		stagedLinkTestMedia(middlePath, "ASO", targetPath),
+		stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", ""))
+
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{IncompleteScan: true},
+		target, stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", middlePath))
+	_, linked := linkTestTarget(t, db, linkTestMedia(t, db, aliasPath).DBID)
+	assert.False(t, linked, "a stored link the scan did not reach is not a target")
+	_, linked = linkTestTarget(t, db, linkTestMedia(t, db, middlePath).DBID)
+	assert.True(t, linked, "the unwalked link itself is kept")
+}
+
+// A walked alias whose target went missing is its own media again, and the
+// art copied from the gone target goes with the link.
+func TestMediaLinks_MissingTargetUnlinks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+	alias := stagedLinkTestMedia(aliasPath, "ASO - Armored Scrum Object", targetPath)
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		stagedLinkTestMedia(targetPath, "ASO", ""), alias)
+	scrapeLinkTestTarget(t, db, linkTestMedia(t, db, targetPath))
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
+	aliasRow := linkTestMedia(t, db, aliasPath)
+	require.NotEmpty(t, linkTestProperties(t, db, aliasRow.DBID))
+
+	stats := indexLinkTestMedia(t, db, database.ScanReconcileOpts{}, alias)
+	assert.Equal(t, int64(1), stats.MediaLinksDeleted)
+	_, linked := linkTestTarget(t, db, aliasRow.DBID)
+	assert.False(t, linked)
+	assert.Empty(t, linkTestProperties(t, db, aliasRow.DBID))
+}
+
+// Unlinking purges the alias's copied data, so it needs a scrape: the library
+// revision must move even when nothing else about the rows changed, or an
+// index-triggered scrape would skip the system as unchanged.
+func TestMediaLinks_UnlinkBumpsLibraryRevision(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO.mra")
+	target := stagedLinkTestMedia(targetPath, "ASO", "")
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, stagedLinkTestMedia(aliasPath, "ASO", targetPath))
+	before, err := db.LibraryRevision(ctx, systemdefs.SystemArcade)
+	require.NoError(t, err)
+
+	stats := indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, stagedLinkTestMedia(aliasPath, "ASO", ""))
+	require.Zero(t, stats.MediaUpserted, "the rows themselves are unchanged")
+	assert.Equal(t, int64(1), stats.MediaLinksDeleted)
+	after, err := db.LibraryRevision(ctx, systemdefs.SystemArcade)
+	require.NoError(t, err)
+	assert.Greater(t, after, before)
+
+	stats = indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		target, stagedLinkTestMedia(aliasPath, "ASO", ""))
+	assert.Zero(t, stats.MediaLinksDeleted)
+	unchanged, err := db.LibraryRevision(ctx, systemdefs.SystemArcade)
+	require.NoError(t, err)
+	assert.Equal(t, after, unchanged, "no unlink, no bump")
 }
 
 // Reconcile copies the target's existing data onto a new link, so it does
@@ -466,6 +646,39 @@ func TestMediaLinks_ScraperStreamsSkipLinks(t *testing.T) {
 	assert.Empty(t, scoped, "a scoped scrape never selects a link")
 }
 
+// An alias carries a copy of its target's sentinel. A title it shares with a
+// game of its own that was never scraped still needs scraping.
+func TestMediaLinks_AliasSentinelDoesNotHideTitle(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	targetPath := arcadeLinkPath("ASO.mra")
+	ownPath := arcadeLinkPath("ASO Bootleg.mra")
+	aliasPath := arcadeLinkPath("_Organized", "_1 A-E", "ASO Bootleg.mra")
+	indexLinkTestMedia(t, db, database.ScanReconcileOpts{},
+		stagedLinkTestMedia(targetPath, "Armored Scrum Object", ""),
+		stagedLinkTestMedia(ownPath, "ASO Bootleg", ""),
+		stagedLinkTestMedia(aliasPath, "ASO Bootleg", targetPath),
+	)
+	target := linkTestMedia(t, db, targetPath)
+	own := linkTestMedia(t, db, ownPath)
+	require.Equal(t, own.MediaTitleDBID, linkTestMedia(t, db, aliasPath).MediaTitleDBID)
+	scrapeLinkTestTarget(t, db, target)
+	require.NoError(t, db.SyncLinkedMedia(ctx, nil, nil))
+
+	system, err := db.FindSystemBySystemID(systemdefs.SystemArcade)
+	require.NoError(t, err)
+	var titles []int64
+	require.NoError(t, db.ForEachMediaTitleWithoutSentinel(ctx, system.DBID, "scraper.test:scraped",
+		func(title *database.MediaTitle) error {
+			titles = append(titles, title.DBID)
+			return nil
+		}))
+	assert.Equal(t, []int64{own.MediaTitleDBID}, titles)
+}
+
 func TestMediaLinks_TouchedTitlesCaptured(t *testing.T) {
 	t.Parallel()
 	db, cleanup := setupTempMediaDB(t)
@@ -485,7 +698,7 @@ func TestMediaLinks_TouchedTitlesCaptured(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 	require.NoError(t, sqlEnsureScanStagingTables(ctx, tx))
-	result, err := sqlSyncMediaLinks(ctx, tx, nil, true)
+	result, err := sqlSyncMediaLinks(ctx, tx, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, []int64{alias.MediaTitleDBID}, result.tagTitles)
 	touched, err := queryInt64s(ctx, tx, "SELECT TitleDBID FROM ScanTouchedTitles")

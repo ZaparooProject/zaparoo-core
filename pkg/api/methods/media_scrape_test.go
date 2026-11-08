@@ -251,7 +251,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 	// Linked rows take the run's results once it finishes, across every
 	// system the run covered.
-	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil)).Return(nil).Once()
+	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil), (*database.ScrapeScope)(nil)).Return(nil).Once()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
@@ -318,6 +318,76 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	assert.False(t, status.Scraping)
 	assert.True(t, status.Done)
 
+	mockDB.AssertExpectations(t)
+}
+
+// A run whose linked games could not be updated has not finished: it ends
+// failed with a reason and keeps its operation instead of reporting success.
+func TestHandleMediaScrape_LinkSyncFailureFailsRun(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusFailed,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	backgroundOperationDone := make(chan struct{})
+	mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		close(backgroundOperationDone)
+	}).Return().Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil), (*database.ScrapeScope)(nil)).
+		Return(errors.New("database is locked")).Once()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	_, err := HandleMediaScrape(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	})
+	require.NoError(t, err)
+
+	var final models.ScrapingStatusResponse
+	timeout := time.After(2 * time.Second)
+	for !final.Done {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			require.NoError(t, json.Unmarshal(n.Params, &final))
+		case <-timeout:
+			t.Fatal("timed out waiting for the terminal media.scraping notification")
+		}
+	}
+	assert.Equal(t, scrapeStateFailed, final.State)
+	assert.Equal(t, "failed to update linked games", final.Error)
+	assert.False(t, final.Scraping)
+
+	select {
+	case <-backgroundOperationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scrape did not release the database")
+	}
+	mockDB.AssertNotCalled(t, "ClearScrapingOperation")
 	mockDB.AssertExpectations(t)
 }
 
@@ -1700,8 +1770,8 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 		},
 	}
 	// Each job's linked rows are synced for that job's own systems.
-	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Pinball"}).Return(nil).Once()
-	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Arcade"}).Return(nil).Once()
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Pinball"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Arcade"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
 	db.On("GetScrapingOperation").Return(op, true, nil).Once()
 	db.On("GetScrapingStatus").Return(mediadb.IndexingStatusPending, nil).Once()
 	require.NoError(t, ResumeMediaScrape(&env, op))
