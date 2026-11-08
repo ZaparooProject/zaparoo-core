@@ -239,19 +239,26 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 	return counts
 }
 
-// hidesChildDir reports whether a hidden folder is an immediate child of
-// prefix, which is the only way one can drop a row from that prefix's listing.
-func (h *hiddenMedia) hidesChildDir(prefix string) bool {
+// hiddenChildDirNames returns the immediate children of prefix that are
+// hidden folders for one of systems, the only folders that can drop a row from
+// that prefix's listing by path.
+func (h *hiddenMedia) hiddenChildDirNames(prefix string, systems []systemdefs.System) []string {
 	if h == nil {
-		return false
+		return nil
 	}
+	var names []string
 	for i := range h.dirs {
-		rest, ok := strings.CutPrefix(h.dirs[i].Prefix, prefix)
-		if ok && strings.Count(rest, "/") == 1 && strings.HasSuffix(rest, "/") && len(rest) > 1 {
-			return true
+		if !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+			continue
 		}
+		rest, ok := strings.CutPrefix(h.dirs[i].Prefix, prefix)
+		name, tail, found := strings.Cut(rest, "/")
+		if !ok || !found || name == "" || tail != "" || slices.Contains(names, name) {
+			continue
+		}
+		names = append(names, name)
 	}
-	return false
+	return names
 }
 
 // childNameCount counts the distinct child directories across prefixes that
