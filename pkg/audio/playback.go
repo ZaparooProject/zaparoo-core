@@ -770,8 +770,10 @@ func (s *streamingSource) skipTrack(delta int) error {
 		return fmt.Errorf("no track after %d", cur+1)
 	}
 	target = max(target, 0)
-	frame := int64(starts[target]) * targetSampleRate / int64(s.sourceRate)
-	s.seek(sampleDuration(frame) - sampleDuration(played))
+	// Round up, so the source frame the seek lands on is the track's first
+	// and not the last of the track before it.
+	frame := (int64(starts[target])*targetSampleRate + int64(s.sourceRate) - 1) / int64(s.sourceRate)
+	s.seekTo(frame)
 	return nil
 }
 
@@ -1168,6 +1170,19 @@ func (s *streamingSource) togglePause() bool {
 // seek schedules a seek to the given offset from the current position.
 // The ring buffer is flushed atomically; a brief silence occurs during the re-fill.
 func (s *streamingSource) seek(offset time.Duration) {
+	s.seekWith(func(played int64) int64 {
+		return played + int64(offset.Seconds()*targetSampleRate)
+	})
+}
+
+// seekTo moves playback to output frame frame.
+func (s *streamingSource) seekTo(frame int64) {
+	s.seekWith(func(int64) int64 { return frame })
+}
+
+// seekWith moves playback to the output frame target returns for the
+// frame playing once the audio callback is held off.
+func (s *streamingSource) seekWith(target func(played int64) int64) {
 	s.seekMu.Lock()
 	defer s.seekMu.Unlock()
 
@@ -1182,14 +1197,14 @@ func (s *streamingSource) seek(offset time.Duration) {
 		log.Warn().Str("path", s.path).Msg("timeout waiting for audio consumer before seek")
 	}
 
-	newPlayed := s.played.Load() + int64(offset.Seconds()*targetSampleRate)
+	newPlayed := target(s.played.Load())
 	if newPlayed < 0 {
 		newPlayed = 0
 	}
 	if s.totalFrames > 0 && newPlayed > s.totalFrames {
 		newPlayed = s.totalFrames
 	}
-	srcFrame := int64(float64(newPlayed) / targetSampleRate * float64(s.sourceRate))
+	srcFrame := newPlayed * int64(s.sourceRate) / targetSampleRate
 	s.seekSrcFrame.Store(srcFrame)
 	s.played.Store(newPlayed)
 	s.eof.Store(false)
@@ -1247,10 +1262,11 @@ func (s *streamingSource) state() PlaybackState {
 	paused := s.paused.Load()
 	stopped := s.stopped.Load()
 	eof := s.eof.Load()
+	played := s.played.Load()
 	return PlaybackState{
-		Meta:       s.trackMeta(),
+		Meta:       s.trackMeta(played),
 		Path:       s.path,
-		Position:   sampleDuration(s.played.Load()),
+		Position:   sampleDuration(played),
 		Duration:   sampleDuration(s.totalFrames),
 		Playing:    !paused && !stopped && (!eof || s.bufferedFrames() != 0),
 		Paused:     paused,
@@ -1260,8 +1276,8 @@ func (s *streamingSource) state() PlaybackState {
 }
 
 // trackMeta is the source's tags, numbered with the track playing when the
-// source plays several back to back.
-func (s *streamingSource) trackMeta() *trackmeta.Meta {
+// source plays several back to back, at output frame played.
+func (s *streamingSource) trackMeta(played int64) *trackmeta.Meta {
 	meta := s.meta.Load()
 	if s.tracks == nil {
 		return meta
@@ -1274,7 +1290,7 @@ func (s *streamingSource) trackMeta() *trackmeta.Meta {
 	if meta != nil {
 		numbered = *meta
 	}
-	numbered.TrackNumber = trackAt(starts, s.played.Load(), s.sourceRate) + 1
+	numbered.TrackNumber = trackAt(starts, played, s.sourceRate) + 1
 	numbered.TrackTotal = len(starts)
 	return &numbered
 }

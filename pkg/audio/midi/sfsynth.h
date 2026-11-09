@@ -25,7 +25,7 @@ typedef struct zm_song zm_song;
 
 /* Loads a SoundFont (SF2, or SF3 with Ogg Vorbis samples) from memory. The
    data is copied; the caller keeps ownership. NULL on failure. */
-zm_sf* zm_sf_load(const void* data, int size);
+zm_sf* zm_sf_load(const void* data, int size, long long budget);
 void zm_sf_close(zm_sf* sf);
 
 /* Parses a Standard MIDI File and binds it to a SoundFont, which the song

@@ -284,6 +284,51 @@ func TestSoundFontSeekMatchesPlayingThrough(t *testing.T) {
 	assert.Less(t, rms(readAll(t, seeked)), 0.001)
 }
 
+// A channel no program change has set up still sounds through a SoundFont.
+func TestSoundFontPlaysEveryChannel(t *testing.T) {
+	t.Parallel()
+	sf := writeTemp(t, "sine.sf2", tinySF2())
+	for ch := byte(0); ch < 16; ch++ {
+		if ch == 9 {
+			continue // drums: the sine SoundFont has no drum kit
+		}
+		tr := &track{}
+		tr.tempo(0, 500000)
+		notes(tr, ch, 69, 2)
+		d, err := OpenBytes(smf(0, tr.end()), Options{SoundFontPath: sf})
+		require.NoError(t, err)
+		assert.Greater(t, rms(readFrames(t, d, rate/4)), 0.01, "channel %d", ch+1)
+		require.NoError(t, d.Seek(0))
+		assert.Greater(t, rms(readFrames(t, d, rate/4)), 0.01, "channel %d after a seek", ch+1)
+		require.NoError(t, d.Close())
+	}
+}
+
+// A SoundFont that does not fit the memory budget renders with FM rather
+// than being loaded.
+func TestSoundFontOverMemoryBudgetFallsBackToFM(t *testing.T) {
+	t.Parallel()
+	data := tinySF2()
+	sf := writeTemp(t, "sine.sf2", data)
+	for name, tc := range map[string]struct {
+		want   string
+		budget int64
+	}{
+		"file over the budget":    {RendererFM, int64(len(data)) - 1},
+		"samples over the budget": {RendererFM, int64(len(data)) + 16},
+		"within the budget":       {RendererSoundFont, int64(len(data)) + 1<<20},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := OpenBytes(type0Song(), Options{SoundFontPath: sf, SoundFontMemory: tc.budget})
+			require.NoError(t, err)
+			defer func() { _ = d.Close() }()
+			assert.Equal(t, tc.want, d.Info().Renderer)
+			assert.Greater(t, rms(readFrames(t, d, rate/4)), 0.01)
+		})
+	}
+}
+
 func TestBadSoundFontFallsBackToFM(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -304,7 +349,7 @@ func TestBadSoundFontFallsBackToFM(t *testing.T) {
 			assert.Equal(t, RendererFM, d.Info().Renderer)
 			assert.Greater(t, rms(readFrames(t, d, rate/4)), 0.01)
 
-			_, sfErr := loadSoundFont(path)
+			_, sfErr := loadSoundFont(path, DefaultSoundFontMemory)
 			require.ErrorIs(t, sfErr, ErrSoundFont)
 		})
 	}
@@ -317,7 +362,7 @@ func TestOversizedSoundFontIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Truncate(MaxSoundFontBytes+1))
 	require.NoError(t, f.Close())
-	_, err = loadSoundFont(p)
+	_, err = loadSoundFont(p, DefaultSoundFontMemory)
 	require.ErrorIs(t, err, ErrSoundFont)
 	assert.Contains(t, err.Error(), "limit")
 }

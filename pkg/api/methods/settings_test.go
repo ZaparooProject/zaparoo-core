@@ -2706,6 +2706,28 @@ func TestHandleSettingsUpdate_MidiSoundFont(t *testing.T) {
 	assert.Empty(t, cfg.MidiSoundFont(), "an empty path goes back to FM")
 }
 
+// A save that fails leaves the SoundFont MIDI files play through as it was.
+func TestHandleSettingsUpdate_MidiSoundFontKeptWhenSaveFails(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetMidiSoundFont("old.sf2")
+	require.NoError(t, cfg.Save())
+
+	require.NoError(t, os.Chmod(configDir, 0o500))       //nolint:gosec // a read-only folder makes the save fail
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) }) //nolint:gosec // writable again for cleanup
+
+	font := "new.sf2"
+	_, err = HandleSettingsUpdate(musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font}))
+	require.ErrorContains(t, err, "failed to save config")
+	assert.Equal(t, "old.sf2", cfg.MidiSoundFont())
+}
+
 func TestHandleSettingsUpdate_AudioNormalize(t *testing.T) {
 	t.Parallel()
 

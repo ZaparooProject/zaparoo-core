@@ -270,6 +270,29 @@ func TestDACStreamControl(t *testing.T) {
 	}
 }
 
+// A 0x93 restart with no start of its own keeps the stream's start, rather
+// than moving it on by the step base each time.
+func TestDACStreamRestartKeepsStart(t *testing.T) {
+	t.Parallel()
+	b := newVGM(0x171).clock(chipYM2612, 7670453)
+	b.dataBlock(0x00, make([]byte, 1000))
+	b.cmd(0x90, 0x00, chipYM2612, 0x00, 0x2A)
+	b.cmd(0x91, 0x00, 0x00, 0x01, 0x0A)
+	b.cmd(0x92, 0x00)
+	b.cmd(binary.LittleEndian.AppendUint32(nil, 8000)...)
+	b.cmd(0x93, 0x00, 0x14, 0, 0, 0, 0x01, 0x10, 0, 0, 0)
+	b.wait(100)
+	for range 2 {
+		b.cmd(0x93, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x10, 0, 0, 0)
+		b.wait(100)
+	}
+	d := openTest(t, b.bytes(), Options{})
+	renderAll(t, d)
+	s := d.st.streams[0]
+	require.NotNil(t, s)
+	assert.Equal(t, uint32(0x14+0x0A), s.start)
+}
+
 func TestDACStreamStop(t *testing.T) {
 	t.Parallel()
 	b := dacStreamFile(false)

@@ -107,6 +107,17 @@ func midiVoices(lowPower bool) int {
 	return 128
 }
 
+// midiSoundFontMemory bounds the memory a SoundFont may take to load. On a
+// resource-constrained device such as MiSTer it is enough for a General
+// MIDI SoundFont of a few tens of megabytes, and a larger one renders with
+// FM rather than exhausting memory.
+func midiSoundFontMemory(lowPower bool) int64 {
+	if lowPower {
+		return 128 << 20
+	}
+	return midi.DefaultSoundFontMemory
+}
+
 // SplitTrackPath splits a <file>/<n> single-track path of a multi-track
 // format into the file and its 0-based track. ok is false when path is not
 // such a path.
@@ -172,9 +183,10 @@ func openDecoder(path string, opts decodeOptions) (*openedDecoder, error) {
 		return od, nil
 	case midi.Supported(ext):
 		d, err := midi.Open(path, midi.Options{
-			SampleRate:    targetSampleRate,
-			SoundFontPath: opts.midiSoundFont,
-			MaxVoices:     midiVoices(opts.lowPower),
+			SampleRate:      targetSampleRate,
+			SoundFontPath:   opts.midiSoundFont,
+			MaxVoices:       midiVoices(opts.lowPower),
+			SoundFontMemory: midiSoundFontMemory(opts.lowPower),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("decode %s: %w", ext, err)

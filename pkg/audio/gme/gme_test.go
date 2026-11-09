@@ -109,6 +109,23 @@ func TestNSFInfo(t *testing.T) {
 	assert.Equal(t, []int{0}, d.TrackStarts())
 }
 
+// HES and KSS record no track count, so playing the whole file plays only
+// the first track rather than every one of the 256 slots gme reports.
+func TestUncountedFormatsPlayFirstTrack(t *testing.T) {
+	t.Parallel()
+	for name, data := range map[string][]byte{"hes": hesFile(), "kss": kssFile()} {
+		d, err := OpenBytes(data, "", -1, Options{})
+		require.NoError(t, err, name)
+		assert.Equal(t, []int{0}, d.TrackStarts(), name)
+		assert.Equal(t, (DefaultTrackSeconds+DefaultFadeSeconds)*rate, d.Len(), name)
+		require.NoError(t, d.Close())
+	}
+	d, err := OpenBytes(nsfFile("G", "A", "C", 1, 2, 3), "", -1, Options{})
+	require.NoError(t, err)
+	defer func() { _ = d.Close() }()
+	assert.Len(t, d.TrackStarts(), 3, "a counted format still plays every track")
+}
+
 func TestNSFEInfoAndLengths(t *testing.T) {
 	t.Parallel()
 	data := nsfeFile([]byte{0xFD, 0x7E, 0x3F}, []string{"One", "Two", "Three"}, []int32{2000, 3000, 1000})

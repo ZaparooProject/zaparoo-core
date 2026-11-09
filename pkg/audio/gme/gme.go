@@ -52,6 +52,14 @@ static Music_Emu* zgme_open(const void* data, long size, int rate, const char** 
 	return emu;
 }
 
+// zgme_counts_tracks reports whether the loaded format records how many
+// tracks it holds. HES and KSS do not; gme reports 256 slots for them.
+static int zgme_counts_tracks(Music_Emu* emu)
+{
+	gme_type_t t = gme_type(emu);
+	return t != gme_hes_type && t != gme_kss_type;
+}
+
 typedef struct {
 	int length, intro, loop, fade;
 	const char *system, *game, *song, *author, *copyright, *comment;
@@ -182,7 +190,8 @@ type Decoder struct {
 var _ beep.StreamSeekCloser = (*Decoder)(nil)
 
 // Open plays the file at path. track is a 0-based track index, or -1 to
-// play every track in order as one stream.
+// play every track in order as one stream. HES and KSS files do not record
+// how many tracks they hold, so -1 plays only their first.
 func Open(path string, track int, opts Options) (*Decoder, error) {
 	data, err := readCapped(path, MaxFileBytes)
 	if err != nil {
@@ -218,6 +227,9 @@ func OpenBytes(data []byte, ext string, track int, opts Options) (*Decoder, erro
 	if err != nil {
 		d.free()
 		return nil, err
+	}
+	if track < 0 && C.zgme_counts_tracks(emu) == 0 {
+		track = 0
 	}
 	if track >= 0 {
 		d.tracks = []int{track}

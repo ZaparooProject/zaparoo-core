@@ -29,6 +29,73 @@
 #define STB_VORBIS_NO_PUSHDATA_API
 #include "../nativedec/third_party/stb_vorbis.c"
 
+/* zm_sf_load can parse a SoundFont under a memory budget, so one that
+   would decode to more than the device can hold fails, and the song falls
+   back to FM, rather than exhausting memory. Each TinySoundFont block
+   records its size ahead of it so frees and reallocs can be counted. */
+typedef union {
+	size_t size;
+	long double align_ld;
+	void* align_p;
+} zm_hdr;
+
+static _Thread_local int zm_budgeted;
+static _Thread_local size_t zm_budget_left;
+
+static int zm_take(size_t n)
+{
+	if (!zm_budgeted) return 1;
+	if (n > zm_budget_left) return 0;
+	zm_budget_left -= n;
+	return 1;
+}
+
+static void zm_give(size_t n)
+{
+	if (zm_budgeted) zm_budget_left += n;
+}
+
+static void* zm_malloc(size_t n)
+{
+	zm_hdr* h;
+	if (n > (size_t)-1 - sizeof(zm_hdr) || !zm_take(n)) return NULL;
+	h = (zm_hdr*)malloc(sizeof(zm_hdr) + n);
+	if (h == NULL) { zm_give(n); return NULL; }
+	h->size = n;
+	return h + 1;
+}
+
+static void zm_free(void* p)
+{
+	zm_hdr* h;
+	if (p == NULL) return;
+	h = (zm_hdr*)p - 1;
+	zm_give(h->size);
+	free(h);
+}
+
+static void* zm_realloc(void* p, size_t n)
+{
+	zm_hdr *h, *nh;
+	size_t old;
+	if (p == NULL) return zm_malloc(n);
+	h = (zm_hdr*)p - 1;
+	old = h->size;
+	if (n > (size_t)-1 - sizeof(zm_hdr)) return NULL;
+	if (n > old && !zm_take(n - old)) return NULL;
+	nh = (zm_hdr*)realloc(h, sizeof(zm_hdr) + n);
+	if (nh == NULL) {
+		if (n > old) zm_give(n - old);
+		return NULL;
+	}
+	if (n < old) zm_give(old - n);
+	nh->size = n;
+	return nh + 1;
+}
+
+#define TSF_MALLOC zm_malloc
+#define TSF_REALLOC zm_realloc
+#define TSF_FREE zm_free
 #define TSF_STATIC
 #define TSF_NO_STDIO
 #define TSF_IMPLEMENTATION
@@ -53,12 +120,15 @@ struct zm_song {
 	double now_ms;
 };
 
-zm_sf* zm_sf_load(const void* data, int size)
+zm_sf* zm_sf_load(const void* data, int size, long long budget)
 {
 	zm_sf* sf;
 	tsf* f;
 	if (data == NULL || size <= 0) return NULL;
+	zm_budgeted = budget > 0;
+	zm_budget_left = budget > 0 ? (size_t)budget : 0;
 	f = tsf_load_memory(data, size);
+	zm_budgeted = 0;
 	if (f == NULL) return NULL;
 	if (tsf_get_presetcount(f) <= 0) { tsf_close(f); return NULL; }
 	sf = (zm_sf*)calloc(1, sizeof(zm_sf));
@@ -76,6 +146,11 @@ void zm_sf_close(zm_sf* sf)
 
 static void zm_song_setup_channels(zm_song* s)
 {
+	int ch;
+	/* TinySoundFont ignores notes on a channel no earlier event has set
+	   up, so every channel starts on General MIDI program 0. */
+	for (ch = 0; ch < 16; ch++)
+		if (ch != 9) tsf_channel_set_presetnumber(s->f, ch, 0, 0);
 	/* Channel 10 is the General MIDI drum channel. */
 	tsf_channel_set_bank_preset(s->f, 9, 128, 0);
 }

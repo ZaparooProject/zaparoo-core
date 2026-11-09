@@ -368,9 +368,17 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		current = "."
 	}
 
-	for _, part := range parts {
+	currentIsDir := true
+	for i, part := range parts {
 		if part == "" {
 			continue
+		}
+		if !currentIsDir {
+			// The path runs on through a file, such as a <file>.nsf/<n>
+			// track. It is not on disk, but the corrected path is what a
+			// launcher may vouch for.
+			rest := append([]string{current}, parts[i:]...)
+			return filepath.Join(rest...), fmt.Errorf("%w: %s", os.ErrNotExist, path)
 		}
 		entries, err := afero.ReadDir(fs, current)
 		if err != nil {
@@ -378,15 +386,16 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		}
 
 		exactMatched := false
-		var foldMatches []string
+		var foldMatches []os.FileInfo
 		for _, entry := range entries {
 			if entry.Name() == part {
 				current = filepath.Join(current, entry.Name())
+				currentIsDir = entry.IsDir()
 				exactMatched = true
 				break
 			}
 			if strings.EqualFold(entry.Name(), part) {
-				foldMatches = append(foldMatches, entry.Name())
+				foldMatches = append(foldMatches, entry)
 			}
 		}
 		if exactMatched {
@@ -396,10 +405,15 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 			return "", os.ErrNotExist
 		}
 		if len(foldMatches) > 1 {
+			names := make([]string, 0, len(foldMatches))
+			for _, m := range foldMatches {
+				names = append(names, m.Name())
+			}
 			return "", fmt.Errorf("%w: component %q in %s matches %s", errAmbiguousPath, part, current,
-				strings.Join(foldMatches, ", "))
+				strings.Join(names, ", "))
 		}
-		current = filepath.Join(current, foldMatches[0])
+		current = filepath.Join(current, foldMatches[0].Name())
+		currentIsDir = foldMatches[0].IsDir()
 	}
 
 	return current, nil
@@ -526,6 +540,10 @@ func findFile(
 			continue
 		}
 		if len(virtualParts) == 0 {
+			// A case-corrected path is what a launcher would know it by.
+			if resolvedPath != "" {
+				candidate = resolvedPath
+			}
 			missing = append(missing, candidate)
 		}
 	}

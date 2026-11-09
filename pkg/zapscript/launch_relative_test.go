@@ -497,6 +497,28 @@ func TestFindFile_VirtualEntryBelowAFile(t *testing.T) {
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
+// A track path written in a different case from the file on disk reaches the
+// launcher by the file's real name, on a case-sensitive filesystem.
+func TestFindFile_VirtualEntryBelowAFileCaseCorrected(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "game.nsf")
+	require.NoError(t, os.WriteFile(file, []byte("NESM"), 0o600))
+	if _, err := os.Stat(filepath.Join(root, "GAME.nsf")); err == nil {
+		t.Skip("filesystem is case-insensitive")
+	}
+	track := filepath.Join(file, "5")
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{virtualListLauncher(track)})
+
+	found, err := findFile(afero.NewOsFs(), mockPlatform, cfg, nil, filepath.Join(root, "GAME.nsf", "5"))
+	require.NoError(t, err)
+	assert.Equal(t, track, found)
+}
+
 // Native audio is added to the launcher cache, not to the platform's own
 // launcher list, so the lookup must ask the cache's launchers too.
 func TestVouchingLaunchers_IncludesCacheOnlyLaunchers(t *testing.T) {

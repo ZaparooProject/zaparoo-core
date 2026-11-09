@@ -46,6 +46,9 @@ const (
 	MaxFileBytes = 8 << 20
 	// MaxSoundFontBytes is the largest SoundFont file that is loaded.
 	MaxSoundFontBytes = 512 << 20
+	// DefaultSoundFontMemory is the SoundFont memory budget used when
+	// Options.SoundFontMemory is 0.
+	DefaultSoundFontMemory = 2 << 30
 
 	// RendererFM and RendererSoundFont are the values of Info.Renderer.
 	RendererFM        = "fm"
@@ -83,6 +86,11 @@ type Options struct {
 	// MaxVoices caps simultaneous SoundFont voices; 0 means
 	// DefaultMaxVoices. It does not apply to FM synthesis.
 	MaxVoices int
+	// SoundFontMemory caps the memory loading the SoundFont may take: the
+	// file plus the samples it decodes to, which for SF3 can be many times
+	// the file. A SoundFont over it renders with FM instead. 0 means
+	// DefaultSoundFontMemory.
+	SoundFontMemory int64
 }
 
 // Info describes a song.
@@ -217,6 +225,9 @@ func normalize(opts Options) (Options, error) {
 	}
 	if opts.MaxVoices <= 0 {
 		opts.MaxVoices = DefaultMaxVoices
+	}
+	if opts.SoundFontMemory <= 0 {
+		opts.SoundFontMemory = DefaultSoundFontMemory
 	}
 	return opts, nil
 }

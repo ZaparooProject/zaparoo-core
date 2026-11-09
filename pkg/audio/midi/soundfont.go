@@ -45,7 +45,7 @@ type sfRenderer struct {
 // not, so the caller can tell a bad SoundFont from a song TinyMidiLoader
 // cannot read.
 func openSoundFont(song []byte, opts Options) (renderer, int, error) {
-	sf, err := loadSoundFont(opts.SoundFontPath)
+	sf, err := loadSoundFont(opts.SoundFontPath, opts.SoundFontMemory)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -62,8 +62,9 @@ func openSoundFont(song []byte, opts Options) (renderer, int, error) {
 }
 
 // loadSoundFont reads a SoundFont straight into C memory, so a large one
-// is not held twice, and parses it.
-func loadSoundFont(path string) (*C.zm_sf, error) {
+// is not held twice, and parses it. The file and everything parsing it
+// allocates stay within budget bytes.
+func loadSoundFont(path string, budget int64) (*C.zm_sf, error) {
 	f, err := os.Open(path) //nolint:gosec // path comes from the user's settings
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSoundFont, err)
@@ -77,8 +78,8 @@ func loadSoundFont(path string) (*C.zm_sf, error) {
 	if !st.Mode().IsRegular() || size <= 0 {
 		return nil, fmt.Errorf("%w: %s is not a regular, non-empty file", ErrSoundFont, path)
 	}
-	if size > MaxSoundFontBytes {
-		return nil, fmt.Errorf("%w: %d bytes is over the %d byte limit", ErrSoundFont, size, MaxSoundFontBytes)
+	if limit := min(MaxSoundFontBytes, budget); size > limit {
+		return nil, fmt.Errorf("%w: %d bytes is over the %d byte limit", ErrSoundFont, size, limit)
 	}
 	mem := C.malloc(C.size_t(size))
 	if mem == nil {
@@ -89,9 +90,10 @@ func loadSoundFont(path string) (*C.zm_sf, error) {
 	if _, err := io.ReadFull(f, buf); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSoundFont, err)
 	}
-	sf := C.zm_sf_load(mem, C.int(size))
+	sf := C.zm_sf_load(mem, C.int(size), C.longlong(budget-size))
 	if sf == nil {
-		return nil, fmt.Errorf("%w: %s is not a usable SF2 or SF3 file", ErrSoundFont, path)
+		return nil, fmt.Errorf("%w: %s is not a usable SF2 or SF3 file, or decodes to more than %d bytes",
+			ErrSoundFont, path, budget)
 	}
 	return sf, nil
 }

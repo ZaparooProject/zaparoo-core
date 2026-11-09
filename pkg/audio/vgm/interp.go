@@ -642,17 +642,18 @@ type dacStream struct {
 	port     byte
 	reg      byte
 	bank     byte
+	running  bool
+	reverse  bool
+	loop     bool
 	stepSize uint32
 	stepBase uint32
 	freq     uint32
 
-	running  bool
+	dataPos  uint32 // start offset the last 0x93 gave, before the step base
 	start    uint32 // byte offset of the first item
 	step     uint32 // bytes between items
 	cmdSize  uint32
 	count    uint32 // items per pass
-	reverse  bool
-	loop     bool
 	item     uint64 // items emitted since the stream started
 	baseItem uint64
 	baseF    int64 // frame the timing is measured from
@@ -761,10 +762,12 @@ func (d *Decoder) startStream(s *dacStream, start uint32, mode byte, length uint
 	bankLen := uint64(len(d.st.banks[s.bank].data))
 	s.cmdSize = itemSize(s.typ, s.reg)
 	s.step = s.cmdSize * s.stepSize
+	// A start of 0xFFFFFFFF restarts from the start given before; the step
+	// base is added to it afresh, not on top of the last start.
 	if start != 0xFFFFFFFF {
-		s.start = start
+		s.dataPos = start
 	}
-	first := min(uint64(s.start)+uint64(s.cmdSize)*uint64(s.stepBase), bankLen)
+	first := min(uint64(s.dataPos)+uint64(s.cmdSize)*uint64(s.stepBase), bankLen)
 	var count uint64
 	switch mode & 0x0F {
 	case 0:

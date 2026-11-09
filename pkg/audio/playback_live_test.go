@@ -288,14 +288,14 @@ func TestMultiTrackSource_SkipTrack(t *testing.T) {
 	assert.True(t, s.state().MultiTrack)
 	assert.False(t, s.state().Live)
 
-	meta := s.trackMeta()
+	meta := s.trackMeta(s.played.Load())
 	require.NotNil(t, meta)
 	assert.Equal(t, 1, meta.TrackNumber)
 	assert.Equal(t, 3, meta.TrackTotal)
 
 	require.NoError(t, s.skipTrack(1))
 	assert.Equal(t, int64(10*rate), s.played.Load())
-	assert.Equal(t, 2, s.trackMeta().TrackNumber)
+	assert.Equal(t, 2, s.trackMeta(s.played.Load()).TrackNumber)
 
 	require.NoError(t, s.skipTrack(1))
 	assert.Equal(t, int64(20*rate), s.played.Load())
@@ -313,6 +313,27 @@ func TestMultiTrackSource_SkipTrack(t *testing.T) {
 	require.NoError(t, s.skipTrack(-1))
 	require.NoError(t, s.skipTrack(-1))
 	assert.Zero(t, s.played.Load(), "going back from the first track stays on it")
+}
+
+// A track boundary that falls between output frames, as one does when the
+// source rate is not the output rate, is reached exactly and not one frame
+// short of it.
+func TestMultiTrackSource_SkipTrackLandsOnTheBoundary(t *testing.T) {
+	t.Parallel()
+
+	const rate = 44100
+	dec := &fakeTracks{starts: []int{0, 1000, 158 * rate}, length: 200 * rate}
+	s := sourceFromDecoder("/Audio/game.nsf", &openedDecoder{decoder: dec, tracks: dec, rate: beep.SampleRate(rate)},
+		1.0, lowPowerResampleQuality)
+
+	s.played.Store(960)
+	require.NoError(t, s.skipTrack(1))
+	assert.Equal(t, 2, s.trackMeta(s.played.Load()).TrackNumber)
+	assert.Equal(t, int64(1000), s.seekSrcFrame.Load())
+
+	require.NoError(t, s.skipTrack(1))
+	assert.Equal(t, 3, s.trackMeta(s.played.Load()).TrackNumber)
+	assert.Equal(t, int64(158*rate), s.seekSrcFrame.Load())
 }
 
 func TestSplitTrackPath(t *testing.T) {
