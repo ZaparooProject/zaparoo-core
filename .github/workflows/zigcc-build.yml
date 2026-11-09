@@ -33,10 +33,13 @@ jobs:
 
       - name: Set version
         id: version
+        # Read the input rather than the event: when build.yml is dispatched and
+        # calls this workflow, the event is workflow_dispatch but has no version.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
             VERSION=$(cat scripts/zigcc/VERSION)
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
