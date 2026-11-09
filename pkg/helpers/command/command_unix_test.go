@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !windows
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -23,31 +23,43 @@ package command
 
 import (
 	"context"
-	"errors"
-	"io/fs"
-	"os"
 	"os/exec"
-	"strconv"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// An exited child that nobody waits on stays in /proc as a zombie.
-func requireReaped(t *testing.T, pid int) {
+func requireReaped(t *testing.T, reaped <-chan struct{}) {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		_, err := os.Stat("/proc/" + strconv.Itoa(pid))
-		return errors.Is(err, fs.ErrNotExist)
-	}, 5*time.Second, 10*time.Millisecond, "pid %d was never reaped", pid)
+	select {
+	case <-reaped:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child was never reaped")
+	}
 }
 
 func TestStartAndReap_ReapsExitedChild(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.CommandContext(context.Background(), "true")
-	require.NoError(t, startAndReap(cmd))
+	reaped, err := startReaped(cmd)
+	require.NoError(t, err)
 
-	requireReaped(t, cmd.Process.Pid)
+	requireReaped(t, reaped)
+	require.NotNil(t, cmd.ProcessState, "Wait did not record the child's exit")
+	assert.True(t, cmd.ProcessState.Exited())
+	assert.True(t, cmd.ProcessState.Success())
+}
+
+func TestStartAndReap_ReturnsStartError(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	cmd := exec.CommandContext(context.Background(), missing) //nolint:gosec // G204: test-owned temp path
+
+	require.Error(t, StartAndReap(cmd))
+	assert.Nil(t, cmd.Process)
 }

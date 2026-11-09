@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 )
 
 // MaxURLLength is the maximum allowed URL length for browser opening.
@@ -48,15 +50,15 @@ func ValidateBrowserURL(url string) error {
 }
 
 // OpenBrowser opens the given URL in the default web browser using xdg-open.
-// This is a fire-and-forget operation - the browser process is started but
-// not waited on. Only http:// and https:// URLs are accepted for security.
+// This is a fire-and-forget operation - the browser process is started and
+// reaped in the background. Only http:// and https:// URLs are accepted for security.
 func OpenBrowser(url string) error {
 	if err := ValidateBrowserURL(url); err != nil {
 		return err
 	}
 	//nolint:gosec // G204: url validated by ValidateBrowserURL
 	cmd := exec.CommandContext(context.Background(), "xdg-open", url)
-	if err := cmd.Start(); err != nil {
+	if err := command.StartAndReap(cmd); err != nil {
 		return fmt.Errorf("failed to open browser: %w", err)
 	}
 	return nil
