@@ -78,12 +78,14 @@ func TestServiceUnitsDeclineToRestartOnTheUnrecoverableStatus(t *testing.T) {
 // map the error through ExitCodeFor; a main that exits 1 unconditionally puts
 // the restart loop back while the unit still claims to prevent it.
 //
-// cmd/steamos installs the same unit as cmd/linux, through
-// pkg/platforms/linux/installer, and exited 1 for every startup failure.
+// cmd/steamos, cmd/bazzite and cmd/chimeraos install the same unit as cmd/linux, through
+// pkg/platforms/linux/installer, and each exited 1 for every startup failure.
 func TestSupervisedEntrypointsMapTheUnrecoverableStatus(t *testing.T) {
 	t.Parallel()
 
 	entrypoints := []string{
+		filepath.Join("..", "..", "cmd", "bazzite", "main.go"),
+		filepath.Join("..", "..", "cmd", "chimeraos", "main.go"),
 		filepath.Join("..", "..", "cmd", "linux", "main.go"),
 		filepath.Join("..", "..", "cmd", "replayos", "main.go"),
 		filepath.Join("..", "..", "cmd", "steamos", "main.go"),
