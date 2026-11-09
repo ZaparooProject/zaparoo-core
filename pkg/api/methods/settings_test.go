@@ -2673,6 +2673,61 @@ func TestHandleSettingsUpdate_SystemDefaultsWithoutAudioKeepPauseOnLaunch(t *tes
 	assert.Empty(t, got[1].Launcher)
 }
 
+func TestHandleSettingsUpdate_MidiSoundFont(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+
+	font := "gm.sf2"
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, "gm.sf2", cfg.MidiSoundFont())
+
+	reloaded, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, "gm.sf2", reloaded.MidiSoundFont(), "the setting is saved")
+
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Equal(t, "gm.sf2", resp.AudioMidiSoundFont)
+
+	cleared := ""
+	env = musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &cleared})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.MidiSoundFont(), "an empty path goes back to FM")
+}
+
+// A save that fails leaves the SoundFont MIDI files play through as it was.
+func TestHandleSettingsUpdate_MidiSoundFontKeptWhenSaveFails(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetMidiSoundFont("old.sf2")
+	require.NoError(t, cfg.Save())
+
+	require.NoError(t, os.Chmod(configDir, 0o500))       //nolint:gosec // a read-only folder makes the save fail
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) }) //nolint:gosec // writable again for cleanup
+
+	font := "new.sf2"
+	_, err = HandleSettingsUpdate(musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font}))
+	require.ErrorContains(t, err, "failed to save config")
+	assert.Equal(t, "old.sf2", cfg.MidiSoundFont())
+}
+
 func TestHandleSettingsUpdate_AudioNormalize(t *testing.T) {
 	t.Parallel()
 

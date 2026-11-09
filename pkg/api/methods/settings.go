@@ -76,6 +76,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		AudioVolume:               env.Config.AudioVolume(),
 		AudioMusicVolume:          env.Config.AudioMusicVolume(),
 		AudioMusicAutoplay:        env.Config.AudioMusicAutoplay(),
+		AudioMidiSoundFont:        env.Config.MidiSoundFont(),
 		AudioNormalize:            env.Config.AudioNormalize(),
 		AudioMusicPauseOnLaunch:   env.Config.AudioPauseOnLaunch(),
 		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
@@ -485,11 +486,17 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
-	// The image folder and cache cap take effect as soon as they are set, so
-	// a failed save puts them back rather than leaving the running Core on
-	// values the file does not hold.
+	// The image folder, cache cap and MIDI SoundFont take effect as soon as
+	// they are set, so a failed save puts them back rather than leaving the
+	// running Core on values the file does not hold.
 	prevImageDir := env.Config.ImageDirSetting()
 	prevThumbCacheMaxMB := env.Config.ThumbCacheMaxMBSetting()
+	prevMidiSoundFont := env.Config.MidiSoundFont()
+	if params.AudioMidiSoundFont != nil {
+		log.Debug().Str("audioMidiSoundFont", *params.AudioMidiSoundFont).Msg("updating setting")
+		env.Config.SetMidiSoundFont(*params.AudioMidiSoundFont)
+	}
+
 	if params.MediaImageDir != nil {
 		log.Debug().Str("mediaImageDir", *params.MediaImageDir).Msg("updating setting")
 		env.Config.SetImageDir(*params.MediaImageDir)
@@ -504,6 +511,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		env.Config.SetImageDir(prevImageDir)
 		env.Config.SetThumbCacheMaxMB(prevThumbCacheMaxMB)
+		env.Config.SetMidiSoundFont(prevMidiSoundFont)
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 	// Music follows audioVolume until it has a volume of its own. Applied

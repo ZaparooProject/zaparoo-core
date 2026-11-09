@@ -28,8 +28,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -345,6 +347,10 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 	if _, err := fs.Stat(path); err == nil {
 		return path, nil
+	} else if errors.Is(err, syscall.ENOTDIR) {
+		// A path that runs through a file, such as a <file>.nsf/<n> track,
+		// does not exist on disk; a launcher may still vouch for it.
+		return "", fmt.Errorf("%w: %s", os.ErrNotExist, path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
@@ -362,9 +368,17 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		current = "."
 	}
 
-	for _, part := range parts {
+	currentIsDir := true
+	for i, part := range parts {
 		if part == "" {
 			continue
+		}
+		if !currentIsDir {
+			// The path runs on through a file, such as a <file>.nsf/<n>
+			// track. It is not on disk, but the corrected path is what a
+			// launcher may vouch for.
+			rest := append([]string{current}, parts[i:]...)
+			return filepath.Join(rest...), fmt.Errorf("%w: %s", os.ErrNotExist, path)
 		}
 		entries, err := afero.ReadDir(fs, current)
 		if err != nil {
@@ -372,15 +386,16 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		}
 
 		exactMatched := false
-		var foldMatches []string
+		var foldMatches []os.FileInfo
 		for _, entry := range entries {
 			if entry.Name() == part {
 				current = filepath.Join(current, entry.Name())
+				currentIsDir = entry.IsDir()
 				exactMatched = true
 				break
 			}
 			if strings.EqualFold(entry.Name(), part) {
-				foldMatches = append(foldMatches, entry.Name())
+				foldMatches = append(foldMatches, entry)
 			}
 		}
 		if exactMatched {
@@ -390,10 +405,15 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 			return "", os.ErrNotExist
 		}
 		if len(foldMatches) > 1 {
+			names := make([]string, 0, len(foldMatches))
+			for _, m := range foldMatches {
+				names = append(names, m.Name())
+			}
 			return "", fmt.Errorf("%w: component %q in %s matches %s", errAmbiguousPath, part, current,
-				strings.Join(foldMatches, ", "))
+				strings.Join(names, ", "))
 		}
-		current = filepath.Join(current, foldMatches[0])
+		current = filepath.Join(current, foldMatches[0].Name())
+		currentIsDir = foldMatches[0].IsDir()
 	}
 
 	return current, nil
@@ -520,11 +540,15 @@ func findFile(
 			continue
 		}
 		if len(virtualParts) == 0 {
+			// A case-corrected path is what a launcher would know it by.
+			if resolvedPath != "" {
+				candidate = resolvedPath
+			}
 			missing = append(missing, candidate)
 		}
 	}
 	if len(missing) > 0 {
-		all := launchers.Get(pl, cfg)
+		all := vouchingLaunchers(launchers.Get(pl, cfg), helpers.GlobalLauncherCache)
 		for _, candidate := range missing {
 			for i := range all {
 				if all[i].VirtualPathExists != nil && all[i].VirtualPathExists(cfg, candidate) {
@@ -539,6 +563,24 @@ func findFile(
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
+}
+
+// vouchingLaunchers is every launcher a missing path may be vouched for by:
+// the platform's, plus those only the launcher cache carries, such as native
+// audio, which launch selection uses too.
+func vouchingLaunchers(platformLaunchers []platforms.Launcher, cache *helpers.LauncherCache) []platforms.Launcher {
+	if cache == nil {
+		return platformLaunchers
+	}
+	all := slices.Clone(platformLaunchers)
+	cached := cache.GetAllLaunchers()
+	for i := range cached {
+		id := cached[i].ID
+		if !slices.ContainsFunc(all, func(p platforms.Launcher) bool { return p.ID == id }) {
+			all = append(all, cached[i])
+		}
+	}
+	return all
 }
 
 // effectiveScanMode returns the scan mode that applies to the token currently

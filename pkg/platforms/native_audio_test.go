@@ -22,6 +22,7 @@ package platforms
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,6 +47,7 @@ type fakePlayback struct {
 	resumeErr error
 	toggleErr error
 	seekErr   error
+	skipErr   error
 
 	lastCall   string
 	lastSlot   string
@@ -54,6 +56,7 @@ type fakePlayback struct {
 	state      audio.PlaybackState
 	lastOffset time.Duration
 	lastVolume float64
+	lastSkip   int
 }
 
 func (f *fakePlayback) Play(slot, path string, opts audio.PlaybackOptions) error {
@@ -79,6 +82,11 @@ func (f *fakePlayback) Resume(slot string) error {
 func (f *fakePlayback) TogglePause(slot string) error {
 	f.lastCall, f.lastSlot = "toggle", slot
 	return f.toggleErr
+}
+
+func (f *fakePlayback) SkipTrack(slot string, delta int) error {
+	f.lastCall, f.lastSlot, f.lastSkip = "skip", slot, delta
+	return f.skipErr
 }
 
 func (f *fakePlayback) Seek(slot string, offset time.Duration) error {
@@ -215,7 +223,8 @@ func TestNativeAudioLauncher_BackgroundMediaCarriesControls(t *testing.T) {
 	require.NotNil(t, gotMedia)
 	assert.Equal(t, ControlNames(&launcher), gotMedia.LauncherControls)
 	assert.ElementsMatch(t, []string{
-		ControlFastForward, ControlPause, ControlResume, ControlRewind, ControlStop, ControlTogglePause,
+		ControlFastForward, ControlNext, ControlPause, ControlPrevious, ControlResume, ControlRewind,
+		ControlStop, ControlTogglePause,
 	}, gotMedia.LauncherControls)
 }
 
@@ -582,6 +591,26 @@ func TestNativeAudioLauncher_Fields(t *testing.T) {
 		assert.True(t, ok, "missing control: %s", key)
 		assert.NotNil(t, ctrl.Func, "nil Func for control: %s", key)
 	}
+}
+
+// A track of a multi-track file is not on disk, so the launcher must vouch
+// for it to the launch lookup, and only for tracks the file has.
+func TestNativeAudioLauncher_VouchesForTrackPaths(t *testing.T) {
+	t.Parallel()
+	nsf := make([]byte, 0x80+1)
+	copy(nsf, "NESM\x1a")
+	nsf[5], nsf[6], nsf[7] = 1, 3, 1
+	nsf[0x09], nsf[0x0B], nsf[0x0D] = 0x80, 0x80, 0x80
+	file := filepath.Join(t.TempDir(), "game.nsf")
+	require.NoError(t, os.WriteFile(file, nsf, 0o600))
+
+	l := NativeAudioLauncher(&fakePlayback{}, nil, nil, nil)
+	require.NotNil(t, l.VirtualPathExists)
+	assert.True(t, l.VirtualPathExists(nil, filepath.Join(file, "1")))
+	assert.True(t, l.VirtualPathExists(nil, filepath.Join(file, "3")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(file, "4")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(file, "0")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(filepath.Dir(file), "missing.nsf", "1")))
 }
 
 // TestNativeAudioLauncher_StopControlRunsThroughHook checks the factory wires the

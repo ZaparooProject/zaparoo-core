@@ -474,6 +474,70 @@ func TestFindFile_VirtualEntries(t *testing.T) {
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
+// A track inside a multi-track file runs the path through a file. The real
+// filesystem answers that with ENOTDIR rather than not-exist, and the entry
+// must still reach the launcher that vouches for it.
+func TestFindFile_VirtualEntryBelowAFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "game.nsf")
+	require.NoError(t, os.WriteFile(file, []byte("NESM"), 0o600))
+	track := filepath.Join(file, "5")
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{virtualListLauncher(track)})
+
+	found, err := findFile(afero.NewOsFs(), mockPlatform, cfg, nil, track)
+	require.NoError(t, err)
+	assert.Equal(t, track, found)
+
+	_, err = findFile(afero.NewOsFs(), mockPlatform, cfg, nil, filepath.Join(file, "6"))
+	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+// A track path written in a different case from the file on disk reaches the
+// launcher by the file's real name, on a case-sensitive filesystem.
+func TestFindFile_VirtualEntryBelowAFileCaseCorrected(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "game.nsf")
+	require.NoError(t, os.WriteFile(file, []byte("NESM"), 0o600))
+	if _, err := os.Stat(filepath.Join(root, "GAME.nsf")); err == nil {
+		t.Skip("filesystem is case-insensitive")
+	}
+	track := filepath.Join(file, "5")
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{virtualListLauncher(track)})
+
+	found, err := findFile(afero.NewOsFs(), mockPlatform, cfg, nil, filepath.Join(root, "GAME.nsf", "5"))
+	require.NoError(t, err)
+	assert.Equal(t, track, found)
+}
+
+// Native audio is added to the launcher cache, not to the platform's own
+// launcher list, so the lookup must ask the cache's launchers too.
+func TestVouchingLaunchers_IncludesCacheOnlyLaunchers(t *testing.T) {
+	t.Parallel()
+
+	platformOnly := platforms.Launcher{ID: "Amiga"}
+	cacheOnly := virtualListLauncher("/music/game.nsf/5")
+	cacheOnly.ID = "native-audio"
+	cache := &pathhelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{platformOnly, cacheOnly})
+
+	all := vouchingLaunchers([]platforms.Launcher{platformOnly}, cache)
+	require.Len(t, all, 2)
+	assert.Equal(t, "Amiga", all[0].ID)
+	assert.Equal(t, "native-audio", all[1].ID)
+
+	assert.Len(t, vouchingLaunchers([]platforms.Launcher{platformOnly}, nil), 1)
+}
+
 // lockedRootFs refuses to stat anything below one root, as an unreadable
 // mount does.
 type lockedRootFs struct {

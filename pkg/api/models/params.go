@@ -215,6 +215,7 @@ type UpdateSettingsParams struct {
 	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	AudioMidiSoundFont      *string   `json:"audioMidiSoundFont" validate:"omitempty,max=4096"`
 	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	// dive is what makes the tags on ReaderConnection run at all: without it

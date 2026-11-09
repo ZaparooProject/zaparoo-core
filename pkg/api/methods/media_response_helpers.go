@@ -78,9 +78,9 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 func activeMediaEnrichment(
 	env *requests.RequestEnv, systemID, path, name string,
 ) (mediaID int64, zapScript string) {
-	// A stream is not indexed, and a title command cannot find it; its URL
-	// launches it again.
-	if audio.IsStreamURL(path) {
+	// A stream, or one track of a multi-track file, is not indexed, and a
+	// title command cannot find it; its location launches it again.
+	if _, _, track := audio.SplitTrackPath(path); track || audio.IsStreamURL(path) {
 		return 0, zapscriptcmd.LocationZapScript(path)
 	}
 	var zapScriptTags []database.TagInfo
@@ -198,15 +198,23 @@ func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, sl
 }
 
 // playableControls drops the launcher controls the playing source cannot
-// do: a live stream cannot seek.
+// do: a live stream cannot seek, and only a source of several tracks has a
+// next or previous one.
 func playableControls(controls []string, state *audio.PlaybackState) []string {
 	if len(controls) == 0 {
 		return controls
 	}
 	kept := make([]string, 0, len(controls))
 	for _, control := range controls {
-		if state.Live && (control == platforms.ControlFastForward || control == platforms.ControlRewind) {
-			continue
+		switch control {
+		case platforms.ControlFastForward, platforms.ControlRewind:
+			if state.Live {
+				continue
+			}
+		case platforms.ControlNext, platforms.ControlPrevious:
+			if !state.MultiTrack {
+				continue
+			}
 		}
 		kept = append(kept, control)
 	}

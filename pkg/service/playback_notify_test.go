@@ -97,6 +97,10 @@ func (p *changeReportingPlayback) TogglePause(slot string) error {
 	return nil
 }
 
+func (*changeReportingPlayback) SkipTrack(string, int) error {
+	return nil
+}
+
 func (p *changeReportingPlayback) Seek(slot string, offset time.Duration) error {
 	p.update(slot, func(st *audio.PlaybackState) { st.Position += offset })
 	return nil
