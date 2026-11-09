@@ -949,6 +949,9 @@ static void *make_block_array(void *mem, int count, int size)
 
 static void *setup_malloc(vorb *f, int sz)
 {
+   // Zaparoo patch: a size from a hostile header can be zero or wrap
+   // negative, which the alloc_buffer path would hand out as valid memory.
+   if (sz <= 0 || sz > INT_MAX - 7) return NULL;
    sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
    f->setup_memory_required += sz;
    if (f->alloc.alloc_buffer) {
@@ -968,6 +971,8 @@ static void setup_free(vorb *f, void *p)
 
 static void *setup_temp_malloc(vorb *f, int sz)
 {
+   // Zaparoo patch: as in setup_malloc.
+   if (sz <= 0 || sz > INT_MAX - 7) return NULL;
    sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
    if (f->alloc.alloc_buffer) {
       if (f->temp_offset - sz < f->setup_offset) return NULL;
@@ -1240,12 +1245,19 @@ static int vorbis_validate(uint8 *data)
 // (formula implied by specification)
 static int lookup1_values(int entries, int dim)
 {
-   int r = (int) floor(exp((float) log((float) entries) / dim));
-   if ((int) floor(pow((float) r+1, dim)) <= entries)   // (int) cast for MinGW warning;
-      ++r;                                              // floor() to avoid _ftol() when non-CRT
+   // Zaparoo patch: entries and dim come from the file. Bound the root
+   // before the int cast and compare the powers as doubles, because a
+   // hostile dim makes them overflow int.
+   double rd = floor(exp((float) log((float) entries) / dim));
+   int r;
+   if (!(rd >= 0 && rd <= 16777216.0))
+      return -1;
+   r = (int) rd;
+   if (floor(pow((float) r+1, dim)) <= entries)
+      ++r;
    if (pow((float) r+1, dim) <= entries)
       return -1;
-   if ((int) floor(pow((float) r, dim)) > entries)
+   if (floor(pow((float) r, dim)) > entries)
       return -1;
    return r;
 }
@@ -3659,10 +3671,24 @@ static int start_decoder(vorb *f)
    //user comments
    f->comment_list_length = get32_packet(f);
    f->comment_list = NULL;
+   // Zaparoo patch: a hostile count must neither wrap the int that
+   // setup_malloc takes nor commit a huge zeroed list below; real streams
+   // carry a handful of comments.
+   if (f->comment_list_length < 0 || f->comment_list_length > 65536) {
+      f->comment_list_length = 0;
+      return error(f, VORBIS_invalid_setup);
+   }
    if (f->comment_list_length > 0)
    {
       f->comment_list = (char**) setup_malloc(f, sizeof(char*) * (f->comment_list_length));
-      if (f->comment_list == NULL)                  return error(f, VORBIS_outofmem);
+      if (f->comment_list == NULL) {
+         // Zaparoo patch: deinit walks comment_list_length entries.
+         f->comment_list_length = 0;
+         return error(f, VORBIS_outofmem);
+      }
+      // Zaparoo patch: deinit frees every entry, even those a truncated
+      // header never filled.
+      memset(f->comment_list, 0, sizeof(char*) * (f->comment_list_length));
    }
 
    for(i=0; i < f->comment_list_length; ++i) {
