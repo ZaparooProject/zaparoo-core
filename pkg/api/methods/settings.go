@@ -540,13 +540,34 @@ func validateMediaImageDir(dir, dataDir string) error {
 	info, err := os.Stat(resolved)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil
+		return validateImageDirParent(resolved, dir)
 	case err != nil:
 		return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
 	case !info.IsDir():
 		return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
 	}
 	return nil
+}
+
+// validateImageDirParent checks the nearest existing folder above a folder
+// that does not exist yet. Windows reports a path under a file as not found
+// rather than not a directory, so the ancestor is what refuses it.
+func validateImageDirParent(resolved, dir string) error {
+	for parent := filepath.Dir(resolved); ; parent = filepath.Dir(parent) {
+		info, err := os.Stat(parent)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if filepath.Dir(parent) == parent {
+				return nil
+			}
+			continue
+		case err != nil:
+			return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
+		case !info.IsDir():
+			return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
+		}
+		return nil
+	}
 }
 
 //nolint:gocritic // single-use parameter in API handler

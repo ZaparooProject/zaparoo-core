@@ -94,9 +94,11 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
+	rootDir := browseTestAbsPath("mock", "roms")
+	// Registered before the basic mock so it wins over its "/mock/roms".
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{rootDir})
 	mockPlatform.SetupBasicMock()
 	now := time.Now()
-	rootDir := browseTestAbsPath("mock", "roms")
 	mediaPath := filepath.Join(rootDir, "NES", "smb.nes")
 	missingPath := filepath.Join(rootDir, "NES", "missing.nes")
 	relPath := filepath.ToSlash(filepath.Join("NES", "smb.nes"))

@@ -335,7 +335,7 @@ func TestImageDirSettingValidation(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 
 	root := filepath.VolumeName(dataDir) + string(filepath.Separator)
-	for _, dir := range []string{root, file, filepath.Join(file, "images")} {
+	for _, dir := range []string{root, file, filepath.Join(file, "images"), filepath.Join(file, "a", "b")} {
 		_, updateErr := HandleSettingsUpdate(
 			imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &dir}))
 		require.Error(t, updateErr, dir)
@@ -348,4 +348,10 @@ func TestImageDirSettingValidation(t *testing.T) {
 	_, err = HandleSettingsUpdate(remote)
 	require.Error(t, err)
 	assert.Empty(t, cfg.ImageDirSetting())
+
+	missing := filepath.Join(t.TempDir(), "new", "images")
+	_, err = HandleSettingsUpdate(
+		imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &missing}))
+	require.NoError(t, err, "a folder that does not exist yet is created later")
+	assert.Equal(t, missing, cfg.ImageDirSetting())
 }
