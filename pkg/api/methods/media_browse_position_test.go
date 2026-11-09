@@ -319,7 +319,8 @@ func TestBrowseAnchorOnMergedRootTreatsShadowedFileAsNotListed(t *testing.T) {
 	found := 0
 	for _, root := range f.roots {
 		path := filepath.Join(root, "PSX", "Shared Game.chd")
-		index, ok := listed[path]
+		// Browse serves paths with forward slashes on every OS.
+		index, ok := listed[filepath.ToSlash(path)]
 		if ok {
 			found++
 			assertAnchorFound(t, f, scope, flat, path, index, 4)
@@ -517,7 +518,7 @@ func TestBrowsePositionSystemFilterHidesOtherSystems(t *testing.T) {
 	all := map[string]any{"path": path}
 	flat := flattenPages(walkPages(t, f, all, 100))
 	for i := range flat {
-		if flat[i].Path == other {
+		if flat[i].Path == filepath.ToSlash(other) {
 			assertAnchorFound(t, f, all, flat, other, i, 3)
 			return
 		}

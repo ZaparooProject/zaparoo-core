@@ -121,9 +121,18 @@ func parseServerPort(t *testing.T, server *httptest.Server) int {
 }
 
 // unusedPort returns port 0, which cannot have a listening TCP service.
+// unusedPort returns a port nothing listens on. Port 0 cannot stand in: only
+// Linux refuses a connection to it, while macOS and Windows fail the dial with
+// an address error instead.
 func unusedPort(t *testing.T) int {
 	t.Helper()
-	return 0
+	var lc net.ListenConfig
+	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	require.NoError(t, listener.Close())
+	return tcpAddr.Port
 }
 
 func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.Duration) bool {
