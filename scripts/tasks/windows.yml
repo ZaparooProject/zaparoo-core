@@ -36,7 +36,12 @@ tasks:
       - go run scripts/tasks/utils/windowsiss/main.go -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
       - cp "cmd/windows/winres/icon.ico" "_build/windows_{{.BUILD_ARCH}}"
       - docker rm -f zaparoo-innosetup 2>/dev/null || true
-      - docker container create --name zaparoo-innosetup {{if env "CI"}}--user 0:0{{end}} --entrypoint sh amake/innosetup -c "{{if env "CI"}}chown -R root:root /home/xclient && {{end}}chmod -R 777 /work && iscc setup.iss"
+      # Inno Setup's compiler is a 32-bit program run under wine. Docker
+      # 29.4.2's default seccomp profile denies socketcall(2), which every
+      # 32-bit program needs, so wineserver cannot start (moby/moby#52537,
+      # fixed in 29.4.3). Lifting seccomp for this one container keeps
+      # installers building on a runner that still ships 29.4.2.
+      - docker container create --name zaparoo-innosetup --security-opt seccomp=unconfined {{if env "CI"}}--user 0:0{{end}} --entrypoint sh amake/innosetup -c "{{if env "CI"}}chown -R root:root /home/xclient && {{end}}chmod -R 777 /work && iscc setup.iss"
       - docker cp "_build/windows_{{.BUILD_ARCH}}/setup.iss" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/Zaparoo.exe" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/LICENSE.txt" zaparoo-innosetup:/work/
