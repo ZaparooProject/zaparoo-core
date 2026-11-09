@@ -36,6 +36,17 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           ACTOR: ${{ github.event.workflow_run.actor.login }}
         run: |
+          # Runs can finish out of order. Only the newest finished run on main
+          # speaks for it, so an older failure cannot reopen the issue after a
+          # newer run closed it, nor an older success close a newer failure.
+          latest="$(gh run list --workflow lint-and-test.yml --branch main --event push \
+            --status completed --limit 20 --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion != "cancelled" and .conclusion != "skipped")][0].databaseId // empty')"
+          if [ -n "$latest" ] && [ "$latest" != "$RUN_ID" ]; then
+            echo "Run $latest is newer than $RUN_ID; leaving the report to it."
+            exit 0
+          fi
+
           title="CI is failing on main"
           issue="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
             --jq "[.[] | select(.title == \"$title\")][0].number // empty")"

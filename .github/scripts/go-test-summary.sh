@@ -52,7 +52,8 @@ packages="$(grep -E '^FAIL[[:space:]]+[^[:space:]]' "$log" || true)"
 	fi
 } | head -c 900000 >>"$summary"
 
-grep -E '^[[:space:]]*--- FAIL: ' "$log" | sed -E 's/^[[:space:]]*--- FAIL: ([^ ]+).*/\1/' | sort -u | head -n 10 |
+# grep finds nothing when only a build or panic failed; that is not an error.
+{ grep -E '^[[:space:]]*--- FAIL: ' "$log" || true; } | sed -E 's/^[[:space:]]*--- FAIL: ([^ ]+).*/\1/' | sort -u | head -n 10 |
 	while read -r name; do
 		echo "::error title=${heading}::${name} failed"
 	done
