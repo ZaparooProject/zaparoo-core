@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2706,24 +2707,43 @@ func TestHandleSettingsUpdate_MidiSoundFont(t *testing.T) {
 	assert.Empty(t, cfg.MidiSoundFont(), "an empty path goes back to FM")
 }
 
+// saveFailFS fails the rename that commits a config save once failSaves is
+// set, so a save fails the same way on every OS. A read-only folder does not
+// stop a write on Windows.
+type saveFailFS struct {
+	afero.Fs
+	failSaves atomic.Bool
+}
+
+//nolint:wrapcheck // Fault injector preserves filesystem errors unchanged.
+func (fs *saveFailFS) Rename(from, to string) error {
+	if fs.failSaves.Load() {
+		return syscall.ENOSPC
+	}
+	return fs.Fs.Rename(from, to)
+}
+
+// newSaveFailConfig returns a config on disk whose saves fail once the
+// returned filesystem's failSaves is set.
+func newSaveFailConfig(t *testing.T) (*config.Instance, *saveFailFS) {
+	t.Helper()
+	fs := &saveFailFS{Fs: afero.NewOsFs()}
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, fs)
+	require.NoError(t, err)
+	return cfg, fs
+}
+
 // A save that fails leaves the SoundFont MIDI files play through as it was.
 func TestHandleSettingsUpdate_MidiSoundFontKeptWhenSaveFails(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
 
-	configDir := t.TempDir()
-	cfg, err := config.NewConfig(configDir, config.Values{})
-	require.NoError(t, err)
+	cfg, fs := newSaveFailConfig(t)
 	cfg.SetMidiSoundFont("old.sf2")
 	require.NoError(t, cfg.Save())
-
-	require.NoError(t, os.Chmod(configDir, 0o500))       //nolint:gosec // a read-only folder makes the save fail
-	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) }) //nolint:gosec // writable again for cleanup
+	fs.failSaves.Store(true)
 
 	font := "new.sf2"
-	_, err = HandleSettingsUpdate(musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font}))
+	_, err := HandleSettingsUpdate(musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font}))
 	require.ErrorContains(t, err, "failed to save config")
 	assert.Equal(t, "old.sf2", cfg.MidiSoundFont())
 }

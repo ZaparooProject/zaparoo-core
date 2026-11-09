@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -34,8 +35,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// arcadeLinkPath is an absolute path on every OS: a scrape scope must be one.
 func arcadeLinkPath(parts ...string) string {
-	all := append([]string{string(filepath.Separator), "media", "fat", "_Arcade"}, parts...)
+	root := filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
+	all := append([]string{root, "media", "fat", "_Arcade"}, parts...)
 	return filepath.ToSlash(filepath.Join(all...))
 }
 

@@ -256,17 +256,12 @@ func TestImageSettingsUpdateReloadsTheThumbCache(t *testing.T) {
 // the config and in the running thumbnail cache.
 func TestImageSettingsUpdateKeepsTheOldValuesWhenTheSaveFails(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache.
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
 	dataDir := t.TempDir()
 	pl := mocks.NewMockPlatform()
 	pl.On("ID").Return("test-platform").Maybe()
 	pl.On("ManagedByPackageManager").Return(false).Maybe()
 	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir, HostManagedPaths: true})
-	configDir := t.TempDir()
-	cfg, err := config.NewConfig(configDir, config.Values{})
-	require.NoError(t, err)
+	cfg, saveFS := newSaveFailConfig(t)
 
 	stop := InitMediaThumbCache(pl, cfg)
 	t.Cleanup(func() {
@@ -276,12 +271,11 @@ func TestImageSettingsUpdateKeepsTheOldValuesWhenTheSaveFails(t *testing.T) {
 	cache := mediaThumbCachePointer.Load()
 	require.NotNil(t, cache)
 
-	require.NoError(t, os.Chmod(configDir, 0o500))       //nolint:gosec // a read-only folder makes the save fail
-	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) }) //nolint:gosec // writable again for cleanup
+	saveFS.failSaves.Store(true)
 
 	newDir := filepath.Join(t.TempDir(), "nas", "images")
 	capMB := 64
-	_, err = HandleSettingsUpdate(imageSettingsEnv(t, pl, cfg,
+	_, err := HandleSettingsUpdate(imageSettingsEnv(t, pl, cfg,
 		models.UpdateSettingsParams{MediaImageDir: &newDir, MediaThumbCacheMaxMB: &capMB}))
 	require.ErrorContains(t, err, "failed to save config")
 
@@ -340,7 +334,8 @@ func TestImageDirSettingValidation(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "file.txt")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 
-	for _, dir := range []string{string(filepath.Separator), file, filepath.Join(file, "images")} {
+	root := filepath.VolumeName(dataDir) + string(filepath.Separator)
+	for _, dir := range []string{root, file, filepath.Join(file, "images")} {
 		_, updateErr := HandleSettingsUpdate(
 			imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &dir}))
 		require.Error(t, updateErr, dir)

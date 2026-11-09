@@ -432,7 +432,9 @@ func TestHandleMediaBrowse_PagesFilesWithEmptySortName(t *testing.T) {
 			}
 			assert.Len(t, served, len(files))
 			for _, file := range files {
-				assert.Equalf(t, 1, seen[filepath.Join(f.roots[0], "PSX", file)], "%s served once", file)
+				// Browse serves paths with forward slashes on every OS.
+				path := filepath.ToSlash(filepath.Join(f.roots[0], "PSX", file))
+				assert.Equalf(t, 1, seen[path], "%s served once", file)
 			}
 		})
 	}

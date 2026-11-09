@@ -47,10 +47,8 @@ const coverTestBoxart = "property:image-boxart"
 
 func newMemThumbCache() *mediaThumbCache {
 	return &mediaThumbCache{
-		fs: afero.NewMemMapFs(),
-		dir: filepath.Join(
-			string(filepath.Separator), "images", mediaThumbCacheDirName, mediaThumbCacheVersionDir(),
-		),
+		fs:       afero.NewMemMapFs(),
+		dir:      browseTestAbsPath("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 		resolved: make(map[string]resolvedThumb),
 	}
 }

@@ -45,7 +45,7 @@ import (
 // operatorDumpPath is where the Epilogue Operator bridge leaves the cartridge
 // it dumped: a file the media index never walks.
 func operatorDumpPath(name string) string {
-	return filepath.Join(string(filepath.Separator), "tmp", "operator", name)
+	return browseTestAbsPath("tmp", "operator", name)
 }
 
 func secretOfManaVariants() []database.SearchResultWithCursor {
