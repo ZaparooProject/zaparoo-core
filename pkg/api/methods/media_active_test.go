@@ -113,6 +113,18 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 			expectedZapScript: "@snes/Error Game",
 			expectNil:         false,
 		},
+		{
+			name: "returns the URL of a stream, which no title command finds",
+			activeMedia: models.NewActiveMedia(
+				"Audio",
+				"Audio",
+				"https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance",
+				"fip",
+				"native-audio",
+			),
+			expectedZapScript: "https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance",
+			expectNil:         false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1046,4 +1058,6 @@ func TestBackgroundTrackZapScript(t *testing.T) {
 	escaped := backgroundTrackZapScript("/music/a||b.mp3")
 	assert.NotEqual(t, "/music/a||b.mp3", escaped, "syntax in a path is escaped")
 	assert.True(t, strings.HasPrefix(escaped, "**launch:"))
+	assert.Equal(t, "https://ice1.somafm.com/groovesalad-128-mp3",
+		backgroundTrackZapScript("https://ice1.somafm.com/groovesalad-128-mp3"), "a stream URL stays readable")
 }

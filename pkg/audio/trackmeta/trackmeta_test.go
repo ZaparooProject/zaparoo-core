@@ -28,6 +28,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/dhowden/tag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -332,4 +333,47 @@ func TestValidID3v2Frames_AcceptsWellFormedTags(t *testing.T) {
 	assert.True(t, validID3v2Frames(id3v2(3, 0x40, withExt)), "extended header")
 	unknown := id3v2(9, 0, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 	assert.True(t, validID3v2Frames(unknown), "an unknown version is the parser's to refuse")
+}
+
+func TestReplayGain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  map[string]any
+		name string
+		want float64
+		ok   bool
+	}{
+		{name: "vorbis comment", raw: map[string]any{"replaygain_track_gain": "-6.20 dB"}, want: -6.2, ok: true},
+		{name: "vorbis positive", raw: map[string]any{"replaygain_track_gain": "+3.5 dB"}, want: 3.5, ok: true},
+		{
+			name: "id3 txxx",
+			raw: map[string]any{
+				"TXXX":   &tag.Comm{Description: "replaygain_album_gain", Text: "-9.00 dB"},
+				"TXXX_0": &tag.Comm{Description: "REPLAYGAIN_TRACK_GAIN", Text: "-4.10 dB"},
+			},
+			want: -4.1, ok: true,
+		},
+		{
+			name: "invalid frame before a valid one",
+			raw: map[string]any{
+				"TXXX":   &tag.Comm{Description: "REPLAYGAIN_TRACK_GAIN", Text: "loud"},
+				"TXXX_0": &tag.Comm{Description: "REPLAYGAIN_TRACK_GAIN", Text: "-4.10 dB"},
+			},
+			want: -4.1, ok: true,
+		},
+		{name: "album gain only", raw: map[string]any{"replaygain_album_gain": "-6.20 dB"}},
+		{name: "garbage", raw: map[string]any{"replaygain_track_gain": "loud"}},
+		{name: "out of range", raw: map[string]any{"replaygain_track_gain": "-900 dB"}},
+		{name: "nan", raw: map[string]any{"replaygain_track_gain": "NaN dB"}},
+		{name: "none", raw: map[string]any{"title": "x"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := replayGain(tt.raw)
+			assert.Equal(t, tt.ok, ok)
+			assert.InDelta(t, tt.want, got, 1e-9)
+		})
+	}
 }

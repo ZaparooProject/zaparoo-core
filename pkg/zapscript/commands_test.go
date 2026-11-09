@@ -1280,6 +1280,29 @@ func TestRunCommandOwnedDeckZapLinkPlaysAsServed(t *testing.T) {
 	assert.Empty(t, all, "no read-only copy of the user's own deck is kept")
 }
 
+// A ZapLink that serves a plain stream URL keeps that URL's query string,
+// the way the same URL written on a card does.
+func TestRunCommandZapLinkStreamURLKeepsItsQuery(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	stream := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(stream.Close)
+	want := stream.URL + "/live?id=station"
+	link, db := ownedLinkServer(t, want)
+
+	pl := newPlaylistTestPlatform()
+	pl.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	_, err := RunCommand(
+		t.Context(), pl, &config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{Name: "launch", Args: []string{link}},
+		1, 0, db, &RunCommandOptions{LauncherManager: state.NewLauncherManager()}, &zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{want}, pl.GetLaunchedMedia())
+}
+
 // TestRunCommandZapLinkCannotWidenTokenPolicy is the point of the bound: a
 // remote operation may launch a ZapLink, so the link's host chooses the
 // command that actually runs. Without the bound travelling on the token, one

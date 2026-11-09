@@ -2672,3 +2672,31 @@ func TestHandleSettingsUpdate_SystemDefaultsWithoutAudioKeepPauseOnLaunch(t *tes
 	assert.Equal(t, "Audio", got[1].System)
 	assert.Empty(t, got[1].Launcher)
 }
+
+func TestHandleSettingsUpdate_AudioNormalize(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	require.True(t, cfg.AudioNormalize(), "normalization is on by default")
+
+	off := false
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioNormalize: &off})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.False(t, cfg.AudioNormalize())
+
+	reloaded, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	assert.False(t, reloaded.AudioNormalize(), "the setting is saved")
+
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.False(t, resp.AudioNormalize)
+}

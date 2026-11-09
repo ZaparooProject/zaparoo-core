@@ -1896,3 +1896,22 @@ func TestSetAudioPauseOnLaunch(t *testing.T) {
 	assert.Equal(t, "player", defaults[1].Launcher)
 	assert.Nil(t, defaults[0].PauseOnLaunch)
 }
+
+func TestAudioNormalize_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioNormalize(), "normalization is on by default")
+
+	cfg.SetAudioNormalize(false)
+	require.NoError(t, cfg.Save())
+	data, err := os.ReadFile(filepath.Join(dir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "normalize = false")
+
+	loaded, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.False(t, loaded.AudioNormalize())
+}

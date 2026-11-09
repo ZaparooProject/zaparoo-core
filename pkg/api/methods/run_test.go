@@ -27,7 +27,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -87,6 +89,32 @@ func TestHandleStopWaitsForLaunchButNotForMediaReadiness(t *testing.T) {
 		t.Fatal("stop waited for media readiness after the launch released")
 	}
 	mockPlatform.AssertExpectations(t)
+}
+
+// Native audio has no process or core for the platform to stop: a stop that
+// only went to the platform cleared the media and left the track playing.
+func TestHandleStopStopsNativeAudioPlayback(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+	st.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
+	))
+	playback := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{Path: "song.mp3", Playing: true})
+
+	value, err := HandleStop(requests.RequestEnv{
+		Context:         context.Background(),
+		Platform:        mockPlatform,
+		State:           st,
+		PlaybackManager: playback,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, value)
+	assert.Equal(t, []string{mediaslot.Primary}, playback.stopped)
+	assert.Nil(t, st.ActiveMedia())
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", mock.Anything)
 }
 
 func TestHandleStopCanceledWhileLaunchInFlight(t *testing.T) {

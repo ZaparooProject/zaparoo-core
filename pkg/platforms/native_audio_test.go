@@ -50,8 +50,8 @@ type fakePlayback struct {
 	lastCall   string
 	lastSlot   string
 	lastPath   string
-	state      audio.PlaybackState
 	lastOpts   audio.PlaybackOptions
+	state      audio.PlaybackState
 	lastOffset time.Duration
 	lastVolume float64
 }
@@ -655,4 +655,20 @@ func TestLaunchNativeAudio_BackgroundNeverResumes(t *testing.T) {
 		&LaunchOptions{Slot: mediaslot.Background})
 	require.NoError(t, err)
 	assert.Zero(t, fp.lastOpts.StartAt)
+}
+
+// A stream is named by the last part of its path, or by its host when the
+// path names nothing.
+func TestAudioDisplayName_Streams(t *testing.T) {
+	t.Parallel()
+	soma := tags.ParseTitleFromFilename("groovesalad-128-mp3", false)
+	tests := map[string]string{
+		"https://ice1.somafm.com/groovesalad-128-mp3":               soma,
+		"https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance": "fip",
+		"http://uk1.internet-radio.com:8004/":                       "uk1.internet-radio.com",
+		"http://uk1.internet-radio.com:8004":                        "uk1.internet-radio.com",
+	}
+	for location, want := range tests {
+		assert.Equal(t, want, audioDisplayName(location), location)
+	}
 }

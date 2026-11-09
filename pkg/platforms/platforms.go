@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -498,6 +499,9 @@ type LaunchOptions struct {
 	// SetName should keep the original game directory. On MiSTer this maps to the
 	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
 	SetNameSameDir string
+	// AudioStream is an http(s) stream Core has already probed, handed to
+	// the native audio launcher so playing it does not connect twice.
+	AudioStream *radio.Probe
 	// Slot selects the media slot for launch routing. Empty means primary.
 	Slot string
 	// PlaylistItem is set by Core when the launch plays a playlist item. A

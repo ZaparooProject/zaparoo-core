@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,10 +60,6 @@ const (
 	playlistPreviousRestartThreshold = 3 * time.Second
 )
 
-func isPlsFile(path string) bool {
-	return filepath.Ext(strings.ToLower(path)) == ".pls"
-}
-
 // maxRotation caps an advance, idle or countdown value.
 const maxRotation = 24 * time.Hour
 
@@ -89,8 +86,10 @@ var (
 )
 
 var (
-	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
-	plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
+	plsFileRe  = regexp.MustCompile(`(?i)^File([1-9]\d*)\s*=\s*(.*)$`)
+	plsTitleRe = regexp.MustCompile(`(?i)^Title([1-9]\d*)\s*=\s*(.*)$`)
+	// plsKnownKeyRe matches the pls keys that carry nothing a playlist uses.
+	plsKnownKeyRe = regexp.MustCompile(`(?i)^(NumberOfEntries|Version|Length[1-9]\d*)\s*=`)
 )
 
 type plsItem struct {
@@ -271,12 +270,12 @@ func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 }
 
 func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
-	//nolint:gosec // Safe: reads playlist files for media management
-	content, err := os.ReadFile(path)
+	content, err := readBoundedFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read playlist file '%s': %w", path, err)
+		return nil, err
 	}
 
+	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	lines := strings.Split(string(content), "\n")
 	filteredLines := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -303,7 +302,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 
 	for _, line := range lines {
 		if !hasHeader {
-			if line == plsHeader {
+			if strings.EqualFold(line, plsHeader) {
 				hasHeader = true
 			}
 			continue
@@ -337,6 +336,9 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 			continue
 		}
 
+		if plsKnownKeyRe.MatchString(line) {
+			continue
+		}
 		log.Warn().Msgf("unrecognized line in pls file: %s", line)
 	}
 
@@ -392,6 +394,12 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 			if exists {
 				item.file = absPath
 			}
+		}
+
+		// A URL is a stream or ZapLink location, so its query string is part
+		// of it rather than launch arguments.
+		if strings.Contains(item.file, "://") {
+			item.file = literalLaunch(item.file)
 		}
 
 		playlistItems = append(playlistItems, playlists.PlaylistItem{
@@ -470,6 +478,10 @@ func indexedFolderItems(
 			return nil, false, fmt.Errorf("browse folder %s: %w", path, err)
 		}
 		for i := range rows {
+			// A playlist file is a playlist of its own, not a track.
+			if rows[i].SystemID == systemdefs.SystemAudio && isAudioPlaylistExt(rows[i].Path) {
+				continue
+			}
 			items = append(items, playlists.PlaylistItem{
 				Name:      mediatags.StripStructuralSetMarkers(rows[i].Name),
 				ZapScript: rows[i].Path,
@@ -533,6 +545,10 @@ func readPlaylistFolder(
 		fullPath := filepath.Join(path, file.Name())
 		if matcher == nil {
 			matcher = helpers.NewLauncherMatcher(cfg, pl)
+		}
+		if isAudioPlaylistExt(fullPath) &&
+			launchersInclude(matcher.PathToLaunchers(fullPath), systemdefs.SystemAudio) {
+			continue
 		}
 		if system != nil {
 			if !launchersInclude(matcher.PathToLaunchers(fullPath), system.ID) {
@@ -615,8 +631,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	var items []playlists.PlaylistItem
-	if isPlsFile(path) {
-		items, err = readPlsFile(path)
+	if isAudioPlaylistExt(path) {
+		items, err = readPlaylistFile(path)
 		if err != nil {
 			return nil, err
 		}

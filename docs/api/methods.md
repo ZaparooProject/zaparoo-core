@@ -3261,6 +3261,7 @@ None.
 | audioMusicVolume          | number                                    | Yes      | Volume of music and other audio played by native audio in either slot, 0 to 200 (`[audio] music_volume`). Reports `audioVolume` while it has not been set. |
 | audioMusicAutoplay        | boolean                                   | Yes      | Whether the background playlist open when Core last stopped starts playing on the first Core start of each boot (`[audio] music_autoplay`). Defaults to true. |
 | audioMusicPauseOnLaunch   | boolean                                   | Yes      | Whether background music pauses while a game runs in the primary slot and resumes when it exits. Stored as `pause_on_launch` on the `Audio` entry of `[[systems.default]]`. Defaults to true. |
+| audioNormalize            | boolean                                   | Yes      | Whether music and radio playback is levelled to a common loudness, using ReplayGain tags where a file has them (`[audio] normalize`). Defaults to true. |
 | readersAutoDetect         | boolean                                   | Yes      | Whether automatic reader detection is enabled.                  |
 | readersScanMode           | string                                    | Yes      | Current scan mode setting.                                      |
 | readersScanExitDelay      | number                                    | Yes      | Delay before exiting scan mode in seconds.                      |
@@ -3363,6 +3364,7 @@ An object containing any of the following optional keys:
 | audioMusicVolume          | number                                    | No       | Volume of music played by native audio in either slot, 0 to 200. `0` is silent. Applies at once to what is playing. |
 | audioMusicAutoplay        | boolean                                   | No       | Whether the restored background playlist starts playing on the first Core start of each boot. |
 | audioMusicPauseOnLaunch   | boolean                                   | No       | Whether background music pauses while a game runs. Applied after `systemDefaults` when both are sent, and kept when `systemDefaults` leaves the `Audio` entry out. |
+| audioNormalize            | boolean                                   | No       | Whether music and radio playback is levelled to a common loudness. Applies to what is playing within a few seconds. |
 | readersAutoDetect         | boolean                                   | No       | Whether automatic reader detection is enabled.                  |
 | readersScanMode           | string                                    | No       | Current scan mode setting.                                      |
 | readersScanExitDelay      | number                                    | No       | Delay before exiting scan mode in seconds.                      |
