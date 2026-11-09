@@ -81,20 +81,13 @@ jobs:
       - name: Build sanitized native libraries and run release tests
         run: task linux:test-sanitized-amd64
 
-  ci:
-    name: CI
-    # Windows takes 12 to 13 minutes here even with its Go build cache warm, so
-    # a 15 minute cap left almost no headroom: once that cache was evicted the
-    # job compiled from scratch, hit the limit while still linking, and died
-    # before the post step that saves a new one. That made the timeout
-    # self-sustaining, because every following run also started cold. 30 gives a
-    # cold run room to finish and repopulate the cache.
+  lint:
+    name: Lint
+    # Lint, the full tests and the deadlock tests each take minutes on their
+    # own, so they run as parallel jobs rather than one after another.
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # Pay for fast PR feedback, not post-merge validation. Non-PR runs use
-      # GitHub-hosted runners, which also preserve SignPath's requirement that
-      # every job upstream of a signed release artifact use that runner group.
       matrix:
         include: >-
           ${{
@@ -112,94 +105,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up Go and dependencies
+        uses: ./.github/actions/go-ci-setup
         with:
-          go-version-file: go.mod
-          cache: false
+          os: ${{ matrix.os }}
 
-      - name: Configure Go paths for Windows
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
-          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
-
-      - name: Set up MSYS2 (Windows)
-        if: matrix.os == 'windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: pkgconf
-          path-type: inherit
-
-      - name: Restore Go cache (Unix)
-        id: restore-go-cache-unix
-        if: matrix.os != 'windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-gomod-
-
-      - name: Restore Go cache (Windows)
-        id: restore-go-cache-windows
-        if: matrix.os == 'windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: D:\go-mod-cache
-          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-gomod-
-
-      # Only the module cache is persisted, so every Windows run compiled the
-      # module from scratch: cgo plus a -race test binary per package, at
-      # GOMAXPROCS 2. That put the first test result seven minutes in and left
-      # the job still linking when the timeout killed it. This cache is keyed by
-      # commit and restored by prefix, so a run starts from the nearest previous
-      # build rather than from nothing.
-      - name: Cache Go build cache (Windows)
-        if: matrix.os == 'windows'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: D:\go-cache
-          key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
-            ${{ runner.os }}-gobuild-
-
-      - name: Download Go modules (Windows)
-        if: matrix.os == 'windows'
-        shell: msys2 {0}
-        run: go mod download
-
-      - name: Download Go modules (non-Windows)
-        if: matrix.os != 'windows'
-        run: go mod download
-
-      # These two are the only native libraries a Linux build needs: libnfc for
-      # the clausecker/nfc binding and libpcsclite for the scard binding. They
-      # pull six packages between them, so installing them outright is as quick
-      # as restoring a cache and cannot go stale.
-      - name: Install system dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libnfc-dev \
-            libpcsclite-dev
-
+      # The vendored C and C++ audio decoders are compiled by cgo before the
+      # analysis starts, which takes macOS over five minutes on its own.
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout=5m
+          args: --timeout=12m
 
       - name: Install govulncheck
         if: matrix.os == 'ubuntu'
@@ -253,16 +170,66 @@ jobs:
           go run ./scripts/expr-method-profile
           go test -race -tags=expr_static_methods github.com/expr-lang/expr/internal/staticmethod github.com/ZaparooProject/go-zapscript/...
 
+  ci:
+    name: CI
+    # Windows takes 12 to 13 minutes here even with its Go build cache warm, so
+    # a 15 minute cap left almost no headroom: once that cache was evicted the
+    # job compiled from scratch, hit the limit while still linking, and died
+    # before the post step that saves a new one. That made the timeout
+    # self-sustaining, because every following run also started cold. 30 gives a
+    # cold run room to finish and repopulate the cache.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Pay for fast PR feedback, not post-merge validation. Non-PR runs use
+      # GitHub-hosted runners, which also preserve SignPath's requirement that
+      # every job upstream of a signed release artifact use that runner group.
+      matrix:
+        include: >-
+          ${{
+            github.event_name == 'pull_request'
+              && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
+              || fromJSON('[
+                   {"os":"ubuntu","runner":"ubuntu-latest"},
+                   {"os":"macos","runner":"macos-latest"},
+                   {"os":"windows","runner":"windows-latest"}
+                 ]')
+          }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go and dependencies
+        id: setup
+        uses: ./.github/actions/go-ci-setup
+        with:
+          os: ${{ matrix.os }}
+          save-build-cache: "true"
+
+      # Without -v, go test prints only the output of failing tests. With it,
+      # every passing test's log output went to the job log, which grew past
+      # what the GitHub log viewer will open.
       - name: Run full tests (Windows)
         if: matrix.os == 'windows'
         shell: msys2 {0}
         env:
           GOMAXPROCS: 2
-        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
+        run: |
+          set -o pipefail
+          go test -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
 
       - name: Run full tests (Unix)
         if: matrix.os != 'windows'
-        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
+        run: |
+          set -o pipefail
+          go test -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
+
+      - name: Summarize test failures
+        if: failure()
+        shell: bash
+        run: .github/scripts/go-test-summary.sh go-test-output.txt "Full tests (${{ matrix.os }})"
 
       - name: Upload rapid failure artifacts
         if: failure()
@@ -271,10 +238,6 @@ jobs:
           name: rapid-failures-${{ matrix.os }}
           path: '**/testdata/rapid/**/*.fail'
           if-no-files-found: ignore
-
-      - name: Run deadlock detection tests
-        if: matrix.os == 'ubuntu'
-        run: go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./...
 
       - name: Upload coverage to Codecov
         # Coverage is tracked per branch, so a release gate's run has nothing to
@@ -297,19 +260,42 @@ jobs:
         if: steps.codecov.outcome == 'failure'
         run: echo "::warning title=Coverage not uploaded::The Codecov upload failed, so this run has no coverage report."
 
-      - name: Save Go cache (Unix)
-        if: matrix.os != 'windows' && steps.restore-go-cache-unix.outputs.cache-hit != 'true'
+      - name: Save Go module cache (Unix)
+        if: matrix.os != 'windows' && steps.setup.outputs.gomod-cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
-      - name: Save Go cache (Windows)
-        if: matrix.os == 'windows' && steps.restore-go-cache-windows.outputs.cache-hit != 'true'
+      - name: Save Go module cache (Windows)
+        if: matrix.os == 'windows' && steps.setup.outputs.gomod-cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
+
+  deadlock:
+    name: Deadlock Detection
+    timeout-minutes: 30
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubicloud-standard-4' || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go and dependencies
+        uses: ./.github/actions/go-ci-setup
+        with:
+          os: ubuntu
+
+      - name: Run deadlock detection tests
+        run: |
+          set -o pipefail
+          go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./... 2>&1 | tee go-test-output.txt
+
+      - name: Summarize test failures
+        if: failure()
+        run: .github/scripts/go-test-summary.sh go-test-output.txt "Deadlock detection tests"
 
   mister-backup-mount-smoke:
     name: MiSTer Backup Mount Smoke
@@ -524,7 +510,8 @@ jobs:
         env:
           GOMAXPROCS: 2
         run: |
-          go test -v -race \
+          set -o pipefail
+          go test -race \
             ./pkg/api \
             ./pkg/database/mediascanner \
             ./pkg/helpers \
@@ -535,12 +522,13 @@ jobs:
             ./pkg/service \
             ./pkg/service/backup \
             ./pkg/service/restart \
-            ./pkg/ui/systray
+            ./pkg/ui/systray 2>&1 | tee go-test-output.txt
 
       - name: Run native tests (macOS)
         if: matrix.os == 'macos'
         run: |
-          go test -v -race \
+          set -o pipefail
+          go test -race \
             ./pkg/api \
             ./pkg/database/mediascanner \
             ./pkg/helpers \
@@ -552,7 +540,12 @@ jobs:
             ./pkg/service/backup \
             ./pkg/service/daemon \
             ./pkg/service/restart \
-            ./pkg/ui/systray
+            ./pkg/ui/systray 2>&1 | tee go-test-output.txt
+
+      - name: Summarize test failures
+        if: failure()
+        shell: bash
+        run: .github/scripts/go-test-summary.sh go-test-output.txt "Native PR tests (${{ matrix.os }})"
 
       - name: Upload rapid failure artifacts
         if: failure()
@@ -565,7 +558,7 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [actionlint, c-sanitizers, ci, cross-lint, native-pr-tests]
+    needs: [actionlint, c-sanitizers, lint, ci, deadlock, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
@@ -578,8 +571,16 @@ jobs:
             echo "CI failed: c-sanitizers=${{ needs.c-sanitizers.result }}"
             exit 1
           fi
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "CI failed: lint=${{ needs.lint.result }}"
+            exit 1
+          fi
           if [ "${{ needs.ci.result }}" != "success" ]; then
             echo "CI failed: ci=${{ needs.ci.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.deadlock.result }}" != "success" ]; then
+            echo "CI failed: deadlock=${{ needs.deadlock.result }}"
             exit 1
           fi
           CROSS_RESULT="${{ needs.cross-lint.result }}"
