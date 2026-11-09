@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package chimeraos
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -197,4 +198,14 @@ func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
 
 	p := NewPlatform()
 	assert.NoError(t, p.ReturnToMenu())
+}
+
+func TestPlatformSteamLaunchEnvUsesSessionDirs(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	env := NewPlatform().steamLaunchEnv()
+	assert.Contains(t, env, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"))
 }

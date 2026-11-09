@@ -139,11 +139,17 @@ func (p *Platform) LaunchMedia(
 	return p.Base.LaunchMedia(cfg, path, launcher, db, opts, p)
 }
 
+// steamLaunchEnv gives Steam launches the user session's environment,
+// including the gamescope DISPLAY in Gaming Mode, which the service unit lacks.
+func (p *Platform) steamLaunchEnv() []string {
+	return linuxbase.DesktopSessionEnvOverrides(p.gameMode)
+}
+
 // Launchers returns the available launchers for Bazzite.
 // Bazzite supports Steam (native/Flatpak), Lutris (pre-installed),
 // Heroic (Flatpak via Bazaar), WebBrowser, and Generic scripts.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	steamLauncher := steam.NewSteamLauncher(steam.DefaultBazziteOptions())
+	steamLauncher := steam.NewSteamLauncherWithEnv(steam.DefaultBazziteOptions(), p.steamLaunchEnv)
 	steamLauncher.Lifecycle = platforms.LifecycleExternal
 	ls := make([]platforms.Launcher, 0, 64)
 	ls = append(ls, []platforms.Launcher{

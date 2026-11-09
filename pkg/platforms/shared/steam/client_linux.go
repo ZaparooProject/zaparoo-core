@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/rs/zerolog/log"
 )
 
@@ -121,7 +122,14 @@ func (c *Client) openURL(steamURL string) error {
 	}
 
 	log.Debug().Str("cmd", cmdName).Str("url", steamURL).Msg("launching Steam game")
-	if err := c.cmd.Start(context.Background(), cmdName, steamURL); err != nil {
+	var err error
+	if c.launchEnv != nil {
+		opts := command.StartOptions{Env: c.launchEnv()}
+		err = c.cmd.StartWithOptions(context.Background(), opts, cmdName, steamURL)
+	} else {
+		err = c.cmd.Start(context.Background(), cmdName, steamURL)
+	}
+	if err != nil {
 		return fmt.Errorf("failed to launch Steam: %w", err)
 	}
 	return nil

@@ -187,7 +187,7 @@ detect_linux_distro() {
         return
     fi
 
-    # Return the ID (e.g., "ubuntu", "fedora", "steamos", "chimeraos")
+    # Return the ID (e.g., "ubuntu", "fedora", "steamos", "bazzite", "chimeraos")
     echo "${ID:-generic}"
 }
 
@@ -1202,8 +1202,9 @@ uninstall_steamos() {
 # ============================================================================
 
 install_linux_generic() {
-    local distro
+    local distro build
     distro="$(detect_linux_distro)"
+    build="linux"
 
     info "Detected Linux distribution: ${distro}"
 
@@ -1230,9 +1231,10 @@ install_linux_generic() {
             install_steamos_transaction
             return 0
             ;;
-        chimeraos)
-            warn "Immutable filesystem detected (chimeraos)"
+        bazzite|chimeraos)
+            warn "Immutable filesystem detected (${distro})"
             warn "Installation will be user-local only"
+            build="${distro}"
             ;;
         recalbox|retropie)
             warn "Embedded system detected (${distro})"
@@ -1240,8 +1242,7 @@ install_linux_generic() {
             ;;
     esac
 
-    # Download and extract
-    download_and_extract "linux"
+    download_and_extract "${build}"
 
     # Install application (always)
     install_application

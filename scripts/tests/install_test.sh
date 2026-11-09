@@ -314,6 +314,31 @@ test_steamos_asset_name() {
     pass "select SteamOS release asset"
 }
 
+test_linux_distro_asset_name() {
+    local test_distro expected output
+    for test_distro in bazzite chimeraos ubuntu fedora; do
+        case "${test_distro}" in
+            bazzite|chimeraos) expected="${test_distro}" ;;
+            *) expected="linux" ;;
+        esac
+        output="$(
+            VERSION="2.21.0"
+            VERSION_TAG="v2.21.0"
+            DRY_RUN=true
+            detect_linux_distro() { echo "${test_distro}"; }
+            detect_arch() { echo amd64; }
+            install_application() { :; }
+            install_service() { :; }
+            install_desktop() { :; }
+            install_hardware() { :; }
+            install_linux_generic
+        )"
+        assert_contains "${output}" "zaparoo-${expected}_amd64-2.21.0.tar.gz" \
+            "${test_distro} release asset"
+    done
+    pass "select distro-specific Linux release asset"
+}
+
 test_semver_comparison() {
     assert_equal "0" "$(semver_compare 2.17.0 2.17.0)" "equal stable versions"
     assert_equal "-1" "$(semver_compare 2.16.9 2.17.0)" "older stable version"
@@ -663,6 +688,7 @@ test_verify_core_api_still_gives_up_on_an_unusable_service
 test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
+test_linux_distro_asset_name
 test_semver_comparison
 test_openssl_version_requirement
 test_decky_release_selection

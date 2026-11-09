@@ -36,9 +36,13 @@ import (
 
 // Client implements SteamClient for Steam game launching and scanning.
 type Client struct {
-	cmd  command.Executor
-	fs   afero.Fs
-	opts Options
+	cmd command.Executor
+	fs  afero.Fs
+	// launchEnv returns KEY=value overrides for the launch command, such as
+	// the active session's DISPLAY when Core runs as a systemd user service.
+	// Only used on Linux.
+	launchEnv func() []string
+	opts      Options
 }
 
 // NewClient creates a new Steam client with the given options.

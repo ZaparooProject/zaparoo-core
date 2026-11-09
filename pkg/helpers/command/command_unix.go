@@ -27,14 +27,16 @@ import (
 )
 
 // StartWithOptions starts a command with platform-specific options on Unix.
-// HideWindow option is ignored on non-Windows platforms.
+// HideWindow is ignored on non-Windows platforms.
 //
 //nolint:wrapcheck // Wrapping exec errors loses important context
 func (*RealExecutor) StartWithOptions(
 	ctx context.Context,
-	_ StartOptions,
+	opts StartOptions,
 	name string,
 	args ...string,
 ) error {
-	return exec.CommandContext(ctx, name, args...).Start() //nolint:gosec // G204: command executor's purpose
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: command executor's purpose
+	applyEnv(cmd, opts.Env)
+	return cmd.Start()
 }
