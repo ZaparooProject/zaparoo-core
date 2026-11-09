@@ -20,7 +20,13 @@
 package audio
 
 import (
+	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -39,6 +45,7 @@ type fakeLive struct {
 	ended     bool
 	suspended int
 	resumed   int
+	dryReads  int
 	mu        syncutil.Mutex
 }
 
@@ -75,13 +82,28 @@ func (f *fakeLive) Err() error {
 	return f.err
 }
 
-func (*fakeLive) Len() int        { return -1 }
-func (*fakeLive) Position() int   { return 0 }
-func (*fakeLive) Seek(int) error  { return ErrLiveStream }
-func (*fakeLive) Close() error    { return nil }
-func (f *fakeLive) Buffered() int { f.mu.Lock(); defer f.mu.Unlock(); return f.frames }
-func (f *fakeLive) Suspend()      { f.mu.Lock(); f.suspended++; f.mu.Unlock() }
-func (f *fakeLive) Resume()       { f.mu.Lock(); f.resumed++; f.mu.Unlock() }
+func (*fakeLive) Len() int       { return -1 }
+func (*fakeLive) Position() int  { return 0 }
+func (*fakeLive) Seek(int) error { return ErrLiveStream }
+func (*fakeLive) Close() error   { return nil }
+func (f *fakeLive) Buffered() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.frames == 0 {
+		f.dryReads++
+	}
+	return f.frames
+}
+func (f *fakeLive) Suspend() { f.mu.Lock(); f.suspended++; f.mu.Unlock() }
+func (f *fakeLive) Resume()  { f.mu.Lock(); f.resumed++; f.mu.Unlock() }
+
+// dry reports how many times the player found nothing buffered.
+func (f *fakeLive) dry() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dryReads
+}
+
 func (f *fakeLive) counts() (suspended, resumed int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -163,4 +185,69 @@ func TestLiveSource_StartAtIgnored(t *testing.T) {
 	s := newLiveSource(t, &fakeLive{}, targetSampleRate)
 	s.startAt(time.Minute, 0)
 	assert.False(t, s.seekPending.Load(), "a live stream never starts part way in")
+}
+
+// A station's first title can arrive while its stream is still opening,
+// before Play knows the source. It must still become the track's title.
+func TestLongformPlaybackManager_PlayKeepsTitleFromOpening(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	tone, err := os.ReadFile(filepath.Join("nativedec", "testdata", "tone.mp3"))
+	require.NoError(t, err)
+	const metaint = 16
+	// A metadata block is a length in 16-byte units, then the text padded
+	// to it: this text takes two units.
+	meta := "StreamTitle='Band - Opening';"
+	block := append([]byte{2}, meta...)
+	block = append(block, make([]byte, 2*16-len(meta))...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("icy-metaint", strconv.Itoa(metaint))
+		var body bytes.Buffer
+		for off := 0; off < len(tone); off += metaint {
+			body.Write(tone[off:min(off+metaint, len(tone))])
+			if off+metaint <= len(tone) {
+				body.Write(block)
+				block = []byte{0}
+			}
+		}
+		_, _ = w.Write(body.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+
+	m := NewLongformPlaybackManager(false)
+	require.NoError(t, m.Play(mediaslot.Background, srv.URL+"/stream", PlaybackOptions{Volume: 1}))
+	t.Cleanup(func() { _ = m.Stop(mediaslot.Background) })
+
+	got := m.State(mediaslot.Background).Meta
+	require.NotNil(t, got)
+	assert.Equal(t, "Opening", got.Title)
+	assert.Equal(t, "Band", got.Artist)
+}
+
+// A station whose buffer runs dry while the normalizer is still measuring
+// the start keeps holding that audio, so the gain is not settled on a
+// fraction of a second.
+func TestLiveSource_DryBufferKeepsNormalizerWarming(t *testing.T) {
+	t.Parallel()
+
+	live := &fakeLive{}
+	live.add(normWarmupFrames / 4)
+	s := newLiveSource(t, live, targetSampleRate)
+	s.normalize = func() bool { return true }
+	s.startPrefetch()
+	t.Cleanup(s.stopAndDeregister)
+
+	// Two dry reads mean the loop has handled the first one and come back.
+	require.Eventually(t, func() bool { return live.dry() >= 2 }, 5*time.Second, time.Millisecond)
+	assert.Zero(t, s.writePos.Load(), "audio still being measured is held")
+
+	live.add(normWarmupFrames)
+	require.Eventually(t, func() bool {
+		return s.writePos.Load() >= normWarmupFrames
+	}, 5*time.Second, time.Millisecond, "a full measurement is published")
 }

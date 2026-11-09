@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -406,4 +407,35 @@ func TestHLSFetchLimits(t *testing.T) {
 	b, _, err = src.fetch(ctx, h.URL+"/norange", &hlsByteRange{offset: 3, length: 4}, 1000, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "3456", string(b))
+}
+
+// A variant that stops loading is chosen again from its master playlist,
+// rather than retried until the stream gives up.
+func TestHLSFailedVariantReresolvesMaster(t *testing.T) {
+	t.Parallel()
+	h := newHLSServer(t)
+	h.file("/master.m3u8", "application/vnd.apple.mpegurl", []byte(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2"
+mid.m3u8
+`))
+	h.file("/mid.m3u8", "application/vnd.apple.mpegurl", []byte(vodPlaylist("", "a0.aac")))
+	u, err := url.Parse(h.URL + "/master.m3u8")
+	require.NoError(t, err)
+	src := newHLSSource(Options{HTTPClient: h.Client()}, u, nil)
+
+	_, _, err = src.loadMedia(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, src.mediaURL)
+	assert.Equal(t, "/mid.m3u8", src.mediaURL.Path)
+
+	gone, err := url.Parse(h.URL + "/expired.m3u8")
+	require.NoError(t, err)
+	src.mediaURL = gone
+	_, _, err = src.loadMedia(context.Background())
+	require.Error(t, err)
+
+	_, _, err = src.loadMedia(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, h.count("/master.m3u8"), "the master is asked again")
+	assert.Equal(t, "/mid.m3u8", src.mediaURL.Path)
 }

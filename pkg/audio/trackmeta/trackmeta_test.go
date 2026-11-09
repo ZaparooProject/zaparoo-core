@@ -354,6 +354,14 @@ func TestReplayGain(t *testing.T) {
 			},
 			want: -4.1, ok: true,
 		},
+		{
+			name: "invalid frame before a valid one",
+			raw: map[string]any{
+				"TXXX":   &tag.Comm{Description: "REPLAYGAIN_TRACK_GAIN", Text: "loud"},
+				"TXXX_0": &tag.Comm{Description: "REPLAYGAIN_TRACK_GAIN", Text: "-4.10 dB"},
+			},
+			want: -4.1, ok: true,
+		},
 		{name: "album gain only", raw: map[string]any{"replaygain_album_gain": "-6.20 dB"}},
 		{name: "garbage", raw: map[string]any{"replaygain_track_gain": "loud"}},
 		{name: "out of range", raw: map[string]any{"replaygain_track_gain": "-900 dB"}},

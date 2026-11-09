@@ -169,7 +169,11 @@ func newStream(src source, opts Options) *Stream {
 func resolveSource(ctx context.Context, p *Probe, opts Options, depth int) (source, string, error) {
 	switch p.Kind() {
 	case KindStream:
-		return &icySource{opts: opts, url: p.URL(), probe: p}, "", nil
+		reconnectURL := p.requested
+		if reconnectURL == "" {
+			reconnectURL = p.URL()
+		}
+		return &icySource{opts: opts, url: reconnectURL, probe: p}, "", nil
 	case KindHLS:
 		body, u := p.body, p.url
 		p.Close()
@@ -233,10 +237,17 @@ func (s *Stream) loop() {
 	}
 	attempt := 0
 	fresh := false
+	var lastGen uint64
 	for {
 		gen, ok := s.waitResumed()
 		if !ok {
 			return
+		}
+		// A pause and resume while waiting to reconnect still joins the
+		// stream at the live point.
+		if gen != lastGen {
+			fresh = true
+			lastGen = gen
 		}
 		connCtx, cancel := context.WithCancelCause(s.ctx)
 		s.mu.Lock()

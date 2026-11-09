@@ -66,7 +66,8 @@ func isAudioPlaylistExt(path string) bool {
 // playlist file a system's launcher takes, such as a multi-disc .m3u in a
 // console's folder, belongs to that launcher.
 func isAudioPlaylistTarget(pl platforms.Platform, env *platforms.CmdEnv, target *launchTarget) bool {
-	if target.audioStream != nil || !isAudioPlaylistExt(target.path) {
+	// A playlist URL is resolved by native audio, not read from disk.
+	if target.audioStream != nil || audio.IsStreamURL(target.path) || !isAudioPlaylistExt(target.path) {
 		return false
 	}
 	if target.systemID != "" {
@@ -193,9 +194,9 @@ func startAudioPlaylistFile(env *platforms.CmdEnv, path string) (platforms.CmdRe
 		return platforms.CmdResult{}, err
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
+	slot, err := commandSlot(env)
 	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("normalize media slot: %w", err)
+		return platforms.CmdResult{}, err
 	}
 	pls := playlists.NewPlaylist(path, name, items)
 	pls.Slot = slot

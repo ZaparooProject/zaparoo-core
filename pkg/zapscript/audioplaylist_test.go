@@ -115,6 +115,22 @@ func TestReadPlsFile_StationPlaylist(t *testing.T) {
 	}, items)
 }
 
+// A pls saved with a byte order mark, a capitalised header or lowercase
+// keys still reads.
+func TestReadPlsFile_HeaderAndKeyVariants(t *testing.T) {
+	t.Parallel()
+
+	path := writePlaylistFile(t, t.TempDir(), "station.pls", "\xef\xbb\xbf[Playlist]\r\n"+
+		"file1=https://radio.example/stream\r\n"+
+		"title1=Example Radio\r\n")
+
+	items, err := readPlaylistFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []playlists.PlaylistItem{
+		{Name: "Example Radio", ZapScript: literalLaunch("https://radio.example/stream")},
+	}, items)
+}
+
 // A playlist entry runs as ZapScript, so a URL entry must parse as a launch
 // of the whole URL, query included, to reach the stream and ZapLink checks.
 func TestLiteralLaunchParsesAsLaunchOfTheLocation(t *testing.T) {
@@ -162,6 +178,10 @@ func TestIsAudioPlaylistTarget(t *testing.T) {
 		},
 		{name: "disc set m3u", target: launchTarget{path: "/games/PSX/a.m3u", systemID: systemdefs.SystemPSX}},
 		{name: "a track", target: launchTarget{path: "/music/a.mp3", systemID: systemdefs.SystemAudio}},
+		{
+			name:   "playlist url",
+			target: launchTarget{path: "https://radio.example/listen.pls", systemID: systemdefs.SystemAudio},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -223,6 +243,30 @@ func TestRunCommand_LaunchingAnAudioPlaylistFilePlaysItAsAPlaylist(t *testing.T)
 			}, pls.Items)
 		})
 	}
+}
+
+// A playlist file launched by an item of a background playlist plays in the
+// background too, as any other item of that playlist would.
+func TestRunCommand_AudioPlaylistFileFollowsItsPlaylistSlot(t *testing.T) {
+	t.Parallel()
+
+	path := writePlaylistFile(t, t.TempDir(), "Station.pls",
+		"[playlist]\nFile1=http://radio.example/stream\nNumberOfEntries=1\n")
+	script, err := zapscript.NewParser("**launch:" + path + "?system=audio").ParseScript()
+	require.NoError(t, err)
+
+	background := playlists.NewPlaylist("bg", "Background", []playlists.PlaylistItem{{ZapScript: path}})
+	background.Slot = mediaslot.Background
+	queue := make(chan *playlists.Playlist, 1)
+	_, err = RunCommand(
+		t.Context(), newPlaylistTestPlatform(), &config.Instance{},
+		playlists.PlaylistController{Queue: queue, Background: background, Current: background},
+		tokens.Token{Source: tokens.SourcePlaylist}, script.Cmds[0], 1, 0, nil,
+		&RunCommandOptions{LauncherManager: state.NewLauncherManager()}, &zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	pls := <-queue
+	assert.Equal(t, mediaslot.Background, pls.Slot)
 }
 
 // A playlist file with no system named is a playlist when native audio is

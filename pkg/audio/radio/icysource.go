@@ -81,6 +81,11 @@ func (c *icySource) run(ctx context.Context, sk *sink, _ bool) error {
 	defer reqCancel()
 	defer func() { _ = resp.Body.Close() }()
 
+	// A server that stops sending, even before the first audio, drops the
+	// connection rather than hanging the stream.
+	idle := newIdleReader(resp.Body, c.opts.timing.idle, func() { cancel(errIdle) })
+	defer idle.stop()
+
 	codec := codecNone
 	if v := resp.Header.Get("Content-Type"); v != "" {
 		mt, _, err := mime.ParseMediaType(v)
@@ -92,11 +97,14 @@ func (c *icySource) run(ctx context.Context, sk *sink, _ bool) error {
 	if codec == codecNone {
 		if head == nil {
 			head = make([]byte, sniffBytes)
-			n, _ := readAtLeast(resp.Body, head)
+			n, _ := readAtLeast(idle, head)
 			head = head[:n]
 		}
 		codec = sniffCodec(head)
 		if codec == codecNone {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause //nolint:wrapcheck // the stream's own stop signal
+			}
 			return fmt.Errorf("radio: %s no longer serves audio", c.url)
 		}
 	}
@@ -104,9 +112,9 @@ func (c *icySource) run(ctx context.Context, sk *sink, _ bool) error {
 		sk.s.setName(name)
 	}
 
-	var body io.Reader = resp.Body
+	var body io.Reader = idle
 	if len(head) > 0 {
-		body = io.MultiReader(bytes.NewReader(head), resp.Body)
+		body = io.MultiReader(bytes.NewReader(head), idle)
 	}
 	body = newICYReader(body, parseMetaint(resp.Header.Get("icy-metaint")), func(t string) {
 		if c.opts.OnMeta != nil {
@@ -114,8 +122,6 @@ func (c *icySource) run(ctx context.Context, sk *sink, _ bool) error {
 			c.opts.OnMeta(title, artist)
 		}
 	})
-	idle := newIdleReader(body, c.opts.timing.idle, func() { cancel(errIdle) })
-	defer idle.stop()
 
 	log.Debug().Str("url", c.url).Int("codec", int(codec)).Bool("reused", fromProbe).Msg("radio: stream connected")
 	if c.buf == nil {
@@ -123,7 +129,7 @@ func (c *icySource) run(ctx context.Context, sk *sink, _ bool) error {
 	}
 	got := 0
 	for {
-		n, err := idle.Read(c.buf)
+		n, err := body.Read(c.buf)
 		if n > 0 {
 			got += n
 			if werr := sk.write(ctx, codec, c.buf[:n]); werr != nil {

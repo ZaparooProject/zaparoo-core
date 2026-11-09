@@ -32,9 +32,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -655,10 +657,13 @@ const maxReplayGainDB = 60
 
 // replayGain finds the track gain in raw tags: a Vorbis comment
 // (replaygain_track_gain) or an ID3v2 TXXX frame described
-// REPLAYGAIN_TRACK_GAIN. The value reads like "-6.20 dB".
+// REPLAYGAIN_TRACK_GAIN. The value reads like "-6.20 dB". A file with
+// several takes the first valid one in key order, so the answer does not
+// change between reads.
 func replayGain(raw map[string]any) (float64, bool) {
-	for key, v := range raw {
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
 		var text string
+		v := raw[key]
 		switch val := v.(type) {
 		case string:
 			if !strings.EqualFold(key, "replaygain_track_gain") {
@@ -673,7 +678,9 @@ func replayGain(raw map[string]any) (float64, bool) {
 		default:
 			continue
 		}
-		return parseGain(text)
+		if gain, ok := parseGain(text); ok {
+			return gain, true
+		}
 	}
 	return 0, false
 }

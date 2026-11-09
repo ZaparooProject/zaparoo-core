@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,8 +86,8 @@ var (
 )
 
 var (
-	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
-	plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
+	plsFileRe  = regexp.MustCompile(`(?i)^File([1-9]\d*)\s*=\s*(.*)$`)
+	plsTitleRe = regexp.MustCompile(`(?i)^Title([1-9]\d*)\s*=\s*(.*)$`)
 	// plsKnownKeyRe matches the pls keys that carry nothing a playlist uses.
 	plsKnownKeyRe = regexp.MustCompile(`(?i)^(NumberOfEntries|Version|Length[1-9]\d*)\s*=`)
 )
@@ -274,6 +275,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 		return nil, err
 	}
 
+	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	lines := strings.Split(string(content), "\n")
 	filteredLines := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -300,7 +302,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 
 	for _, line := range lines {
 		if !hasHeader {
-			if line == plsHeader {
+			if strings.EqualFold(line, plsHeader) {
 				hasHeader = true
 			}
 			continue

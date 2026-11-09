@@ -336,27 +336,24 @@ static int aac_step(nd_stream* s)
 
 /* ---- Ogg Vorbis ---- */
 
-static unsigned ogg_crc_table[256];
-static int ogg_crc_ready;
+/* CRC-32 of Ogg pages (poly 0x04C11DB7, MSB first), a nibble at a time. The
+   table is constant so decoders on different threads share it safely. */
+static const unsigned ogg_crc_nibble[16] = {
+	0x00000000u, 0x04C11DB7u, 0x09823B6Eu, 0x0D4326D9u,
+	0x130476DCu, 0x17C56B6Bu, 0x1A864DB2u, 0x1E475005u,
+	0x2608EDB8u, 0x22C9F00Fu, 0x2F8AD6D6u, 0x2B4BCB61u,
+	0x350C9B64u, 0x31CD86D3u, 0x3C8EA00Au, 0x384FBDBDu,
+};
 
 static unsigned ogg_crc(const unsigned char* p, size_t n)
 {
 	unsigned crc = 0;
 	size_t i;
-	if (!ogg_crc_ready) {
-		unsigned k, j, r;
-		for (k = 0; k < 256; k++) {
-			r = k << 24;
-			for (j = 0; j < 8; j++) {
-				r = (r & 0x80000000u) ? (r << 1) ^ 0x04C11DB7u : r << 1;
-			}
-			ogg_crc_table[k] = r;
-		}
-		ogg_crc_ready = 1;
-	}
 	for (i = 0; i < n; i++) {
 		unsigned char b = (i >= 22 && i < 26) ? 0 : p[i];
-		crc = (crc << 8) ^ ogg_crc_table[((crc >> 24) ^ b) & 0xFF];
+		crc ^= (unsigned)b << 24;
+		crc = (crc << 4) ^ ogg_crc_nibble[crc >> 28];
+		crc = (crc << 4) ^ ogg_crc_nibble[crc >> 28];
 	}
 	return crc;
 }

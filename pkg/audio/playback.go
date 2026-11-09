@@ -218,13 +218,25 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	}
 
 	// A live stream's title changes as it plays. The source is not known
-	// until it opens, so the callback looks it up.
-	var srcRef atomic.Pointer[streamingSource]
+	// until it opens, so the callback looks it up, and a title that arrives
+	// while it is still opening is held for it.
+	var (
+		metaMu      syncutil.Mutex
+		srcRef      *streamingSource
+		pendingMeta *trackmeta.Meta
+	)
 	onMeta := func(meta *trackmeta.Meta) {
-		live := srcRef.Load()
-		if live == nil || nonEmptyMeta(meta) == nil {
+		if nonEmptyMeta(meta) == nil {
 			return
 		}
+		metaMu.Lock()
+		live := srcRef
+		if live == nil {
+			pendingMeta = meta
+			metaMu.Unlock()
+			return
+		}
+		metaMu.Unlock()
 		live.meta.Store(meta)
 		m.mu.Lock()
 		current := m.getSourceLocked(key) == live
@@ -241,7 +253,12 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
 	}
-	srcRef.Store(src)
+	metaMu.Lock()
+	srcRef = src
+	if pendingMeta != nil {
+		src.meta.Store(pendingMeta)
+	}
+	metaMu.Unlock()
 	if fn := m.normalize.Load(); fn != nil {
 		src.normalize = *fn
 	}
@@ -787,7 +804,12 @@ prefetchLoop:
 			space := len(s.ring) - boundedFrameCount(buffered, len(s.ring))
 			n := s.liveChunk(min(space, len(s.chunk)))
 			if n == 0 {
-				pending = s.publishPending(pending)
+				// A live stream that has run dry for now keeps holding
+				// what the normalizer is still measuring, so its gain is
+				// not settled on a fraction of a second of audio.
+				if !s.normWarming() {
+					pending = s.publishPending(pending)
+				}
 				break
 			}
 			written, ok := s.streamer.Stream(s.chunk[:n])
@@ -808,7 +830,9 @@ prefetchLoop:
 			}
 			if ok && written == 0 {
 				// Nothing ready yet; wait for the next wake-up rather than spin.
-				pending = s.publishPending(pending)
+				if !s.normWarming() {
+					pending = s.publishPending(pending)
+				}
 				break
 			}
 			if !ok {
@@ -867,6 +891,12 @@ func (s *streamingSource) levelChunk(frames [][2]float64) bool {
 	s.norm.observe(frames)
 	s.norm.apply(frames, true)
 	return false
+}
+
+// normWarming reports whether the normalizer is still measuring the start
+// of the track, holding the frames decoded so far.
+func (s *streamingSource) normWarming() bool {
+	return s.norm != nil && !s.norm.settled
 }
 
 // publishPending levels the frames held back while the normalizer

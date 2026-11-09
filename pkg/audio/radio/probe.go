@@ -45,10 +45,14 @@ const codecNone nativedec.Kind = -1
 // Probe is a URL opened and classified by ProbeURL. A stream probe holds
 // its response open so Open can play from it without connecting again.
 type Probe struct {
-	resp        *http.Response
-	cancel      context.CancelFunc
-	url         *url.URL
-	opened      time.Time
+	resp   *http.Response
+	cancel context.CancelFunc
+	url    *url.URL
+	opened time.Time
+	// requested is the URL asked for, before redirects: a reconnect asks
+	// it again, so a station that redirects to a short-lived URL still
+	// gets a fresh one.
+	requested   string
 	contentType string
 	name        string
 	head        []byte // bytes already read from resp.Body
@@ -80,12 +84,13 @@ func ProbeURL(ctx context.Context, c *http.Client, rawURL string) (*Probe, error
 		return nil, err
 	}
 	p := &Probe{
-		resp:   resp,
-		cancel: cancel,
-		url:    resp.Request.URL,
-		opened: time.Now(),
-		codec:  codecNone,
-		name:   sanitizeText(decodeText([]byte(resp.Header.Get("icy-name")))),
+		resp:      resp,
+		cancel:    cancel,
+		url:       resp.Request.URL,
+		requested: u.String(),
+		opened:    time.Now(),
+		codec:     codecNone,
+		name:      sanitizeText(decodeText([]byte(resp.Header.Get("icy-name")))),
 	}
 	// Sniffing reads the body, which outlives ctx, so watch ctx again.
 	stop := context.AfterFunc(ctx, cancel)

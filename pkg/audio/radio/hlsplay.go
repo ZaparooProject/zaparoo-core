@@ -205,6 +205,11 @@ func (h *hlsSource) loadMedia(ctx context.Context) (*hlsPlaylist, uint64, error)
 	switch {
 	case h.mediaURL != nil:
 		body, base, err = h.fetch(ctx, h.mediaURL.String(), nil, maxPlaylistBytes, playlistTimeout)
+		if err != nil {
+			// The variant may have moved or expired; the next load asks
+			// the playlist it came from again.
+			h.mediaURL = nil
+		}
 	case h.body != nil:
 		body, base = h.body, h.url
 		h.body = nil

@@ -22,6 +22,7 @@ package radio
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,8 @@ type icyServer struct {
 	conns      atomic.Int32
 	// failAfterFirst answers every later request with 503.
 	failAfterFirst bool
+	// stallLater applies stallAfter only to the connections after the first.
+	stallLater bool
 }
 
 func (s *icyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +82,9 @@ func (s *icyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = s.limitFirst
 	}
 	stall := s.stallAfter
+	if s.stallLater && n == 1 {
+		stall = 0
+	}
 	sent, sinceMeta, block := 0, 0, 0
 	for sent < limit {
 		chunk := s.audio[sent%len(s.audio):]
@@ -464,6 +470,30 @@ func TestIdleConnectionReconnects(t *testing.T) {
 	require.NoError(t, s.Err())
 }
 
+// A reconnect to a server that sends a few bytes and stalls, before the
+// codec can be told from them, is dropped as idle rather than hanging.
+func TestIdleBeforeSniffReconnects(t *testing.T) {
+	t.Parallel()
+	audio := fixture(t, "tone.mp3")
+	srv := &icyServer{
+		contentType: "application/octet-stream",
+		audio:       audio,
+		limitFirst:  2 * len(audio),
+		stallAfter:  sniffBytes / 4,
+		stallLater:  true,
+	}
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	tm := fastTiming()
+	tm.idle = 100 * time.Millisecond
+	s := openURL(t, ts.URL, Options{timing: tm})
+	require.Eventually(t, func() bool {
+		buf := make([][2]float64, 4096)
+		_, _ = s.Stream(buf)
+		return srv.conns.Load() >= 3
+	}, 10*time.Second, time.Millisecond, "the stalled reconnect is dropped and tried again")
+}
+
 func TestCloseWhileBlocked(t *testing.T) {
 	audio := fixture(t, "tone.mp3")
 	srv := &icyServer{contentType: "audio/mpeg", audio: audio, stallAfter: 3 * len(audio)}
@@ -506,4 +536,68 @@ func TestSuspendResume(t *testing.T) {
 	assert.GreaterOrEqual(t, got, 44100)
 	assert.Equal(t, int32(2), srv.conns.Load())
 	require.NoError(t, s.Err())
+}
+
+// freshLog is a source that records whether each connection was asked to
+// join at the live point. The first connection drops; later ones play
+// until stopped.
+type freshLog struct {
+	runs  chan bool
+	calls atomic.Int32
+}
+
+func (f *freshLog) run(ctx context.Context, _ *sink, fresh bool) error {
+	f.runs <- fresh
+	if f.calls.Add(1) == 1 {
+		return errors.New("dropped")
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A pause and resume while the stream waits to reconnect still joins the
+// stream at the live point, rather than where it dropped.
+func TestResumeDuringBackoffReconnectsFresh(t *testing.T) {
+	t.Parallel()
+	src := &freshLog{runs: make(chan bool, 4)}
+	tm := fastTiming()
+	tm.retry = []time.Duration{200 * time.Millisecond}
+	s := newStream(src, Options{timing: tm})
+	go s.loop()
+	t.Cleanup(func() { _ = s.Close() })
+
+	assert.False(t, <-src.runs, "the first connection is not a rejoin")
+	s.Suspend()
+	s.Resume()
+	select {
+	case fresh := <-src.runs:
+		assert.True(t, fresh, "the reconnect after a resume joins at the live point")
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reconnect")
+	}
+}
+
+// A station that redirects to a short-lived URL is asked again on a
+// reconnect, so the reconnect gets a fresh redirect.
+func TestReconnectFollowsRedirectAgain(t *testing.T) {
+	t.Parallel()
+	audio := fixture(t, "tone.mp3")
+	srv := &icyServer{contentType: "audio/mpeg", audio: audio, limitFirst: 2 * len(audio)}
+	var starts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		n := starts.Add(1)
+		http.Redirect(w, r, "/live/"+strconv.Itoa(int(n)), http.StatusFound)
+	})
+	mux.Handle("/live/", srv)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	s := openURL(t, ts.URL+"/start", Options{timing: fastTiming()})
+	require.Eventually(t, func() bool {
+		buf := make([][2]float64, 4096)
+		_, _ = s.Stream(buf)
+		return srv.conns.Load() >= 2
+	}, 10*time.Second, time.Millisecond)
+	assert.Equal(t, int32(2), starts.Load(), "the reconnect starts from the requested URL")
 }

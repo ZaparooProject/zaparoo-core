@@ -657,7 +657,7 @@ func RunCommand(
 			newCmds = append(newCmds, script.Cmds[1:]...)
 		}
 
-		cmd = script.Cmds[0]
+		cmd = foldURLQuery(script.Cmds[0])
 		// A link the account vouched for as the user's own card or deck runs
 		// trusted, the way a card the user wrote does; any other link body
 		// runs untrusted. The answer only ever keeps trust, never restores
