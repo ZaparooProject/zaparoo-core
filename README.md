@@ -133,12 +133,21 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/turnercore">
+                    <img src="https://avatars.githubusercontent.com/u/85597948?v=4" width="100;" alt="turnercore"/>
+                    <br />
+                    <sub><b>Turner Monroe</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/treyturner">
                     <img src="https://avatars.githubusercontent.com/u/1878152?v=4" width="100;" alt="treyturner"/>
                     <br />
                     <sub><b>Trey Turner</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/sreuter">
                     <img src="https://avatars.githubusercontent.com/u/550246?v=4" width="100;" alt="sreuter"/>
@@ -146,8 +155,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Sascha Reuter</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/mogorman">
                     <img src="https://avatars.githubusercontent.com/u/64710?v=4" width="100;" alt="mogorman"/>
@@ -183,6 +190,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Emashzed</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/philips">
                     <img src="https://avatars.githubusercontent.com/u/33544?v=4" width="100;" alt="philips"/>
@@ -190,8 +199,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Brandon Philips</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/AndreaBogazzi">
                     <img src="https://avatars.githubusercontent.com/u/44466913?v=4" width="100;" alt="AndreaBogazzi"/>
