@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -335,7 +336,16 @@ func TestImageDirSettingValidation(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 
 	root := filepath.VolumeName(dataDir) + string(filepath.Separator)
-	for _, dir := range []string{root, file, filepath.Join(file, "images"), filepath.Join(file, "a", "b")} {
+	refused := []string{root, file, filepath.Join(file, "images"), filepath.Join(file, "a", "b")}
+	// A link to nothing cannot have the folder created through it. Windows
+	// only allows links with a privilege CI may not hold.
+	broken := filepath.Join(t.TempDir(), "broken")
+	if linkErr := os.Symlink(filepath.Join(t.TempDir(), "gone"), broken); linkErr == nil {
+		refused = append(refused, filepath.Join(broken, "images"))
+	} else if runtime.GOOS != "windows" {
+		require.NoError(t, linkErr)
+	}
+	for _, dir := range refused {
 		_, updateErr := HandleSettingsUpdate(
 			imageSettingsEnv(t, pl, cfg, models.UpdateSettingsParams{MediaImageDir: &dir}))
 		require.Error(t, updateErr, dir)

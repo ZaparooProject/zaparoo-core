@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -527,8 +528,8 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 // validateMediaImageDir refuses an image folder Core could not use: a
 // filesystem root, whose thumbs folder Core would claim, a path that exists
-// and is not a directory, or one Core cannot check. A folder that does not exist yet is fine;
-// Core creates it on first use.
+// and is not a directory, or one Core cannot check. A folder that does not
+// exist yet is fine when it can be created; Core creates it on first use.
 func validateMediaImageDir(dir, dataDir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return nil
@@ -539,7 +540,7 @@ func validateMediaImageDir(dir, dataDir string) error {
 	}
 	info, err := os.Stat(resolved)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 		return validateImageDirParent(resolved, dir)
 	case err != nil:
 		return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
@@ -549,24 +550,27 @@ func validateMediaImageDir(dir, dataDir string) error {
 	return nil
 }
 
-// validateImageDirParent checks the nearest existing folder above a folder
-// that does not exist yet. Windows reports a path under a file as not found
-// rather than not a directory, so the ancestor is what refuses it.
+// validateImageDirParent checks the nearest existing path above a folder that
+// does not exist yet, which must be a folder for the image folder to be
+// created. A path below a file reports not a directory on Unix but not found
+// on Windows, so the ancestor is what refuses it on both. A broken link on
+// the way, or no existing ancestor at all, such as a missing drive or share,
+// cannot be created through.
 func validateImageDirParent(resolved, dir string) error {
 	for parent := filepath.Dir(resolved); ; parent = filepath.Dir(parent) {
 		info, err := os.Stat(parent)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			if filepath.Dir(parent) == parent {
-				return nil
+		if err == nil {
+			if !info.IsDir() {
+				return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
 			}
-			continue
-		case err != nil:
-			return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
-		case !info.IsDir():
-			return models.ClientErrf("mediaImageDir is not a folder: %s", dir)
+			return nil
 		}
-		return nil
+		if _, lerr := os.Lstat(parent); lerr == nil {
+			return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
+		}
+		if filepath.Dir(parent) == parent {
+			return models.ClientErrf("mediaImageDir cannot be used: %s", dir)
+		}
 	}
 }
 
