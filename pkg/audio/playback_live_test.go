@@ -341,7 +341,7 @@ func TestSplitTrackPath(t *testing.T) {
 
 	file, track, ok := SplitTrackPath("/Audio/game.nsf/5")
 	require.True(t, ok)
-	assert.Equal(t, "/Audio/game.nsf", file)
+	assert.Equal(t, filepath.FromSlash("/Audio/game.nsf"), file)
 	assert.Equal(t, 4, track)
 
 	for _, path := range []string{
