@@ -21,6 +21,10 @@ package command
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -100,6 +104,31 @@ func TestRealExecutor_StartWithOptions(t *testing.T) {
 		err := executor.StartWithOptions(context.Background(), opts, "true")
 
 		assert.NoError(t, err)
+	})
+
+	t.Run("env_overrides_inherited_environment", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" {
+			t.Skip("uses a POSIX shell")
+		}
+
+		out := filepath.Join(t.TempDir(), "env")
+		cmd := exec.CommandContext( //nolint:gosec // fixed script; out is a test temp path
+			context.Background(), "sh", "-c", `printf %s "$HOME" > "$1"`, "sh", out)
+		applyEnv(cmd, []string{"HOME=/zaparoo-test-home"})
+		require.NoError(t, cmd.Run())
+
+		got, err := os.ReadFile(out) //nolint:gosec // test-owned temp path
+		require.NoError(t, err)
+		assert.Equal(t, "/zaparoo-test-home", string(got))
+	})
+
+	t.Run("empty_env_inherits_environment", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.CommandContext(context.Background(), "true")
+		applyEnv(cmd, nil)
+		assert.Nil(t, cmd.Env)
 	})
 
 	t.Run("returns_error_for_nonexistent_command", func(t *testing.T) {

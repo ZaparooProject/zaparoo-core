@@ -24,6 +24,8 @@ package bazzite
 
 import (
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -241,4 +243,16 @@ func TestPlatformReturnToMenuWithoutActiveMedia(t *testing.T) {
 
 	p := NewPlatform()
 	assert.NoError(t, p.ReturnToMenu())
+}
+
+func TestPlatformSteamLaunchEnvUsesSessionDirs(t *testing.T) {
+	t.Parallel()
+
+	// The value can come from the host's systemd user manager, so only the
+	// presence of the session variable is checked.
+	env := NewPlatform().steamLaunchEnv()
+	hasConfigHome := slices.ContainsFunc(env, func(entry string) bool {
+		return strings.HasPrefix(entry, "XDG_CONFIG_HOME=")
+	})
+	assert.True(t, hasConfigHome, "Steam launches should carry the session environment: %v", env)
 }

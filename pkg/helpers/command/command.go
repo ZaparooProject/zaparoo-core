@@ -22,6 +22,7 @@ package command
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -34,9 +35,20 @@ func ShellQuote(value string) string {
 
 // StartOptions configures command startup behavior.
 type StartOptions struct {
+	// Env holds KEY=value entries that override the inherited environment.
+	// Nil or empty leaves the child with Core's own environment.
+	Env []string
 	// HideWindow prevents a console window from appearing (Windows-only).
 	// On non-Windows platforms, this field is ignored.
 	HideWindow bool
+}
+
+// applyEnv appends overrides after the inherited environment. exec.Cmd keeps
+// the last value for a duplicated key, so the overrides win.
+func applyEnv(cmd *exec.Cmd, env []string) {
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 }
 
 // Executor provides an abstraction over exec.Command for testability.

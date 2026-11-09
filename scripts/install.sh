@@ -40,6 +40,7 @@ GUI_PROGRESS_FD=""
 GUI_PROGRESS_PATH=""
 HARDWARE_INSTALLED=false
 DECKY_INSTALLED=false
+RESTART_SERVICE_ON_EXIT=false
 DECKY_REPO="ZaparooProject/zaparoo-decky"
 DECKY_API_URL="https://api.github.com/repos/${DECKY_REPO}"
 DECKY_HOME="${HOME}/homebrew"
@@ -187,7 +188,7 @@ detect_linux_distro() {
         return
     fi
 
-    # Return the ID (e.g., "ubuntu", "fedora", "steamos", "chimeraos")
+    # Return the ID (e.g., "ubuntu", "fedora", "steamos", "bazzite", "chimeraos")
     echo "${ID:-generic}"
 }
 
@@ -1202,8 +1203,9 @@ uninstall_steamos() {
 # ============================================================================
 
 install_linux_generic() {
-    local distro
+    local distro build
     distro="$(detect_linux_distro)"
+    build="linux"
 
     info "Detected Linux distribution: ${distro}"
 
@@ -1230,9 +1232,10 @@ install_linux_generic() {
             install_steamos_transaction
             return 0
             ;;
-        chimeraos)
-            warn "Immutable filesystem detected (chimeraos)"
+        bazzite|chimeraos)
+            warn "Immutable filesystem detected (${distro})"
             warn "Installation will be user-local only"
+            build="${distro}"
             ;;
         recalbox|retropie)
             warn "Embedded system detected (${distro})"
@@ -1240,8 +1243,8 @@ install_linux_generic() {
             ;;
     esac
 
-    # Download and extract
-    download_and_extract "linux"
+    download_and_extract "${build}"
+    stop_service_for_replacement
 
     # Install application (always)
     install_application
@@ -1250,6 +1253,37 @@ install_linux_generic() {
     install_service
     install_desktop
     install_hardware
+}
+
+# The running binary cannot be rewritten in place (ETXTBSY), and a service
+# left running would keep the old build. Stop it here; cleanup starts it again
+# if nothing else did, so a failed or service-less install leaves it running.
+stop_service_for_replacement() {
+    if [ "$DRY_RUN" = true ]; then
+        return 0
+    fi
+    if command -v systemctl >/dev/null 2>&1 && \
+        systemctl --user is-active --quiet zaparoo.service 2>/dev/null; then
+        info "Stopping zaparoo.service to replace the installed binary..."
+        systemctl --user stop zaparoo.service || abort "Failed to stop zaparoo.service"
+        RESTART_SERVICE_ON_EXIT=true
+    elif core_api_available; then
+        abort "Zaparoo Core is running outside zaparoo.service; stop it before rerunning the installer"
+    fi
+    if ! wait_for_core_api_down; then
+        abort "Another Zaparoo Core instance is still using 127.0.0.1:7497"
+    fi
+}
+
+restart_stopped_service() {
+    if [ "${RESTART_SERVICE_ON_EXIT}" != true ]; then
+        return 0
+    fi
+    RESTART_SERVICE_ON_EXIT=false
+    if ! systemctl --user is-active --quiet zaparoo.service 2>/dev/null; then
+        systemctl --user start zaparoo.service >/dev/null 2>&1 || \
+            warn "Failed to restart zaparoo.service"
+    fi
 }
 
 install_application() {
@@ -1674,6 +1708,7 @@ install_windows() {
 # ============================================================================
 
 cleanup() {
+    restart_stopped_service
     stop_gui_progress
     cleanup_steamos_admin
     if [ -n "${TMP_DIR:-}" ] && [ -d "${TMP_DIR}" ]; then

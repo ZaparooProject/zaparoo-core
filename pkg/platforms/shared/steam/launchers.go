@@ -34,7 +34,14 @@ import (
 
 // NewSteamLauncher creates a configurable Steam launcher.
 func NewSteamLauncher(opts Options) platforms.Launcher {
+	return NewSteamLauncherWithEnv(opts, nil)
+}
+
+// NewSteamLauncherWithEnv creates a Steam launcher whose launch command gets
+// the KEY=value overrides returned by launchEnv. Only used on Linux.
+func NewSteamLauncherWithEnv(opts Options, launchEnv func() []string) platforms.Launcher {
 	client := NewClient(opts)
+	client.launchEnv = launchEnv
 
 	return platforms.Launcher{
 		ID:       "Steam",

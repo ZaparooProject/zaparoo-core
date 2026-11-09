@@ -314,6 +314,81 @@ test_steamos_asset_name() {
     pass "select SteamOS release asset"
 }
 
+test_linux_distro_asset_name() {
+    local test_distro expected output
+    for test_distro in bazzite chimeraos ubuntu fedora; do
+        case "${test_distro}" in
+            bazzite|chimeraos) expected="${test_distro}" ;;
+            *) expected="linux" ;;
+        esac
+        output="$(
+            VERSION="2.21.0"
+            VERSION_TAG="v2.21.0"
+            DRY_RUN=true
+            detect_linux_distro() { echo "${test_distro}"; }
+            detect_arch() { echo amd64; }
+            install_application() { :; }
+            install_service() { :; }
+            install_desktop() { :; }
+            install_hardware() { :; }
+            install_linux_generic
+        )"
+        assert_contains "${output}" "zaparoo-${expected}_amd64-2.21.0.tar.gz" \
+            "${test_distro} release asset"
+    done
+    pass "select distro-specific Linux release asset"
+}
+
+test_generic_install_stops_and_restarts_service() {
+    local log="${TEST_TMP}/systemctl.log"
+    local output
+    : > "${log}"
+    output="$(
+        DRY_RUN=false
+        SERVICE_ACTIVE=true
+        systemctl() {
+            echo "systemctl $*" >> "${log}"
+            case "$*" in
+                "--user is-active --quiet zaparoo.service") [ "${SERVICE_ACTIVE}" = true ] ;;
+                "--user stop zaparoo.service") SERVICE_ACTIVE=false ;;
+            esac
+        }
+        core_api_available() { return 1; }
+        wait_for_core_api_down() { return 0; }
+        stop_service_for_replacement
+        echo "flag=${RESTART_SERVICE_ON_EXIT}"
+        restart_stopped_service
+        echo "flag=${RESTART_SERVICE_ON_EXIT}"
+    )"
+    assert_contains "$(cat "${log}")" "systemctl --user stop zaparoo.service" "service stopped before replacement"
+    assert_contains "${output}" "flag=true" "restart scheduled"
+    assert_contains "$(cat "${log}")" "systemctl --user start zaparoo.service" "stopped service restarted"
+    assert_contains "${output}" "flag=false" "restart runs once"
+
+    : > "${log}"
+    (
+        DRY_RUN=false
+        systemctl() { echo "systemctl $*" >> "${log}"; return 1; }
+        core_api_available() { return 1; }
+        wait_for_core_api_down() { return 0; }
+        stop_service_for_replacement
+        restart_stopped_service
+    )
+    if grep -q "stop\|start" "${log}"; then
+        fail "inactive service was stopped or started: $(cat "${log}")"
+    fi
+
+    if (
+        DRY_RUN=false
+        systemctl() { return 1; }
+        core_api_available() { return 0; }
+        stop_service_for_replacement
+    ) >/dev/null 2>&1; then
+        fail "replaced a binary under a Core running outside the service"
+    fi
+    pass "stop and restart the running service around a generic install"
+}
+
 test_semver_comparison() {
     assert_equal "0" "$(semver_compare 2.17.0 2.17.0)" "equal stable versions"
     assert_equal "-1" "$(semver_compare 2.16.9 2.17.0)" "older stable version"
@@ -663,6 +738,8 @@ test_verify_core_api_still_gives_up_on_an_unusable_service
 test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
+test_linux_distro_asset_name
+test_generic_install_stops_and_restarts_service
 test_semver_comparison
 test_openssl_version_requirement
 test_decky_release_selection
