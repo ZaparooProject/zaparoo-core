@@ -378,7 +378,7 @@ jobs:
           elif [ "${{ matrix.target }}" = "darwin" ]; then
             {
               echo "TARGET_CC=zig cc -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
-              echo "TARGET_CXX=zig c++ -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
+              echo "TARGET_CXX=zig c++ -w --target=x86_64-macos -idirafter /opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
               echo "TARGET_CGO_CFLAGS="
               echo "TARGET_CGO_LDFLAGS="
             } >> "$GITHUB_ENV"

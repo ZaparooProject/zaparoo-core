@@ -135,6 +135,7 @@ type Audio struct {
 	Volume        *int    `toml:"volume,omitempty"`
 	MusicVolume   *int    `toml:"music_volume,omitempty"`
 	MusicAutoplay *bool   `toml:"music_autoplay,omitempty"`
+	Normalize     *bool   `toml:"normalize,omitempty"`
 	ScanFeedback  bool    `toml:"scan_feedback"`
 }
 
@@ -719,6 +720,22 @@ func (c *Instance) SetAudioMusicAutoplay(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.MusicAutoplay = &enabled
+}
+
+// AudioNormalize reports whether long-form playback is levelled to a
+// common loudness. Defaults to true.
+func (c *Instance) AudioNormalize() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.Normalize == nil || *c.vals.Audio.Normalize
+}
+
+// SetAudioNormalize sets whether long-form playback is levelled to a common
+// loudness.
+func (c *Instance) SetAudioNormalize(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.Normalize = &enabled
 }
 
 // SuccessSoundPath resolves the success sound file path based on config and disk overrides.

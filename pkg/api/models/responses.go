@@ -216,6 +216,7 @@ type SettingsResponse struct {
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
 	AudioMusicAutoplay        bool               `json:"audioMusicAutoplay"`
+	AudioNormalize            bool               `json:"audioNormalize"`
 	AudioMusicPauseOnLaunch   bool               `json:"audioMusicPauseOnLaunch"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`

@@ -225,6 +225,7 @@ type UpdateSettingsParams struct {
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	AudioMusicVolume          *int                `json:"audioMusicVolume" validate:"omitempty,gte=0,lte=200"`
 	AudioMusicAutoplay        *bool               `json:"audioMusicAutoplay"`
+	AudioNormalize            *bool               `json:"audioNormalize"`
 	AudioMusicPauseOnLaunch   *bool               `json:"audioMusicPauseOnLaunch"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`

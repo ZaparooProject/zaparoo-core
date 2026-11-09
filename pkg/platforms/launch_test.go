@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -1270,4 +1273,60 @@ func TestDoLaunch_PublishesThePathTheLauncherRan(t *testing.T) {
 	require.NoError(t, platforms.DoLaunch(params, filepath.Base))
 	require.NotNil(t, activeMedia)
 	assert.Equal(t, ran, activeMedia.Path)
+}
+
+// A stream is named by the station name its server sent, and a URL with no
+// path to name it by is named by its host.
+func TestDoLaunch_NamesStreams(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("icy-name", "Pink Noise Radio")
+		_, _ = w.Write(make([]byte, 64))
+	}))
+	t.Cleanup(srv.Close)
+	probe, err := radio.ProbeURL(context.Background(), nil, srv.URL+"/stream.mp3")
+	require.NoError(t, err)
+	t.Cleanup(probe.Close)
+
+	tests := []struct {
+		probe *radio.Probe
+		name  string
+		path  string
+		want  string
+	}{
+		{name: "station name", path: srv.URL + "/stream.mp3", probe: probe, want: "Pink Noise Radio"},
+		{name: "host", path: "http://uk1.example.com:8004/", want: "uk1.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+			launcher := &platforms.Launcher{
+				ID:        "native-audio",
+				SystemID:  systemdefs.SystemAudio,
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			var published *models.ActiveMedia
+			params := &platforms.LaunchParams{
+				Platform: mockPlatform,
+				Config:   &config.Instance{},
+				Launcher: launcher,
+				Path:     tt.path,
+				Options: &platforms.LaunchOptions{
+					AudioStream:          tt.probe,
+					ActiveMediaPublisher: func(media *models.ActiveMedia) { published = media },
+				},
+			}
+			require.NoError(t, platforms.DoLaunch(params, func(string) string { return "" }))
+			require.NotNil(t, published)
+			assert.Equal(t, tt.want, published.Name)
+		})
+	}
 }

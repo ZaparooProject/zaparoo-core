@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -345,6 +346,21 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 	// kill what the hook just started instead of what the caller asked to stop.
 	if env.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
 		log.Info().Msg("before_exit replaced the outgoing media, leaving it running")
+		return NoContent{}, nil
+	}
+
+	// Native audio has no process or core for the platform to stop, so the
+	// platform stop would clear its media and leave the track playing.
+	if media := env.State.ActiveMedia(); media != nil &&
+		media.LauncherID == platforms.NativeAudioLauncherID && env.PlaybackManager != nil {
+		cancelStop := env.State.RecordMediaStop(models.MediaStopReasonStopped)
+		if err := env.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+			cancelStop()
+			return nil, fmt.Errorf("failed to stop native audio: %w", err)
+		}
+		env.State.ClearActiveMediaIf(func(m *models.ActiveMedia) bool {
+			return m != nil && m.LauncherID == platforms.NativeAudioLauncherID
+		})
 		return NoContent{}, nil
 	}
 

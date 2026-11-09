@@ -25,17 +25,14 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/nativedec"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
-	"github.com/gopxl/beep/v2/wav"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,6 +55,9 @@ const (
 
 // PlaybackOptions configures a long-form Play call.
 type PlaybackOptions struct {
+	// Stream is an already probed stream URL, so playing it does not
+	// connect twice. nil probes http(s) paths itself.
+	Stream *radio.Probe
 	// Volume is the playback gain (0.0-2.0); 0 is silent.
 	Volume float64
 	// StartAt is how far into the track playback starts; 0 is the start.
@@ -78,6 +78,8 @@ type PlaybackState struct {
 	Duration time.Duration
 	Playing  bool
 	Paused   bool
+	// Live is set for a stream that plays in real time and cannot seek.
+	Live bool
 }
 
 // PlaybackManager is the interface for managing long-form audio slots.
@@ -113,8 +115,10 @@ type LongformPlaybackManager struct {
 	// metaPending is the newest tag request of each slot, metaReaders how
 	// many workers are reading them; both are guarded by metaMu.
 	metaPending     map[string]*streamingSource
+	normalize       atomic.Pointer[func() bool]
 	resampleQuality int
 	metaMaxBytes    atomic.Int64
+	lowPower        bool
 	mu              syncutil.Mutex
 	metaReaders     int
 	metaMu          syncutil.Mutex
@@ -132,6 +136,7 @@ func NewLongformPlaybackManager(lowPowerAudio bool) *LongformPlaybackManager {
 		failureCallbacks: make(map[string]func()),
 		readMeta:         trackmeta.Read,
 		resampleQuality:  quality,
+		lowPower:         lowPowerAudio,
 	}
 	m.metaMaxBytes.Store(defaultTrackMetaMaxBytes)
 	return m
@@ -144,6 +149,18 @@ func (m *LongformPlaybackManager) SetTrackMetaLimit(maxBytes int64) {
 	if maxBytes > 0 {
 		m.metaMaxBytes.Store(maxBytes)
 	}
+}
+
+// SetNormalizeSource registers fn to say whether playback is levelled to a
+// common loudness. Each playing source asks it as it decodes, so a change
+// applies to what is playing. It is not part of the PlaybackManager
+// interface and is called at service startup.
+func (m *LongformPlaybackManager) SetNormalizeSource(fn func() bool) {
+	if fn == nil {
+		m.normalize.Store(nil)
+		return
+	}
+	m.normalize.Store(&fn)
 }
 
 // SetDrainCallback registers fn to be called when a slot drains.
@@ -200,9 +217,33 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		return err
 	}
 
-	src, err := newStreamingSource(path, opts.Volume, m.resampleQuality)
+	// A live stream's title changes as it plays. The source is not known
+	// until it opens, so the callback looks it up.
+	var srcRef atomic.Pointer[streamingSource]
+	onMeta := func(meta *trackmeta.Meta) {
+		live := srcRef.Load()
+		if live == nil || nonEmptyMeta(meta) == nil {
+			return
+		}
+		live.meta.Store(meta)
+		m.mu.Lock()
+		current := m.getSourceLocked(key) == live
+		m.mu.Unlock()
+		if current {
+			m.notifyChange(key)
+		}
+	}
+	src, err := newStreamingSource(path, opts.Volume, m.resampleQuality, decodeOptions{
+		radio:    opts.Stream,
+		onMeta:   onMeta,
+		lowPower: m.lowPower,
+	})
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
+	}
+	srcRef.Store(src)
+	if fn := m.normalize.Load(); fn != nil {
+		src.normalize = *fn
 	}
 
 	m.mu.Lock()
@@ -247,7 +288,10 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 
 	// Tags are read once per track, off the playback path and through a
 	// file handle of their own, so a slow or broken tag never delays sound.
-	m.queueMeta(key, src)
+	// Formats whose decoder reports its own tags, and streams, skip it.
+	if !src.ownMeta {
+		m.queueMeta(key, src)
+	}
 	return nil
 }
 
@@ -369,6 +413,9 @@ func (m *LongformPlaybackManager) Pause(slot string) error {
 		return nil
 	}
 	changed := src.setPaused(true)
+	if changed {
+		src.suspendLive()
+	}
 	globalDevice.releaseIfAllPaused()
 	if changed {
 		m.notifyChange(key)
@@ -383,6 +430,9 @@ func (m *LongformPlaybackManager) Resume(slot string) error {
 	}
 	if src == nil {
 		return nil
+	}
+	if src.paused.Load() {
+		src.resumeLive()
 	}
 	changed := src.setPaused(false)
 	globalDevice.openIfNeeded()
@@ -400,8 +450,12 @@ func (m *LongformPlaybackManager) TogglePause(slot string) error {
 	if src == nil {
 		return nil
 	}
+	if src.live != nil && src.paused.Load() {
+		src.resumeLive()
+	}
 	nowPaused := src.togglePause()
 	if nowPaused {
+		src.suspendLive()
 		globalDevice.releaseIfAllPaused()
 	} else {
 		globalDevice.openIfNeeded()
@@ -417,6 +471,9 @@ func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error 
 	}
 	if src == nil {
 		return nil
+	}
+	if src.live != nil {
+		return fmt.Errorf("seek: %w", ErrLiveStream)
 	}
 	src.seek(offset)
 	m.notifyChange(key)
@@ -484,15 +541,20 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 type streamingSource struct {
 	streamer beep.Streamer
 	decoder  beep.StreamSeekCloser
+	live     liveDecoder
 	onDrain  func(natural bool)
-	file     *os.File
-	wakeCh   chan struct{}
-	doneCh   chan struct{}
-	cancelFn context.CancelFunc
-	meta     atomic.Pointer[trackmeta.Meta]
-	path     string
-	ring     [][2]float64
-	chunk    [][2]float64
+	// normalize says whether the source is levelled; nil never levels it.
+	// norm is owned by the prefetch goroutine.
+	normalize func() bool
+	norm      *normalizer
+	file      *os.File
+	wakeCh    chan struct{}
+	doneCh    chan struct{}
+	cancelFn  context.CancelFunc
+	meta      atomic.Pointer[trackmeta.Meta]
+	path      string
+	ring      [][2]float64
+	chunk     [][2]float64
 	// appliedVolume is the gain the last mixAdd ended on. Only mixAdd reads
 	// or writes it, on the audio thread.
 	appliedVolume float64
@@ -520,6 +582,8 @@ type streamingSource struct {
 	decodeFailed   atomic.Bool
 	stopped        atomic.Bool
 	paused         atomic.Bool
+	// ownMeta is set when the decoder supplied the track's tags at open.
+	ownMeta bool
 }
 
 func streamerAtTargetSampleRate(source beep.Streamer, sourceRate beep.SampleRate, quality int) beep.Streamer {
@@ -531,45 +595,20 @@ func streamerAtTargetSampleRate(source beep.Streamer, sourceRate beep.SampleRate
 
 // newStreamingSource opens path for streaming decode and returns a ready source.
 // The prefetch goroutine is not started yet; start it before device registration.
-func newStreamingSource(path string, volume float64, quality int) (*streamingSource, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	var (
-		decoder beep.StreamSeekCloser
-		format  beep.Format
-		f       *os.File
-		err     error
-	)
-	if kind, native := nativedec.KindForExt(ext); native {
-		// MP3, FLAC and Vorbis decode natively, reading the file themselves.
-		var d *nativedec.Decoder
-		d, err = nativedec.Open(path, kind)
-		if err != nil {
-			return nil, fmt.Errorf("decode %s: %w", ext, err)
-		}
-		decoder = d
-		format = nativeFormat(d)
-	} else {
-		if ext != ".wav" {
-			return nil, fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
-		}
-		//nolint:gosec // G304: callers validate media paths before launching.
-		f, err = os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("open audio file: %w", err)
-		}
-		decoder, format, err = wav.Decode(f)
-		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("decode %s: %w", ext, err)
-		}
+func newStreamingSource(path string, volume float64, quality int, opts decodeOptions) (*streamingSource, error) {
+	od, err := openDecoder(path, opts)
+	if err != nil {
+		return nil, err
 	}
+	return sourceFromDecoder(path, od, volume, quality), nil
+}
 
+// sourceFromDecoder wraps an opened decoder in a ready source.
+func sourceFromDecoder(path string, od *openedDecoder, volume float64, quality int) *streamingSource {
 	totalFrames := int64(-1)
-	if n := decoder.Len(); n >= 0 {
-		totalFrames = int64(float64(n) * float64(targetSampleRate) / float64(format.SampleRate))
+	if n := od.decoder.Len(); n >= 0 && od.live == nil {
+		totalFrames = int64(float64(n) * float64(targetSampleRate) / float64(od.rate))
 	}
-
-	streamer := streamerAtTargetSampleRate(decoder, format.SampleRate, quality)
 
 	s := &streamingSource{
 		ring:          make([][2]float64, ringBufferFrames),
@@ -577,16 +616,62 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 		appliedVolume: clampVolume(volume),
 		totalFrames:   totalFrames,
 		tickInterval:  defaultPrefetchTick,
-		sourceRate:    int(format.SampleRate),
+		sourceRate:    int(od.rate),
 		quality:       quality,
 		wakeCh:        make(chan struct{}, 1),
-		decoder:       decoder,
-		file:          f,
-		streamer:      streamer,
+		decoder:       od.decoder,
+		live:          od.live,
+		file:          od.file,
+		streamer:      streamerAtTargetSampleRate(od.decoder, od.rate, quality),
 		chunk:         make([][2]float64, decodeChunkFrames),
+		ownMeta:       od.meta != nil || od.live != nil,
+	}
+	if meta := nonEmptyMeta(od.meta); meta != nil {
+		s.meta.Store(meta)
 	}
 	s.setVolume(volume)
-	return s, nil
+	return s
+}
+
+// liveResampleSlack is how many source frames beyond the ones it turns into
+// output the resampler can read ahead: one 512-frame buffer plus its
+// interpolation window.
+const liveResampleSlack = 512 + 64
+
+// liveChunk bounds a pull of n output frames from a live source to what it
+// has buffered, because the resampler takes any short read for the end of
+// the stream. It returns 0 when nothing can be pulled yet. A stream that has
+// ended is pulled in full so its end is seen.
+func (s *streamingSource) liveChunk(n int) int {
+	if s.live == nil || s.decoder.Err() != nil {
+		return n
+	}
+	buffered := s.live.Buffered()
+	if s.sourceRate == targetSampleRate {
+		return min(n, buffered)
+	}
+	usable := buffered - liveResampleSlack
+	if usable <= 0 {
+		return 0
+	}
+	return min(n, int(int64(usable)*targetSampleRate/int64(s.sourceRate)))
+}
+
+// suspendLive drops a live stream's connection while it is paused.
+func (s *streamingSource) suspendLive() {
+	if s.live != nil {
+		s.live.Suspend()
+	}
+}
+
+// resumeLive reconnects a paused live stream at the live point, dropping
+// the audio buffered before the pause.
+func (s *streamingSource) resumeLive() {
+	if s.live == nil {
+		return
+	}
+	s.live.Resume()
+	s.seek(0)
 }
 
 // maxPlaybackVolume is the highest gain a source plays at.
@@ -644,6 +729,9 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var reportedUnderruns uint64
+	// pending frames are decoded into the ring past writePos but not yet
+	// published, while the normalizer measures the start of the track.
+	pending := 0
 
 prefetchLoop:
 	for {
@@ -656,8 +744,11 @@ prefetchLoop:
 			seekFrame := s.seekSrcFrame.Load()
 			// An int is 32 bits on ARM32; a frame beyond it cannot be in a
 			// file whose length the decoder reported.
-			if err := s.decoder.Seek(int(min(seekFrame, int64(math.MaxInt)))); err != nil {
-				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
+			// A live stream only drops what it had buffered.
+			if s.live == nil {
+				if err := s.decoder.Seek(int(min(seekFrame, int64(math.MaxInt)))); err != nil {
+					log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
+				}
 			}
 			s.streamer = streamerAtTargetSampleRate(s.decoder, beep.SampleRate(s.sourceRate), s.quality)
 			s.readPos.Store(0)
@@ -666,6 +757,7 @@ prefetchLoop:
 			s.underrunActive.Store(false)
 			s.seekPending.Store(false)
 			s.seekMu.Unlock()
+			pending = 0
 		}
 
 		if count := s.underruns.Load(); count > reportedUnderruns {
@@ -686,24 +778,41 @@ prefetchLoop:
 			}
 			readPos := s.readPos.Load()
 			writePos := s.writePos.Load()
-			buffered := writePos - readPos
+			buffered := writePos - readPos + uint64(pending)
 			if buffered >= uint64(len(s.ring)) {
+				pending = s.publishPending(pending)
 				break
 			}
 
 			space := len(s.ring) - boundedFrameCount(buffered, len(s.ring))
-			n := min(space, len(s.chunk))
+			n := s.liveChunk(min(space, len(s.chunk)))
+			if n == 0 {
+				pending = s.publishPending(pending)
+				break
+			}
 			written, ok := s.streamer.Stream(s.chunk[:n])
 			if s.seekPending.Load() {
 				continue prefetchLoop
 			}
 			if written > 0 {
+				frames := s.chunk[:written]
+				warming := s.levelChunk(frames)
+				start := writePos + uint64(pending)
 				for i := range written {
-					s.ring[(writePos+uint64(i))%uint64(len(s.ring))] = s.chunk[i]
+					s.ring[(start+uint64(i))%uint64(len(s.ring))] = frames[i]
 				}
-				s.writePos.Store(writePos + uint64(written))
+				pending += written
+				if !warming || pending >= normWarmupFrames {
+					pending = s.publishPending(pending)
+				}
+			}
+			if ok && written == 0 {
+				// Nothing ready yet; wait for the next wake-up rather than spin.
+				pending = s.publishPending(pending)
+				break
 			}
 			if !ok {
+				pending = s.publishPending(pending)
 				if err := s.decoder.Err(); err != nil {
 					// A failed decode is not the track finishing: it drains
 					// as a stop, so the slot does not move on as if it had
@@ -725,6 +834,59 @@ prefetchLoop:
 		case <-ticker.C:
 		}
 	}
+}
+
+// levelChunk runs the normalizer over freshly decoded frames. While the
+// start of the track is still being measured it only measures them and
+// reports true; the frames are levelled when publishPending settles it.
+func (s *streamingSource) levelChunk(frames [][2]float64) bool {
+	enabled := s.normalize != nil && s.normalize()
+	if s.norm == nil {
+		if !enabled {
+			return false
+		}
+		s.norm = newNormalizer()
+	}
+	if meta := s.meta.Load(); meta != nil && meta.HasReplayGain {
+		s.norm.setReplayGain(meta.ReplayGainDB)
+	}
+	if !s.norm.settled {
+		if !enabled {
+			s.norm.settled = true
+			return false
+		}
+		s.norm.observe(frames)
+		return true
+	}
+	if !enabled {
+		if !s.norm.bypassed() {
+			s.norm.apply(frames, false)
+		}
+		return false
+	}
+	s.norm.observe(frames)
+	s.norm.apply(frames, true)
+	return false
+}
+
+// publishPending levels the frames held back while the normalizer
+// measured the start of the track and hands them to the audio thread. It
+// returns the new pending count, zero.
+func (s *streamingSource) publishPending(pending int) int {
+	if pending == 0 {
+		return 0
+	}
+	writePos := s.writePos.Load()
+	if s.norm != nil && !s.norm.settled {
+		s.norm.settle()
+		size := uint64(len(s.ring))
+		first := int(writePos % size) //nolint:gosec // bounded by the ring length.
+		head := min(pending, len(s.ring)-first)
+		s.norm.apply(s.ring[first:first+head], true)
+		s.norm.apply(s.ring[:pending-head], true)
+	}
+	s.writePos.Store(writePos + uint64(pending)) //nolint:gosec // pending counts frames written, never negative.
+	return 0
 }
 
 func boundedFrameCount(frames uint64, limit int) int {
@@ -804,7 +966,9 @@ func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
 		s.underrunActive.Store(false)
 	}
 
-	if written < n && !eof && s.underrunActive.CompareAndSwap(false, true) {
+	// The ring is empty until the first frames after a start or a seek are
+	// published; that wait is not an underrun.
+	if written < n && !eof && writePos > 0 && s.underrunActive.CompareAndSwap(false, true) {
 		s.underruns.Add(1)
 	}
 
@@ -918,7 +1082,7 @@ func (s *streamingSource) seek(offset time.Duration) {
 // track. An offset outside the track, or a track that is not the expected
 // length, starts from the beginning.
 func (s *streamingSource) startAt(offset, expected time.Duration) {
-	if offset <= 0 {
+	if offset <= 0 || s.live != nil {
 		return
 	}
 	if s.totalFrames > 0 {
@@ -972,6 +1136,7 @@ func (s *streamingSource) state() PlaybackState {
 		Duration: sampleDuration(s.totalFrames),
 		Playing:  !paused && !stopped && (!eof || s.bufferedFrames() != 0),
 		Paused:   paused,
+		Live:     s.live != nil,
 	}
 }
 

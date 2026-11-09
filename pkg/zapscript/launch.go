@@ -32,6 +32,8 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -1021,6 +1023,9 @@ func (invalidLaunchFormatError) Error() string { return "invalid launch format" 
 func (invalidLaunchFormatError) Unwrap() error { return ErrInvalidArguments }
 
 type launchTarget struct {
+	// audioStream is an http(s) URL already probed as audio, played by
+	// native audio with the probe's connection.
+	audioStream           *radio.Probe
 	path                  string
 	systemID              string
 	mediaID               int64
@@ -1034,12 +1039,17 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
+		if isAudioPlaylistTarget(pl, env, &target) {
+			return &audioPlaylistLaunchError{path: target.path}
+		}
 		backgroundSlot := false
 		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {
 			backgroundSlot = true
 		}
 		switch {
 		case explicitLauncher:
+		case target.audioStream != nil:
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, platforms.NativeAudioLauncherID)
 		case backgroundSlot:
 			// The background slot only plays native audio, so a system
 			// default, a preference or a launcher found for the path, such as
@@ -1091,12 +1101,14 @@ func getLaunchClosure(
 		}
 
 		var opts *platforms.LaunchOptions
-		if action != "" || setName != "" || setNameSameDir != "" || normalizedSlot != mediaslot.Primary {
+		if action != "" || setName != "" || setNameSameDir != "" || normalizedSlot != mediaslot.Primary ||
+			target.audioStream != nil {
 			opts = &platforms.LaunchOptions{
 				Action:         action,
 				SetName:        setName,
 				SetNameSameDir: setNameSameDir,
 				Slot:           normalizedSlot,
+				AudioStream:    target.audioStream,
 			}
 		}
 
@@ -1325,6 +1337,18 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, launch(requestedPathTarget(found))
+	}
+
+	// A plain http(s) URL is asked what it serves: an audio stream plays
+	// through native audio, anything else launches as it always has.
+	if !explicitLauncher && audio.IsStreamURL(path) {
+		if probe := probeAudioStream(env.LauncherCtx, path); probe != nil {
+			log.Info().Str("url", path).Msg("launching audio stream")
+			err := launch(launchTarget{path: path, systemID: systemdefs.SystemAudio, audioStream: probe})
+			// A launch that did not take the connection, or failed, leaves it open.
+			probe.Close()
+			return platforms.CmdResult{MediaChanged: true}, err
+		}
 	}
 
 	// match for uri style launch syntax

@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ type stubPlaybackManager struct {
 	paused  []string
 	resumed []string
 	toggled []string
+	stopped []string
 }
 
 func newStubPlaybackManager(slot string, state audio.PlaybackState) *stubPlaybackManager {
@@ -54,8 +56,13 @@ func newStubPlaybackManager(slot string, state audio.PlaybackState) *stubPlaybac
 }
 
 func (*stubPlaybackManager) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
-func (*stubPlaybackManager) Stop(_ string) error                             { return nil }
 func (*stubPlaybackManager) Seek(_ string, _ time.Duration) error            { return nil }
+
+func (s *stubPlaybackManager) Stop(slot string) error {
+	s.stopped = append(s.stopped, slot)
+	return nil
+}
+
 func (s *stubPlaybackManager) State(slot string) audio.PlaybackState {
 	return s.states[slot]
 }
@@ -343,6 +350,48 @@ func TestMediaEntryTags_TriState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.expected, mediaEntryTags(tt.known, tt.mediaID, tags))
+		})
+	}
+}
+
+// The native-audio launcher lists every control it has, but a live stream
+// cannot seek, so the entry advertises what the playing source can do.
+func TestEnrichPlaybackState_ControlsFollowTheSource(t *testing.T) {
+	t.Parallel()
+
+	all := []string{
+		platforms.ControlFastForward, platforms.ControlPause, platforms.ControlResume,
+		platforms.ControlRewind, platforms.ControlStop, platforms.ControlTogglePause,
+	}
+	tests := []struct {
+		name  string
+		want  []string
+		state audio.PlaybackState
+	}{
+		{
+			name:  "file",
+			state: audio.PlaybackState{Playing: true},
+			want:  all,
+		},
+		{
+			name:  "live stream",
+			state: audio.PlaybackState{Playing: true, Live: true},
+			want: []string{
+				platforms.ControlPause, platforms.ControlResume,
+				platforms.ControlStop, platforms.ControlTogglePause,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := &requests.RequestEnv{PlaybackManager: newStubPlaybackManager(mediaslot.Background, tt.state)}
+			entry := &models.ActiveMedia{
+				LauncherID:       platforms.NativeAudioLauncherID,
+				LauncherControls: slices.Clone(all),
+			}
+			enrichPlaybackState(env, entry, mediaslot.Background)
+			assert.Equal(t, tt.want, entry.LauncherControls)
 		})
 	}
 }

@@ -275,9 +275,17 @@ func TestStreamingSource_UnderrunEpisodes(t *testing.T) {
 	s := newTestSource()
 	buf := make([][2]float64, 4)
 
+	// Nothing has been published yet: waiting for the first frames is not
+	// an underrun.
 	written, drained := s.mixAdd(buf, len(buf))
 	assert.Zero(t, written)
 	assert.False(t, drained)
+	assert.Zero(t, s.underruns.Load())
+
+	s.ring[0] = [2]float64{0.25, 0.25}
+	s.writePos.Store(1)
+	s.mixAdd(buf, 1)
+	s.mixAdd(buf, len(buf))
 	assert.Equal(t, uint64(1), s.underruns.Load())
 
 	// Repeated empty callbacks belong to the same underrun episode.
@@ -286,8 +294,8 @@ func TestStreamingSource_UnderrunEpisodes(t *testing.T) {
 
 	// Consuming newly published audio ends the episode; another empty callback
 	// starts a new one.
-	s.ring[0] = [2]float64{0.25, 0.25}
-	s.writePos.Store(1)
+	s.ring[1] = [2]float64{0.25, 0.25}
+	s.writePos.Store(2)
 	s.mixAdd(buf, 1)
 	s.mixAdd(buf, len(buf))
 	assert.Equal(t, uint64(2), s.underruns.Load())
@@ -298,14 +306,14 @@ func TestNewStreamingSource_UnsupportedExtension(t *testing.T) {
 	// The file must exist — the extension check happens after os.Open succeeds.
 	path := filepath.Join(t.TempDir(), "audio.xyz")
 	require.NoError(t, os.WriteFile(path, []byte("fake"), 0o600))
-	_, err := newStreamingSource(path, 1.0, resampleQuality)
+	_, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported audio format")
 }
 
 func TestNewStreamingSource_FileNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0, resampleQuality)
+	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0, resampleQuality, decodeOptions{})
 	require.Error(t, err)
 }
 
@@ -315,7 +323,7 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
 
-	s, err := newStreamingSource(path, 0.75, resampleQuality)
+	s, err := newStreamingSource(path, 0.75, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())
@@ -336,7 +344,7 @@ func TestNewStreamingSource_TargetRateUsesDecoderDirectly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(0, targetSampleRate), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())
@@ -391,7 +399,7 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 			sampleCount := tc.sourceRate / 10
 			require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(sampleCount, tc.sourceRate), 0o600))
 
-			s, err := newStreamingSource(path, 1.0, tc.quality)
+			s, err := newStreamingSource(path, 1.0, tc.quality, decodeOptions{})
 			require.NoError(t, err)
 			s.startPrefetch()
 			stopped := false
@@ -448,7 +456,7 @@ func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamples(6*44100), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	s.tickInterval = time.Hour
 	s.startPrefetch()
@@ -465,7 +473,7 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamples(10*44100), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, lowPowerResampleQuality)
+	s, err := newStreamingSource(path, 1.0, lowPowerResampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	s.startPrefetch()
 	t.Cleanup(s.stopAndDeregister)
@@ -781,7 +789,7 @@ func TestStreamingSource_StartAtPositionsBeforePlayback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(2*targetSampleRate, targetSampleRate), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())

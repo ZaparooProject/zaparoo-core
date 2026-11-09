@@ -236,7 +236,9 @@ func (db *MediaDB) recordScrapeImageSystem(systemID string) {
 }
 
 // GetDirectoryProperties returns file-backed properties for one stable
-// directory identity. Content type is inferred from Text by media.image.
+// directory identity. Content type is inferred from Text by media.image. A
+// path no directory property can be stored at, such as a stream URL, has
+// none.
 func (db *MediaDB) GetDirectoryProperties(
 	ctx context.Context, systemDBID int64, path string,
 ) ([]database.MediaProperty, error) {
@@ -245,7 +247,7 @@ func (db *MediaDB) GetDirectoryProperties(
 	}
 	normalizedPath, err := normalizeDirectoryPropertyPath(path)
 	if err != nil {
-		return nil, err
+		return []database.MediaProperty{}, nil
 	}
 	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT dp.TypeTagDBID, tt.Type || ':' || t.Tag, dp.Text

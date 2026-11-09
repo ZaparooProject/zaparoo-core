@@ -23,7 +23,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -69,12 +71,9 @@ func NativeAudioLauncher(
 		ID:       NativeAudioLauncherID,
 		SystemID: "Audio",
 		Folders:  []string{"Audio", "Music"},
-		Extensions: []string{
-			".wav",
-			".mp3",
-			".ogg",
-			".flac",
-		},
+		// Playlist files are listed with audio so they can be browsed and
+		// picked; launching one runs it as a playlist instead.
+		Extensions: slices.Concat(audio.SupportedExtensions, audio.PlaylistExtensions),
 		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
 			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, controlNames, cfg, path, opts)
 		},
@@ -114,6 +113,10 @@ func launchNativeAudio(
 	}
 
 	playOpts := audio.PlaybackOptions{Volume: MusicVolumeGain(cfg)}
+	if opts != nil {
+		playOpts.Stream = opts.AudioStream
+	}
+
 	if slot == mediaslot.Primary && resumeAt != nil {
 		playOpts.StartAt, playOpts.StartAtDuration = resumeAt(path)
 	}
@@ -122,7 +125,11 @@ func launchNativeAudio(
 	}
 
 	if slot == mediaslot.Background && setBackgroundMedia != nil {
-		media := models.NewActiveMedia("Audio", "Audio", path, audioDisplayName(path), NativeAudioLauncherID)
+		name := audioDisplayName(path)
+		if opts != nil && opts.AudioStream.Name() != "" {
+			name = opts.AudioStream.Name()
+		}
+		media := models.NewActiveMedia("Audio", "Audio", path, name, NativeAudioLauncherID)
 		media.LauncherControls = slices.Clone(controlNames)
 		setBackgroundMedia(media)
 	}
@@ -200,7 +207,20 @@ func controlSeekDuration(args map[string]string, fallback time.Duration) time.Du
 	return time.Duration(seconds * float64(time.Second))
 }
 
-func audioDisplayName(path string) string {
-	base := filepath.Base(path)
+func audioDisplayName(location string) string {
+	if audio.IsStreamURL(location) {
+		u, err := url.Parse(location)
+		if err != nil || u.Host == "" {
+			return location
+		}
+		// A stream is named by the last part of its path, as a file is,
+		// or by its host when the path names nothing.
+		base := pathpkg.Base(u.Path)
+		if base == "/" || base == "." {
+			return u.Hostname()
+		}
+		return tags.ParseTitleFromFilename(strings.TrimSuffix(base, pathpkg.Ext(base)), false)
+	}
+	base := filepath.Base(location)
 	return tags.ParseTitleFromFilename(strings.TrimSuffix(base, filepath.Ext(base)), false)
 }
