@@ -79,7 +79,7 @@ require (
 	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/ProtonMail/go-crypto v1.5.2 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
-	github.com/andybalholm/brotli v1.2.6 // indirect
+	github.com/andybalholm/brotli v1.2.8 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.1 // indirect
