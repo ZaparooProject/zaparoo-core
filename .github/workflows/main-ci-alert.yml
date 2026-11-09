@@ -1,0 +1,77 @@
+name: Main CI Alert
+
+# Pull requests run the full suite on Linux only, so macOS and Windows
+# failures first appear on main. A failed push run on main opens an issue
+# assigned to whoever pushed, or comments on the one already open; the next
+# green run closes it. This lives outside Lint and Test so the release build,
+# which calls that workflow, does not have to grant issue access.
+on:
+  workflow_run:
+    workflows: ["Lint and Test"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  issues: write
+
+concurrency:
+  group: main-ci-alert
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report main CI result
+    if: github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open, update or close the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          ACTOR: ${{ github.event.workflow_run.actor.login }}
+        run: |
+          # Runs can finish out of order. Only the newest finished run on main
+          # speaks for it, so an older failure cannot reopen the issue after a
+          # newer run closed it, nor an older success close a newer failure.
+          latest="$(gh run list --workflow lint-and-test.yml --branch main --event push \
+            --status completed --limit 20 --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion != "cancelled" and .conclusion != "skipped")][0].databaseId // empty')"
+          if [ -n "$latest" ] && [ "$latest" != "$RUN_ID" ]; then
+            echo "Run $latest is newer than $RUN_ID; leaving the report to it."
+            exit 0
+          fi
+
+          title="CI is failing on main"
+          issue="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+
+          case "$CONCLUSION" in
+            failure|timed_out)
+              # shellcheck disable=SC2016 # \( \) is jq interpolation
+              jobs="$(gh run view "$RUN_ID" --json jobs \
+                --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "- [\(.name)](\(.url))"')"
+              # shellcheck disable=SC2016 # the backticks are Markdown
+              body="$(printf 'Lint and Test %s on `%s`: %s\n\nFailed jobs (the run summary lists the failing tests):\n\n%s\n' \
+                "$CONCLUSION" "${SHA:0:9}" "$RUN_URL" "$jobs")"
+              if [ -n "$issue" ]; then
+                gh issue comment "$issue" --body "$body"
+              else
+                gh issue create --title "$title" --assignee "$ACTOR" --body "$body" ||
+                  gh issue create --title "$title" --body "$body"
+              fi
+              ;;
+            success)
+              if [ -n "$issue" ]; then
+                gh issue close "$issue" --comment "Lint and Test passed on \`${SHA:0:9}\`: $RUN_URL"
+              fi
+              ;;
+            *)
+              echo "Run concluded $CONCLUSION; nothing to report."
+              ;;
+          esac
