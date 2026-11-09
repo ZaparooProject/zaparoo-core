@@ -19,7 +19,7 @@ linters:
       # cgo files trigger gocritic dupImport false positive: https://github.com/go-critic/go-critic/issues/845
       - linters:
           - gocritic
-        path: pkg/(helpers/(usb_darwin|wuffspng/decode_cgo)|audio/nativedec/(nativedec|stream))\.go
+        path: pkg/(helpers/(usb_darwin|wuffspng/decode_cgo)|audio/(nativedec/(nativedec|stream)|gme/gme|midi/(fm|soundfont)|vgm/vgm))\.go
   enable:
     - staticcheck
     - errcheck

@@ -160,7 +160,9 @@ func TestLiveSource_ManagerControls(t *testing.T) {
 	m.mu.Unlock()
 
 	require.ErrorIs(t, m.Seek(mediaslot.Background, 10*time.Second), ErrLiveStream)
+	require.ErrorIs(t, m.SkipTrack(mediaslot.Background, 1), ErrSingleTrack)
 	assert.True(t, m.State(mediaslot.Background).Live)
+	assert.False(t, m.State(mediaslot.Background).MultiTrack)
 
 	require.NoError(t, m.Pause(mediaslot.Background))
 	suspended, resumed := live.counts()
@@ -250,4 +252,94 @@ func TestLiveSource_DryBufferKeepsNormalizerWarming(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return s.writePos.Load() >= normWarmupFrames
 	}, 5*time.Second, time.Millisecond, "a full measurement is published")
+}
+
+// fakeTracks is a multi-track decoder: a silent timeline with tracks
+// starting at fixed frames.
+type fakeTracks struct {
+	starts []int
+	pos    int
+	length int
+}
+
+func (f *fakeTracks) Stream(samples [][2]float64) (int, bool) {
+	n := min(len(samples), f.length-f.pos)
+	for i := range n {
+		samples[i] = [2]float64{}
+	}
+	f.pos += n
+	return n, n > 0
+}
+func (*fakeTracks) Err() error           { return nil }
+func (f *fakeTracks) Len() int           { return f.length }
+func (f *fakeTracks) Position() int      { return f.pos }
+func (f *fakeTracks) Seek(p int) error   { f.pos = p; return nil }
+func (*fakeTracks) Close() error         { return nil }
+func (f *fakeTracks) TrackStarts() []int { return f.starts }
+
+func TestMultiTrackSource_SkipTrack(t *testing.T) {
+	t.Parallel()
+
+	rate := targetSampleRate
+	dec := &fakeTracks{starts: []int{0, 10 * rate, 20 * rate}, length: 30 * rate}
+	s := sourceFromDecoder("/Audio/game.nsf", &openedDecoder{decoder: dec, tracks: dec, rate: beep.SampleRate(rate)},
+		1.0, lowPowerResampleQuality)
+
+	assert.True(t, s.state().MultiTrack)
+	assert.False(t, s.state().Live)
+
+	meta := s.trackMeta()
+	require.NotNil(t, meta)
+	assert.Equal(t, 1, meta.TrackNumber)
+	assert.Equal(t, 3, meta.TrackTotal)
+
+	require.NoError(t, s.skipTrack(1))
+	assert.Equal(t, int64(10*rate), s.played.Load())
+	assert.Equal(t, 2, s.trackMeta().TrackNumber)
+
+	require.NoError(t, s.skipTrack(1))
+	assert.Equal(t, int64(20*rate), s.played.Load())
+	require.Error(t, s.skipTrack(1), "there is no track after the last")
+
+	// Five seconds into a track, going back restarts it.
+	s.played.Store(int64(25 * rate))
+	require.NoError(t, s.skipTrack(-1))
+	assert.Equal(t, int64(20*rate), s.played.Load())
+
+	// At its start, going back goes to the track before.
+	require.NoError(t, s.skipTrack(-1))
+	assert.Equal(t, int64(10*rate), s.played.Load())
+
+	require.NoError(t, s.skipTrack(-1))
+	require.NoError(t, s.skipTrack(-1))
+	assert.Zero(t, s.played.Load(), "going back from the first track stays on it")
+}
+
+func TestSplitTrackPath(t *testing.T) {
+	t.Parallel()
+
+	file, track, ok := SplitTrackPath("/Audio/game.nsf/5")
+	require.True(t, ok)
+	assert.Equal(t, "/Audio/game.nsf", file)
+	assert.Equal(t, 4, track)
+
+	for _, path := range []string{
+		"/Audio/game.nsf", "/Audio/game.nsf/0", "/Audio/game.nsf/05", "/Audio/game.nsf/x",
+		"/Audio/game.spc/1", "/Audio/song.mp3/2", "/Audio/game.nsf/-1",
+	} {
+		_, _, ok := SplitTrackPath(path)
+		assert.False(t, ok, path)
+	}
+}
+
+// A file of one track, such as an NSF picked by its track number, has no
+// other track to move to.
+func TestMultiTrackSource_OneTrackIsNotMultiTrack(t *testing.T) {
+	t.Parallel()
+
+	rate := targetSampleRate
+	dec := &fakeTracks{starts: []int{0}, length: 10 * rate}
+	s := sourceFromDecoder("/Audio/game.nsf/5", &openedDecoder{decoder: dec, tracks: dec, rate: beep.SampleRate(rate)},
+		1.0, lowPowerResampleQuality)
+	assert.False(t, s.state().MultiTrack)
 }

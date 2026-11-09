@@ -82,6 +82,10 @@ func (s *stubPlaybackManager) TogglePause(slot string) error {
 	return nil
 }
 
+func (*stubPlaybackManager) SkipTrack(string, int) error {
+	return nil
+}
+
 func (s *stubPlaybackManager) SetVolume(slot string, volume float64) error {
 	if s.volumes == nil {
 		s.volumes = make(map[string]float64)
@@ -355,13 +359,15 @@ func TestMediaEntryTags_TriState(t *testing.T) {
 }
 
 // The native-audio launcher lists every control it has, but a live stream
-// cannot seek, so the entry advertises what the playing source can do.
+// cannot seek and only a source of several tracks has a next or previous one,
+// so the entry advertises what the playing source can do.
 func TestEnrichPlaybackState_ControlsFollowTheSource(t *testing.T) {
 	t.Parallel()
 
 	all := []string{
-		platforms.ControlFastForward, platforms.ControlPause, platforms.ControlResume,
-		platforms.ControlRewind, platforms.ControlStop, platforms.ControlTogglePause,
+		platforms.ControlFastForward, platforms.ControlNext, platforms.ControlPause,
+		platforms.ControlPrevious, platforms.ControlResume, platforms.ControlRewind,
+		platforms.ControlStop, platforms.ControlTogglePause,
 	}
 	tests := []struct {
 		name  string
@@ -369,8 +375,16 @@ func TestEnrichPlaybackState_ControlsFollowTheSource(t *testing.T) {
 		state audio.PlaybackState
 	}{
 		{
-			name:  "file",
+			name:  "single track file",
 			state: audio.PlaybackState{Playing: true},
+			want: []string{
+				platforms.ControlFastForward, platforms.ControlPause, platforms.ControlResume,
+				platforms.ControlRewind, platforms.ControlStop, platforms.ControlTogglePause,
+			},
+		},
+		{
+			name:  "multi track file",
+			state: audio.PlaybackState{Playing: true, MultiTrack: true},
 			want:  all,
 		},
 		{

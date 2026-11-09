@@ -1915,3 +1915,48 @@ func TestAudioNormalize_SaveLoadRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, loaded.AudioNormalize())
 }
+
+func TestMidiSoundFont(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	t.Run("unset uses FM", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		assert.Empty(t, cfg.MidiSoundFont())
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("relative path resolves under assets", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		cfg.SetMidiSoundFont("gm.sf2")
+		assert.Equal(t, "gm.sf2", cfg.MidiSoundFont())
+		assert.Equal(t, filepath.Join(dataDir, AssetsDir, "gm.sf2"), cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("absolute path kept", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		abs := filepath.Join(dataDir, "fonts", "gm.sf2")
+		cfg.SetMidiSoundFont(abs)
+		assert.Equal(t, abs, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("empty clears back to FM", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		cfg.SetMidiSoundFont("gm.sf2")
+		cfg.SetMidiSoundFont("")
+		assert.Nil(t, cfg.vals.Audio.MidiSoundFont)
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("empty string in file uses FM", func(t *testing.T) {
+		t.Parallel()
+		empty := ""
+		cfg := &Instance{fs: afero.NewMemMapFs(), vals: Values{Audio: Audio{MidiSoundFont: &empty}}}
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+}

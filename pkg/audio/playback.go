@@ -80,6 +80,9 @@ type PlaybackState struct {
 	Paused   bool
 	// Live is set for a stream that plays in real time and cannot seek.
 	Live bool
+	// MultiTrack is set for a source that plays several tracks back to back,
+	// which SkipTrack moves between.
+	MultiTrack bool
 }
 
 // PlaybackManager is the interface for managing long-form audio slots.
@@ -94,6 +97,9 @@ type PlaybackManager interface {
 	// taking effect within one output buffer. It does nothing when the slot
 	// is empty.
 	SetVolume(slot string, volume float64) error
+	// SkipTrack moves delta tracks within a source that plays several
+	// tracks back to back. It returns ErrSingleTrack for any other source.
+	SkipTrack(slot string, delta int) error
 	State(slot string) PlaybackState
 }
 
@@ -115,6 +121,7 @@ type LongformPlaybackManager struct {
 	// metaPending is the newest tag request of each slot, metaReaders how
 	// many workers are reading them; both are guarded by metaMu.
 	metaPending     map[string]*streamingSource
+	midiSoundFont   atomic.Pointer[func() string]
 	normalize       atomic.Pointer[func() bool]
 	resampleQuality int
 	metaMaxBytes    atomic.Int64
@@ -151,6 +158,18 @@ func (m *LongformPlaybackManager) SetTrackMetaLimit(maxBytes int64) {
 	}
 }
 
+// SetMidiSoundFontSource registers fn to name the SoundFont each MIDI file
+// plays through when it starts; "" plays it through the built-in FM
+// synthesizer. It is not part of the PlaybackManager interface and is called
+// at service startup.
+func (m *LongformPlaybackManager) SetMidiSoundFontSource(fn func() string) {
+	if fn == nil {
+		m.midiSoundFont.Store(nil)
+		return
+	}
+	m.midiSoundFont.Store(&fn)
+}
+
 // SetNormalizeSource registers fn to say whether playback is levelled to a
 // common loudness. Each playing source asks it as it decodes, so a change
 // applies to what is playing. It is not part of the PlaybackManager
@@ -161,6 +180,13 @@ func (m *LongformPlaybackManager) SetNormalizeSource(fn func() bool) {
 		return
 	}
 	m.normalize.Store(&fn)
+}
+
+func (m *LongformPlaybackManager) midiSoundFontPath() string {
+	if fn := m.midiSoundFont.Load(); fn != nil {
+		return (*fn)()
+	}
+	return ""
 }
 
 // SetDrainCallback registers fn to be called when a slot drains.
@@ -246,9 +272,10 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		}
 	}
 	src, err := newStreamingSource(path, opts.Volume, m.resampleQuality, decodeOptions{
-		radio:    opts.Stream,
-		onMeta:   onMeta,
-		lowPower: m.lowPower,
+		radio:         opts.Stream,
+		onMeta:        onMeta,
+		midiSoundFont: m.midiSoundFontPath(),
+		lowPower:      m.lowPower,
 	})
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
@@ -497,6 +524,21 @@ func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error 
 	return nil
 }
 
+func (m *LongformPlaybackManager) SkipTrack(slot string, delta int) error {
+	key, src, err := m.readSourceKey(slot)
+	if err != nil {
+		return err
+	}
+	if src == nil {
+		return nil
+	}
+	if err := src.skipTrack(delta); err != nil {
+		return err
+	}
+	m.notifyChange(key)
+	return nil
+}
+
 func (m *LongformPlaybackManager) State(slot string) PlaybackState {
 	src, err := m.readSource(slot)
 	if err != nil || src == nil {
@@ -559,6 +601,7 @@ type streamingSource struct {
 	streamer beep.Streamer
 	decoder  beep.StreamSeekCloser
 	live     liveDecoder
+	tracks   trackDecoder
 	onDrain  func(natural bool)
 	// normalize says whether the source is levelled; nil never levels it.
 	// norm is owned by the prefetch goroutine.
@@ -638,6 +681,7 @@ func sourceFromDecoder(path string, od *openedDecoder, volume float64, quality i
 		wakeCh:        make(chan struct{}, 1),
 		decoder:       od.decoder,
 		live:          od.live,
+		tracks:        od.tracks,
 		file:          od.file,
 		streamer:      streamerAtTargetSampleRate(od.decoder, od.rate, quality),
 		chunk:         make([][2]float64, decodeChunkFrames),
@@ -690,6 +734,50 @@ func (s *streamingSource) resumeLive() {
 	s.live.Resume()
 	s.seek(0)
 }
+
+// trackAt returns the index of the track holding output frame played.
+func trackAt(starts []int, played int64, sourceRate int) int {
+	src := played * int64(sourceRate) / targetSampleRate
+	idx := 0
+	for i, start := range starts {
+		if int64(start) <= src {
+			idx = i
+		}
+	}
+	return idx
+}
+
+// skipTrack moves delta tracks from the one playing. Going back from more
+// than a few seconds into a track restarts it.
+func (s *streamingSource) skipTrack(delta int) error {
+	if s.tracks == nil {
+		return ErrSingleTrack
+	}
+	starts := s.tracks.TrackStarts()
+	if len(starts) == 0 {
+		return ErrSingleTrack
+	}
+	played := s.played.Load()
+	cur := trackAt(starts, played, s.sourceRate)
+	target := cur + delta
+	if delta < 0 {
+		into := played - int64(starts[cur])*targetSampleRate/int64(s.sourceRate)
+		if into > restartTrackFrames {
+			target++
+		}
+	}
+	if target >= len(starts) {
+		return fmt.Errorf("no track after %d", cur+1)
+	}
+	target = max(target, 0)
+	frame := int64(starts[target]) * targetSampleRate / int64(s.sourceRate)
+	s.seek(sampleDuration(frame) - sampleDuration(played))
+	return nil
+}
+
+// restartTrackFrames is how far into a track going back restarts it rather
+// than going to the one before.
+const restartTrackFrames = 3 * targetSampleRate
 
 // maxPlaybackVolume is the highest gain a source plays at.
 const maxPlaybackVolume = 2.0
@@ -1160,14 +1248,35 @@ func (s *streamingSource) state() PlaybackState {
 	stopped := s.stopped.Load()
 	eof := s.eof.Load()
 	return PlaybackState{
-		Meta:     s.meta.Load(),
-		Path:     s.path,
-		Position: sampleDuration(s.played.Load()),
-		Duration: sampleDuration(s.totalFrames),
-		Playing:  !paused && !stopped && (!eof || s.bufferedFrames() != 0),
-		Paused:   paused,
-		Live:     s.live != nil,
+		Meta:       s.trackMeta(),
+		Path:       s.path,
+		Position:   sampleDuration(s.played.Load()),
+		Duration:   sampleDuration(s.totalFrames),
+		Playing:    !paused && !stopped && (!eof || s.bufferedFrames() != 0),
+		Paused:     paused,
+		Live:       s.live != nil,
+		MultiTrack: s.tracks != nil && len(s.tracks.TrackStarts()) > 1,
 	}
+}
+
+// trackMeta is the source's tags, numbered with the track playing when the
+// source plays several back to back.
+func (s *streamingSource) trackMeta() *trackmeta.Meta {
+	meta := s.meta.Load()
+	if s.tracks == nil {
+		return meta
+	}
+	starts := s.tracks.TrackStarts()
+	if len(starts) < 2 {
+		return meta
+	}
+	numbered := trackmeta.Meta{}
+	if meta != nil {
+		numbered = *meta
+	}
+	numbered.TrackNumber = trackAt(starts, s.played.Load(), s.sourceRate) + 1
+	numbered.TrackTotal = len(starts)
+	return &numbered
 }
 
 func sampleDuration(samples int64) time.Duration {

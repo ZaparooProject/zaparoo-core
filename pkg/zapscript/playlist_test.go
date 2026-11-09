@@ -712,8 +712,10 @@ func (*playlistPlaybackStub) Stop(_ string) error                             { 
 func (*playlistPlaybackStub) Pause(_ string) error                            { return nil }
 func (*playlistPlaybackStub) Resume(_ string) error                           { return nil }
 func (*playlistPlaybackStub) TogglePause(_ string) error                      { return nil }
-func (*playlistPlaybackStub) SetVolume(_ string, _ float64) error             { return nil }
-func (p *playlistPlaybackStub) State(_ string) audio.PlaybackState            { return p.state }
+
+func (*playlistPlaybackStub) SkipTrack(string, int) error          { return nil }
+func (*playlistPlaybackStub) SetVolume(_ string, _ float64) error  { return nil }
+func (p *playlistPlaybackStub) State(_ string) audio.PlaybackState { return p.state }
 func (p *playlistPlaybackStub) Seek(slot string, offset time.Duration) error {
 	p.seekCalled = true
 	p.seekSlot = slot

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("MThd\x00\x00\x00\x0600\x00\x0100MTrk\x00\x00\x0000\xff\x03 0000000 00000 000 0 0000 00000000000\xa8\xad=\x90\xe9=73")

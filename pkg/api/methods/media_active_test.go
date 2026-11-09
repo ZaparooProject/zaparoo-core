@@ -125,6 +125,18 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 			expectedZapScript: "https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance",
 			expectNil:         false,
 		},
+		{
+			name: "returns the path of one track of a chiptune file, which is not indexed",
+			activeMedia: models.NewActiveMedia(
+				"Audio",
+				"Audio",
+				"/music/smb3.nsf/5",
+				"smb3 - 5",
+				"native-audio",
+			),
+			expectedZapScript: "/music/smb3.nsf/5",
+			expectNil:         false,
+		},
 	}
 
 	for _, tt := range tests {

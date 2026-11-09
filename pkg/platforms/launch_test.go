@@ -1298,6 +1298,7 @@ func TestDoLaunch_NamesStreams(t *testing.T) {
 	}{
 		{name: "station name", path: srv.URL + "/stream.mp3", probe: probe, want: "Pink Noise Radio"},
 		{name: "host", path: "http://uk1.example.com:8004/", want: "uk1.example.com"},
+		{name: "chiptune track", path: filepath.Join(t.TempDir(), "smb3.nsf", "5"), want: "smb3 - 5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

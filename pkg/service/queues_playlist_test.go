@@ -124,6 +124,8 @@ func (*servicePlaybackRecorder) TogglePause(string) error {
 	return nil
 }
 
+func (*servicePlaybackRecorder) SkipTrack(string, int) error { return nil }
+
 func (*servicePlaybackRecorder) Seek(string, time.Duration) error {
 	return nil
 }
@@ -1050,6 +1052,10 @@ func (s *statefulPlaybackStub) Resume(slot string) error {
 
 func (s *statefulPlaybackStub) TogglePause(slot string) error {
 	s.playing[slot] = !s.playing[slot]
+	return nil
+}
+
+func (*statefulPlaybackStub) SkipTrack(string, int) error {
 	return nil
 }
 

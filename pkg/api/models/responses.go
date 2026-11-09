@@ -201,6 +201,7 @@ type SettingsResponse struct {
 	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
 	MediaImageDir             *string            `json:"mediaImageDir,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
+	AudioMidiSoundFont        string             `json:"audioMidiSoundFont"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
