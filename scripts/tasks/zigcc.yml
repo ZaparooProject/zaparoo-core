@@ -180,7 +180,7 @@ tasks:
             -F/opt/macosx-sdk/System/Library/Frameworks
           CXX: >-
             zig c++ -w --target=x86_64-macos
-            -I/opt/macosx-sdk/usr/include
+            -idirafter /opt/macosx-sdk/usr/include
             -L/opt/macosx-sdk/usr/lib
             -F/opt/macosx-sdk/System/Library/Frameworks
 
@@ -205,6 +205,6 @@ tasks:
             -F/opt/macosx-sdk/System/Library/Frameworks
           CXX: >-
             zig c++ -w --target=aarch64-macos
-            -I/opt/macosx-sdk/usr/include
+            -idirafter /opt/macosx-sdk/usr/include
             -L/opt/macosx-sdk/usr/lib
             -F/opt/macosx-sdk/System/Library/Frameworks

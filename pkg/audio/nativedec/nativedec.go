@@ -18,7 +18,8 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // Package nativedec decodes MP3, FLAC and Ogg Vorbis with dr_mp3, dr_flac
-// and stb_vorbis, single-file C decoders vendored in third_party. The pure
+// and stb_vorbis, single-file C decoders vendored in third_party, and AAC
+// with libfaad (faad2) for network streams; see StreamDecoder. The pure
 // Go decoders cost about half of a MiSTer CPU core to play one MP3, which
 // the background music slot spent for as long as it played; these decode
 // the same audio for a fraction of that. A Decoder is a beep
@@ -27,6 +28,7 @@ package nativedec
 
 /*
 #cgo CFLAGS: -O2 -I${SRCDIR}/third_party -Wno-unused-function -Wno-unused-variable
+#cgo CFLAGS: -I${SRCDIR}/third_party/faad2/include -I${SRCDIR}/third_party/faad2/libfaad
 #cgo linux LDFLAGS: -lm
 #include <stdlib.h>
 #include "decoders.h"
@@ -36,6 +38,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"unsafe"
 )
@@ -171,13 +174,13 @@ func (d *Decoder) Stream(samples [][2]float64) (int, bool) {
 	switch d.channels {
 	case 1:
 		for i := range n {
-			v := float64(buf[i])
+			v := finite(buf[i])
 			samples[i] = [2]float64{v, v}
 		}
 	default:
 		for i := range n {
 			at := i * d.channels
-			samples[i] = [2]float64{float64(buf[at]), float64(buf[at+1])}
+			samples[i] = [2]float64{finite(buf[at]), finite(buf[at+1])}
 		}
 	}
 	d.pos += n
@@ -186,6 +189,17 @@ func (d *Decoder) Stream(samples [][2]float64) (int, bool) {
 
 // Err returns the error that stopped the stream, if any.
 func (d *Decoder) Err() error { return d.err }
+
+// finite widens a decoded sample, turning NaN and infinity into silence.
+// A hostile file can make the decoders emit them, and one non-finite
+// sample would poison every sound it is mixed with.
+func finite(v float32) float64 {
+	f := float64(v)
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
+	return f
+}
 
 // Len is the length in frames, or -1 when the file does not say.
 func (d *Decoder) Len() int { return d.length }

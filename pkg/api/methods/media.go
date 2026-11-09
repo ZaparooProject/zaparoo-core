@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
@@ -54,6 +55,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	zapscriptcmd "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -1816,6 +1818,9 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 // launches as it stands, unless it holds ZapScript syntax, when it is
 // escaped into one launch command so it cannot split into several.
 func backgroundTrackZapScript(path string) string {
+	if audio.IsStreamURL(path) {
+		return zapscriptcmd.LocationZapScript(path)
+	}
 	script := zapscript.Command{
 		Name: zapscript.ZapScriptCmdLaunch,
 		Args: []string{path},

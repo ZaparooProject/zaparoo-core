@@ -625,6 +625,7 @@ func RunCommand(
 	}
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
+	cmd = foldURLQuery(cmd)
 
 	linkValue, linkOwned, linkErr := checkZapLink(cfg, pl, db, cmd)
 	if linkErr != nil {
@@ -781,6 +782,7 @@ func RunCommand(
 	// way playlist.play does, and each item takes the guard when it launches.
 	// Holding it here would make the command's own playlist update look like a
 	// second launch and be refused.
+	releaseGuard := func() {}
 	if IsMediaLaunchingCommand(cmd.Name) && !isQueuedRandom(&cmd) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
@@ -798,7 +800,8 @@ func RunCommand(
 			if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 			}
-			defer opts.LauncherManager.EndLaunch()
+			releaseGuard = sync.OnceFunc(opts.LauncherManager.EndLaunch)
+			defer releaseGuard()
 		}
 		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
@@ -810,6 +813,13 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
+	if playlistFile, ok := errors.AsType[*audioPlaylistLaunchError](err); ok {
+		// The playlist's first item launches from the playlist queue and
+		// takes the launch guard itself, so this command lets it go first.
+		releaseGuard()
+		log.Info().Str("path", playlistFile.path).Msg("playing audio playlist file")
+		res, err = startAudioPlaylistFile(&env, playlistFile.path)
+	}
 	if errors.Is(err, errMediaLaunchSkipped) {
 		// A resolved no-op is successful, including when wrapped by random
 		// or last-played launch handlers. Preserve metadata and chained commands.

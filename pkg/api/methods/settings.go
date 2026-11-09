@@ -76,6 +76,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		AudioVolume:               env.Config.AudioVolume(),
 		AudioMusicVolume:          env.Config.AudioMusicVolume(),
 		AudioMusicAutoplay:        env.Config.AudioMusicAutoplay(),
+		AudioNormalize:            env.Config.AudioNormalize(),
 		AudioMusicPauseOnLaunch:   env.Config.AudioPauseOnLaunch(),
 		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
 		ReadersScanMode:           env.Config.ReadersScan().Mode,
@@ -351,6 +352,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.AudioMusicVolume != nil {
 		log.Debug().Int("audioMusicVolume", *params.AudioMusicVolume).Msg("updating setting")
 		env.Config.SetAudioMusicVolume(*params.AudioMusicVolume)
+	}
+
+	if params.AudioNormalize != nil {
+		log.Debug().Bool("audioNormalize", *params.AudioNormalize).Msg("updating setting")
+		env.Config.SetAudioNormalize(*params.AudioNormalize)
 	}
 
 	if params.AudioMusicAutoplay != nil {

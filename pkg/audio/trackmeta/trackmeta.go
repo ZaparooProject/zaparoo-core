@@ -32,8 +32,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -71,6 +73,10 @@ type Meta struct {
 	TrackTotal  int
 	DiscNumber  int
 	DiscTotal   int
+	// ReplayGainDB is the track's ReplayGain adjustment, valid when
+	// HasReplayGain is set.
+	ReplayGainDB  float64
+	HasReplayGain bool
 	// HasArt reports cover art either embedded in the track or as an image
 	// beside it.
 	HasArt bool
@@ -640,6 +646,48 @@ func fillMeta(meta *Meta, md tag.Metadata) {
 	meta.TrackNumber, meta.TrackTotal = positive(track), positive(trackTotal)
 	disc, discTotal := md.Disc()
 	meta.DiscNumber, meta.DiscTotal = positive(disc), positive(discTotal)
+	meta.ReplayGainDB, meta.HasReplayGain = replayGain(md.Raw())
+}
+
+// maxReplayGainDB bounds a ReplayGain tag; anything further out is not a
+// real adjustment.
+const maxReplayGainDB = 60
+
+// replayGain finds the track gain in raw tags: a Vorbis comment
+// (replaygain_track_gain) or an ID3v2 TXXX frame described
+// REPLAYGAIN_TRACK_GAIN. The value reads like "-6.20 dB".
+func replayGain(raw map[string]any) (float64, bool) {
+	for key, v := range raw {
+		var text string
+		switch val := v.(type) {
+		case string:
+			if !strings.EqualFold(key, "replaygain_track_gain") {
+				continue
+			}
+			text = val
+		case *tag.Comm:
+			if !strings.EqualFold(val.Description, "replaygain_track_gain") {
+				continue
+			}
+			text = val.Text
+		default:
+			continue
+		}
+		return parseGain(text)
+	}
+	return 0, false
+}
+
+func parseGain(text string) (float64, bool) {
+	text = strings.TrimSpace(text)
+	if len(text) > 2 && strings.EqualFold(text[len(text)-2:], "db") {
+		text = strings.TrimSpace(text[:len(text)-2])
+	}
+	gain, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(gain) || math.Abs(gain) > maxReplayGainDB {
+		return 0, false
+	}
+	return gain, true
 }
 
 func positive(n int) int {
@@ -695,6 +743,13 @@ func sanitize(s string) string {
 
 // findFolderArt looks for a cover, folder or front image in the directory of
 // the track at path.
+// HasFolderArt reports whether a cover, folder or front image sits beside
+// the track at path.
+func HasFolderArt(path string) bool {
+	_, ok := findFolderArt(path)
+	return ok
+}
+
 func findFolderArt(path string) (string, bool) {
 	dir := filepath.Dir(path)
 	entries, err := os.ReadDir(dir)

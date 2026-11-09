@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,6 +287,12 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 	}
 
+	if params.Options != nil && params.Options.AudioStream.Name() != "" {
+		displayName = params.Options.AudioStream.Name()
+	} else if displayName == "" {
+		displayName = urlHost(publishedPath)
+	}
+
 	if systemID == "" {
 		log.Debug().Msg("skipping ActiveMedia - no SystemID available")
 		return nil
@@ -345,4 +352,17 @@ func waitForBlockingProcess(
 
 	setActiveMedia(nil)
 	log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+}
+
+// urlHost is the host of a URL, which names media whose URL has no path to
+// name it by, or "" when path is not a URL.
+func urlHost(path string) string {
+	if !strings.Contains(path, "://") {
+		return ""
+	}
+	u, err := url.Parse(path)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

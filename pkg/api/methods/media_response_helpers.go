@@ -28,11 +28,13 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	zapscriptcmd "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -76,6 +78,11 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 func activeMediaEnrichment(
 	env *requests.RequestEnv, systemID, path, name string,
 ) (mediaID int64, zapScript string) {
+	// A stream is not indexed, and a title command cannot find it; its URL
+	// launches it again.
+	if audio.IsStreamURL(path) {
+		return 0, zapscriptcmd.LocationZapScript(path)
+	}
 	var zapScriptTags []database.TagInfo
 	if env.Database != nil && env.Database.MediaDB != nil {
 		tags, err := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(env.Context, systemID, path)
@@ -187,6 +194,23 @@ func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, sl
 	if state.Meta != nil && state.Path == entry.Path {
 		entry.Track = trackInfo(state.Meta)
 	}
+	entry.LauncherControls = playableControls(entry.LauncherControls, &state)
+}
+
+// playableControls drops the launcher controls the playing source cannot
+// do: a live stream cannot seek.
+func playableControls(controls []string, state *audio.PlaybackState) []string {
+	if len(controls) == 0 {
+		return controls
+	}
+	kept := make([]string, 0, len(controls))
+	for _, control := range controls {
+		if state.Live && (control == platforms.ControlFastForward || control == platforms.ControlRewind) {
+			continue
+		}
+		kept = append(kept, control)
+	}
+	return kept
 }
 
 func trackInfo(meta *trackmeta.Meta) *models.TrackInfo {
