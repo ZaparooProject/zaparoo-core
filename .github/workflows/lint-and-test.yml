@@ -72,12 +72,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Native archives are rebuilt from this checkout; reuse already published
-      # tooling so PR validation does not depend on publishing the new image.
+      # Native archives are rebuilt from this checkout. Pull the toolchain
+      # version Cross Lint uses; a PR that bumps VERSION before the image is
+      # published builds it locally instead.
       - name: Pull release toolchain
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
-          docker pull ghcr.io/zaparooproject/zigcc:1.5.0
-          docker tag ghcr.io/zaparooproject/zigcc:1.5.0 zaparoo/zigcc
+          image="ghcr.io/${OWNER,,}/zigcc:$(cat scripts/zigcc/VERSION)"
+          if docker pull "$image"; then
+            docker tag "$image" zaparoo/zigcc
+          else
+            echo "Could not pull $image, building it locally..."
+            docker build --build-arg UID=1001 --build-arg GID=1001 -t zaparoo/zigcc scripts/zigcc
+          fi
       - name: Build sanitized native libraries and run release tests
         run: task linux:test-sanitized-amd64
 
