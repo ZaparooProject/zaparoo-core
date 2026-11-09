@@ -38,5 +38,5 @@ func (*RealExecutor) StartWithOptions(
 ) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: command executor's purpose
 	applyEnv(cmd, opts.Env)
-	return cmd.Start()
+	return startAndReap(cmd)
 }
