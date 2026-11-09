@@ -1,0 +1,126 @@
+Third-party sound chip cores used by pkg/audio/vgm
+==================================================
+
+Only chip emulation cores are vendored. The VGM interpreter, DAC stream
+engine, data block handling, resampler, mixer, per-chip glue (engine.c,
+chip_*.c) and every header under ../csrc are Zaparoo code under
+GPL-3.0-or-later. The ../csrc headers declare the types, macros and
+functions the cores use; they are written from the cores' own definitions and
+contain no libvgm framework, glue or player code.
+
+Upstreams
+---------
+
+libvgm   https://github.com/ValleyBell/libvgm
+         commit c5c03a2c2514d38d2ab7b7e8dbd021af0b8292cb (2026-11-04)
+         files from emu/cores/, copied into libvgm/cores/
+emu2413  https://github.com/digital-sound-antiques/emu2413
+         commit a1d5120903b75f93d3eb7690e34a29c0b4add903 (2026-10-11), v1.6.4
+         emu2413.c, emu2413.h and LICENSE, copied into emu2413/
+
+Files
+-----
+
+Each license was read from the file's own header at the pinned commit.
+
+File                          License        Chips
+libvgm/cores/sn76496.c        BSD-3-Clause   SN76489 family, T6W28
+libvgm/cores/fmopn.c          GPL-2.0+       YM2612, YM2203, YM2608, YM2610/B (patched, see below)
+libvgm/cores/ym3438.c         LGPL-2.1+      YM2612 (Nuked OPN2, Options.AccurateYM2612)
+libvgm/cores/ym3438_int.h     LGPL-2.1+      (ym3438.c internals)
+libvgm/cores/ym2151.c         GPL-2.0+       YM2151
+libvgm/cores/segapcm.c        BSD-3-Clause   SegaPCM
+libvgm/cores/rf5c68.c         BSD-3-Clause   RF5C68, RF5C164
+libvgm/cores/fmopl.c          GPL-2.0+       YM3812, YM3526, Y8950
+libvgm/cores/ymf262.c         GPL-2.0+       YMF262
+libvgm/cores/ymf271.c         BSD-3-Clause   YMF271
+libvgm/cores/ymz280b.c        BSD-3-Clause   YMZ280B
+libvgm/cores/pwm.c            GPL-2.0+       32X PWM
+libvgm/cores/ay8910.c         BSD-3-Clause   AY-3-8910, YM2149, OPN SSG parts
+libvgm/cores/gb_mame.c        BSD-3-Clause   Game Boy DMG
+libvgm/cores/nes_apu.c        GPL-2.0+       NES APU with DPCM
+libvgm/cores/nes_defs.h       GPL-2.0+       (nes_apu.c tables)
+libvgm/cores/multipcm.c       BSD-3-Clause   MultiPCM
+libvgm/cores/upd7759.c        BSD-3-Clause   uPD7759
+libvgm/cores/okim6258.c       BSD-3-Clause   OKIM6258
+libvgm/cores/okim6295.c       BSD-3-Clause   OKIM6295
+libvgm/cores/okiadpcm.c       BSD-3-Clause   (OKI ADPCM decoder)
+libvgm/cores/okiadpcm.h       BSD-3-Clause   (OKI ADPCM decoder)
+libvgm/cores/k051649.c        BSD-3-Clause   K051649 / SCC
+libvgm/cores/k054539.c        BSD-3-Clause   K054539
+libvgm/cores/c6280_mame.c     BSD-3-Clause   HuC6280
+libvgm/cores/c140.c           BSD-3-Clause   C140
+libvgm/cores/c219.c           BSD-3-Clause   C219
+libvgm/cores/k053260.c        BSD-3-Clause   K053260
+libvgm/cores/pokey.c          BSD-3-Clause   Pokey
+libvgm/cores/qsound_mame.c    BSD-3-Clause   QSound
+libvgm/cores/scsp.c           BSD-3-Clause   SCSP
+libvgm/cores/scspdsp.c        BSD-3-Clause   (SCSP DSP)
+libvgm/cores/scsplfo.c        BSD-3-Clause   (SCSP LFO)
+libvgm/cores/vsu.c            GPL-2.0+       Virtual Boy VSU
+libvgm/cores/saa1099_mame.c   BSD-3-Clause   SAA1099
+libvgm/cores/es5503.c         BSD-3-Clause   ES5503
+libvgm/cores/x1_010.c         BSD-3-Clause   X1-010
+libvgm/cores/c352.c           BSD-3-Clause   C352
+libvgm/cores/iremga20.c       BSD-3-Clause   GA20
+libvgm/cores/mikey.c          MIT            Atari Lynx Mikey
+emu2413/emu2413.c             MIT            YM2413, VRC7
+emu2413/emu2413.h             MIT            (emu2413 API)
+
+License texts
+-------------
+
+BSD-3-Clause   LICENSE.BSD-3-Clause.txt (copyright holders are named in each file)
+GPL-2.0        LICENSE.GPL-2.0.txt (the files allow version 2 or any later version)
+LGPL-2.1       LICENSE.LGPL-2.1.txt (the files allow version 2.1 or any later version)
+MIT            LICENSE.MIT-mikey.txt for mikey.c, emu2413/LICENSE for emu2413
+
+Changes and replacements
+------------------------
+
+- libvgm/cores/fmopn.c: two changes, marked "Zaparoo". The YM2610 ADPCM-A
+  fetch checks the address against the ROM size, because the end address
+  comes from the file. The legacy-mode 3CH FNUM1 latch read only runs for
+  the first port, where the channel index fits block_fnum[3].
+- libvgm/cores/segapcm.c: SEGAPCM_update, marked "Zaparoo", reads
+  silence past the ROM.
+- libvgm/cores/upd7759.c: ROM reads go through zap_rom_byte, marked
+  "Zaparoo", which checks the bank offset plus address against the ROM size,
+  because the bank, sample index and offsets come from the file.
+- libvgm/cores/multipcm.c: init_sample and read_byte, marked "Zaparoo",
+  check the ROM exists and the read stays inside it. value_to_fixed
+  saturates instead of overflowing the float cast, because the pitch table
+  scales with the chip clock from the file.
+- libvgm/cores/k054539.c: k054539_w and k054539_r, marked "Zaparoo", drop
+  register offsets past the 0x230-byte register file, because the offset
+  comes from the file.
+- libvgm/cores/x1_010.c: seta_sound_w, seta_sound_r and seta_update,
+  marked "Zaparoo", keep register offsets, waveform and envelope numbers
+  inside the 0x2000-byte register area and PCM reads inside the ROM.
+- libvgm/cores/es5503.c: es5503_halt_osc, marked "Zaparoo", skips the
+  sync partner below oscillator 0.
+- libvgm/cores/iremga20.c: irem_ga20_cache_samples, marked "Zaparoo",
+  stops the voice when the ROM is missing or the address is past it.
+- libvgm/cores/k051649.c: the waveform, volume and frequency handlers,
+  marked "Zaparoo", ignore channel numbers past the fifth.
+- libvgm/cores/scsp.c: SCSP_UpdateSlot, marked "Zaparoo", wraps sample
+  addresses to the sample RAM.
+- libvgm/cores/scspdsp.c: SCSPDSP_Step, marked "Zaparoo", checks DSP memory
+  addresses against the RAM's real word count.
+- ../csrc/emu/cores/ymdeltat.c and .h: our own ADPCM-B (DELTA-T) decoder for
+  Y8950, YM2608 and YM2610, used in place of libvgm's ymdeltat.c, whose
+  header grants no license.
+- ../csrc/emu/cores/fmopn_2608rom.h: an all-zero stand-in. The real file is a
+  dump of Yamaha's YM2608 rhythm ROM, with no license that allows
+  redistribution. The glue drops rhythm writes, so the YM2608 rhythm part
+  plays silent.
+- ../csrc/emu/cores/scspdsp.h: our own declaration of the SCSP DSP state;
+  libvgm's copy has no license header.
+
+Every other vendored file is byte-for-byte identical to upstream.
+
+Not included
+------------
+
+YMF278B (OPL4), WonderSwan, NES FDS and ES5506 are not emulated: their
+commands are parsed and skipped, and those parts play silent.

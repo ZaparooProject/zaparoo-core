@@ -161,6 +161,11 @@ ENV LIBNFC_COMMIT="3fa0751ad58fb0053d3de2e61bbbd4066259104c"
 	write("pkg/audio/nativedec/third_party/LICENSE-dr_libs",
 		"This software is available as a choice of the following licenses.")
 	write("pkg/audio/nativedec/third_party/LICENSE-stb", "This software is available under 2 licenses.")
+	for i := range vendoredAudioLibraries {
+		for _, lic := range vendoredAudioLibraries[i].licenses {
+			write(lic.path, vendoredAudioLibraries[i].component.License)
+		}
+	}
 	write("mod/sqlite/sqlite3-binding.c", fakeSQLite)
 	write("mod/sqlite/LICENSE", mitText)
 	write("mod/malgo/miniaudio.h", fakeMiniaudio)
@@ -303,6 +308,11 @@ func TestExtrasFailWhenInputsAreMissing(t *testing.T) {
 			t.Helper()
 			require.NoError(t, os.Remove(filepath.Join(
 				c.root, "pkg", "audio", "nativedec", "third_party", "LICENSE-stb")))
+		}},
+		{name: "vendored audio library license", want: "faad2/COPYING", mutate: func(t *testing.T, c *fakeCheckout) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(
+				c.root, "pkg", "audio", "nativedec", "third_party", "faad2", "COPYING")))
 		}},
 		{name: "EFF attribution", want: "eff-wordlist.txt", mutate: func(t *testing.T, c *fakeCheckout) {
 			t.Helper()

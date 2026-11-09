@@ -198,6 +198,19 @@ func extras(root string, modules map[string]*linkedModule) ([]extraComponent, er
 		files: []extraFile{{name: "LICENSE", text: stbVorbis}},
 	})
 
+	for i := range vendoredAudioLibraries {
+		lib := &vendoredAudioLibraries[i]
+		files := make([]extraFile, 0, len(lib.licenses))
+		for _, lic := range lib.licenses {
+			text, readErr := read(lic.path)
+			if readErr != nil {
+				return nil, readErr
+			}
+			files = append(files, extraFile{name: lic.name, text: text})
+		}
+		out = append(out, extraComponent{component: lib.component, files: files})
+	}
+
 	vdf, err := read("internal/vdfbinary/LICENSE")
 	if err != nil {
 		return nil, err
@@ -315,4 +328,98 @@ func miniaudioLicense(source string) (string, error) {
 		return "", errors.New("miniaudio license end not found")
 	}
 	return source[start : start+end], nil
+}
+
+type vendoredLicense struct{ name, path string }
+
+// vendoredAudioLibraries are the C and C++ libraries compiled into the
+// native audio decoders.
+var vendoredAudioLibraries = []struct {
+	component credits.Component
+	licenses  []vendoredLicense
+}{
+	{
+		component: credits.Component{
+			Name: "FAAD2", Version: "2.11.4", URL: "https://github.com/knik0/faad2",
+			License: "GPL-2.0-or-later",
+			Note: "libfaad is vendored in pkg/audio/nativedec/third_party/faad2 from " +
+				"https://github.com/knik0/faad2/tree/e8e76f0a44db45aed773a3f62fe35a63c867a738.",
+		},
+		licenses: []vendoredLicense{{name: "COPYING", path: "pkg/audio/nativedec/third_party/faad2/COPYING"}},
+	},
+	{
+		component: credits.Component{
+			Name: "libADLMIDI", Version: "1.6.2.1", URL: "https://github.com/Wohlstand/libADLMIDI",
+			License: "LGPL-3.0-or-later AND GPL-2.0-or-later AND MIT AND BSL-1.0",
+			Note: "Vendored in pkg/audio/midi/third_party/libadlmidi from " +
+				"https://github.com/Wohlstand/libADLMIDI/tree/99c5e03a5cf9b4fdf35b53efddb853c96320d50f, " +
+				"built with the DOSBox OPL3 emulator only. Changes are marked \"Zaparoo\": " +
+				"dbopl.cpp computes its offset tables with offsetof, and the sequencer " +
+				"bounds-checks note and controller numbers and rejects a zero division.",
+		},
+		licenses: []vendoredLicense{
+			{name: "LICENSE", path: "pkg/audio/midi/third_party/libadlmidi/LICENSE"},
+			{name: "LICENSE.GPL-3", path: "pkg/audio/midi/third_party/libadlmidi/LICENSE.GPL-3.txt"},
+			{name: "LICENSE.DOSBox", path: "pkg/audio/midi/third_party/libadlmidi/src/chips/dosbox/LICENSE"},
+			{name: "LICENSE.midiseq", path: "pkg/audio/midi/third_party/libadlmidi/src/midiseq/LICENSE.txt"},
+			{name: "LICENSE.models", path: "pkg/audio/midi/third_party/libadlmidi/src/models/LICENSE.txt"},
+			{name: "LICENSE.wopl", path: "pkg/audio/midi/third_party/libadlmidi/src/wopl/LICENSE.txt"},
+			{name: "LICENSE.structures", path: "pkg/audio/midi/third_party/libadlmidi/src/structures/LICENSE"},
+		},
+	},
+	{
+		component: credits.Component{
+			Name: "DMXOPL3", URL: "https://github.com/sneakernets/DMXOPL", License: "MIT",
+			Note: "The GS OPL3 instrument bank embedded in the MIDI player, " +
+				"from pkg/audio/midi/third_party/libadlmidi/banks.",
+		},
+		licenses: []vendoredLicense{
+			{name: "LICENSE", path: "pkg/audio/midi/third_party/libadlmidi/banks/LICENSE-DMXOPL.txt"},
+		},
+	},
+	{
+		component: credits.Component{
+			Name: "TinySoundFont", URL: "https://github.com/schellingb/TinySoundFont", License: "MIT",
+			Note: "tsf.h and tml.h are vendored in pkg/audio/midi/third_party/tinysoundfont from " +
+				"https://github.com/schellingb/TinySoundFont/tree/853a0a171759f1ddba0de1442133a75912bbeffa.",
+		},
+		licenses: []vendoredLicense{{name: "LICENSE", path: "pkg/audio/midi/third_party/tinysoundfont/LICENSE"}},
+	},
+	{
+		component: credits.Component{
+			Name: "libvgm sound cores", URL: "https://github.com/ValleyBell/libvgm",
+			License: "BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT",
+			Note: "Chip emulation cores vendored in pkg/audio/vgm/third_party/libvgm from " +
+				"https://github.com/ValleyBell/libvgm/tree/c5c03a2c2514d38d2ab7b7e8dbd021af0b8292cb; " +
+				"pkg/audio/vgm/third_party/README lists the license of each file.",
+		},
+		licenses: []vendoredLicense{
+			{name: "LICENSE.BSD-3-Clause", path: "pkg/audio/vgm/third_party/LICENSE.BSD-3-Clause.txt"},
+			{name: "LICENSE.GPL-2.0", path: "pkg/audio/vgm/third_party/LICENSE.GPL-2.0.txt"},
+			{name: "LICENSE.LGPL-2.1", path: "pkg/audio/vgm/third_party/LICENSE.LGPL-2.1.txt"},
+			{name: "LICENSE.MIT-mikey", path: "pkg/audio/vgm/third_party/LICENSE.MIT-mikey.txt"},
+		},
+	},
+	{
+		component: credits.Component{
+			Name: "emu2413", Version: "1.6.4", URL: "https://github.com/digital-sound-antiques/emu2413",
+			License: "MIT",
+			Note: "Vendored in pkg/audio/vgm/third_party/emu2413 from " +
+				"https://github.com/digital-sound-antiques/emu2413/tree/a1d5120903b75f93d3eb7690e34a29c0b4add903.",
+		},
+		licenses: []vendoredLicense{{name: "LICENSE", path: "pkg/audio/vgm/third_party/emu2413/LICENSE"}},
+	},
+	{
+		component: credits.Component{
+			Name: "Game_Music_Emu", Version: "0.6.5", URL: "https://github.com/libgme/game-music-emu",
+			License: "LGPL-2.1-or-later AND MIT",
+			Note: "Vendored and patched in pkg/audio/gme/third_party/gme from " +
+				"https://github.com/libgme/game-music-emu/tree/8238afd9503a59ffcec0e2685584d5ce819ad7c6, " +
+				"including its copy of emu2413 (MIT).",
+		},
+		licenses: []vendoredLicense{
+			{name: "license.txt", path: "pkg/audio/gme/third_party/gme/license.txt"},
+			{name: "LICENSE.emu2413", path: "pkg/audio/gme/third_party/gme/gme/ext/LICENSE"},
+		},
+	},
 }
