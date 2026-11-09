@@ -51,6 +51,31 @@ func applyEnv(cmd *exec.Cmd, env []string) {
 	}
 }
 
+// StartAndReap starts cmd and waits for it in the background. Use it for
+// fire-and-forget commands whose caller never calls cmd.Wait: without the
+// wait every exited child stays a zombie (and on Windows keeps its process
+// handle) until Core exits. The caller must not call cmd.Wait itself.
+func StartAndReap(cmd *exec.Cmd) error {
+	_, err := startReaped(cmd)
+	return err
+}
+
+// startReaped is StartAndReap with a channel that closes once cmd.Wait has
+// returned, after which cmd.ProcessState is safe to read.
+//
+//nolint:wrapcheck // Wrapping exec errors loses important context
+func startReaped(cmd *exec.Cmd) (<-chan struct{}, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	reaped := make(chan struct{})
+	go func() {
+		defer close(reaped)
+		_ = cmd.Wait()
+	}()
+	return reaped, nil
+}
+
 // Executor provides an abstraction over exec.Command for testability.
 // This allows commands to be mocked in tests without executing real system commands.
 type Executor interface {
@@ -93,5 +118,5 @@ func (*RealExecutor) Output(ctx context.Context, name string, args ...string) ([
 //
 //nolint:wrapcheck,gosec // Wrapping exec errors loses important context; G204: command executor's purpose
 func (*RealExecutor) Start(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Start()
+	return StartAndReap(exec.CommandContext(ctx, name, args...))
 }

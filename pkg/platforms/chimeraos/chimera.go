@@ -32,6 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -106,7 +107,7 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 
 			//nolint:gosec // Path constructed from known base directory
 			cmd := exec.CommandContext(context.Background(), startScript)
-			if err := cmd.Start(); err != nil {
+			if err := command.StartAndReap(cmd); err != nil {
 				return nil, fmt.Errorf("failed to launch GOG game: %w", err)
 			}
 			return nil, nil

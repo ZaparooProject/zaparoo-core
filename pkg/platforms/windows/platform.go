@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/pinuppopper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -824,7 +825,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					path,
 				)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				err := cmd.Start()
+				err := command.StartAndReap(cmd)
 				if err != nil {
 					return nil, fmt.Errorf("failed to open URL in browser: %w", err)
 				}

@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -255,7 +256,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := exec.CommandContext(context.Background(), path).Start()
+				err := command.StartAndReap(exec.CommandContext(context.Background(), path))
 				if err != nil {
 					return nil, fmt.Errorf("failed to start command: %w", err)
 				}

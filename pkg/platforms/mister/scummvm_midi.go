@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
@@ -52,7 +53,7 @@ func startMIDIMeister() error {
 
 	// Start MIDIMeister with CPU affinity
 	cmd := exec.CommandContext(ctx, "taskset", midiCPUMask, midiMeisterPath, "QUIET")
-	if err := cmd.Start(); err != nil {
+	if err := command.StartAndReap(cmd); err != nil {
 		return fmt.Errorf("failed to start MIDIMeister: %w", err)
 	}
 
