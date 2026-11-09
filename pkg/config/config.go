@@ -135,6 +135,7 @@ type Audio struct {
 	Volume        *int    `toml:"volume,omitempty"`
 	MusicVolume   *int    `toml:"music_volume,omitempty"`
 	MusicAutoplay *bool   `toml:"music_autoplay,omitempty"`
+	MidiSoundFont *string `toml:"midi_soundfont,omitempty"`
 	Normalize     *bool   `toml:"normalize,omitempty"`
 	ScanFeedback  bool    `toml:"scan_feedback"`
 }
@@ -736,6 +737,45 @@ func (c *Instance) SetAudioNormalize(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.Normalize = &enabled
+}
+
+// MidiSoundFontPath returns the SoundFont MIDI files play through, or ""
+// when MIDI plays through the built-in FM synthesizer. A relative path
+// resolves under dataDir/assets.
+func (c *Instance) MidiSoundFontPath(dataDir string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.MidiSoundFont == nil || *c.vals.Audio.MidiSoundFont == "" {
+		return ""
+	}
+	path := *c.vals.Audio.MidiSoundFont
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dataDir, AssetsDir, path)
+}
+
+// MidiSoundFont returns the configured SoundFont setting as written, ""
+// when MIDI uses the built-in FM synthesizer.
+func (c *Instance) MidiSoundFont() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.MidiSoundFont == nil {
+		return ""
+	}
+	return *c.vals.Audio.MidiSoundFont
+}
+
+// SetMidiSoundFont sets the SoundFont MIDI files play through. An empty
+// path goes back to the built-in FM synthesizer.
+func (c *Instance) SetMidiSoundFont(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if path == "" {
+		c.vals.Audio.MidiSoundFont = nil
+		return
+	}
+	c.vals.Audio.MidiSoundFont = &path
 }
 
 // SuccessSoundPath resolves the success sound file path based on config and disk overrides.

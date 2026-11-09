@@ -149,7 +149,7 @@ func readM3UFile(path string) ([]playlists.PlaylistItem, error) {
 }
 
 // resolvePlaylistEntry turns a relative file entry into the absolute path of
-// the file next to the playlist, leaving URLs, absolute paths and entries
+// the file, or track of a file, next to the playlist, leaving URLs, absolute paths and entries
 // with no such file as written.
 func resolvePlaylistEntry(playlistPath, entry string) string {
 	if strings.Contains(entry, "://") || filepath.IsAbs(entry) {
@@ -159,6 +159,12 @@ func resolvePlaylistEntry(playlistPath, entry string) string {
 	candidate := filepath.Join(filepath.Dir(playlistPath), rel)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
+	}
+	// One track of a multi-track chiptune file is <file>/<n>.
+	if file, _, ok := audio.SplitTrackPath(candidate); ok {
+		if _, err := os.Stat(file); err == nil {
+			return candidate
+		}
 	}
 	return entry
 }

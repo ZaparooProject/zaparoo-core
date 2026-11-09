@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("NSFE0040NEND")
+int(-25)

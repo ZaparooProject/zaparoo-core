@@ -504,6 +504,9 @@ func startServiceWithOptions(
 	platformSettings := pl.Settings()
 	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 	playbackManager.SetTrackMetaLimit(methods.MediaImageMaxBytes(pl))
+	playbackManager.SetMidiSoundFontSource(func() string {
+		return cfg.MidiSoundFontPath(helpers.DataDir(pl))
+	})
 	playbackManager.SetNormalizeSource(cfg.AudioNormalize)
 
 	// TODO: define the notifications chan here instead of in state

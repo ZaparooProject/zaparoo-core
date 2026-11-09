@@ -28,8 +28,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -345,6 +347,10 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 	if _, err := fs.Stat(path); err == nil {
 		return path, nil
+	} else if errors.Is(err, syscall.ENOTDIR) {
+		// A path that runs through a file, such as a <file>.nsf/<n> track,
+		// does not exist on disk; a launcher may still vouch for it.
+		return "", fmt.Errorf("%w: %s", os.ErrNotExist, path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
@@ -524,7 +530,7 @@ func findFile(
 		}
 	}
 	if len(missing) > 0 {
-		all := launchers.Get(pl, cfg)
+		all := vouchingLaunchers(launchers.Get(pl, cfg), helpers.GlobalLauncherCache)
 		for _, candidate := range missing {
 			for i := range all {
 				if all[i].VirtualPathExists != nil && all[i].VirtualPathExists(cfg, candidate) {
@@ -539,6 +545,24 @@ func findFile(
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
+}
+
+// vouchingLaunchers is every launcher a missing path may be vouched for by:
+// the platform's, plus those only the launcher cache carries, such as native
+// audio, which launch selection uses too.
+func vouchingLaunchers(platformLaunchers []platforms.Launcher, cache *helpers.LauncherCache) []platforms.Launcher {
+	if cache == nil {
+		return platformLaunchers
+	}
+	all := slices.Clone(platformLaunchers)
+	cached := cache.GetAllLaunchers()
+	for i := range cached {
+		id := cached[i].ID
+		if !slices.ContainsFunc(all, func(p platforms.Launcher) bool { return p.ID == id }) {
+			all = append(all, cached[i])
+		}
+	}
+	return all
 }
 
 // effectiveScanMode returns the scan mode that applies to the token currently

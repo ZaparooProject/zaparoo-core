@@ -53,6 +53,7 @@ func TestReadM3UFile(t *testing.T) {
 	sub := filepath.Join(dir, "album")
 	require.NoError(t, os.Mkdir(sub, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "one.mp3"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "game.nsf"), nil, 0o600))
 	path := writePlaylistFile(t, dir, "mix.m3u", "\xef\xbb\xbf#EXTM3U\r\n"+
 		"#EXTINF:-1,Groove Salad\r\n"+
 		"http://ice1.somafm.com/groovesalad-128-mp3\r\n"+
@@ -61,7 +62,8 @@ func TestReadM3UFile(t *testing.T) {
 		"album\\one.mp3\r\n"+
 		"#EXTINF:120,Missing\r\n"+
 		"missing.mp3\r\n"+
-		"https://zpr.au/abc\r\n")
+		"https://zpr.au/abc\r\n"+
+		"game.nsf/5\r\n")
 
 	items, err := readPlaylistFile(path)
 	require.NoError(t, err)
@@ -70,6 +72,7 @@ func TestReadM3UFile(t *testing.T) {
 		{Name: "", ZapScript: literalLaunch(filepath.Join(sub, "one.mp3"))},
 		{Name: "Missing", ZapScript: "missing.mp3"},
 		{Name: "", ZapScript: literalLaunch("https://zpr.au/abc")},
+		{Name: "", ZapScript: literalLaunch(filepath.Join(dir, "game.nsf", "5"))},
 	}, items)
 }
 

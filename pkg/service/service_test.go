@@ -570,9 +570,11 @@ func (*resumePlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { re
 func (*resumePlaybackStub) Stop(_ string) error                             { return nil }
 func (*resumePlaybackStub) Pause(_ string) error                            { return nil }
 func (*resumePlaybackStub) TogglePause(_ string) error                      { return nil }
-func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
-func (*resumePlaybackStub) SetVolume(_ string, _ float64) error             { return nil }
-func (*resumePlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
+
+func (*resumePlaybackStub) SkipTrack(string, int) error          { return nil }
+func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error { return nil }
+func (*resumePlaybackStub) SetVolume(_ string, _ float64) error  { return nil }
+func (*resumePlaybackStub) State(_ string) audio.PlaybackState   { return audio.PlaybackState{} }
 
 func (s *resumePlaybackStub) Resume(slot string) error {
 	s.resumed = append(s.resumed, slot)

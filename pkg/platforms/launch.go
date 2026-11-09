@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -289,6 +290,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 
 	if params.Options != nil && params.Options.AudioStream.Name() != "" {
 		displayName = params.Options.AudioStream.Name()
+	} else if _, _, track := audio.SplitTrackPath(publishedPath); track {
+		// One track of a multi-track file is named for the file, not for
+		// its track number.
+		displayName = audioDisplayName(publishedPath)
 	} else if displayName == "" {
 		displayName = urlHost(publishedPath)
 	}

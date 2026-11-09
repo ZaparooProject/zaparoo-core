@@ -433,6 +433,8 @@ func (p *stubPlayback) TogglePause(string) error {
 	return nil
 }
 
+func (*stubPlayback) SkipTrack(string, int) error { return nil }
+
 func (p *stubPlayback) Seek(string, time.Duration) error {
 	p.record("seek")
 	return nil

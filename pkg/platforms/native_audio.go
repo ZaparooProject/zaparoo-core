@@ -35,6 +35,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/gme"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -63,6 +64,8 @@ func NativeAudioLauncher(
 		ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
 		ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
 		ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
+		ControlNext:        {Func: nativeAudioControl(playback, nil, nil, ControlNext)},
+		ControlPrevious:    {Func: nativeAudioControl(playback, nil, nil, ControlPrevious)},
 	}
 	// Background media is published by the launch itself rather than by the
 	// launch pipeline, so it carries the control names from here.
@@ -74,6 +77,14 @@ func NativeAudioLauncher(
 		// Playlist files are listed with audio so they can be browsed and
 		// picked; launching one runs it as a playlist instead.
 		Extensions: slices.Concat(audio.SupportedExtensions, audio.PlaylistExtensions),
+		// A single track of a multi-track chiptune file is <file>/<n>.
+		Test: func(_ *config.Instance, path string) bool {
+			return nativeAudioTrackExists(path)
+		},
+		// The track path is not on disk, so the launch lookup asks here.
+		VirtualPathExists: func(_ *config.Instance, path string) bool {
+			return nativeAudioTrackExists(path)
+		},
 		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
 			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, controlNames, cfg, path, opts)
 		},
@@ -189,6 +200,10 @@ func nativeAudioControl(
 			return playback.Seek(slot, controlSeekDuration(params.Args, 10*time.Second))
 		case ControlRewind:
 			return playback.Seek(slot, -controlSeekDuration(params.Args, 10*time.Second))
+		case ControlNext:
+			return playback.SkipTrack(slot, 1)
+		case ControlPrevious:
+			return playback.SkipTrack(slot, -1)
 		default:
 			return fmt.Errorf("unsupported native audio control: %s", action)
 		}
@@ -207,6 +222,21 @@ func controlSeekDuration(args map[string]string, fallback time.Duration) time.Du
 	return time.Duration(seconds * float64(time.Second))
 }
 
+// nativeAudioTrackExists reports whether path names a track of a multi-track
+// chiptune file that exists.
+func nativeAudioTrackExists(path string) bool {
+	file, track, ok := audio.SplitTrackPath(path)
+	if !ok {
+		return false
+	}
+	info, err := os.Stat(file)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	count, err := gme.TrackCount(file)
+	return err == nil && track < count
+}
+
 func audioDisplayName(location string) string {
 	if audio.IsStreamURL(location) {
 		u, err := url.Parse(location)
@@ -220,6 +250,9 @@ func audioDisplayName(location string) string {
 			return u.Hostname()
 		}
 		return tags.ParseTitleFromFilename(strings.TrimSuffix(base, pathpkg.Ext(base)), false)
+	}
+	if file, track, ok := audio.SplitTrackPath(location); ok {
+		return fmt.Sprintf("%s - %d", audioDisplayName(file), track+1)
 	}
 	base := filepath.Base(location)
 	return tags.ParseTitleFromFilename(strings.TrimSuffix(base, filepath.Ext(base)), false)
