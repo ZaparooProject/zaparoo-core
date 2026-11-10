@@ -316,7 +316,7 @@ None.
 
 Choice IDs are presentation-safe. Executable ZapScript and private choice values remain inside Core.
 
-On MiSTer, Main_MiSTer records in `/tmp/zaparoo/frontend_status.json` whether the Zaparoo frontend runs in place of the stock menu. While it does, Core shows no UI event through its own menu widgets and leaves every event to API clients, as long as the frontend is running or a game is; at the menu before the frontend has started, the widgets show it as before. An event raised while a game runs, which the widgets would have ended the game to show, instead returns to the menu so Main starts the frontend, and stays open for at least 60 seconds from then, or for its own timeout when that is longer. Events the widgets never show over a running game, such as the auto-advance switch countdown, are unchanged. When the file is missing, unreadable, reports the frontend inactive, or names a Main process that is no longer running (a stock Main started in its place), Core shows events as before.
+On MiSTer, Main_MiSTer records in `/tmp/zaparoo/frontend_status.json` whether the Zaparoo frontend runs in place of the stock menu. While it does, Core shows no UI event through its own menu widgets and leaves every event to API clients, including at the menu before the frontend has started, as when a game has just exited and Main is still loading the menu: such an event stays open for at least 60 seconds for the frontend to start and show it, or for its own timeout when that is longer. An event raised while a game runs, which the widgets would have ended the game to show, instead returns to the menu so Main starts the frontend, and stays open for at least 60 seconds from then, or for its own timeout when that is longer. Events the widgets never show over a running game, such as the auto-advance switch countdown, are unchanged. Main starts a new process on every core load and names it in the file shortly after, so when the file names a Main process that is no longer running, Core rereads it for up to 5 seconds before deciding. If it still names that process (a stock Main started in its place), Core shows events as before, without waiting again until the file changes. When the file is missing, unreadable or reports the frontend inactive, Core shows events as before.
 
 #### Example
 
@@ -407,7 +407,7 @@ Top-level `confirm` remains launch-guard-specific for compatibility. It cannot c
 
 ### ui.shown
 
-**Access:** All clients.
+**Access:** Localhost or any authenticated client.
 
 Reports that a client has put the active UI event on screen. The first report for an event restarts its expiry at the event's full timeout from now, so time spent waiting for the client to start does not count against the person answering it, and publishes the new `expiresAt` through `ui.changed`. A first report within a second of the event opening keeps the current expiry. Repeated reports for the same event are accepted and change nothing. An event the host renderer presents counts as shown without a report.
 

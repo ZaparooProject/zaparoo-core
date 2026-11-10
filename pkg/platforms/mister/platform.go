@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -139,10 +140,13 @@ type Platform struct {
 	coreLoads    coreLoadStops
 	lastLauncher platforms.Launcher
 	shared.InputManager
-	arcadeCardLaunch    arcadeCardLaunchCache
-	stopIntent          platforms.StopIntent
-	processMu           syncutil.RWMutex
-	platformMu          syncutil.Mutex
+	arcadeCardLaunch arcadeCardLaunchCache
+	stopIntent       platforms.StopIntent
+	processMu        syncutil.RWMutex
+	platformMu       syncutil.Mutex
+	// uiAbandonedPID is the orphaned status file pid HandOffUI last gave up
+	// waiting on.
+	uiAbandonedPID      atomic.Int64
 	trackedProcessGroup bool
 }
 

@@ -220,8 +220,8 @@ type activeEvent struct {
 	result        chan Result
 	shown         chan time.Time
 	event         models.UIEvent
-	// timeout is the request's own timeout, which the event gets in full from
-	// the moment it is shown.
+	// timeout is the request's own timeout, or the last one Update set, which
+	// the event gets in full from the moment it is shown.
 	timeout          time.Duration
 	timerGeneration  uint64
 	skipHostRenderer bool
@@ -399,6 +399,8 @@ func (s *Service) Update(id string, update Update) error {
 	if update.Timeout != nil {
 		resetTimer = true
 		timeout = *update.Timeout
+		// Shown restarts the expiry at the timeout as it now stands.
+		entry.timeout = timeout
 		entry.timerGeneration++
 		if entry.timer != nil {
 			entry.timer.Stop()

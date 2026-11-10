@@ -174,6 +174,32 @@ func TestHandOffUIGivesUpOnAnOrphanedStatus(t *testing.T) {
 	assert.Zero(t, minOpen)
 }
 
+// Once a wait has given up on an orphaned status, later events for the same
+// pid skip the wait; a rewritten file is waited on again.
+func TestHandOffUIWaitsOnceForAnOrphanedPID(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `{"active":true,"pid":999}`, false)
+	wait := 2 * frontendReloadPoll
+	p.uiReloadWait = &wait
+	event := &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker}
+	handled, _ := p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+
+	wait = time.Minute
+	start := time.Now()
+	handled, _ = p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.Less(t, time.Since(start), frontendReloadPoll, "the same orphaned pid is not waited on again")
+
+	require.NoError(t, afero.WriteFile(p.fs, frontendStatusPath, []byte(`{"active":true,"pid":998}`), 0o600))
+	wait = 2 * frontendReloadPoll
+	start = time.Now()
+	handled, _ = p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.GreaterOrEqual(t, time.Since(start), wait, "a new orphaned pid is waited on")
+}
+
 func TestFrontendActiveRejectsOversizedStatus(t *testing.T) {
 	t.Parallel()
 

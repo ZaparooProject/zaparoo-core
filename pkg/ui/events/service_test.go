@@ -594,6 +594,30 @@ func TestServiceShownWithoutTimeoutStaysOpen(t *testing.T) {
 	assert.Equal(t, uint64(1), state.Revision, "nothing changed, so nothing is published")
 }
 
+func TestServiceShownUsesUpdatedTimeout(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	service, published := newTestService(clock, nil)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+	openEnded := time.Duration(0)
+	require.NoError(t, handle.Update(Update{Timeout: &openEnded}))
+	_ = receiveState(t, published)
+
+	clock.Advance(4 * time.Second)
+	require.NoError(t, service.Shown(handle.ID))
+	state := service.State()
+	require.Len(t, state.Events, 1)
+	assert.Nil(t, state.Events[0].ExpiresAt, "an event made open-ended stays open-ended once shown")
+	assert.Equal(t, uint64(2), state.Revision)
+}
+
 func TestServiceShownStaleID(t *testing.T) {
 	t.Parallel()
 

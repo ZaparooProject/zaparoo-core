@@ -27,6 +27,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -66,7 +67,8 @@ type frontendStatus struct {
 // load and the fork rewrites the file from it, so a dead pid means a stock
 // Main took over and the file is stale.
 func frontendActive(fs afero.Fs) bool {
-	return readFrontendStatus(fs) == statusLive
+	state, _ := readFrontendStatus(fs)
+	return state == statusLive
 }
 
 type statusState int
@@ -79,46 +81,58 @@ const (
 	statusLive
 )
 
-func readFrontendStatus(fs afero.Fs) statusState {
+// readFrontendStatus reads the status file and the pid it names.
+func readFrontendStatus(fs afero.Fs) (state statusState, pid int) {
 	file, err := fs.Open(frontendStatusPath)
 	if err != nil {
-		return statusOff
+		return statusOff, 0
 	}
 	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, frontendStatusMaxBytes+1))
 	if err != nil || len(data) > frontendStatusMaxBytes {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return statusOff
+		return statusOff, 0
 	}
 	var status frontendStatus
 	if err := json.Unmarshal(data, &status); err != nil {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return statusOff
+		return statusOff, 0
 	}
 	if !status.Active || status.PID <= 0 {
-		return statusOff
+		return statusOff, 0
 	}
 	if _, err := fs.Stat(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(status.PID))); err != nil {
-		return statusOrphaned
+		return statusOrphaned, status.PID
 	}
-	return statusLive
+	return statusLive, status.PID
 }
 
 // frontendActiveSettled is frontendActive that waits out a core load: a
 // status file whose writer has just gone is reread until Main names its new
 // process, or until wait passes, when a stock Main is taken to have replaced
-// the fork.
-func frontendActiveSettled(ctx context.Context, fs afero.Fs, wait time.Duration) bool {
+// the fork. The pid a wait gave up on is kept in abandoned, so a file a stock
+// Main never rewrites delays only the first event, not every one after it.
+func frontendActiveSettled(
+	ctx context.Context,
+	fs afero.Fs,
+	wait time.Duration,
+	abandoned *atomic.Int64,
+) bool {
 	deadline := time.Now().Add(wait)
 	for {
-		switch readFrontendStatus(fs) {
+		state, pid := readFrontendStatus(fs)
+		switch state {
 		case statusLive:
 			return true
 		case statusOff:
 			return false
 		case statusOrphaned:
+			if abandoned.Load() == int64(pid) {
+				return false
+			}
 		}
 		if !time.Now().Before(deadline) {
+			abandoned.Store(int64(pid))
 			return false
 		}
 		select {
@@ -138,15 +152,15 @@ func frontendActiveSettled(ctx context.Context, fs afero.Fs, wait time.Duration)
 // loading the menu, is kept open the same way: the widget cannot switch
 // consoles under a starting frontend. Main names a new process in the status
 // file after each core load, so a status whose writer has just gone is
-// waited on briefly before the widget gets the event. Events the widgets never show over
-// media (the auto-advance switch countdown, the launch guard) are decided
+// waited on briefly before the widget gets the event. Events the widgets
+// never show over media (the auto-advance switch countdown, the launch guard) are decided
 // before they reach the renderer and are unaffected.
 func (p *Platform) HandOffUI(ctx context.Context, event *models.UIEvent) (handled bool, minOpen time.Duration) {
 	wait := frontendReloadWait
 	if p.uiReloadWait != nil {
 		wait = *p.uiReloadWait
 	}
-	if !frontendActiveSettled(ctx, p.filesystem(), wait) {
+	if !frontendActiveSettled(ctx, p.filesystem(), wait, &p.uiAbandonedPID) {
 		return false, 0
 	}
 	if p.activeMedia == nil || p.activeMedia() == nil {
