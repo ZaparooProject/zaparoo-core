@@ -19,24 +19,23 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
-	"testing"
+	"context"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
-	"github.com/stretchr/testify/assert"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputactivity"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// Batocera shows notices and loaders only, which is what PresentUI accepts, so
-// pickers and confirmations are left to API clients.
-func TestPlatform_RendersUIKind(t *testing.T) {
-	t.Parallel()
+var _ platforms.InputActivitySource = (*Platform)(nil)
 
-	var renderer uievents.Renderer = &Platform{}
-	assert.True(t, uievents.RendersKind(renderer, models.UIEventKindNotice))
-	assert.True(t, uievents.RendersKind(renderer, models.UIEventKindLoader))
-	assert.False(t, uievents.RendersKind(renderer, models.UIEventKindPicker))
-	assert.False(t, uievents.RendersKind(renderer, models.UIEventKindConfirm))
+// InputCoverage implements platforms.InputActivitySource.
+func (*Platform) InputCoverage() platforms.InputClass {
+	return platforms.InputClass(inputactivity.NewEvdevAll().Coverage())
+}
+
+// WatchInput implements platforms.InputActivitySource.
+func (*Platform) WatchInput(ctx context.Context, responsive bool, onActivity func()) error {
+	return inputactivity.NewEvdevAll().Watch(ctx, responsive, onActivity) //nolint:wrapcheck // already descriptive
 }

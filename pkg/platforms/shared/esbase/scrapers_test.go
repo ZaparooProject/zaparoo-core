@@ -1,6 +1,6 @@
 //go:build linux && !android
 
-package batocera
+package esbase
 
 import (
 	"testing"
@@ -12,7 +12,7 @@ import (
 func TestScrapers_RegisterGamelistAndMediaFolder(t *testing.T) {
 	t.Parallel()
 
-	scrapers := (&Platform{}).Scrapers(nil)
+	scrapers := (&Platform{opts: testOptions()}).Scrapers(nil)
 
 	require.Contains(t, scrapers, "gamelist.xml")
 	require.Contains(t, scrapers, "media-folder")

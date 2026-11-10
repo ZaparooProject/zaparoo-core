@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"encoding/xml"
@@ -27,20 +27,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	// ESConfigDir is the EmulationStation config directory on Batocera.
-	ESConfigDir = "/userdata/system/configs/emulationstation"
 	// ESSystemsConfigFile is the main ES systems config file.
 	ESSystemsConfigFile = "es_systems.cfg"
 	// ESSystemsOverlayPattern is the glob pattern for overlay config files.
 	ESSystemsOverlayPattern = "es_systems_*.cfg"
-	// defaultROMPath is the default ROM directory used for relative path resolution.
-	defaultROMPath = "/userdata/roms"
 )
 
 // ESSystem represents a single system entry from es_systems.cfg.
@@ -151,7 +148,8 @@ func parseESSystemFile(path string, cfg *ESSystemConfig) error {
 
 // GetROMPaths returns deduplicated ROM paths from parsed ES config.
 // Paths are expanded (environment variables resolved) and normalized.
-func (c *ESSystemConfig) GetROMPaths() []string {
+// Systems named in skip are left out.
+func (c *ESSystemConfig) GetROMPaths(relativeRoot string, skip ...string) []string {
 	if c == nil {
 		return nil
 	}
@@ -160,7 +158,10 @@ func (c *ESSystemConfig) GetROMPaths() []string {
 	var paths []string
 
 	for _, sys := range c.Systems {
-		expandedPath := expandPath(sys.Path)
+		if slices.Contains(skip, sys.Name) {
+			continue
+		}
+		expandedPath := expandPath(sys.Path, relativeRoot)
 		if expandedPath == "" {
 			continue
 		}
@@ -183,7 +184,7 @@ func (c *ESSystemConfig) GetROMPaths() []string {
 }
 
 // expandPath expands environment variables and cleans the path.
-func expandPath(path string) string {
+func expandPath(path, relativeRoot string) string {
 	if path == "" {
 		return ""
 	}
@@ -204,7 +205,7 @@ func expandPath(path string) string {
 
 	// Ensure absolute path
 	if !filepath.IsAbs(expanded) {
-		expanded = defaultROMPath + string(filepath.Separator) + expanded
+		expanded = relativeRoot + string(filepath.Separator) + expanded
 	}
 
 	return expanded

@@ -4,7 +4,7 @@
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package batocera
+package esbase
 
 import (
 	"os"
@@ -168,7 +168,7 @@ func TestGetROMPaths_Deduplication(t *testing.T) {
 		},
 	}
 
-	paths := config.GetROMPaths()
+	paths := config.GetROMPaths("/userdata/roms")
 
 	// Should deduplicate to 2 unique ROM roots
 	assert.Len(t, paths, 2)
@@ -180,7 +180,7 @@ func TestGetROMPaths_NilConfig(t *testing.T) {
 	t.Parallel()
 
 	var config *ESSystemConfig
-	paths := config.GetROMPaths()
+	paths := config.GetROMPaths("/userdata/roms")
 	assert.Nil(t, paths)
 }
 
@@ -191,7 +191,7 @@ func TestGetROMPaths_EmptySystems(t *testing.T) {
 		Systems: make(map[string]ESSystem),
 	}
 
-	paths := config.GetROMPaths()
+	paths := config.GetROMPaths("/userdata/roms")
 	assert.Empty(t, paths)
 }
 
@@ -233,7 +233,7 @@ func TestExpandPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := expandPath(tt.input)
+			result := expandPath(tt.input, "/userdata/roms")
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -337,7 +337,7 @@ func TestParseESSystemsConfig_MultipleOverlays(t *testing.T) {
 	assert.Equal(t, "/media/USB2/roms/genesis", config.Systems["genesis"].Path)
 
 	// Verify GetROMPaths returns unique roots
-	paths := config.GetROMPaths()
+	paths := config.GetROMPaths("/userdata/roms")
 	assert.Len(t, paths, 3)
 	assert.Contains(t, paths, "/userdata/roms")
 	assert.Contains(t, paths, "/media/USB1/roms")

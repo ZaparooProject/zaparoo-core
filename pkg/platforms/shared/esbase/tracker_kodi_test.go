@@ -18,7 +18,7 @@
 //
 // You should have received a copy of the GNU General Public License
 
-package batocera
+package esbase
 
 import (
 	"testing"
@@ -56,7 +56,7 @@ func newKodiPollRig(t *testing.T, tracking bool) *kodiPollRig {
 		Path:     "kodi-movie://7/Heat",
 		Name:     "Heat",
 	}}
-	rig.platform = &Platform{cfg: cfg, kodiActive: true, lastKnownGame: rig.media}
+	rig.platform = &Platform{opts: testOptions(), cfg: cfg, kodiActive: true, lastKnownGame: rig.media}
 
 	prev := kodiTracking
 	kodiTracking = func(url string) bool {

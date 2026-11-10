@@ -73,7 +73,7 @@ func run() error {
 		}
 	}()
 
-	pl := &batocera.Platform{}
+	pl := batocera.NewPlatform()
 	flags := cli.SetupFlags()
 
 	serviceFlag := flag.String(

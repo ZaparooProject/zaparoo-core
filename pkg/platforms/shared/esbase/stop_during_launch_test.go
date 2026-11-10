@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"context"
@@ -69,6 +69,7 @@ func startSettlingLaunch(t *testing.T) *settlingLaunch {
 		result:   make(chan error, 1),
 	}
 	sl.platform = &Platform{
+		opts:            testOptions(),
 		cfg:             cfg,
 		clock:           sl.clock,
 		launcherManager: sl.manager,
@@ -172,6 +173,7 @@ func startOvertakenLaunch(t *testing.T, stopDuringLaunch, publish bool) error {
 	clock := clockwork.NewFakeClock()
 	var published *models.ActiveMedia
 	platform := &Platform{
+		opts:            testOptions(),
 		cfg:             cfg,
 		clock:           clock,
 		launcherManager: state.NewLauncherManager(),

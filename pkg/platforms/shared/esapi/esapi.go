@@ -38,6 +38,10 @@ const apiURL = "http://localhost:1234"
 
 var ErrInvalidRunningGameResponse = errors.New("invalid running game response")
 
+// ErrRouteUnsupported reports that this EmulationStation has no such API
+// route, as older forks lack /runningGame.
+var ErrRouteUnsupported = errors.New("EmulationStation API route not supported")
+
 func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	return sendAPIRequest(apiURL, path, body, timeout)
 }
@@ -106,6 +110,13 @@ func sendAPIRequest(baseURL, path, body string, timeout time.Duration) ([]byte, 
 		Str("responseBody", string(respBody)).
 		Int("bodyLength", len(respBody)).
 		Msg("ES API response")
+
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, fmt.Errorf("%s: %w", path, ErrRouteUnsupported)
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		return nil, fmt.Errorf("%s: unexpected status %s", path, resp.Status)
+	}
 
 	return respBody, nil
 }

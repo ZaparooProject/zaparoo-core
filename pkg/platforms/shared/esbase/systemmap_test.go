@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"testing"
@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestFromBatoceraSystem tests the fromBatoceraSystem helper function.
+// TestFromBatoceraSystem tests the fromESSystem helper function.
 func TestFromBatoceraSystem(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +67,7 @@ func TestFromBatoceraSystem(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := fromBatoceraSystem(tt.batoceraName)
+			result, err := New(&Options{}).fromESSystem(tt.batoceraName)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -78,7 +78,7 @@ func TestFromBatoceraSystem(t *testing.T) {
 	}
 }
 
-// TestToBatoceraSystems tests the toBatoceraSystems helper function.
+// TestToBatoceraSystems tests the toESSystems helper function.
 func TestToBatoceraSystems(t *testing.T) {
 	t.Parallel()
 
@@ -107,8 +107,7 @@ func TestToBatoceraSystems(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := toBatoceraSystems(tt.zaparooSystem)
-			require.NoError(t, err)
+			result := New(&Options{}).toESSystems(tt.zaparooSystem)
 			if tt.expectNonEmpty {
 				assert.NotEmpty(t, result)
 			} else {
@@ -116,6 +115,39 @@ func TestToBatoceraSystems(t *testing.T) {
 			}
 		})
 	}
+}
+
+func aliasPlatform() *Platform {
+	return New(&Options{SystemAliases: map[string]string{
+		"genesis": "megadrive",
+		"genh":    "megadrive",
+		"fbn":     "fbneo",
+	}})
+}
+
+func TestFromESSystemFollowsAliases(t *testing.T) {
+	t.Parallel()
+
+	p := aliasPlatform()
+	got, err := p.fromESSystem("genesis")
+	require.NoError(t, err)
+	assert.Equal(t, "Genesis", got)
+
+	got, err = p.fromESSystem("fbn")
+	require.NoError(t, err)
+	assert.Equal(t, "Arcade", got)
+
+	_, err = New(&Options{}).fromESSystem("genesis")
+	assert.Error(t, err, "aliases belong to the platform that declares them")
+}
+
+func TestToESSystemsIncludesAliases(t *testing.T) {
+	t.Parallel()
+
+	names := aliasPlatform().toESSystems("Genesis")
+	assert.Contains(t, names, "megadrive")
+	assert.Contains(t, names, "genesis")
+	assert.Contains(t, names, "genh")
 }
 
 // TestCommonSystemsExist tests that commonly expected systems exist in the shared esde.SystemMap.
