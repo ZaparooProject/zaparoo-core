@@ -405,6 +405,43 @@ Top-level `confirm` remains launch-guard-specific for compatibility. It cannot c
 | outcome | string | Yes      | `confirmed`, `selected`, `dismissed`, `timed_out`, `completed`, `superseded`, or `cancelled`. |
 | choiceId | string | No     | Selected opaque choice ID for `selected`. |
 
+### ui.shown
+
+**Access:** All clients.
+
+Reports that a client has put the active UI event on screen. The first report for an event restarts its expiry at the event's full timeout from now, so time spent waiting for the client to start does not count against the person answering it, and publishes the new `expiresAt` through `ui.changed`. Repeated reports for the same event are accepted and change nothing. An event the host renderer presents counts as shown without a report.
+
+Clients should send it once per event, when the event first becomes visible.
+
+#### Parameters
+
+| Key | Type   | Required | Description |
+| :-- | :----- | :------- | :---------- |
+| id  | string | Yes      | Active event ID. |
+
+Returns `null` when accepted. Returns client error for stale event ID or expired event.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-shown-1",
+  "method": "ui.shown",
+  "params": {
+    "id": "56969e9c-f863-4cc8-9c2c-d7512bf10d4d"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-shown-1",
+  "result": null
+}
+```
+
 ## Tokens
 
 ### tokens

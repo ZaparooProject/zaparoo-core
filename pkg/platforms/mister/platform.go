@@ -134,8 +134,10 @@ type Platform struct {
 	// holding its activity lease; nil means probe the lease file. Tests
 	// replace it.
 	uiFrontendRunning func() bool
-	coreLoads         coreLoadStops
-	lastLauncher      platforms.Launcher
+	// uiReloadWait replaces frontendReloadWait; tests shorten it.
+	uiReloadWait *time.Duration
+	coreLoads    coreLoadStops
+	lastLauncher platforms.Launcher
 	shared.InputManager
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent

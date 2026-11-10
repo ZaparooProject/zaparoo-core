@@ -389,6 +389,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodConfirm:   methods.HandleConfirm,
 		models.MethodUI:        methods.HandleUI,
 		models.MethodUIRespond: methods.HandleUIRespond,
+		models.MethodUIShown:   methods.HandleUIShown,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,

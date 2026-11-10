@@ -494,6 +494,139 @@ func TestServiceUpdateNotifiesRenderer(t *testing.T) {
 	require.ErrorIs(t, handle.Update(Update{Title: &title}), ErrNoActiveEvent)
 }
 
+func TestServiceShownRestartsExpiry(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	service, published := newTestService(clock, nil)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+
+	clock.Advance(4 * time.Second)
+	require.NoError(t, service.Shown(handle.ID))
+	shownAt := clock.Now()
+	state := receiveState(t, published)
+	assert.Equal(t, uint64(2), state.Revision)
+	require.Len(t, state.Events, 1)
+	assert.Equal(t, shownAt.Add(10*time.Second), *state.Events[0].ExpiresAt)
+	select {
+	case at := <-handle.Shown:
+		assert.Equal(t, shownAt, at)
+	default:
+		t.Fatal("the producer was not told the event is shown")
+	}
+
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	clock.Advance(2 * time.Second)
+	require.NoError(t, service.Shown(handle.ID), "a repeated report is accepted")
+	select {
+	case at := <-handle.Shown:
+		t.Fatalf("shown fired twice: %v", at)
+	case state := <-published:
+		t.Fatalf("a repeated report published state: %+v", state)
+	default:
+	}
+	assert.Equal(t, uint64(2), service.State().Revision)
+
+	clock.Advance(7 * time.Second)
+	select {
+	case result := <-handle.Results:
+		t.Fatalf("a repeated report restarted nothing, yet the event resolved early: %+v", result)
+	default:
+	}
+	clock.Advance(time.Second)
+	result := receiveResult(t, handle.Results)
+	assert.Equal(t, models.UIOutcomeTimedOut, result.Resolution.Outcome)
+}
+
+func TestServiceShownWithoutTimeoutStaysOpen(t *testing.T) {
+	t.Parallel()
+
+	service, published := newTestService(clockwork.NewFakeClock(), nil)
+	handle, err := service.Open(t.Context(), &Request{Kind: models.UIEventKindLoader})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+
+	require.NoError(t, service.Shown(handle.ID))
+	require.NotNil(t, <-handle.Shown)
+	state := service.State()
+	require.Len(t, state.Events, 1)
+	assert.Nil(t, state.Events[0].ExpiresAt)
+	assert.Equal(t, uint64(1), state.Revision, "nothing changed, so nothing is published")
+}
+
+func TestServiceShownStaleID(t *testing.T) {
+	t.Parallel()
+
+	service, published := newTestService(clockwork.NewFakeClock(), nil)
+	require.ErrorIs(t, service.Shown("stale"), ErrNoActiveEvent)
+
+	handle, err := service.Open(t.Context(), &Request{Kind: models.UIEventKindLoader, Timeout: time.Minute})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+	require.ErrorIs(t, service.Shown("stale"), ErrEventNotActive)
+	assert.Equal(t, uint64(1), service.State().Revision)
+	select {
+	case at := <-handle.Shown:
+		t.Fatalf("a stale report marked the active event shown: %v", at)
+	default:
+	}
+
+	require.NoError(t, handle.Complete(models.UIOutcomeCompleted))
+	require.ErrorIs(t, service.Shown(handle.ID), ErrNoActiveEvent)
+}
+
+func TestServiceHostPresentSignalsShown(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	service, published := newTestService(clock, &testRenderer{})
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.False(t, handle.HandedOff)
+	select {
+	case at := <-handle.Shown:
+		assert.Equal(t, clock.Now(), at)
+	default:
+		t.Fatal("an event the host renderer presented is shown")
+	}
+	opened := receiveState(t, published)
+	require.Len(t, opened.Events, 1)
+	assert.Equal(t, clock.Now().Add(10*time.Second), *opened.Events[0].ExpiresAt)
+	select {
+	case state := <-published:
+		t.Fatalf("presenting at once moved no expiry, yet published: %+v", state)
+	default:
+	}
+}
+
+func TestServiceHostPresentFailureIsNotShown(t *testing.T) {
+	t.Parallel()
+
+	service, _ := newTestService(clockwork.NewFakeClock(), &testRenderer{presentErr: errors.New("no console")})
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	select {
+	case at := <-handle.Shown:
+		t.Fatalf("a failed present is not shown: %v", at)
+	default:
+	}
+}
+
 func TestValidateRequestLimitsAndKinds(t *testing.T) {
 	t.Parallel()
 

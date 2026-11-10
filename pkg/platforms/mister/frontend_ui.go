@@ -45,6 +45,13 @@ const (
 	// leaves running media for it, so the frontend has time to start and
 	// draw it.
 	frontendColdStartHold = 60 * time.Second
+	// frontendReloadWait is how long HandOffUI waits for Main to rewrite a
+	// status file whose writer has gone. Main replaces its process on every
+	// core load and names the new one within about two seconds; a game's
+	// exit raises its countdown inside that gap.
+	frontendReloadWait = 5 * time.Second
+	// frontendReloadPoll is how often the status file is reread meanwhile.
+	frontendReloadPoll = 100 * time.Millisecond
 )
 
 type frontendStatus struct {
@@ -59,50 +66,98 @@ type frontendStatus struct {
 // load and the fork rewrites the file from it, so a dead pid means a stock
 // Main took over and the file is stale.
 func frontendActive(fs afero.Fs) bool {
+	return readFrontendStatus(fs) == statusLive
+}
+
+type statusState int
+
+const (
+	statusOff statusState = iota
+	// statusOrphaned is a status file saying active whose writer has gone:
+	// Main is between processes, or a stock Main replaced the fork.
+	statusOrphaned
+	statusLive
+)
+
+func readFrontendStatus(fs afero.Fs) statusState {
 	file, err := fs.Open(frontendStatusPath)
 	if err != nil {
-		return false
+		return statusOff
 	}
 	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, frontendStatusMaxBytes+1))
 	if err != nil || len(data) > frontendStatusMaxBytes {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return false
+		return statusOff
 	}
 	var status frontendStatus
 	if err := json.Unmarshal(data, &status); err != nil {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return false
+		return statusOff
 	}
 	if !status.Active || status.PID <= 0 {
-		return false
+		return statusOff
 	}
 	if _, err := fs.Stat(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(status.PID))); err != nil {
-		return false
+		return statusOrphaned
 	}
-	return true
+	return statusLive
 }
 
-// HandOffUI leaves UI events to API clients while the frontend runs, so it
-// draws them instead of the menu widgets. The widgets end running media to
+// frontendActiveSettled is frontendActive that waits out a core load: a
+// status file whose writer has just gone is reread until Main names its new
+// process, or until wait passes, when a stock Main is taken to have replaced
+// the fork.
+func frontendActiveSettled(ctx context.Context, fs afero.Fs, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		switch readFrontendStatus(fs) {
+		case statusLive:
+			return true
+		case statusOff:
+			return false
+		case statusOrphaned:
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(frontendReloadPoll):
+		}
+	}
+}
+
+// HandOffUI leaves UI events to API clients while the frontend is active, so
+// it draws them instead of the menu widgets. The widgets end running media to
 // show any event that reaches them, so an event raised while media runs
 // returns to the menu, which makes Main start the frontend, and is kept open
-// long enough for the frontend to start. Events the widgets never show over
+// long enough for the frontend to start. An event raised at the menu before
+// the frontend has started, as when a game has just exited and Main is still
+// loading the menu, is kept open the same way: the widget cannot switch
+// consoles under a starting frontend. Main names a new process in the status
+// file after each core load, so a status whose writer has just gone is
+// waited on briefly before the widget gets the event. Events the widgets never show over
 // media (the auto-advance switch countdown, the launch guard) are decided
 // before they reach the renderer and are unaffected.
-func (p *Platform) HandOffUI(_ context.Context, event *models.UIEvent) (handled bool, minOpen time.Duration) {
-	if !frontendActive(p.filesystem()) {
+func (p *Platform) HandOffUI(ctx context.Context, event *models.UIEvent) (handled bool, minOpen time.Duration) {
+	wait := frontendReloadWait
+	if p.uiReloadWait != nil {
+		wait = *p.uiReloadWait
+	}
+	if !frontendActiveSettled(ctx, p.filesystem(), wait) {
 		return false, 0
 	}
 	if p.activeMedia == nil || p.activeMedia() == nil {
 		// Nothing running means the menu is up, but Main can report the
-		// frontend active before it has started (just enabled, or Main
-		// restarted without a menu load). Only a running frontend can draw
-		// the event; otherwise the widget shows it, as before.
+		// frontend active before it has started (a game just exited and the
+		// menu is loading, or it was just enabled). It draws the event once it
+		// is up, so the event is held open for it to start.
 		if !p.frontendRunning() {
 			log.Debug().Str("event_id", event.ID).
-				Msg("frontend active but not running; leaving the UI event to the widget")
-			return false, 0
+				Msg("frontend active but not running yet; holding the UI event for it")
+			return true, frontendColdStartHold
 		}
 		return true, 0
 	}

@@ -111,6 +111,7 @@ const (
 	MethodConfirm                     = "confirm"
 	MethodUI                          = "ui"
 	MethodUIRespond                   = "ui.respond"
+	MethodUIShown                     = "ui.shown"
 	MethodRunScript                   = "run.script"
 	MethodStop                        = "stop"
 	MethodTokens                      = "tokens"
