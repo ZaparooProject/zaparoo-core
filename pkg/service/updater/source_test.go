@@ -199,9 +199,9 @@ releases:
         sha256: aaaa
         url: %[2]s/v2.16.1/zaparoo-linux_amd64-2.16.1.tar.gz
       - id: 21
-        name: zaparoo-zapos_arm64-2.16.1.tar.gz
+        name: zaparoo-firmware_arm64-2.16.1.tar.gz
         size: 8123456
-        url: %[2]s/v2.16.1/zaparoo-zapos_arm64-2.16.1.tar.gz
+        url: %[2]s/v2.16.1/zaparoo-firmware_arm64-2.16.1.tar.gz
       - id: 22
         name: checksums.txt
         url: checksums.txt
@@ -239,7 +239,7 @@ func TestVerifiedSource_SelectsTheNewestRelease(t *testing.T) {
 	// the install's job, and it does that against the same signed manifest.
 	assert.Equal(t, []string{
 		"zaparoo-linux_amd64-2.16.1.tar.gz",
-		"zaparoo-zapos_arm64-2.16.1.tar.gz",
+		"zaparoo-firmware_arm64-2.16.1.tar.gz",
 		"checksums.txt",
 		"checksums.txt.sig",
 	}, assetNames(rel))
@@ -250,9 +250,9 @@ func TestVerifiedSource_SelectsTheNewestRelease(t *testing.T) {
 func TestVerifiedSource_SkipsReleasesWithoutAnAsset(t *testing.T) {
 	t.Parallel()
 
-	// Only the newer release carries a zapos archive.
+	// Only the newer release carries a firmware archive.
 	ms := newManifestServer(t, twoReleaseManifest(412))
-	rel := offered(t, ms.loaded(t, t.TempDir(), "zapos", "arm64"), otameta.ChannelStable)
+	rel := offered(t, ms.loaded(t, t.TempDir(), "firmware", "arm64"), otameta.ChannelStable)
 
 	require.NotNil(t, rel)
 	assert.Equal(t, "v2.16.1", rel.TagName)
@@ -541,7 +541,7 @@ func TestVerifiedSource_SkipsAmbiguousRelease(t *testing.T) {
 	t.Parallel()
 
 	body := strings.Replace(twoReleaseManifest(412),
-		"name: zaparoo-zapos_arm64-2.16.1.tar.gz",
+		"name: zaparoo-firmware_arm64-2.16.1.tar.gz",
 		"name: zaparoo-linux_amd64-2.16.1.zip", 1)
 	ms := newManifestServer(t, body)
 
@@ -619,7 +619,7 @@ func TestVerifiedSource_ReleaseForVersion(t *testing.T) {
 	}
 	assert.Equal(t, []string{
 		"zaparoo-linux_amd64-2.16.1.tar.gz",
-		"zaparoo-zapos_arm64-2.16.1.tar.gz",
+		"zaparoo-firmware_arm64-2.16.1.tar.gz",
 		"checksums.txt",
 		"checksums.txt.sig",
 	}, names)

@@ -26,6 +26,7 @@ const (
 	Batocera  = "batocera"
 	Bazzite   = "bazzite"
 	ChimeraOS = "chimeraos"
+	Firmware  = "firmware"
 	LibreELEC = "libreelec"
 	Linux     = "linux"
 	Mac       = "mac"
@@ -36,5 +37,4 @@ const (
 	RetroPie  = "retropie"
 	SteamOS   = "steamos"
 	Windows   = "windows"
-	ZapOS     = "zapos"
 )

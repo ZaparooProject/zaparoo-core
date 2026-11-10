@@ -4,8 +4,8 @@
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package zapos implements the Zaparoo OS appliance platform.
-package zapos
+// Package firmware implements the Zaparoo Firmware appliance platform.
+package firmware
 
 import (
 	"os"
@@ -24,15 +24,15 @@ import (
 
 const retroArchNetworkAddr = "127.0.0.1:55355"
 
-// Platform implements Zaparoo OS support.
+// Platform implements Zaparoo Firmware support.
 type Platform struct {
 	*linuxbase.Base
 	emulationOptionsOverride *linuxemu.Options
 }
 
-// NewPlatform creates a Zaparoo OS platform.
+// NewPlatform creates a Zaparoo Firmware platform.
 func NewPlatform() *Platform {
-	return &Platform{Base: linuxbase.NewBase(platformids.ZapOS)}
+	return &Platform{Base: linuxbase.NewBase(platformids.Firmware)}
 }
 
 // Settings returns appliance-specific persistent paths.
