@@ -218,6 +218,9 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.Firmware,
 		platformids.Recalbox,
 		platformids.RetroPie,
+		platformids.Knulli,
+		platformids.ROCKNIX,
+		platformids.AmberELEC,
 		"future-platform",
 	} {
 		assert.False(t, LegacyEnabled(platformID), platformID)

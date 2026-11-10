@@ -108,20 +108,21 @@ start_gui_progress() {
         --title="Zaparoo Installer" --text="${text}" \
         < "${GUI_PROGRESS_PATH}" 2>/dev/null &
     GUI_PROGRESS_PID=$!
-    exec {GUI_PROGRESS_FD}<>"${GUI_PROGRESS_PATH}"
+    exec 9<>"${GUI_PROGRESS_PATH}"
+    GUI_PROGRESS_FD=9
 }
 
 update_gui_progress() {
     local text="$1"
     if [ -n "${GUI_PROGRESS_FD}" ]; then
-        printf '# %s\n' "${text}" >&"${GUI_PROGRESS_FD}" || true
+        printf '# %s\n' "${text}" >&9 || true
     fi
 }
 
 stop_gui_progress() {
     if [ -n "${GUI_PROGRESS_FD}" ]; then
-        printf '100\n' >&"${GUI_PROGRESS_FD}" || true
-        exec {GUI_PROGRESS_FD}>&-
+        printf '100\n' >&9 || true
+        exec 9>&-
         GUI_PROGRESS_FD=""
     fi
     if [ -n "${GUI_PROGRESS_PID}" ]; then
@@ -159,32 +160,53 @@ detect_os() {
 }
 
 detect_linux_distro() {
+    # DETECT_ROOT lets tests point detection at a fake filesystem.
+    local root="${DETECT_ROOT:-}"
+
     # Check for MiSTer FPGA (before os-release check)
-    if [ -f /MiSTer.version ]; then
+    if [ -f "${root}"/MiSTer.version ]; then
         echo "mister"
         return
     fi
 
     # Check for RePlayOS (before os-release check — it reports as plain Debian)
-    if [ -d /opt/replay ]; then
+    if [ -d "${root}"/opt/replay ]; then
         echo "replayos"
         return
     fi
 
+    # Handheld and appliance OSes that report a generic base in os-release
+    if [ -f "${root}"/usr/share/knulli/knulli.version ]; then
+        echo "knulli"
+        return
+    fi
+
     # Detect Linux distribution from /etc/os-release
-    if [ ! -f /etc/os-release ]; then
+    if [ ! -f "${root}"/etc/os-release ]; then
         echo "generic"
         return
     fi
 
     # Source the os-release file to get distro info
     # shellcheck source=/dev/null
-    . /etc/os-release
+    . "${root}"/etc/os-release
 
     # Check NAME field for distributions that use generic IDs
     # Batocera uses ID=buildroot, so we need to check NAME
     if echo "${NAME:-}" | grep -qi "batocera"; then
         echo "batocera"
+        return
+    fi
+
+    # ROCKNIX sets OS_NAME instead of NAME/ID
+    if [ "${OS_NAME:-}" = "ROCKNIX" ]; then
+        echo "rocknix"
+        return
+    fi
+
+    # AmberELEC reports ID=coreelec
+    if echo "${NAME:-}" | grep -qi "amberelec"; then
+        echo "amberelec"
         return
     fi
 
@@ -346,20 +368,19 @@ require_command() {
 
 openssl_version_supported() {
     local product version major
-    read -r product version _ <<< "$(openssl version 2>/dev/null)"
+    # shellcheck disable=SC2046 # Split the version line into fields.
+    set -- $(openssl version 2>/dev/null)
+    product="${1:-}"
+    version="${2:-}"
     if [ "${product}" != "OpenSSL" ]; then
         return 1
     fi
     major="${version%%.*}"
-    [[ "${major}" =~ ^[0-9]+$ ]] && [ "${major}" -ge 3 ]
+    is_number "${major}" && [ "${major}" -ge 3 ]
 }
 
 check_requirements() {
     info "Checking requirements..."
-
-    if [ -z "${BASH_VERSION:-}" ]; then
-        abort "Bash is required to run this installer"
-    fi
 
     require_command curl
     require_command tar
@@ -367,6 +388,9 @@ check_requirements() {
     if [ "${MODE}" = "install" ]; then
         require_command openssl
         if ! openssl_version_supported; then
+            if [ "$(uname -s)" = "Linux" ] && [ "$(detect_linux_distro)" = "amberelec" ]; then
+                abort "This AmberELEC release is too old for the Zaparoo installer. Update to the AmberELEC prerelease and try again, or install Core by hand: download zaparoo-amberelec_arm64 from ${BASE_URL}, extract it to /storage/zaparoo and run /storage/zaparoo/zaparoo -install."
+            fi
             abort "OpenSSL 3.0 or newer is required for signed release verification. Please upgrade OpenSSL and try again."
         fi
         require_command sha256sum
@@ -515,6 +539,38 @@ is_semver() {
     echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+.-][0-9A-Za-z.-]+)?$'
 }
 
+# Whether $1 is a non-empty run of decimal digits.
+is_number() {
+    case "$1" in
+        "" | *[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Compares two non-negative decimal integers of any length without
+# arithmetic, so leading zeros and huge values are safe. Prints -1, 0 or 1.
+numeric_compare() {
+    local left="$1"
+    local right="$2"
+    while [ "${#left}" -gt 1 ] && [ "${left#0}" != "${left}" ]; do
+        left="${left#0}"
+    done
+    while [ "${#right}" -gt 1 ] && [ "${right#0}" != "${right}" ]; do
+        right="${right#0}"
+    done
+    if [ "${#left}" -ne "${#right}" ]; then
+        if [ "${#left}" -lt "${#right}" ]; then echo -1; else echo 1; fi
+        return
+    fi
+    if [ "${left}" = "${right}" ]; then
+        echo 0
+    elif [ "$(printf '%s\n%s\n' "${left}" "${right}" | LC_ALL=C sort | head -n 1)" = "${left}" ]; then
+        echo -1
+    else
+        echo 1
+    fi
+}
+
 semver_compare() {
     if ! is_semver "$1" || ! is_semver "$2"; then
         return 2
@@ -526,24 +582,16 @@ semver_compare() {
     local right_core="${right%%-*}"
     local left_pre=""
     local right_pre=""
-    local index left_id right_id
-    local -a left_parts right_parts left_pre_parts right_pre_parts
+    local index left_id right_id relation
 
-    if [[ "${left}" == *-* ]]; then
-        left_pre="${left#*-}"
-    fi
-    if [[ "${right}" == *-* ]]; then
-        right_pre="${right#*-}"
-    fi
-    IFS='.' read -r -a left_parts <<< "${left_core}"
-    IFS='.' read -r -a right_parts <<< "${right_core}"
-    for index in 0 1 2; do
-        if ((10#${left_parts[index]} < 10#${right_parts[index]})); then
-            echo -1
-            return
-        fi
-        if ((10#${left_parts[index]} > 10#${right_parts[index]})); then
-            echo 1
+    case "${left}" in *-*) left_pre="${left#*-}" ;; esac
+    case "${right}" in *-*) right_pre="${right#*-}" ;; esac
+    for index in 1 2 3; do
+        left_id="$(printf '%s\n' "${left_core}" | cut -d. -f"${index}")"
+        right_id="$(printf '%s\n' "${right_core}" | cut -d. -f"${index}")"
+        relation="$(numeric_compare "${left_id}" "${right_id}")"
+        if [ "${relation}" != 0 ]; then
+            echo "${relation}"
             return
         fi
     done
@@ -560,46 +608,49 @@ semver_compare() {
         return
     fi
 
-    IFS='.' read -r -a left_pre_parts <<< "${left_pre}"
-    IFS='.' read -r -a right_pre_parts <<< "${right_pre}"
-    for ((index = 0; index < ${#left_pre_parts[@]} || index < ${#right_pre_parts[@]}; index++)); do
-        if ((index >= ${#left_pre_parts[@]})); then
+    while :; do
+        if [ -z "${left_pre}" ] && [ -z "${right_pre}" ]; then
+            echo 0
+            return
+        fi
+        if [ -z "${left_pre}" ]; then
             echo -1
             return
         fi
-        if ((index >= ${#right_pre_parts[@]})); then
+        if [ -z "${right_pre}" ]; then
             echo 1
             return
         fi
-        left_id="${left_pre_parts[index]}"
-        right_id="${right_pre_parts[index]}"
+        left_id="${left_pre%%.*}"
+        right_id="${right_pre%%.*}"
+        case "${left_pre}" in *.*) left_pre="${left_pre#*.}" ;; *) left_pre="" ;; esac
+        case "${right_pre}" in *.*) right_pre="${right_pre#*.}" ;; *) right_pre="" ;; esac
         if [ "${left_id}" = "${right_id}" ]; then
             continue
         fi
-        if [[ "${left_id}" =~ ^[0-9]+$ ]] && [[ "${right_id}" =~ ^[0-9]+$ ]]; then
-            if ((10#${left_id} < 10#${right_id})); then
-                echo -1
-            else
-                echo 1
+        if is_number "${left_id}" && is_number "${right_id}"; then
+            relation="$(numeric_compare "${left_id}" "${right_id}")"
+            if [ "${relation}" = 0 ]; then
+                continue
             fi
+            echo "${relation}"
             return
         fi
-        if [[ "${left_id}" =~ ^[0-9]+$ ]]; then
+        if is_number "${left_id}"; then
             echo -1
             return
         fi
-        if [[ "${right_id}" =~ ^[0-9]+$ ]]; then
+        if is_number "${right_id}"; then
             echo 1
             return
         fi
-        if [[ "${left_id}" < "${right_id}" ]]; then
+        if [ "$(printf '%s\n%s\n' "${left_id}" "${right_id}" | LC_ALL=C sort | head -n 1)" = "${left_id}" ]; then
             echo -1
         else
             echo 1
         fi
         return
     done
-    echo 0
 }
 
 upgrade_relation() {
@@ -627,12 +678,13 @@ core_api_available() {
 CORE_API_DOWN_ATTEMPTS=60
 
 wait_for_core_api_down() {
-    local attempt
-    for ((attempt = 0; attempt < CORE_API_DOWN_ATTEMPTS; attempt++)); do
+    local attempt=0
+    while [ "${attempt}" -lt "${CORE_API_DOWN_ATTEMPTS}" ]; do
         if ! core_api_available; then
             return 0
         fi
         sleep 0.25
+        attempt=$((attempt + 1))
     done
     return 1
 }
@@ -1064,7 +1116,9 @@ offer_decky_plugin() {
         "${DECKY_API_URL}/releases/latest" -o "${metadata_path}" || \
         abort "Failed to resolve latest Zaparoo Decky release"
     release_info="$(resolve_decky_release "${metadata_path}")" || abort "Invalid Zaparoo Decky release metadata"
-    IFS=$'\t' read -r decky_version asset_url expected_digest expected_size <<< "${release_info}"
+    IFS="$(printf '\t')" read -r decky_version asset_url expected_digest expected_size <<EOF
+${release_info}
+EOF
 
     current="$(installed_decky_version)"
     if [ -n "${current}" ]; then
@@ -1236,6 +1290,19 @@ install_linux_generic() {
             warn "Immutable filesystem detected (${distro})"
             warn "Installation will be user-local only"
             build="${distro}"
+            ;;
+        rocknix)
+            install_appliance rocknix "ROCKNIX" /storage/zaparoo/zaparoo
+            return 0
+            ;;
+        amberelec)
+            install_appliance amberelec "AmberELEC" /storage/zaparoo/zaparoo
+            return 0
+            ;;
+        knulli)
+            install_appliance knulli "Knulli" /userdata/system/zaparoo \
+                "knulli-services stop zaparoo_service"
+            return 0
             ;;
         recalbox|retropie)
             warn "Embedded system detected (${distro})"
@@ -1582,6 +1649,57 @@ install_replayos() {
     info "Run via SSH: /media/sd/zaparoo/zaparoo"
 }
 
+# Appliance OSes install the platform build to a fixed path and let the
+# binary's -install register and (re)start its service. The binary is renamed
+# into place because the running service may still hold the old one open.
+install_appliance() {
+    local platform label dest stop_cmd dest_dir
+    platform="$1"
+    label="$2"
+    dest="$3"
+    stop_cmd="${4:-}"
+    dest_dir="$(dirname "${dest}")"
+
+    info "Installing Zaparoo Core for ${label}..."
+
+    download_and_extract "${platform}"
+
+    if [ "$DRY_RUN" = true ]; then
+        if [ -n "${stop_cmd}" ]; then
+            info "[DRY-RUN] Would run: ${stop_cmd}"
+        fi
+        info "[DRY-RUN] Would install binary to: ${dest}"
+        info "[DRY-RUN] Would run: ${dest} -install"
+        success "[DRY-RUN] ${label} installation simulated"
+        return 0
+    fi
+
+    if [ -n "${stop_cmd}" ]; then
+        ${stop_cmd} >/dev/null 2>&1 || true
+    fi
+
+    if ! mkdir -p "${dest_dir}"; then
+        abort "Failed to create ${dest_dir}"
+    fi
+    if ! cp "${ZAPAROO_BIN}" "${dest}.new"; then
+        rm -f "${dest}.new"
+        abort "Failed to copy binary to ${dest}"
+    fi
+    chmod +x "${dest}.new"
+    if ! mv -f "${dest}.new" "${dest}"; then
+        rm -f "${dest}.new"
+        abort "Failed to install binary to ${dest}"
+    fi
+    success "Installed to ${dest}"
+
+    info "Installing service..."
+    if ! "${dest}" -install; then
+        abort "Failed to install service"
+    fi
+
+    success "${label} installation complete!"
+}
+
 # ============================================================================
 # Batocera Installation
 # ============================================================================
@@ -1898,16 +2016,21 @@ main() {
     if gui_available; then
         summary="Zaparoo setup completed successfully."
         if [ "${HARDWARE_INSTALLED}" = true ]; then
-            summary+=$'\n\nNFC reader support: installed'
+            summary="${summary}
+
+NFC reader support: installed"
         fi
         if [ "${DECKY_INSTALLED}" = true ]; then
-            summary+=$'\nZaparoo Decky: installed'
+            summary="${summary}
+Zaparoo Decky: installed"
         fi
         zenity --info --title="Zaparoo Installer" --text="${summary}" || true
     fi
 }
 
-if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
+# Tests source this file under bash; busybox ash has no BASH_SOURCE.
+# shellcheck disable=SC2128
+if [ "${BASH_SOURCE:-$0}" = "$0" ]; then
     trap cleanup EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT

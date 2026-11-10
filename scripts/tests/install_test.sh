@@ -339,6 +339,66 @@ test_linux_distro_asset_name() {
     pass "select distro-specific Linux release asset"
 }
 
+make_detect_root() {
+    local root="$1"
+    rm -rf "${root}"
+    mkdir -p "${root}/etc"
+}
+
+test_detect_handheld_and_appliance_distros() {
+    local root="${TEST_TMP}/detect-root"
+
+    make_detect_root "${root}"
+    mkdir -p "${root}/usr/share/knulli"
+    : > "${root}/usr/share/knulli/knulli.version"
+    printf 'NAME=Batocera\nID=buildroot\n' > "${root}/etc/os-release"
+    assert_equal "knulli" "$(DETECT_ROOT="${root}" detect_linux_distro)" \
+        "Knulli marker wins over Batocera os-release"
+
+    make_detect_root "${root}"
+    printf 'OS_NAME="ROCKNIX"\nOS_VERSION="20250101"\n' > "${root}/etc/os-release"
+    assert_equal "rocknix" "$(DETECT_ROOT="${root}" detect_linux_distro)" "ROCKNIX OS_NAME"
+
+    make_detect_root "${root}"
+    printf 'NAME="AmberELEC"\nID="coreelec"\n' > "${root}/etc/os-release"
+    assert_equal "amberelec" "$(DETECT_ROOT="${root}" detect_linux_distro)" \
+        "AmberELEC is not treated as CoreELEC"
+
+    make_detect_root "${root}"
+    printf 'NAME="Ubuntu"\nID=ubuntu\n' > "${root}/etc/os-release"
+    assert_equal "ubuntu" "$(DETECT_ROOT="${root}" detect_linux_distro)" "plain distro"
+
+    pass "detect handheld and appliance distros"
+}
+
+test_appliance_install_dispatch() {
+    local test_distro expected_asset expected_dest output
+    for test_distro in rocknix amberelec knulli; do
+        case "${test_distro}" in
+            rocknix|amberelec) expected_dest="/storage/zaparoo/zaparoo" ;;
+            knulli) expected_dest="/userdata/system/zaparoo" ;;
+        esac
+        expected_asset="zaparoo-${test_distro}_arm64-2.21.0.tar.gz"
+        output="$(
+            VERSION="2.21.0"
+            VERSION_TAG="v2.21.0"
+            DRY_RUN=true
+            detect_linux_distro() { echo "${test_distro}"; }
+            detect_arch() { echo arm64; }
+            id() { echo 1000; }
+            install_application() { fail "${test_distro}: generic install_application called"; }
+            install_service() { fail "${test_distro}: generic install_service called"; }
+            install_linux_generic
+        )"
+        assert_contains "${output}" "${expected_asset}" "${test_distro} release asset"
+        assert_contains "${output}" "Would install binary to: ${expected_dest}" \
+            "${test_distro} install path"
+        assert_contains "${output}" "Would run: ${expected_dest} -install" \
+            "${test_distro} service install"
+    done
+    pass "dispatch appliance distros to their platform build"
+}
+
 test_generic_install_stops_and_restarts_service() {
     local log="${TEST_TMP}/systemctl.log"
     local output
@@ -396,6 +456,12 @@ test_semver_comparison() {
     assert_equal "-1" "$(semver_compare 2.17.0-beta.2 2.17.0)" "prerelease before stable"
     assert_equal "1" "$(semver_compare 2.17.0-beta.10 2.17.0-beta.2)" "numeric prerelease order"
     assert_equal "0" "$(semver_compare 2.17.0+build.1 2.17.0+build.2)" "build metadata ignored"
+    assert_equal "1" "$(semver_compare 2.10.0 2.9.0)" "numeric minor order"
+    assert_equal "-1" "$(semver_compare 2.17.0 10.0.0)" "numeric major order"
+    assert_equal "-1" "$(semver_compare 2.17.0-beta 2.17.0-beta.1)" "shorter prerelease first"
+    assert_equal "-1" "$(semver_compare 2.17.0-1 2.17.0-beta)" "numeric before text prerelease"
+    assert_equal "-1" "$(semver_compare 2.17.0-beta.2 2.17.0-rc.1)" "text prerelease order"
+    assert_equal "1" "$(semver_compare 2.17.0-rc.1 2.17.0-beta.9)" "later text prerelease"
     if semver_compare 46e9fbb7-dev 2.17.0 >/dev/null 2>&1; then
         fail "non-semver development build was compared as a release"
     fi
@@ -417,6 +483,21 @@ test_openssl_version_requirement() {
     fi
     unset -f openssl
     pass "require OpenSSL 3.0 or newer"
+}
+
+test_old_amberelec_gets_its_own_message() {
+    local output
+    output="$(
+        MODE=install
+        openssl() { echo "OpenSSL 1.1.1n 15 Mar 2022"; }
+        require_command() { :; }
+        detect_linux_distro() { echo amberelec; }
+        uname() { echo Linux; }
+        check_requirements 2>&1
+    )" || true
+    assert_contains "${output}" "AmberELEC prerelease" "old AmberELEC abort message"
+    assert_contains "${output}" "/storage/zaparoo/zaparoo -install" "old AmberELEC manual install"
+    pass "tell old AmberELEC releases to update"
 }
 
 test_decky_release_selection() {
@@ -739,9 +820,12 @@ test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
 test_linux_distro_asset_name
+test_detect_handheld_and_appliance_distros
+test_appliance_install_dispatch
 test_generic_install_stops_and_restarts_service
 test_semver_comparison
 test_openssl_version_requirement
+test_old_amberelec_gets_its_own_message
 test_decky_release_selection
 test_decky_archive_validation
 test_unrecognized_binary_is_not_replaced

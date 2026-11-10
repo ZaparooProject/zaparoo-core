@@ -53,8 +53,11 @@ var platformDocs = map[string]string{
 	"replayos":  "replayos.md",
 	"steamos":   "steamos/index.md",
 	"windows":   "windows/index.md",
-	// Interim packaging fallback until dedicated docs are published.
-	"firmware": "linux/index.md",
+	// Interim packaging fallbacks until dedicated docs are published.
+	"amberelec": "linux/index.md",
+	"firmware":  "linux/index.md",
+	"knulli":    "linux/index.md",
+	"rocknix":   "linux/index.md",
 }
 
 // platformURLs maps platform IDs to their online documentation URLs
@@ -71,8 +74,11 @@ var platformURLs = map[string]string{
 	"replayos":  "https://zaparoo.org/docs/platforms/replayos/",
 	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
-	// Interim packaging fallback until dedicated docs are published.
-	"firmware": "https://zaparoo.org/docs/platforms/linux/",
+	// Interim packaging fallbacks until dedicated docs are published.
+	"amberelec": "https://zaparoo.org/docs/platforms/linux/",
+	"firmware":  "https://zaparoo.org/docs/platforms/linux/",
+	"knulli":    "https://zaparoo.org/docs/platforms/linux/",
+	"rocknix":   "https://zaparoo.org/docs/platforms/linux/",
 }
 
 func stripFrontmatter(content string) string {

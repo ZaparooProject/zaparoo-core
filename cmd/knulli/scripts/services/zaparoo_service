@@ -1,0 +1,3 @@
+#!/bin/bash
+chmod +x /userdata/system/zaparoo
+/userdata/system/zaparoo -service "$1"

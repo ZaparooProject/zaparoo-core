@@ -148,6 +148,16 @@ jobs:
             arch: arm64
           - platform: firmware
             arch: arm64
+          - platform: amberelec
+            arch: arm64
+          - platform: knulli
+            arch: arm
+          - platform: knulli
+            arch: arm64
+          - platform: rocknix
+            arch: amd64
+          - platform: rocknix
+            arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Get latest Zaparoo App release tag
