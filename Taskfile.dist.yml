@@ -16,11 +16,13 @@ includes:
   docker: ./scripts/tasks/docker.yml
   amberelec: ./scripts/tasks/amberelec.yml
   arkos: ./scripts/tasks/arkos.yml
+  armada: ./scripts/tasks/armada.yml
   batocera: ./scripts/tasks/batocera.yml
   bazzite: ./scripts/tasks/bazzite.yml
   chimeraos: ./scripts/tasks/chimeraos.yml
   firmware: ./scripts/tasks/firmware.yml
   knulli: ./scripts/tasks/knulli.yml
+  lakka: ./scripts/tasks/lakka.yml
   libreelec: ./scripts/tasks/libreelec.yml
   linux: ./scripts/tasks/linux.yml
   mac: ./scripts/tasks/mac.yml

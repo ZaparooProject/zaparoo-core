@@ -1,0 +1,27 @@
+[Unit]
+Description=Zaparoo Core
+Documentation=https://zaparoo.org/docs/
+After=network-online.target retroarch.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/storage
+WorkingDirectory=@ZAPAROO_DIR@
+ExecStart=@ZAPAROO_BIN@ -daemon
+Restart=on-failure
+RestartSec=5s
+# Core exits 78 when starting again cannot help, currently a user database
+# written by a newer build than the one installed. Retrying that every five
+# seconds buries the explanation under copies of itself; failing here leaves it
+# readable in systemctl status. See docs/ota-runbook.md.
+RestartPreventExitStatus=78
+StandardOutput=journal
+StandardError=journal
+# Games run in RetroArch, so Core yields to it.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

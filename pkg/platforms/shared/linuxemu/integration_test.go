@@ -263,8 +263,19 @@ func TestLauncherIDInSliceUsesEqualFold(t *testing.T) {
 func TestStandaloneDiscoversEmuDeckAppImage(t *testing.T) {
 	t.Parallel()
 
+	for _, name := range []string{"pcsx2-Qt-2.0.AppImage", "ARMSX2.AppImage"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertPCSX2AppImageDiscovered(t, name)
+		})
+	}
+}
+
+func assertPCSX2AppImageDiscovered(t *testing.T, name string) {
+	t.Helper()
+
 	home := t.TempDir()
-	application := filepath.Join(home, "Applications", "pcsx2-Qt-2.0.AppImage")
+	application := filepath.Join(home, "Applications", name)
 	require.NoError(t, os.MkdirAll(filepath.Dir(application), 0o750))
 	require.NoError(t, os.WriteFile(application, []byte("appimage"), 0o600))
 	require.NoError(t, os.Chmod(application, 0o700)) //nolint:gosec // Test executable must be runnable.
@@ -760,5 +771,23 @@ func TestEmuDeckWrapperPathUsesToolsPath(t *testing.T) {
 
 	if emuDeckWrapperPath(&paths, emulatorConfig{}) != "" {
 		t.Fatal("expected empty path for an emulator with no wrapper")
+	}
+}
+
+// Handhelds without RetroArch rely on these standalone emulators alone, so
+// their folders must be indexed.
+func TestStandaloneHandheldEmulatorsScanTheirFolders(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]bool{"DuckStation": false, "PPSSPP": false, "MelonDS": false}
+	for i := range nativeStandaloneDefs {
+		def := &nativeStandaloneDefs[i]
+		if _, ok := want[def.id]; ok {
+			want[def.id] = true
+			assert.True(t, def.scan, "%s must scan its folder", def.id)
+		}
+	}
+	for id, found := range want {
+		assert.True(t, found, "%s standalone def is missing", id)
 	}
 }

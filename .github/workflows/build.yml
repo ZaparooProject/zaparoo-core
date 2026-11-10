@@ -152,9 +152,17 @@ jobs:
             arch: arm64
           - platform: arkos
             arch: arm64
+          - platform: armada
+            arch: arm64
           - platform: knulli
             arch: arm
           - platform: knulli
+            arch: arm64
+          - platform: lakka
+            arch: amd64
+          - platform: lakka
+            arch: arm
+          - platform: lakka
             arch: arm64
           - platform: muos
             arch: arm64
