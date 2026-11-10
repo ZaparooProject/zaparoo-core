@@ -422,9 +422,12 @@ func TestUploadLog_ReportsAMissingLog(t *testing.T) {
 		"telling this user the upload failed sends them looking at the network")
 }
 
+// Not parallel: the upload client dials on http.DefaultTransport, and a
+// parallel test's httptest Server.Close closes that transport's idle
+// connections, which fails a request this test has just dialled.
+//
+//nolint:paralleltest // shares http.DefaultTransport, see above
 func TestNewUploadClient_SendsUserAgent(t *testing.T) {
-	t.Parallel()
-
 	userAgent := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userAgent <- r.Header.Get("User-Agent")
