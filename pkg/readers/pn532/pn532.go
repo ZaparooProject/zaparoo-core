@@ -41,13 +41,15 @@ import (
 	"github.com/ZaparooProject/go-pn532/transport/uart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -82,7 +84,7 @@ var (
 // Must be called with probeStateMu held for writing.
 func refreshFailedProbes() {
 	for path, entry := range failedProbePaths {
-		info, err := os.Stat(path)
+		info, err := os.Stat(probeStatPath(path))
 		if err != nil {
 			delete(failedProbePaths, path)
 		} else if !info.ModTime().Equal(entry.deviceModTime) {
@@ -115,13 +117,23 @@ func recordFailedProbes(
 		if _, alreadyFailed := failedProbePaths[probe.Path]; alreadyFailed {
 			continue
 		}
-		info, err := os.Stat(probe.Path)
+		info, err := os.Stat(probeStatPath(probe.Path))
 		if err != nil {
 			continue
 		}
 		failedProbePaths[probe.Path] = failedProbeEntry{deviceModTime: info.ModTime()}
 		log.Debug().Str("path", probe.Path).Msg("PN532: marking port as failed probe")
 	}
+}
+
+// probeStatPath is the file whose ModTime tracks the device at path. A
+// usbserial port has no device file of its own, so its usbfs node stands in:
+// the node is recreated whenever the adapter is plugged in again.
+func probeStatPath(path string) string {
+	if usbserial.IsPath(path) {
+		return usbserial.DeviceNode(path)
+	}
+	return path
 }
 
 // ClearFailedProbe removes the failed probe entry for a single path.
@@ -202,6 +214,9 @@ type SessionFactory func(device PN532Device, sessionConfig *polling.Config) Poll
 func DefaultTransportFactory(deviceInfo detection.DeviceInfo) (pn532.Transport, error) {
 	switch deviceInfo.Transport {
 	case "uart":
+		if usbserial.IsPath(deviceInfo.Path) {
+			return newUSBSerialTransport(deviceInfo.Path)
+		}
 		transport, err := uart.New(deviceInfo.Path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UART transport: %w", err)
@@ -222,6 +237,28 @@ func DefaultTransportFactory(deviceInfo detection.DeviceInfo) (pn532.Transport, 
 	default:
 		return nil, fmt.Errorf("unsupported transport type: %s", deviceInfo.Transport)
 	}
+}
+
+// openUSBSerialPort opens a usbserial port, indirected so tests can drive the
+// UART transport without an adapter.
+var openUSBSerialPort = serialport.OpenPort
+
+// newUSBSerialTransport builds a UART transport over a CH34x or PL2303
+// adapter served by the userspace USB serial driver. Reconnects reopen the
+// adapter the same way.
+func newUSBSerialTransport(path string) (*uart.Transport, error) {
+	reopen := func(name string, mode *serial.Mode) (serial.Port, error) {
+		return openUSBSerialPort(name, mode)
+	}
+	port, err := reopen(path, &serial.Mode{BaudRate: 115200})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create UART transport: %w", err)
+	}
+	transport, err := uart.NewFromPort(port, path, reopen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create UART transport: %w", err)
+	}
+	return transport, nil
 }
 
 // DefaultDeviceFactory creates a real pn532.Device.
@@ -746,6 +783,15 @@ func (*Reader) Detect(connected []string) string {
 	probesMu.Lock()
 	probed := slices.Clone(probes)
 	probesMu.Unlock()
+	if usbDevices, usbProbes := detectUSBSerial(ctx, ignorePaths); len(usbProbes) > 0 {
+		probed = append(probed, usbProbes...)
+		if len(usbDevices) > 0 {
+			devices = append(devices, usbDevices...)
+			if isExpectedDetectionMiss(err) {
+				err = nil
+			}
+		}
+	}
 	logDetectionSummary(probed, ignorePaths, devices, err)
 	// Recorded before the error check: DetectAll reports ErrNoDevicesFound
 	// whenever every probe went unanswered, which is exactly when the
@@ -802,6 +848,81 @@ func (*Reader) Detect(connected []string) string {
 	// All detected devices are already in use
 	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
+}
+
+// listUSBSerial and probeUSBSerial are the usbserial enumeration and PN532
+// probe, indirected so tests can drive Detect without hardware.
+var (
+	listUSBSerial  = usbserial.List
+	probeUSBSerial = probeUSBSerialPort
+)
+
+// usbSerialProbeTimeout bounds the PN532 probe of one usbserial adapter.
+const usbSerialProbeTimeout = 500 * time.Millisecond
+
+// detectUSBSerial probes the CH34x and PL2303 adapters that have no kernel
+// driver, which go-pn532's detection cannot see because they have no serial
+// device node. Adapters on the VID:PID blocklist or in ignorePaths are left
+// alone, the same as detection does for OS serial ports.
+func detectUSBSerial(
+	ctx context.Context,
+	ignorePaths []string,
+) ([]detection.DeviceInfo, []detection.ProbeResult) {
+	ports, err := listUSBSerial()
+	if err != nil {
+		log.Debug().Err(err).Msg("PN532: listing USB serial adapters failed")
+		return nil, nil
+	}
+	blocklist := createVIDPIDBlocklist()
+	var devices []detection.DeviceInfo
+	var probes []detection.ProbeResult
+	for i := range ports {
+		info := &ports[i]
+		if slices.Contains(ignorePaths, info.Path) {
+			continue
+		}
+		if detection.IsBlocked(info.VIDPID(), blocklist) {
+			log.Trace().Str("path", info.Path).Str("vidpid", info.VIDPID()).
+				Msg("PN532: skipping blocklisted USB serial adapter")
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, usbSerialProbeTimeout)
+		found := probeUSBSerial(probeCtx, info.Path)
+		cancel()
+		probes = append(probes, detection.ProbeResult{
+			Transport: detection.TransportUART,
+			Path:      info.Path,
+			Found:     found,
+		})
+		if found {
+			devices = append(devices, detection.DeviceInfo{
+				Transport: detection.TransportUART,
+				Path:      info.Path,
+				Name:      info.Name,
+			})
+		}
+	}
+	return devices, probes
+}
+
+// probeUSBSerialPort reports whether a PN532 answers a firmware version
+// request on the usbserial adapter at path.
+func probeUSBSerialPort(ctx context.Context, path string) bool {
+	transport, err := newUSBSerialTransport(path)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("PN532: opening USB serial adapter failed")
+		return false
+	}
+	defer func() { _ = transport.Close() }()
+	device, err := pn532.New(transport)
+	if err != nil {
+		return false
+	}
+	_, err = device.GetFirmwareVersion(ctx)
+	return err == nil
 }
 
 // Detection summary state. This is package level because SupportedReaders
@@ -911,7 +1032,7 @@ func (r *Reader) ReaderID() string {
 func (r *Reader) readerIDLocked() string {
 	return r.identity.ID(
 		r.Metadata().ID,
-		helpers.GetUSBTopologyPath(r.deviceInfo.Path),
+		serialport.TopologyPath(r.deviceInfo.Path),
 		r.deviceInfo.ConnectionString(),
 	)
 }

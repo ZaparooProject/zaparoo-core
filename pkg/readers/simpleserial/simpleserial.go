@@ -22,8 +22,6 @@ package simpleserial
 import (
 	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -41,6 +39,7 @@ import (
 type SimpleSerialReader struct {
 	port        serialport.SerialPort
 	portFactory serialport.SerialPortFactory
+	checkExists func(path string) error
 	cfg         *config.Instance
 	lastToken   *tokens.Token
 	device      config.ReadersConnect
@@ -55,6 +54,7 @@ func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
 		cfg:         cfg,
 		portFactory: serialport.DefaultSerialPortFactory,
+		checkExists: serialport.CheckExists,
 		removable:   true, // default to removable unless explicitly set to no
 	}
 }
@@ -130,10 +130,8 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 	path := device.Path
 
-	if runtime.GOOS != "windows" {
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("failed to stat device path %s: %w", path, err)
-		}
+	if err := r.checkExists(path); err != nil {
+		return err //nolint:wrapcheck // CheckExists names the path
 	}
 
 	port, err := r.portFactory(path, &serial.Mode{
@@ -259,7 +257,7 @@ func (r *SimpleSerialReader) Path() string {
 }
 
 func (r *SimpleSerialReader) ReaderID() string {
-	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(r.path), r.device.ConnectionString())
+	return r.identity.ID(r.Metadata().ID, serialport.TopologyPath(r.path), r.device.ConnectionString())
 }
 
 func (r *SimpleSerialReader) Connected() bool {
