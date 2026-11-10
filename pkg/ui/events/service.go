@@ -474,7 +474,7 @@ func (s *Service) Shown(id string) error {
 	// An event shown within a second of opening, such as one the host
 	// renderer presents at once, keeps its expiry: no client counts down
 	// finer than that, and republishing would only add a revision.
-	if entry.event.ExpiresAt != nil && (expiresAt.Sub(*entry.event.ExpiresAt)).Abs() < shownRestartMin {
+	if entry.event.ExpiresAt != nil && expiresAt.Sub(*entry.event.ExpiresAt).Abs() < shownRestartMin {
 		s.mu.Unlock()
 		return nil
 	}
