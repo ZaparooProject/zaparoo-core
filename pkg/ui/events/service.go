@@ -175,10 +175,19 @@ type Result struct {
 
 // Handle lets producer update or complete request it opened.
 type Handle struct {
-	service        *Service
-	Results        <-chan Result
-	ID             string
+	service *Service
+	Results <-chan Result
+	// Shown receives, once, the time the event was first put on screen: by a
+	// client reporting it through Service.Shown or by the host renderer
+	// presenting it. It is never closed.
+	Shown <-chan time.Time
+	ID    string
+	// HandOffHold is the least time the event was kept open for a client to
+	// start and draw it when HandedOff is set; zero when no wait was asked.
+	HandOffHold    time.Duration
 	MinimumDisplay time.Duration
+	// HandedOff reports that the host renderer left the event to API clients.
+	HandedOff bool
 }
 
 // Complete resolves event from producer side. Completing stale/superseded
@@ -204,14 +213,19 @@ func (h *Handle) Update(update Update) error {
 }
 
 type activeEvent struct {
-	stopContext      func() bool
-	closeRenderer    func() error
-	timer            clockwork.Timer
-	choices          map[string]Choice
-	result           chan Result
-	event            models.UIEvent
+	stopContext   func() bool
+	closeRenderer func() error
+	timer         clockwork.Timer
+	choices       map[string]Choice
+	result        chan Result
+	shown         chan time.Time
+	event         models.UIEvent
+	// timeout is the request's own timeout, or the last one Update set, which
+	// the event gets in full from the moment it is shown.
+	timeout          time.Duration
 	timerGeneration  uint64
 	skipHostRenderer bool
+	wasShown         bool
 }
 
 // Service owns current global UI event and arbitrates all terminal outcomes.
@@ -284,9 +298,12 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 	s.attachTimer(eventID, timerGeneration, request.Timeout)
 
 	minimumDisplay := time.Duration(0)
+	handedOff := false
+	hold := time.Duration(0)
 	if !entry.skipHostRenderer {
 		event := cloneEvent(&entry.event)
-		if !s.handOff(ctx, eventID, &event) {
+		handedOff, hold = s.handOff(ctx, eventID, &event)
+		if !handedOff {
 			s.present(ctx, eventID, &event)
 		}
 		if timedRenderer, ok := s.renderer.(TimedRenderer); ok {
@@ -296,8 +313,11 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 	return &Handle{
 		service:        s,
 		Results:        entry.result,
+		Shown:          entry.shown,
 		ID:             eventID,
+		HandOffHold:    hold,
 		MinimumDisplay: minimumDisplay,
+		HandedOff:      handedOff,
 	}, nil
 }
 
@@ -379,6 +399,8 @@ func (s *Service) Update(id string, update Update) error {
 	if update.Timeout != nil {
 		resetTimer = true
 		timeout = *update.Timeout
+		// Shown restarts the expiry at the timeout as it now stands.
+		entry.timeout = timeout
 		entry.timerGeneration++
 		if entry.timer != nil {
 			entry.timer.Stop()
@@ -408,6 +430,71 @@ func (s *Service) Update(id string, update Update) error {
 	if resetTimer {
 		s.attachTimer(id, generation, timeout)
 	}
+	return nil
+}
+
+// shownRestartMin is the least an expiry restart must move the deadline by,
+// either way.
+const shownRestartMin = time.Second
+
+// Shown records that the active event is on screen. The first report restarts
+// the event's expiry at its full request timeout from now, so time spent
+// waiting for a client to start does not count against the person answering
+// it, and signals the producer through Handle.Shown. Later reports for the
+// same event are no-ops; an ID that is not the active event is an error, as
+// for Respond.
+func (s *Service) Shown(id string) error {
+	s.mu.Lock()
+	entry, err := s.activeForIDLocked(id)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if s.eventExpired(entry) {
+		state, resolution := s.expireLocked(entry)
+		s.mu.Unlock()
+		closeRenderer(entry)
+		s.publishState(state)
+		s.deliverResult(entry, Result{Resolution: resolution})
+		return ErrEventExpired
+	}
+	if entry.wasShown {
+		s.mu.Unlock()
+		return nil
+	}
+	entry.wasShown = true
+	now := s.clock.Now()
+	// Buffered for exactly this one send.
+	entry.shown <- now
+
+	timeout := entry.timeout
+	if timeout <= 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	expiresAt := now.Add(timeout)
+	// An event shown within a second of opening, such as one the host
+	// renderer presents at once, keeps its expiry: no client counts down
+	// finer than that, and republishing would only add a revision.
+	if entry.event.ExpiresAt != nil && expiresAt.Sub(*entry.event.ExpiresAt).Abs() < shownRestartMin {
+		s.mu.Unlock()
+		return nil
+	}
+	entry.timerGeneration++
+	if entry.timer != nil {
+		entry.timer.Stop()
+		entry.timer = nil
+	}
+	entry.event.ExpiresAt = &expiresAt
+	generation := entry.timerGeneration
+	s.revision++
+	state := s.stateLocked(nil)
+	s.mu.Unlock()
+
+	log.Debug().Str("event_id", id).Dur("timeout", timeout).
+		Msg("UI event shown; expiry restarted")
+	s.publishState(state)
+	s.attachTimer(id, generation, timeout)
 	return nil
 }
 
@@ -592,31 +679,32 @@ func (s *Service) resolveTimeout(id string, generation uint64) {
 }
 
 // handOff offers an event to a HandoffRenderer and reports whether the
-// renderer left it to API clients. A handed-off event is never shown or
-// updated through the host renderer, and its expiry is pushed out to the
-// least open time the renderer asked for. An event without an expiry keeps
-// none.
-func (s *Service) handOff(ctx context.Context, id string, event *models.UIEvent) bool {
+// renderer left it to API clients, with the least open time it asked for. A
+// handed-off event is never shown or updated through the host renderer, and
+// its expiry is pushed out to that least open time. An event without an
+// expiry keeps none.
+func (s *Service) handOff(ctx context.Context, id string, event *models.UIEvent) (bool, time.Duration) {
 	handoff, ok := s.renderer.(HandoffRenderer)
 	if !ok {
-		return false
+		return false, 0
 	}
 	handled, minOpen := handoff.HandOffUI(ctx, event)
 	if !handled {
-		return false
+		return false, 0
 	}
+	minOpen = max(minOpen, 0)
 
 	s.mu.Lock()
 	entry := s.active
 	if entry == nil || entry.event.ID != id {
 		s.mu.Unlock()
-		return true
+		return true, minOpen
 	}
 	entry.skipHostRenderer = true
 	floor := s.clock.Now().Add(minOpen)
 	if minOpen <= 0 || entry.event.ExpiresAt == nil || !entry.event.ExpiresAt.Before(floor) {
 		s.mu.Unlock()
-		return true
+		return true, minOpen
 	}
 	entry.timerGeneration++
 	if entry.timer != nil {
@@ -633,9 +721,11 @@ func (s *Service) handOff(ctx context.Context, id string, event *models.UIEvent)
 		Msg("UI event left to API clients; expiry extended")
 	s.publishState(state)
 	s.attachTimer(id, generation, minOpen)
-	return true
+	return true, minOpen
 }
 
+// present shows an event through the host renderer. An event it presents
+// without error is on screen, so it counts as shown.
 func (s *Service) present(ctx context.Context, id string, event *models.UIEvent) {
 	if s.renderer == nil {
 		return
@@ -652,6 +742,12 @@ func (s *Service) present(ctx context.Context, id string, event *models.UIEvent)
 	if s.active != nil && s.active.event.ID == id {
 		s.active.closeRenderer = closeFn
 		s.mu.Unlock()
+		if err == nil {
+			if shownErr := s.Shown(id); shownErr != nil && !errors.Is(shownErr, ErrNoActiveEvent) &&
+				!errors.Is(shownErr, ErrEventNotActive) {
+				log.Debug().Err(shownErr).Str("event_id", id).Msg("presented UI event could not be marked shown")
+			}
+		}
 		return
 	}
 	s.mu.Unlock()
@@ -710,6 +806,8 @@ func newActiveEvent(request *Request, now time.Time) *activeEvent {
 	return &activeEvent{
 		choices:          privateChoices,
 		result:           make(chan Result, 1),
+		shown:            make(chan time.Time, 1),
+		timeout:          request.Timeout,
 		skipHostRenderer: request.SkipHostRenderer,
 		event: models.UIEvent{
 			ExpiresAt:        expiresAt,

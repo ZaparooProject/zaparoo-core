@@ -273,6 +273,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | confirm                         | Confirm and launch the currently staged token.                                        | All clients |
 | ui                              | Return authoritative global UI event state.                                           | All clients |
 | ui.respond                      | Respond to active global UI event.                                                     | All clients |
+| ui.shown                        | Report that the active global UI event is on screen.                                   | Localhost or any authenticated client |
 | tokens                          | List active tokens.                                                                   | All clients |
 | tokens.history                  | Return latest token launches.                                                         | All clients |
 | media                           | Return media database status and active media.                                        | All clients |

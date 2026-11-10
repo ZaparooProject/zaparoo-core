@@ -54,7 +54,7 @@ Platform UI rendering is optional. MiSTer implements notice, loader, picker, and
 
 Domain owners keep behavior: reader manager owns staged launch-guard token, playlist code owns selected ZapScript action, and installer owns download lifecycle. Public picker choices contain only label and opaque ID. Global events are broadcast to every permitted client and must never carry PINs, passwords, credentials, or other secrets.
 
-Clients consume `ui.changed`, replace local state using newest `revision`, query `ui` after reconnect, and answer through `ui.respond`. Legacy launch-guard `confirm` and token notifications remain supported. Launch-guard confirmation events deliberately skip host rendering so opening a MiSTer widget cannot interrupt active media; existing sound feedback and card re-tap confirmation remain unchanged.
+Clients consume `ui.changed`, replace local state using newest `revision`, query `ui` after reconnect, report an event on screen through `ui.shown`, and answer through `ui.respond`. Legacy launch-guard `confirm` and token notifications remain supported. Launch-guard confirmation events deliberately skip host rendering so opening a MiSTer widget cannot interrupt active media; existing sound feedback and card re-tap confirmation remain unchanged.
 
 ## Database
 

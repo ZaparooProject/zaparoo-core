@@ -358,3 +358,176 @@ func TestExited_PlaylistUpdateBeforeTheExitIsHarmless(t *testing.T) {
 	r.end(gen, exited)
 	require.Equal(t, 1, r.ui.opened())
 }
+
+// holdForFrontend is the hand-off hold the MiSTer gives a frontend that is
+// still starting.
+const holdForFrontend = 60 * time.Second
+
+func TestExited_HeldWhileHandedOff(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true), withInput())
+	r.ui.handOff(holdForFrontend)
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+	require.Equal(t, 1, r.ui.opened())
+	assert.Equal(t, playlists.DefaultCountdown, r.ui.request(t, 0).Timeout,
+		"the prompt asks for the countdown's own time")
+
+	r.tick(playlists.DefaultCountdown)
+	r.quiet()
+	r.tick(30 * time.Second)
+	r.quiet()
+	assert.False(t, r.ui.dismissed(0), "the prompt waits for the frontend")
+}
+
+func TestExited_HandedOffNeverShownExpiresAtTheHold(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true))
+	r.ui.handOff(holdForFrontend)
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+
+	r.tick(holdForFrontend - time.Second)
+	r.quiet()
+	r.tick(time.Second)
+	got := r.host.last(t)
+	assert.Equal(t, 1, got.Index)
+	assert.True(t, got.EngineStarted)
+}
+
+func TestExited_HandedOffShortHoldKeepsTheCountdown(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true))
+	r.ui.handOff(time.Second)
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+
+	r.tick(playlists.DefaultCountdown - time.Second)
+	r.quiet()
+	r.tick(time.Second)
+	assert.Equal(t, 1, r.host.last(t).Index, "a hold shorter than the countdown changes nothing")
+}
+
+func TestExited_FullTimeAfterShown(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true), withInput())
+	r.ui.handOff(holdForFrontend)
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+
+	r.tick(16 * time.Second)
+	r.show(0)
+	r.tick(playlists.DefaultCountdown - time.Second)
+	r.quiet()
+	r.tick(time.Second)
+	assert.Equal(t, 1, r.host.last(t).Index, "the countdown ran its full time from when it was shown")
+}
+
+func TestExited_ShownWithoutHandOffRestartsTheCountdown(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true))
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+
+	r.tick(3 * time.Second)
+	r.show(0)
+	r.tick(playlists.DefaultCountdown - time.Second)
+	r.quiet()
+	r.tick(time.Second)
+	assert.Equal(t, 1, r.host.last(t).Index)
+}
+
+func TestExited_PressAfterShownDoesNotCancel(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true), withInput())
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+	w := r.input.nextWatch(t)
+	assert.True(t, w.responsive)
+
+	r.tick(3 * time.Second)
+	r.show(0)
+	eventually(t, func() bool { return w.ctx.Err() != nil })
+	w.activity()
+	r.eng.Sync()
+	assert.False(t, r.ui.dismissed(0), "a press answers a prompt on screen, it does not cancel it")
+
+	r.tick(playlists.DefaultCountdown)
+	assert.Equal(t, 1, r.host.last(t).Index)
+}
+
+func TestExited_PressBeforeShownWithoutHandOffCancels(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true), withInput())
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+	w := r.input.nextWatch(t)
+
+	r.tick(3 * time.Second)
+	w.activity()
+	r.eng.Sync()
+	assert.True(t, r.ui.dismissed(0), "nothing was shown, so a press still cancels")
+	r.tick(time.Minute)
+	r.quiet()
+}
+
+func TestExited_PressWhileHeldDoesNotCancel(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true), withInput())
+	r.ui.handOff(holdForFrontend)
+	gen := r.play(testPlaylist(3, 0, nil))
+	r.end(gen, exited)
+
+	r.tick(5 * time.Second)
+	r.eng.Sync()
+	// Press on every watch that starts; there may be none at all.
+	for pressed := false; !pressed; {
+		select {
+		case w := <-r.input.started:
+			if w.ctx.Err() == nil {
+				w.activity()
+				r.eng.Sync()
+			}
+		case <-time.After(200 * time.Millisecond):
+			pressed = true
+		}
+	}
+	assert.False(t, r.ui.dismissed(0), "a press while the frontend starts does not cancel the held prompt")
+
+	r.show(0)
+	r.tick(playlists.DefaultCountdown)
+	assert.Equal(t, 1, r.host.last(t).Index)
+}
+
+func TestExited_MovedWhileHeldKeepsTheFullCountdown(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, withUI(true))
+	r.ui.handOff(holdForFrontend)
+	pls := testPlaylist(4, 2, nil)
+	gen := r.play(pls)
+	r.end(gen, exited)
+
+	r.tick(20 * time.Second)
+	shuffled := playlists.SetShuffle(pls, true)
+	r.eng.ItemMoved(pls.Slot, pls.ID, pls.Index, shuffled.Index)
+	r.host.set(pls.Slot, shuffled)
+	r.changed()
+
+	require.Equal(t, 2, r.ui.opened())
+	assert.Equal(t, playlists.DefaultCountdown, r.ui.request(t, 1).Timeout,
+		"nothing was shown yet, so the reopened prompt has all its time")
+	r.show(1)
+	r.tick(playlists.DefaultCountdown - time.Second)
+	r.quiet()
+	r.tick(time.Second)
+	assert.Equal(t, shuffled.ID, r.host.last(t).ID)
+}
