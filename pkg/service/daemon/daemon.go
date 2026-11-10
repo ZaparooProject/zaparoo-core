@@ -329,10 +329,20 @@ func (s *Service) stopService() error {
 
 // prepareBinary keeps a persistent service binary cache in DataDir so the
 // package-manager target can be replaced while the daemon is running.
+// serviceBinaryDir is where the service's own copy of the binary lives.
+func (s *Service) serviceBinaryDir() string {
+	if p, ok := s.pl.(platforms.ServiceBinaryDirProvider); ok {
+		if dir := p.ServiceBinaryDir(); dir != "" {
+			return dir
+		}
+	}
+	return helpers.DataDir(s.pl)
+}
+
 func (s *Service) prepareBinary(binPath string) (string, error) {
 	started := time.Now()
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
+	dataDir := s.serviceBinaryDir()
 	if err := fs.MkdirAll(dataDir, 0o750); err != nil {
 		return "", fmt.Errorf("error creating data directory: %w", err)
 	}
@@ -444,7 +454,7 @@ func (s *Service) cachedServiceBinaryFromManifest(
 	}
 
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
+	dataDir := s.serviceBinaryDir()
 	servicePath := serviceCachePath(dataDir, binPath, manifest.SourceHash)
 	if filepath.Clean(manifest.ServicePath) != filepath.Clean(servicePath) ||
 		!serviceCachePathValid(manifest.ServicePath, dataDir) {
@@ -718,7 +728,7 @@ func isServiceCacheFilename(name string) bool {
 
 func (s *Service) cleanupServiceBinaries(currentPath, previousPath string) {
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
+	dataDir := s.serviceBinaryDir()
 	entries, err := afero.ReadDir(fs, dataDir)
 	if err != nil {
 		log.Debug().Err(err).Msg("error reading service binary cache directory")
@@ -1390,7 +1400,7 @@ func (s *Service) serviceProcessIdentity(pid int) (bool, error) {
 		return true, nil
 	}
 
-	dataDir := helpers.DataDir(s.pl)
+	dataDir := s.serviceBinaryDir()
 	exePath, exeErr := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
 	exePath = strings.TrimSuffix(exePath, " (deleted)")
 	if exeErr == nil && pathLooksLikeServiceBinary(exePath, dataDir) {

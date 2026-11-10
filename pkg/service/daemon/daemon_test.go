@@ -170,6 +170,41 @@ func TestPrepareBinary_CreatesDataDir(t *testing.T) {
 	assert.FileExists(t, result)
 }
 
+type binDirPlatform struct {
+	*mocks.MockPlatform
+	dir string
+}
+
+func (p binDirPlatform) ServiceBinaryDir() string { return p.dir }
+
+func TestPrepareBinary_UsesServiceBinaryDir(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	binDir := filepath.Join(t.TempDir(), "bin")
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{
+		DataDir: dataDir,
+		TempDir: t.TempDir(),
+	})
+	svc := &Service{pl: binDirPlatform{MockPlatform: pl, dir: binDir}}
+
+	srcPath := filepath.Join(t.TempDir(), "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, binDir, filepath.Dir(result))
+	assert.FileExists(t, filepath.Join(binDir, serviceManifestName))
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing is staged in DataDir")
+
+	again, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, again, "the staged copy is reused")
+}
+
 func TestPrepareBinary_NoExtension(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

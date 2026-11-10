@@ -54,6 +54,7 @@ func expectedTargets() []target {
 		arches   []string
 	}{
 		{platform: "amberelec", arches: []string{"arm64"}},
+		{platform: "arkos", arches: []string{"arm64"}},
 		{platform: "batocera", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "bazzite", arches: []string{"amd64", "arm64"}},
 		{platform: "chimeraos", arches: []string{"amd64", "arm64"}},
@@ -64,7 +65,10 @@ func expectedTargets() []target {
 		{platform: "mac", arches: []string{"amd64", "arm64"}},
 		{platform: "mister", arches: []string{"arm"}},
 		{platform: "mistex", arches: []string{"arm64"}},
+		{platform: "muos", arches: []string{"arm64"}},
+		{platform: "recalbox", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "replayos", arches: []string{"arm64"}},
+		{platform: "retropie", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "rocknix", arches: []string{"amd64", "arm64"}},
 		{platform: "steamos", arches: []string{"amd64"}},
 		{platform: "windows", arches: []string{"386", "amd64", "arm64"}},

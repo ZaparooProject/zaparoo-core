@@ -56,9 +56,11 @@ func TestServiceUnitsDeclineToRestartOnTheUnrecoverableStatus(t *testing.T) {
 
 	units := []string{
 		filepath.Join("..", "..", "cmd", "amberelec", "conf", "zaparoo.service"),
+		filepath.Join("..", "..", "cmd", "arkos", "conf", "zaparoo.service"),
 		filepath.Join("..", "..", "cmd", "replayos", "conf", "zaparoo.service"),
 		filepath.Join("..", "..", "cmd", "rocknix", "conf", "zaparoo.service"),
 		filepath.Join("..", "platforms", "linux", "installer", "conf", "zaparoo.service"),
+		filepath.Join("..", "platforms", "retropie", "conf", "zaparoo.service"),
 	}
 	want := fmt.Sprintf("RestartPreventExitStatus=%d", ExitUnrecoverable)
 
@@ -87,10 +89,14 @@ func TestSupervisedEntrypointsMapTheUnrecoverableStatus(t *testing.T) {
 
 	entrypoints := []string{
 		filepath.Join("..", "..", "cmd", "amberelec", "main.go"),
+		filepath.Join("..", "..", "cmd", "arkos", "main.go"),
 		filepath.Join("..", "..", "cmd", "bazzite", "main.go"),
 		filepath.Join("..", "..", "cmd", "chimeraos", "main.go"),
 		filepath.Join("..", "..", "cmd", "linux", "main.go"),
+		filepath.Join("..", "..", "cmd", "muos", "main.go"),
+		filepath.Join("..", "..", "cmd", "recalbox", "main.go"),
 		filepath.Join("..", "..", "cmd", "replayos", "main.go"),
+		filepath.Join("..", "..", "cmd", "retropie", "main.go"),
 		filepath.Join("..", "..", "cmd", "rocknix", "main.go"),
 		filepath.Join("..", "..", "cmd", "steamos", "main.go"),
 	}

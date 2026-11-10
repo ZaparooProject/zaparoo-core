@@ -24,6 +24,7 @@ package ids
 const (
 	Android   = "android"
 	AmberELEC = "amberelec"
+	ArkOS     = "arkos"
 	Batocera  = "batocera"
 	Bazzite   = "bazzite"
 	ChimeraOS = "chimeraos"
@@ -34,6 +35,7 @@ const (
 	Mac       = "mac"
 	Mister    = "mister"
 	Mistex    = "mistex"
+	MuOS      = "muos"
 	Recalbox  = "recalbox"
 	ReplayOS  = "replayos"
 	RetroPie  = "retropie"

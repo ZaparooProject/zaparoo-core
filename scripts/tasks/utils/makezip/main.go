@@ -55,8 +55,11 @@ var platformDocs = map[string]string{
 	"windows":   "windows/index.md",
 	// Interim packaging fallbacks until dedicated docs are published.
 	"amberelec": "linux/index.md",
+	"arkos":     "linux/index.md",
 	"firmware":  "linux/index.md",
 	"knulli":    "linux/index.md",
+	"muos":      "linux/index.md",
+	"retropie":  "linux/index.md",
 	"rocknix":   "linux/index.md",
 }
 
@@ -76,8 +79,11 @@ var platformURLs = map[string]string{
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
 	// Interim packaging fallbacks until dedicated docs are published.
 	"amberelec": "https://zaparoo.org/docs/platforms/linux/",
+	"arkos":     "https://zaparoo.org/docs/platforms/linux/",
 	"firmware":  "https://zaparoo.org/docs/platforms/linux/",
 	"knulli":    "https://zaparoo.org/docs/platforms/linux/",
+	"muos":      "https://zaparoo.org/docs/platforms/linux/",
+	"retropie":  "https://zaparoo.org/docs/platforms/linux/",
 	"rocknix":   "https://zaparoo.org/docs/platforms/linux/",
 }
 

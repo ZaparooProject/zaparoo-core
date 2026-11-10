@@ -24,24 +24,32 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/retropie"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -49,7 +57,7 @@ import (
 func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCodeFor(err))
 	}
 }
 
@@ -68,24 +76,62 @@ func run() error {
 		}
 	}()
 
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
 	pl := &retropie.Platform{}
 	flags := cli.SetupFlags()
 
 	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
+	doInstall := flag.Bool("install", false, "install the zaparoo service and RetroPie hooks, as the RetroPie user")
+	doUninstall := flag.Bool("uninstall", false, "uninstall the zaparoo service and RetroPie hooks")
+	installSystem := flag.String(retropie.InstallSystemFlag, "", "")
+	uninstallSystem := flag.Bool(retropie.UninstallSystemFlag, false, "")
 
 	flags.Pre(pl)
+
+	ctx := context.Background()
+
+	// The root half of install and uninstall, run by -install and
+	// -uninstall through sudo.
+	if *installSystem != "" || *uninstallSystem {
+		exe, err := executablePath()
+		if err != nil {
+			return err
+		}
+		if *uninstallSystem {
+			if err := retropie.UninstallSystem(ctx, runInteractive); err != nil {
+				return fmt.Errorf("uninstall service: %w", err)
+			}
+			return nil
+		}
+		if err := retropie.InstallSystem(ctx, *installSystem, exe, runInteractive); err != nil {
+			return fmt.Errorf("install service: %w", err)
+		}
+		return nil
+	}
 
 	if os.Geteuid() == 0 {
 		return errors.New("zaparoo must not be run as root")
 	}
 
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
+	if *doInstall || *doUninstall {
+		exe, err := executablePath()
+		if err != nil {
+			return err
+		}
+		if *doUninstall {
+			if err := pl.Uninstall(ctx, exe, runInteractive); err != nil {
+				return fmt.Errorf("uninstall: %w", err)
+			}
+			_, _ = fmt.Println("Zaparoo service and RetroPie hooks removed.")
+			return nil
+		}
+		if err := pl.Install(ctx, exe, runInteractive); err != nil {
+			return fmt.Errorf("install: %w", err)
+		}
+		_, _ = fmt.Println("Zaparoo installed. Reboot the console so EmulationStation " +
+			"starts with Zaparoo launch support.")
+		return nil
+	}
+
 	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
 	if *asDaemon {
 		logWriters = []io.Writer{os.Stderr}
@@ -98,6 +144,42 @@ func run() error {
 	)
 
 	flags.Post(cfg, pl)
+
+	if *asDaemon {
+		return runDaemon(pl, cfg)
+	}
+
+	return runTUI(pl, cfg)
+}
+
+func executablePath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("find zaparoo binary: %w", err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("resolve zaparoo binary: %w", err)
+	}
+	return exe, nil
+}
+
+func runInteractive(ctx context.Context, name string, args ...string) error {
+	//nolint:gosec // G204: only sudo and systemctl with arguments built by the installer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+func runDaemon(pl *retropie.Platform, cfg *config.Instance) error {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
 
 	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
@@ -127,6 +209,29 @@ func run() error {
 		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
 			return fmt.Errorf("failed to re-exec for restart: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// runTUI connects to an existing daemon or spawns one, then displays the TUI.
+func runTUI(pl *retropie.Platform, cfg *config.Instance) error {
+	stopDaemon, err := daemon.SpawnDaemon(cfg)
+	if err != nil {
+		return fmt.Errorf("error spawning daemon: %w", err)
+	}
+	defer stopDaemon()
+
+	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+		logDestPath := filepath.Join(helpers.DataDir(pl), config.LogFile)
+		return tui.BuildMain(
+			cfg, pl,
+			func() bool { return client.IsServiceRunning(cfg) },
+			logDestPath, "storage",
+		)
+	})
+	if err != nil {
+		return fmt.Errorf("error displaying TUI: %w", err)
 	}
 
 	return nil

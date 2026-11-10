@@ -1,0 +1,27 @@
+[Unit]
+Description=Zaparoo Core
+Documentation=https://zaparoo.org/docs/
+After=emulationstation.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ark/.config/zaparoo
+ExecStart=/home/ark/.config/zaparoo/zaparoo -daemon
+Restart=on-failure
+RestartSec=5s
+# Core exits 78 when starting again cannot help, currently a user database
+# written by a newer build than the one installed. Retrying that every five
+# seconds buries the explanation under copies of itself; failing here leaves it
+# readable in systemctl status. See docs/ota-runbook.md.
+RestartPreventExitStatus=78
+# Core stops EmulationStation while a game it launched runs. If Core dies
+# before starting it again, bring the frontend back.
+ExecStopPost=-/bin/sh -c 'if [ -e /run/zaparoo-arkos-es-stopped ]; then rm -f /run/zaparoo-arkos-es-stopped; systemctl start emulationstation.service; fi'
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

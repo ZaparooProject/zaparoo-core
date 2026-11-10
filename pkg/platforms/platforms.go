@@ -689,6 +689,14 @@ type Settings struct {
 	ThrottleBackground bool
 }
 
+// ServiceBinaryDirProvider is implemented by platforms whose DataDir sits on
+// a filesystem that cannot execute files, such as a FAT share mounted without
+// exec bits. The background service runs from a copy of the binary in the
+// returned directory instead of DataDir.
+type ServiceBinaryDirProvider interface {
+	ServiceBinaryDir() string
+}
+
 // ScraperCustomOption is a single user-configurable option for a scraper.
 type ScraperCustomOption struct {
 	Name  string
