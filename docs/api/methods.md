@@ -409,7 +409,7 @@ Top-level `confirm` remains launch-guard-specific for compatibility. It cannot c
 
 **Access:** All clients.
 
-Reports that a client has put the active UI event on screen. The first report for an event restarts its expiry at the event's full timeout from now, so time spent waiting for the client to start does not count against the person answering it, and publishes the new `expiresAt` through `ui.changed`. Repeated reports for the same event are accepted and change nothing. An event the host renderer presents counts as shown without a report.
+Reports that a client has put the active UI event on screen. The first report for an event restarts its expiry at the event's full timeout from now, so time spent waiting for the client to start does not count against the person answering it, and publishes the new `expiresAt` through `ui.changed`. A first report within a second of the event opening keeps the current expiry. Repeated reports for the same event are accepted and change nothing. An event the host renderer presents counts as shown without a report.
 
 Clients should send it once per event, when the event first becomes visible.
 

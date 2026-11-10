@@ -431,6 +431,10 @@ func (s *Service) Update(id string, update Update) error {
 	return nil
 }
 
+// shownRestartMin is the least an expiry restart must move the deadline by,
+// either way.
+const shownRestartMin = time.Second
+
 // Shown records that the active event is on screen. The first report restarts
 // the event's expiry at its full request timeout from now, so time spent
 // waiting for a client to start does not count against the person answering
@@ -467,7 +471,10 @@ func (s *Service) Shown(id string) error {
 		return nil
 	}
 	expiresAt := now.Add(timeout)
-	if entry.event.ExpiresAt != nil && entry.event.ExpiresAt.Equal(expiresAt) {
+	// An event shown within a second of opening, such as one the host
+	// renderer presents at once, keeps its expiry: no client counts down
+	// finer than that, and republishing would only add a revision.
+	if entry.event.ExpiresAt != nil && (expiresAt.Sub(*entry.event.ExpiresAt)).Abs() < shownRestartMin {
 		s.mu.Unlock()
 		return nil
 	}

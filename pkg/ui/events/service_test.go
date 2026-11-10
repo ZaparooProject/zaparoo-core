@@ -545,6 +545,39 @@ func TestServiceShownRestartsExpiry(t *testing.T) {
 	assert.Equal(t, models.UIOutcomeTimedOut, result.Resolution.Outcome)
 }
 
+func TestServiceShownSoonAfterOpenKeepsExpiry(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	service, published := newTestService(clock, nil)
+	opened := clock.Now()
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+
+	clock.Advance(500 * time.Millisecond)
+	require.NoError(t, service.Shown(handle.ID))
+	select {
+	case <-handle.Shown:
+	default:
+		t.Fatal("the producer was not told the event is shown")
+	}
+	select {
+	case state := <-published:
+		t.Fatalf("a sub-second restart published state: %+v", state)
+	default:
+	}
+	state := service.State()
+	assert.Equal(t, uint64(1), state.Revision)
+	require.Len(t, state.Events, 1)
+	assert.Equal(t, opened.Add(10*time.Second), *state.Events[0].ExpiresAt)
+}
+
 func TestServiceShownWithoutTimeoutStaysOpen(t *testing.T) {
 	t.Parallel()
 
