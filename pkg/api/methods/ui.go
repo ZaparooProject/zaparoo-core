@@ -52,3 +52,19 @@ func HandleUIRespond(env requests.RequestEnv) (any, error) {
 	}
 	return NoContent{}, nil
 }
+
+//nolint:gocritic // single-use parameter in API handler
+func HandleUIShown(env requests.RequestEnv) (any, error) {
+	if env.UI == nil {
+		return nil, errUIServiceUnavailable
+	}
+
+	var params models.UIShownParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if err := env.UI.Shown(params.ID); err != nil {
+		return nil, models.ClientErrf("UI shown report failed: %w", err)
+	}
+	return NoContent{}, nil
+}

@@ -414,11 +414,15 @@ func (e *Engine) onIdleExpired(pls *playlists.Playlist, now time.Time) {
 }
 
 // startCountdown opens a countdown that ends wait after at. It replaces any
-// countdown already open.
+// countdown already open. An exit countdown whose prompt is left to a client
+// that has yet to start is held open as long as the prompt is, and gets its
+// full wait once the prompt is shown.
 func (e *Engine) startCountdown(c *countdown, title string, wait time.Duration, at time.Time) {
 	e.cancelCountdown()
 	e.cdSeq++
 	c.id = e.cdSeq
+	c.wait = wait
+	c.held = false
 	c.deadline = at.Add(wait)
 	if c.kind != cdExit && e.input == nil {
 		c.inputCancels = false
@@ -453,19 +457,52 @@ func (e *Engine) startCountdown(c *countdown, title string, wait time.Duration, 
 	}
 	e.promptID = handle.ID
 	c.prompted = true
+	if c.kind == cdExit && handle.HandedOff && handle.HandOffHold > wait {
+		// Nothing is on screen until the client starts and shows the prompt,
+		// so the countdown cannot run out before the prompt could, and a
+		// press made while it starts cannot cancel a prompt nobody has seen.
+		c.deadline = at.Add(handle.HandOffHold)
+		c.held = true
+		c.inputCancels = false
+		log.Debug().Dur("hold", handle.HandOffHold).
+			Msg("auto-advance: countdown held until its prompt is shown")
+	}
 	id := c.id
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		select {
-		case result, ok := <-handle.Results:
-			if ok {
-				e.post(&event{kind: evUIResult, gen: id, result: result})
+		shown := handle.Shown
+		for {
+			select {
+			case result, ok := <-handle.Results:
+				if ok {
+					e.post(&event{kind: evUIResult, gen: id, result: result})
+				}
+				cancel()
+				return
+			case shownAt := <-shown:
+				shown = nil
+				e.post(&event{kind: evUIShown, gen: id, at: shownAt})
+			case <-ctx.Done():
+				return
 			}
-			cancel()
-		case <-ctx.Done():
 		}
 	}()
+}
+
+// onUIShown restarts an exit countdown at its full wait from the moment its
+// prompt was put on screen. From then on the person can see it, so a press
+// answers the prompt rather than cancelling the countdown.
+func (e *Engine) onUIShown(ev *event) {
+	c := e.cd
+	if c == nil || c.id != ev.gen || c.kind != cdExit {
+		return
+	}
+	c.deadline = ev.at.Add(c.wait)
+	c.held = false
+	c.inputCancels = false
+	log.Debug().Dur("wait", c.wait).Msg("auto-advance: countdown prompt shown, countdown restarted")
+	e.syncWatch(e.clock.Now())
 }
 
 // countdownTitle is what a countdown tells the user is coming next.
@@ -490,6 +527,10 @@ func (e *Engine) restartCountdown(c *countdown, at time.Time) bool {
 		return false
 	}
 	left := max(c.deadline.Sub(at), 0)
+	if c.held {
+		// Nothing was shown yet, so the prompt still has all its time.
+		left = c.wait
+	}
 	// Not cancelCountdown: a rotation that carries on is not the user
 	// having been active.
 	e.cd = nil
