@@ -198,3 +198,35 @@ func TestScriptCommand(t *testing.T) {
 	require.NoError(t, cmd.Cancel(), "cancelling an unstarted script is a no-op")
 	assert.Equal(t, scriptWaitDelay, cmd.WaitDelay)
 }
+
+func TestDquoted(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		`a\$b`:    `a$b`,
+		"a\\`b":   "a`b",
+		`a\"b`:    `a"b`,
+		`a\\b`:    `a\b`,
+		"a\\\nb":  "ab",
+		`a\(b`:    `a\(b`,
+		`trail\`:  `trail\`,
+		"plain":   "plain",
+		`\\\$x\y`: `\$x\y`,
+	}
+	for in, want := range tests {
+		assert.Equal(t, want, dquoted(in), in)
+	}
+}
+
+func TestRunScriptProcess_ReportsFailure(t *testing.T) {
+	t.Parallel()
+
+	acct := testAccount()
+	acct.home = filepath.Join(t.TempDir(), "missing")
+	spec := &scriptSpec{acct: acct, path: "/nonexistent/game-start/x.sh"}
+	err := runScriptProcess(context.Background(), spec)
+	require.ErrorContains(t, err, "run /nonexistent/game-start/x.sh")
+
+	cmd := scriptCommand(context.Background(), spec)
+	require.NoError(t, cmd.Cancel(), "no process to kill")
+}

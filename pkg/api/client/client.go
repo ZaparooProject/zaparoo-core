@@ -454,6 +454,9 @@ func ServiceState(cfg *config.Instance) (state string, ok bool) {
 	if err != nil {
 		return "", false
 	}
+	// Without this, /health answers with a plain-text body that only says OK
+	// once startup has finished.
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := (&http.Client{Transport: useragent.Transport(nil)}).Do(req)
 	if err != nil {

@@ -8,8 +8,11 @@ package arkos
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,4 +177,57 @@ func TestGameCommand(t *testing.T) {
 	assert.Equal(t, uint32(1002), cmd.SysProcAttr.Credential.Uid)
 	assert.Equal(t, uint32(1002), cmd.SysProcAttr.Credential.Gid)
 	assert.Equal(t, []uint32{4, 27}, cmd.SysProcAttr.Credential.Groups)
+}
+
+func TestNewLaunchSpec_RefusesUnsafeLaunch(t *testing.T) {
+	t.Parallel()
+
+	launch := snesLaunch(t)
+	launch.core = "snes9x; id"
+	spec, err := newLaunchSpec(&launch, testAccount(), "/roms/snes/Game.sfc")
+	require.Error(t, err)
+	assert.Nil(t, spec)
+}
+
+func TestAccountFromUser(t *testing.T) {
+	t.Parallel()
+
+	me, err := user.Current()
+	require.NoError(t, err)
+
+	acct, err := accountFromUser(me)
+	require.NoError(t, err)
+	assert.Equal(t, me.Username, acct.name)
+	assert.Equal(t, me.Uid, strconv.FormatUint(uint64(acct.uid), 10))
+	assert.Equal(t, me.Gid, strconv.FormatUint(uint64(acct.gid), 10))
+	assert.NotEmpty(t, acct.groups)
+
+	noHome := *me
+	noHome.HomeDir = ""
+	acct, err = accountFromUser(&noHome)
+	require.NoError(t, err)
+	assert.Equal(t, frontendHome, acct.home)
+
+	badUID := *me
+	badUID.Uid = "x"
+	_, err = accountFromUser(&badUID)
+	require.ErrorContains(t, err, "parse uid")
+
+	badGID := *me
+	badGID.Gid = "x"
+	_, err = accountFromUser(&badGID)
+	require.ErrorContains(t, err, "parse gid")
+}
+
+func TestStartGameProcess_ReportsStartFailure(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root may switch credentials, so the start would succeed")
+	}
+
+	spec := &launchSpec{acct: testAccount(), script: "exit 0"}
+	spec.acct.home = t.TempDir()
+	proc, err := startGameProcess(spec)
+	require.ErrorContains(t, err, "start game")
+	assert.Nil(t, proc)
 }

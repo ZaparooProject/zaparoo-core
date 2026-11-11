@@ -73,3 +73,14 @@ func TestRetroArchControls_OnlyWhenNetworkCommandsEnabled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "network_cmd_enable = \"true\"\n", string(data), "config is not modified")
 }
+
+func TestRetroArchControls_NotRetroArch(t *testing.T) {
+	t.Parallel()
+
+	fs := newTestFs(t)
+	writeFile(t, fs, filepath.Join(frontendHome, ".config", "retroarch", "retroarch.cfg"),
+		"network_cmd_enable = \"true\"\n")
+	p := newTestPlatform(t, fs, newMockCmd())
+	launch := esLaunch{emulator: "ppsspp", command: "/opt/ppsspp/PPSSPPSDL %ROM%"}
+	assert.Nil(t, p.retroArchControls(&launch))
+}

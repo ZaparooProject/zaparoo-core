@@ -163,3 +163,72 @@ func TestCloseProcessEndsExternalPort(t *testing.T) {
 	}, sigs.signals())
 	assert.Empty(t, p.foregroundPIDs(externalForeground))
 }
+
+func TestProcessScansWithoutProc(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPlatform(t, &failFs{Fs: newTestFs(t), op: "open", path: testProc})
+	assert.Empty(t, p.pidsOf("retroarch"))
+	assert.Empty(t, p.foregroundPIDs(externalForeground))
+}
+
+func TestForegroundPIDsExternalPortSkipsOddEntries(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	addPortTree(t, base)
+	addProc(t, base, testSelf, "sh", "/bin/sh", externalLauncher)
+	writeFile(t, base, "/proc/self/comm", "zaparoo")
+	writeFile(t, base, "/proc/99", "a file, not a process")
+	addProc(t, base, 60, "sh", "/bin/sh", externalLauncher)
+	writeFile(t, base, "/proc/60/stat", "60 (sh) Z 1 1")
+	addProc(t, base, 70, "sh", "/bin/sh")
+	p, _, _ := newTestPlatform(t, &failFs{Fs: base, op: "open", path: "/proc/70/cmdline"})
+
+	assert.Equal(t, []int{32, 33}, p.foregroundPIDs(externalForeground))
+
+	p, _, _ = newTestPlatform(t, newTestFs(t))
+	assert.Empty(t, p.foregroundPIDs(externalForeground), "no port is running")
+}
+
+func TestProcParent(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	tests := map[string]int{
+		"7 (a) b (c)) S 42 1": 42,
+		"7 (a S 42 1":         0,
+		"7 (a) S":             0,
+		"7 (a) S x 1":         0,
+	}
+	for stat, want := range tests {
+		writeFile(t, fs, "/proc/7/stat", stat)
+		assert.Equal(t, want, procParent(fs, "/proc/7"), stat)
+	}
+}
+
+func TestProcZombieAndProgram(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	assert.True(t, procZombie(fs, "/proc/8"), "a vanished process counts as gone")
+	writeFile(t, fs, "/proc/8/stat", "8 (x S 1")
+	assert.False(t, procZombie(fs, "/proc/8"), "unparsable but present")
+	writeFile(t, fs, "/proc/8/stat", "8 (x) X 1")
+	assert.True(t, procZombie(fs, "/proc/8"))
+
+	assert.Empty(t, procProgram(fs, "/proc/8"), "no cmdline")
+	writeFile(t, fs, "/proc/8/cmdline", "")
+	assert.Empty(t, procProgram(fs, "/proc/8"), "kernel thread")
+}
+
+func TestSignalAllContinuesPastFailures(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPlatform(t, newTestFs(t))
+	var sent []int
+	p.signal = func(pid int, _ syscall.Signal) error {
+		sent = append(sent, pid)
+		if pid == 1 {
+			return syscall.EPERM
+		}
+		return syscall.ESRCH
+	}
+	p.signalAll([]int{1, 2, 3}, syscall.SIGTERM)
+	assert.Equal(t, []int{1, 2, 3}, sent)
+}

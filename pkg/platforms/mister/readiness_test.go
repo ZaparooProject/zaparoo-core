@@ -446,23 +446,28 @@ func TestCoreReadiness_ArcadeRelaunchOfTheRunningSetWaitsForTheReload(t *testing
 	h.names = []string{"dkong"}
 	mra := writeMRA(t, "dkong")
 	h.setWritten(h.clock.Now().Add(-time.Hour))
-	ctx, cancel := context.WithCancel(t.Context())
-	done := h.start(ctx, mustCore(t, "Arcade"), mra)
+	done := h.start(t.Context(), mustCore(t, "Arcade"), mra)
 
 	// The name already matches, but the file was written before the launch.
+	// Each poll arming again means the check ran and refused the stale name;
+	// polling past a whole settle would let a wrongly accepted name finish.
 	require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
-	h.clock.Advance(readyCorePoll)
-	select {
-	case err := <-done:
-		t.Fatalf("ready before the core was reloaded: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	for range readySettle / readyCorePoll {
+		h.clock.Advance(readyCorePoll)
+		armed, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		armErr := h.clock.BlockUntilContext(armed, 1)
+		cancel()
+		select {
+		case err := <-done:
+			t.Fatalf("ready before the core was reloaded: %v", err)
+		default:
+		}
+		require.NoError(t, armErr, "the poll stopped before the core was reloaded")
 	}
 
 	h.setWritten(h.clock.Now().Add(time.Second))
-	require.NoError(t, h.clock.BlockUntilContext(t.Context(), 1))
 	h.clock.Advance(readyCorePoll)
 	h.settle(t)
-	cancel()
 
 	require.NoError(t, <-done)
 }

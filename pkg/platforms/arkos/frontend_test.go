@@ -168,3 +168,33 @@ func TestFrontend_RecoverStale(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists)
 }
+
+func TestFrontend_MarkerFailuresDoNotBlockES(t *testing.T) {
+	t.Parallel()
+
+	ro := afero.NewReadOnlyFs(afero.NewMemMapFs())
+	cmd := newMockCmd()
+	fe := newFrontend(cmd, ro)
+
+	require.NoError(t, fe.stopES(), "ES stops even when the marker cannot be written")
+	fe.launchFailed()
+	assert.Equal(t, []string{esStop, esStart}, cmdCalls(cmd))
+	assert.False(t, fe.stopped)
+}
+
+func TestFrontend_PerfnormFailureStillStartsES(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	writeFile(t, fs, perfnormPath, "")
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Run", mock.Anything, "systemctl", []string{"stop", esService}).Return(nil)
+	cmd.On("Run", mock.Anything, perfnormPath, []string(nil)).Return(errors.New("boom"))
+	cmd.On("Run", mock.Anything, "systemctl", []string{"start", esService}).Return(nil)
+	fe := newFrontend(cmd, fs)
+
+	require.NoError(t, fe.stopES())
+	fe.restore()
+	cmd.AssertExpectations(t)
+	assert.False(t, fe.stopped)
+}

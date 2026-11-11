@@ -21,13 +21,21 @@ package gamelistxml
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,4 +86,46 @@ func TestLoadRecords_FallsBackToGamelistDirs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, "ROM List", records[0].Game.Name)
+}
+
+func TestNewPlatformScraper_AppliesOptions(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.ExpectedCalls = nil
+	pl.On("ID").Return(ids.Batocera)
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.Anything).Return([]string{})
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+	mdb := newMockMediaDB(t)
+	mdb.On("IndexedSystems").Return([]string{}, nil)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	applied := false
+	spy := func(*GamelistXMLScraper) { applied = true }
+	ch := make(chan scraper.ScrapeUpdate, 8)
+	require.NoError(t, NewPlatformScraper(spy).Scrape(t.Context(), cfg, pl, afero.NewMemMapFs(),
+		&database.Database{MediaDB: mdb}, scraper.ScrapeOptions{Pauser: syncutil.NewPauser()}, nil, ch))
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+	}
+	assert.True(t, applied)
+}
+
+// statErrFs fails every Stat with an error other than "not found".
+type statErrFs struct{ afero.Fs }
+
+var errStat = errors.New("stat failed")
+
+func (statErrFs) Stat(string) (os.FileInfo, error) { return nil, errStat }
+
+func TestFindGamelist_ReportsStatErrors(t *testing.T) {
+	t.Parallel()
+	g := gamelistDirsScraper(statErrFs{afero.NewMemMapFs()}, "/etc/gamelists")
+	romDir := filepath.Join(string(filepath.Separator), "roms", "snes")
+	path, found, err := g.findGamelist(romDir)
+	require.ErrorIs(t, err, errStat)
+	assert.False(t, found)
+	assert.Equal(t, filepath.Join(romDir, "gamelist.xml"), path)
 }

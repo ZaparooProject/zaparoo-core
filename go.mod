@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.27.3
+go 1.27.4
 
 require (
 	fyne.io/systray v1.12.2
@@ -156,4 +156,4 @@ require (
 replace github.com/ZaparooProject/zaparoo-core/mister => ./mister
 
 // Preserve Expr semantics while enabling the validated static method profile.
-replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261104080414-1ac911627a96
+replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20261111065210-1b1726c0f9e5

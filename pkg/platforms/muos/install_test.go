@@ -25,9 +25,11 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -139,4 +141,96 @@ func TestStopServiceFailsWhenDaemonSurvives(t *testing.T) {
 	addProc(t, fs, 50, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "-daemon")
 
 	require.ErrorContains(t, p.StopService("/mnt/mmc/MUOS/zaparoo/zaparoo"), "did not stop")
+}
+
+func TestInstallFallsBackWhenWriteFails(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	require.NoError(t, base.MkdirAll(userInitDir, 0o755))
+	require.NoError(t, base.MkdirAll("/mnt/mmc/MUOS/init", 0o755))
+	fs := &failFs{Fs: base, op: "open", path: filepath.Join(userInitDir, initScriptName)}
+
+	path, err := Install(fs, "/mnt/mmc/MUOS/zaparoo/zaparoo")
+	require.NoError(t, err)
+	assert.Equal(t, "/mnt/mmc/MUOS/init/zaparoo.sh", path)
+
+	require.NoError(t, base.RemoveAll("/mnt/mmc/MUOS/init"))
+	_, err = Install(fs, "/mnt/mmc/MUOS/zaparoo/zaparoo")
+	require.ErrorContains(t, err, "user init folder not found")
+
+	_, err = Install(base, "relative/zaparoo")
+	require.Error(t, err, "bad executable path")
+}
+
+func TestUninstallReportsRemoveFailure(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	script := filepath.Join(userInitDir, initScriptName)
+	writeFile(t, base, script, "#!/bin/sh")
+	p, sigs, _ := newTestPlatform(t, &failFs{Fs: base, op: "remove", path: script})
+
+	require.ErrorIs(t, p.Uninstall("/mnt/mmc/MUOS/zaparoo/zaparoo"), errInjected)
+	assert.Empty(t, sigs.signals(), "the service is left running")
+}
+
+func TestStopServiceSignalErrors(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+	addProc(t, fs, 50, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "-daemon")
+
+	p.signal = func(pid int, _ syscall.Signal) error {
+		removeProc(fs, pid)
+		return syscall.ESRCH
+	}
+	require.NoError(t, p.StopService("/mnt/mmc/MUOS/zaparoo/zaparoo"), "already gone is fine")
+
+	addProc(t, fs, 50, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "-daemon")
+	p.signal = func(int, syscall.Signal) error { return syscall.EPERM }
+	require.ErrorIs(t, p.StopService("/mnt/mmc/MUOS/zaparoo/zaparoo"), syscall.EPERM)
+}
+
+func TestStopServiceDaemonExitsOnLastWait(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+	addProc(t, fs, 50, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "-daemon")
+	polls := int(serviceStopTimeout / closePollStep)
+	pauses := 0
+	p.sleep = func(time.Duration) {
+		pauses++
+		if pauses == polls {
+			removeProc(fs, 50)
+		}
+	}
+
+	require.NoError(t, p.StopService("/mnt/mmc/MUOS/zaparoo/zaparoo"))
+	assert.Equal(t, polls, pauses)
+}
+
+func TestSupervisorPIDRejectsBadPIDFiles(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+	p.pid = 77
+	// pid 1 and Core itself look like the init script, so only the pid
+	// checks can turn them away. pid 60 is not running at all.
+	script := filepath.Join(userInitDir, initScriptName)
+	addProc(t, fs, 1, "sh", "sh", script)
+	addProc(t, fs, p.pid, "sh", "sh", script)
+	for _, content := range []string{"abc", "1", strconv.Itoa(p.pid), "-5", "60"} {
+		writeFile(t, fs, supervisorPIDFile, content+"\n")
+		_, ok := p.supervisorPID()
+		assert.False(t, ok, content)
+	}
+}
+
+func TestDaemonPIDsSkipsUnreadableCmdline(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	addProc(t, base, 50, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "-daemon")
+	addProc(t, base, 51, "zaparoo", "/mnt/mmc/MUOS/zaparoo/zaparoo", "--daemon")
+	p, _, _ := newTestPlatform(t, &failFs{Fs: base, op: "open", path: filepath.Join(testProc, "50", "cmdline")})
+
+	assert.Equal(t, []int{51}, p.daemonPIDs("zaparoo"))
 }

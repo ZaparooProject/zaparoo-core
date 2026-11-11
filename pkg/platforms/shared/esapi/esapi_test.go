@@ -153,7 +153,10 @@ func TestAPIRequest_GetWithDefaultTimeout(t *testing.T) {
 func TestAPIRequest_LocalEmulationStation(t *testing.T) {
 	t.Parallel()
 
-	_, err := APIRequest("/runningGame", "", 200*time.Millisecond)
+	// A refused connection returns at once, so the timeout only caps a
+	// listener that never answers. It must not race the dial itself: on a
+	// loaded runner a short deadline expires first and reports a timeout.
+	_, err := APIRequest("/runningGame", "", 5*time.Second)
 	if err != nil {
 		assert.ErrorIs(t, err, platforms.ErrLauncherUnavailable)
 	}
@@ -183,6 +186,6 @@ func TestAPIRequest_StatusCodes(t *testing.T) {
 	require.ErrorIs(t, err, ErrRouteUnsupported)
 
 	_, err = sendAPIRequest(server.URL, "/forbidden", "", time.Second)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnexpectedStatus)
 	assert.NotErrorIs(t, err, ErrRouteUnsupported)
 }

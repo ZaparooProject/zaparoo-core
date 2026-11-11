@@ -1367,7 +1367,9 @@ func TestBackupDetailsModal_DeleteCallsService_Integration(t *testing.T) {
 
 	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Backup details", uiSettleTimeout))
+	// The loading modal shares the "Backup details" title and has only a
+	// Back button; wait for the loaded details before moving to Delete.
+	require.True(t, runner.WaitForText("Size: 2 KB", uiSettleTimeout), runner.GetScreenText())
 	runner.SimulateTab()
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Delete Local backup", uiSettleTimeout))

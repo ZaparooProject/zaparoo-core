@@ -68,7 +68,7 @@ func (p *Platform) sendCommand(ctx context.Context, msg []byte) error {
 
 // launchGame asks EmulationStation to run a ROM from its game list and waits
 // until ES reports the game started.
-func (p *Platform) launchGame(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+func (p *Platform) launchGame(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("ROM path is not absolute: %s", path)
 	}
@@ -85,7 +85,9 @@ func (p *Platform) launchGame(cfg *config.Instance, path string, _ *platforms.La
 	if err != nil {
 		return nil, err
 	}
-	sys, err := systemForPath(systems, path, p.RootDirs(cfg))
+	// ES resolves system folders against its own ROM roots only; a match under
+	// a Zaparoo index root would send a START that ES ignores.
+	sys, err := systemForPath(systems, path, p.romRoots())
 	if err != nil {
 		return nil, err
 	}

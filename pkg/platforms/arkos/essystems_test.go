@@ -365,3 +365,38 @@ func TestResolveLaunch_IgnoresDefaultCoreAndGov(t *testing.T) {
 	assert.Equal(t, "snes9x", launch.core)
 	assert.Equal(t, "performance", launch.governor)
 }
+
+func TestResolveLaunch_SystemWithoutEmulators(t *testing.T) {
+	t.Parallel()
+
+	systems, err := parseESSystems([]byte(testESSystems))
+	require.NoError(t, err)
+	unknown := &systems[len(systems)-1]
+	require.Equal(t, "zzunknown", unknown.Name)
+
+	launch := resolveLaunch(unknown, map[string]string{
+		"zzunknown.emulator": "retroarch",
+		"zzunknown.core":     "snes9x",
+		"zzunknown.governor": "performance",
+	}, nil)
+	assert.Empty(t, launch.emulator)
+	assert.Empty(t, launch.core)
+	assert.Equal(t, "performance", launch.governor, "the system setting still applies")
+	assert.Equal(t, "%ROM%", launch.command)
+}
+
+func TestSystemForPath_FallsBackToSystemName(t *testing.T) {
+	t.Parallel()
+
+	systems := []esSystem{
+		{Name: "gba", Path: "/roms/gameboyadvance/"},
+		{Name: "nes", Path: "/roms/nes/"},
+	}
+	sys, err := systemForPath(systems, "/roms2/gba/Game.gba", romRoots)
+	require.NoError(t, err)
+	assert.Equal(t, "gba", sys.Name)
+
+	sys, err = systemForPath(systems, "/roms2/gameboyadvance/Game.gba", romRoots)
+	require.NoError(t, err)
+	assert.Equal(t, "gba", sys.Name, "the folder match still wins")
+}

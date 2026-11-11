@@ -42,9 +42,17 @@ import (
 //go:embed conf/zaparoo.service
 var serviceFile string
 
-const (
+const binaryName = "zaparoo"
+
+// Tests replace these; the defaults are what runs on the device.
+var (
 	serviceFilePath = "/etc/systemd/system/zaparoo.service"
-	binaryName      = "zaparoo"
+	installDir      = arkos.InstallDir
+	runSystemctl    = systemctl
+	executable      = os.Executable
+	geteuid         = os.Geteuid
+	lookPath        = exec.LookPath
+	execProcess     = syscall.Exec
 )
 
 func main() {
@@ -77,6 +85,14 @@ func run() error {
 	doUninstall := flag.Bool("uninstall", false, "uninstall zaparoo systemd service")
 
 	flags.Pre(pl)
+
+	exe, err := executable()
+	if err != nil {
+		return fmt.Errorf("error finding executable: %w", err)
+	}
+	if err := runAsRoot(geteuid(), exe, os.Args[1:], lookPath, execProcess); err != nil {
+		return err
+	}
 
 	if *doInstall {
 		return installService()
@@ -168,6 +184,31 @@ func runTUI(pl *arkos.Platform, cfg *config.Instance) error {
 	return nil
 }
 
+// runAsRoot re-runs this invocation through sudo unless it already runs as
+// root. The service runs as root and owns everything in InstallDir, including
+// the private config, so the TUI and client commands must too. ArkOS gives
+// the frontend user passwordless sudo; its own ES commands rely on it.
+func runAsRoot(
+	euid int,
+	exe string,
+	args []string,
+	lookPath func(string) (string, error),
+	execFn func(string, []string, []string) error,
+) error {
+	if euid == 0 {
+		return nil
+	}
+	sudo, err := lookPath("sudo")
+	if err != nil {
+		return fmt.Errorf("zaparoo must run as root and sudo was not found: %w", err)
+	}
+	argv := append([]string{"sudo", "-n", "--", exe}, args...)
+	if err := execFn(sudo, argv, os.Environ()); err != nil {
+		return fmt.Errorf("zaparoo must run as root; running it with sudo failed: %w", err)
+	}
+	return nil
+}
+
 func systemctl(args ...string) error {
 	//nolint:gosec // G204: args from internal install/uninstall logic
 	cmd := exec.CommandContext(context.Background(), "systemctl", args...)
@@ -178,8 +219,8 @@ func systemctl(args ...string) error {
 }
 
 func installService() error {
-	if err := os.MkdirAll(arkos.InstallDir, 0o750); err != nil {
-		return fmt.Errorf("error creating install directory: %w", err)
+	if err := prepareInstallDir(installDir); err != nil {
+		return err
 	}
 	if err := installBinary(); err != nil {
 		return err
@@ -191,17 +232,17 @@ func installService() error {
 		return fmt.Errorf("error writing service file: %w", err)
 	}
 
-	if err := systemctl("daemon-reload"); err != nil {
+	if err := runSystemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("error reloading systemd: %w", err)
 	}
 
-	if err := systemctl("enable", "zaparoo.service"); err != nil {
+	if err := runSystemctl("enable", "zaparoo.service"); err != nil {
 		return fmt.Errorf("error enabling service: %w", err)
 	}
 
 	// restart, not start: a reinstall over a running service must pick up
 	// the new binary.
-	if err := systemctl("restart", "zaparoo.service"); err != nil {
+	if err := runSystemctl("restart", "zaparoo.service"); err != nil {
 		return fmt.Errorf("error starting service: %w", err)
 	}
 
@@ -209,17 +250,30 @@ func installService() error {
 	return nil
 }
 
+// prepareInstallDir creates the install directory for the root service. The
+// frontend user needs to traverse it to run the binary, but not to write it.
+// An existing directory, possibly created by that user, is reset to the same.
+func prepareInstallDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: the frontend user runs the binary from here
+		return fmt.Errorf("error creating install directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // G302: as above
+		return fmt.Errorf("error setting install directory permissions: %w", err)
+	}
+	return nil
+}
+
 // installBinary copies the running binary to where the service runs it from,
 // unless it is already there.
 func installBinary() error {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return fmt.Errorf("error finding executable: %w", err)
 	}
 	if resolved, evalErr := filepath.EvalSymlinks(exe); evalErr == nil {
 		exe = resolved
 	}
-	dest := filepath.Join(arkos.InstallDir, binaryName)
+	dest := filepath.Join(installDir, binaryName)
 	if exe == dest {
 		return nil
 	}
@@ -240,14 +294,14 @@ func installBinary() error {
 }
 
 func uninstallService() error {
-	_ = systemctl("stop", "zaparoo.service")
-	_ = systemctl("disable", "zaparoo.service")
+	_ = runSystemctl("stop", "zaparoo.service")
+	_ = runSystemctl("disable", "zaparoo.service")
 
 	if err := os.Remove(serviceFilePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("error removing service file: %w", err)
 	}
 
-	if err := systemctl("daemon-reload"); err != nil {
+	if err := runSystemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("error reloading systemd: %w", err)
 	}
 

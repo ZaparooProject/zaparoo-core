@@ -268,3 +268,129 @@ func TestGameRunning(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, running)
 }
+
+func TestLaunchContentWriteFailures(t *testing.T) {
+	t.Parallel()
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	tests := map[string]*failFs{
+		"assets":  {op: "mkdir", path: runDir},
+		"request": {op: "open", path: contentFile + ".tmp"},
+	}
+	for name, fs := range tests {
+		fs.Fs = newTestFs(t)
+		writeFile(t, fs.Fs, rom, "rom")
+		p, _, _ := newTestPlatform(t, fs)
+
+		_, err := p.launchContent(nil, rom, nil)
+		require.ErrorIs(t, err, errInjected, name)
+		assert.Empty(t, p.pending, name)
+		assert.False(t, p.launching, name)
+	}
+}
+
+// The game exits but launch.sh never clears its overlay, and the frontend
+// never picks up the request, which Core then cannot withdraw.
+func TestLaunchContentFrontendNeverResponds(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, base, rom, "rom")
+	writeFile(t, base, overlayFile, "Old\nsys\ncore")
+	writeFile(t, base, foregroundFile, "retroarch\n")
+	addProc(t, base, 40, "retroarch", "retroarch")
+	p, sigs, media := newTestPlatform(t, &failFs{Fs: base, op: "remove", path: contentFile})
+	media.set(models.NewActiveMedia("GBA", "Game Boy Advance", "/old.gba", "Old", "GBA"))
+	p.lastOverlay = "Old\nsys\ncore"
+	sigs.onSignal = func(pid int, sig syscall.Signal) {
+		if sig == syscall.SIGTERM {
+			removeProc(base, pid)
+		}
+	}
+	pauses := 0
+	p.sleep = func(time.Duration) { pauses++ }
+
+	_, err := p.launchContent(nil, rom, nil)
+	require.ErrorIs(t, err, errNotPickedUp)
+	assert.Nil(t, media.get())
+	assert.Empty(t, p.lastOverlay, "cleanup is assumed done after the wait")
+	assert.Empty(t, p.pending)
+	assert.GreaterOrEqual(t, pauses, overlayGonePolls+pickupPolls, "both waits run to the end")
+	exists, err := afero.Exists(base, contentFile)
+	require.NoError(t, err)
+	assert.True(t, exists, "the request could not be withdrawn")
+}
+
+func TestLaunchContentMenuWontClose(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, sigs, _ := newTestPlatform(t, fs)
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, fs, rom, "rom")
+	writeFile(t, fs, overlayFile, "Old\nsys\ncore")
+	writeFile(t, fs, foregroundFile, "muxfrontend\n")
+	addProc(t, fs, 30, "muxfrontend", "muxfrontend")
+
+	_, err := p.launchContent(nil, rom, nil)
+	require.ErrorIs(t, err, errNotPickedUp)
+	terms := 0
+	for _, s := range sigs.signals() {
+		if s.sig == syscall.SIGTERM {
+			terms++
+		}
+	}
+	assert.Equal(t, 1, terms, "a running menu is not treated as content, and is asked to close once")
+}
+
+func TestLaunchContentMenuAssetsFail(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, base, rom, "rom")
+	writeFile(t, base, foregroundFile, "muxfrontend\n")
+	addProc(t, base, 30, "muxfrontend", "muxfrontend")
+	p, sigs, _ := newTestPlatform(t, &failFs{Fs: base, op: "open", path: runDir + "/governor", skip: 1})
+
+	_, err := p.launchContent(nil, rom, nil)
+	require.ErrorIs(t, err, errInjected)
+	assert.Empty(t, sigs.signals(), "the menu is left open")
+	exists, err := afero.Exists(base, contentFile)
+	require.NoError(t, err)
+	assert.False(t, exists, "the request is withdrawn")
+}
+
+func TestLaunchContentWithoutSafeQuitMarker(t *testing.T) {
+	t.Parallel()
+	base := newTestFs(t)
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, base, rom, "rom")
+	writeFile(t, base, foregroundFile, "muxfrontend\n")
+	addProc(t, base, 30, "muxfrontend", "muxfrontend")
+	p, sigs, _ := newTestPlatform(t, &failFs{Fs: base, op: "open", path: safeQuitFile})
+	var picked string
+	var safeQuit bool
+	sigs.onSignal = frontendLoader(t, base, 30, &picked, &safeQuit)
+
+	_, err := p.launchContent(nil, rom, nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, picked)
+	assert.False(t, safeQuit)
+}
+
+func TestLaunchContentPickedUpDuringLastWait(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+	rom := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, fs, rom, "rom")
+	pauses := 0
+	p.sleep = func(time.Duration) {
+		pauses++
+		if pauses == pickupPolls {
+			_ = fs.Remove(contentFile)
+		}
+	}
+
+	_, err := p.launchContent(nil, rom, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Game", p.pending)
+}

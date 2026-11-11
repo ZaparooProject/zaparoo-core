@@ -19,9 +19,6 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package rocknix is ROCKNIX, whose EmulationStation is Batocera's fork but
-// whose /emukill does nothing: games are stopped the way its own hotkey
-// daemon stops them.
 package esbase
 
 // ELECSystemAliases maps the EmulationStation system names and ROM folders

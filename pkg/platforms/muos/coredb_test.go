@@ -281,3 +281,87 @@ func TestResolveContentWithCoreJSON(t *testing.T) {
 		"Nintendo Game Boy Advance\n0\nmu-mgba\n/mnt/mmc/ROMS/\nGBA\nMetroid Fusion.gba\n",
 		req.contentLines())
 }
+
+func TestOrderedCoresRejectsMalformedEntries(t *testing.T) {
+	t.Parallel()
+	for _, data := range []string{``, `{1: {}}`, `{"a"`, `{"a": {"core": 5}}`} {
+		var cores orderedCores
+		require.Error(t, cores.UnmarshalJSON([]byte(data)), data)
+	}
+}
+
+func TestLoadCoreDBSkipsUnusableManifests(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	root := manifestRoots[0]
+	writeFile(t, fs, filepath.Join(root, "loose.json"), `{"libretro": {"x": {"core": "x.so"}}}`)
+	writeFile(t, fs, filepath.Join(root, ".hidden", "Hidden.json"), `{"libretro": {"x": {"core": "x.so"}}}`)
+	writeFile(t, fs, filepath.Join(root, "Sony", "notes.txt"), "not a manifest")
+	writeFile(t, fs, filepath.Join(root, "Sony", "Broken.json"), `{not json`)
+	writeFile(t, fs, filepath.Join(root, "Sony", "Unreadable.json"), `{}`)
+	writeFile(t, fs, filepath.Join(root, "Sony", "Sony PlayStation.json"),
+		`{"friendly": ["", "psx"], "libretro": {"pcsx": {"core": "pcsx_libretro.so"}}}`)
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "Sony", "sub.json"), 0o755))
+	writeFile(t, fs, filepath.Join(root, "Locked", "Locked.json"), `{}`)
+	writeFile(t, fs, assignFile, `{not json`)
+
+	broken := &failFs{Fs: fs, op: "read", path: filepath.Join(root, "Sony", "Unreadable.json")}
+	db := loadCoreDB(&failFs{Fs: broken, op: "open", path: filepath.Join(root, "Locked")}, "aarch64")
+
+	assert.Contains(t, db.systems, "Sony PlayStation")
+	for _, id := range []string{"loose", "Hidden", "notes", "Broken", "Unreadable", "sub", "Locked"} {
+		assert.NotContains(t, db.systems, id)
+	}
+	assert.Equal(t, "Sony PlayStation", db.friendly["psx"])
+	assert.NotContains(t, db.friendly, "")
+	assert.Empty(t, db.assign, "an unreadable assign index is ignored")
+}
+
+func TestLoadCoreJSONSkipsBadEntries(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	writeFile(t, fs, coreJSONFiles[1], `{"": {}, "Bad": [], "Good": {"libretro": {"x": {"core": "x.so"}}}}`)
+
+	db := loadCoreDB(fs, "aarch64")
+
+	assert.Equal(t, []string{"Good"}, keys(db.systems))
+}
+
+func keys(m map[string]*systemManifest) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestReadManifestOpenFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(manifestRoots[0], "Sony", "Sony PlayStation.json")
+	fs := afero.NewMemMapFs()
+	writeFile(t, fs, path, `{}`)
+	_, err := readManifest(&failFs{Fs: fs, op: "open", path: path}, path)
+	require.ErrorIs(t, err, errInjected)
+}
+
+func TestDefaultCoreIgnoresUnknownRequirementsAndSystems(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	writeFile(t, fs, filepath.Join(manifestRoots[0], "Sony", "Sony PlayStation.json"),
+		`{"libretro": {"pcsx": {"core": "pcsx_libretro.so", "require": {"ram": ["1G"]}}}}`)
+	writeFile(t, fs, filepath.Join(manifestRoots[0], "Sony", "Sony PSP.json"),
+		`{"libretro": {"ppsspp": {"core": "ppsspp_libretro.so", "require": {"arch": ["x86_64"]}}}}`)
+	db := loadCoreDB(fs, "aarch64")
+
+	choice, ok := db.defaultCore("Sony PlayStation")
+	require.True(t, ok)
+	assert.Equal(t, "pcsx", choice.ID, "an unknown requirement does not exclude a core")
+
+	_, ok = db.defaultCore("Sony PSP")
+	assert.False(t, ok, "no usable core")
+
+	assert.Equal(t, "Missing", db.catalogue("Missing"))
+	assert.Zero(t, db.lookup("Missing"))
+	assert.Empty(t, db.systemGovernor("Missing"))
+	assert.Empty(t, db.systemControl("Missing"))
+}

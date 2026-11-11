@@ -180,6 +180,9 @@ func runTUI(pl *recalbox.Platform, cfg *config.Instance) error {
 	return nil
 }
 
+// newInstaller is replaced by tests; the default works on the real share.
+var newInstaller = recalbox.NewInstaller
+
 func installer() (*recalbox.Installer, error) {
 	// The share cannot execute files, so install.sh runs this from a copy and
 	// names the installed binary in ZAPAROO_APP.
@@ -191,7 +194,7 @@ func installer() (*recalbox.Installer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve zaparoo executable: %w", err)
 	}
-	return recalbox.NewInstaller(supervisorScript, exe), nil
+	return newInstaller(supervisorScript, exe), nil
 }
 
 func installService() error {

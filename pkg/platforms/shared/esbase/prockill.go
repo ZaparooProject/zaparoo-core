@@ -166,11 +166,12 @@ func (k *ProcessKiller) forceKill(pids []int) error {
 }
 
 // alive returns the pids that still belong to one of names, so a pid reused
-// by another process meanwhile is left alone.
+// by another process meanwhile is left alone. A zombie has already exited
+// and only waits for its parent to reap it, so it does not count.
 func (k *ProcessKiller) alive(pids []int, names []string) []int {
 	var alive []int
 	for _, pid := range pids {
-		if k.matches(pid, names) {
+		if k.matches(pid, names) && !k.zombie(pid) {
 			alive = append(alive, pid)
 		}
 	}
@@ -214,6 +215,22 @@ func (k *ProcessKiller) matches(pid int, names []string) bool {
 		}
 	}
 	return false
+}
+
+// zombie reports whether pid has exited and not been reaped. The state
+// follows the name in /proc/<pid>/stat, and the name may itself hold spaces
+// and parentheses, so it is read after the last closing parenthesis.
+func (k *ProcessKiller) zombie(pid int) bool {
+	data, err := afero.ReadFile(k.FS, filepath.Join(k.ProcPath, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	end := bytes.LastIndexByte(data, ')')
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(string(data[end+1:]))
+	return len(fields) > 0 && fields[0] == "Z"
 }
 
 func argv0Base(fs afero.Fs, dir string) string {

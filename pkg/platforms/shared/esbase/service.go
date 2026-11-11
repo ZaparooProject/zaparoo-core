@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -57,12 +58,23 @@ type ServiceInstaller struct {
 	Mode   os.FileMode
 }
 
-// Install writes the service file and enables it.
+// Install writes the service file and enables it. When enabling fails, a
+// service this call created is removed again, while one that was already
+// installed gets its previous file back rather than being removed.
 func (s *ServiceInstaller) Install(ctx context.Context) error {
+	if err := s.checkCommands(); err != nil {
+		return err
+	}
+	previous, readErr := afero.ReadFile(s.FS, s.Path)
+	existed := readErr == nil
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("read existing service file: %w", readErr)
+	}
+
 	if err := s.FS.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return fmt.Errorf("create service directory: %w", err)
 	}
-	if err := afero.WriteFile(s.FS, s.Path, []byte(s.Content), s.Mode); err != nil {
+	if err := afero.WriteFile(s.FS, s.Path, []byte(s.Content), s.mode()); err != nil {
 		return fmt.Errorf("write service file: %w", err)
 	}
 	for _, args := range s.Stop {
@@ -71,20 +83,31 @@ func (s *ServiceInstaller) Install(ctx context.Context) error {
 		}
 	}
 	for _, args := range s.Enable {
-		if err := s.Cmd.Run(ctx, args[0], args[1:]...); err != nil {
-			// An enabled service that failed to start would still come up
-			// at the next boot, so a failed install is undone.
-			if rbErr := s.Uninstall(ctx); rbErr != nil {
-				log.Warn().Err(rbErr).Msg("removing service after a failed install failed")
-			}
-			return fmt.Errorf("%s: %w", strings.Join(args, " "), err)
+		err := s.Cmd.Run(ctx, args[0], args[1:]...)
+		if err == nil {
+			continue
 		}
+		if existed {
+			// The service was installed before this call, so it is kept
+			// with its previous file instead of being taken away.
+			if rbErr := afero.WriteFile(s.FS, s.Path, previous, s.mode()); rbErr != nil {
+				log.Warn().Err(rbErr).Msg("restoring the previous service file failed")
+			}
+		} else if rbErr := s.Uninstall(ctx); rbErr != nil {
+			// An enabled service that failed to start would still come up
+			// at the next boot, so a new install that failed is undone.
+			log.Warn().Err(rbErr).Msg("removing service after a failed install failed")
+		}
+		return fmt.Errorf("%s: %w", strings.Join(args, " "), err)
 	}
 	return nil
 }
 
 // Uninstall disables the service and removes its file.
 func (s *ServiceInstaller) Uninstall(ctx context.Context) error {
+	if err := s.checkCommands(); err != nil {
+		return err
+	}
 	for _, args := range s.Disable {
 		if err := s.Cmd.Run(ctx, args[0], args[1:]...); err != nil {
 			log.Debug().Err(err).Strs("command", args).Msg("disabling service failed")
@@ -99,6 +122,51 @@ func (s *ServiceInstaller) Uninstall(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// InstallCommand runs the -install flag: it installs the service when the
+// running binary is binaryPath, the one the service starts, and tells the
+// user on out.
+func (s *ServiceInstaller) InstallCommand(ctx context.Context, binaryPath string, out io.Writer) error {
+	if err := CheckRunningInstallPath(binaryPath); err != nil {
+		return err
+	}
+	if err := s.Install(ctx); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "Zaparoo service installed and started.")
+	return nil
+}
+
+// UninstallCommand runs the -uninstall flag and tells the user on out.
+func (s *ServiceInstaller) UninstallCommand(ctx context.Context, out io.Writer) error {
+	if err := s.Uninstall(ctx); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "Zaparoo service uninstalled.")
+	return nil
+}
+
+// errEmptyServiceCommand means a service command list holds an empty
+// command, which has no program to run.
+var errEmptyServiceCommand = errors.New("empty service command")
+
+func (s *ServiceInstaller) checkCommands() error {
+	for _, list := range [][][]string{s.Stop, s.Enable, s.Disable, s.Reload} {
+		for _, args := range list {
+			if len(args) == 0 || args[0] == "" {
+				return errEmptyServiceCommand
+			}
+		}
+	}
+	return nil
+}
+
+func (s *ServiceInstaller) mode() os.FileMode {
+	if s.Mode == 0 {
+		return 0o644
+	}
+	return s.Mode
 }
 
 // SystemdUnitInstaller installs unit as a system service named name at
