@@ -22,7 +22,10 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -35,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,9 +56,9 @@ func appliancePlatform(t *testing.T) *mocks.MockPlatform {
 }
 
 // failingDeps fails any boundary a test did not expect to be crossed.
-func failingDeps(t *testing.T) applianceDeps {
+func failingDeps(t *testing.T) *applianceDeps {
 	t.Helper()
-	return applianceDeps{
+	return &applianceDeps{
 		startService: func(platforms.Platform, *config.Instance) (*service.StartResult, error) {
 			t.Error("unexpected service start")
 			return nil, errors.New("unexpected")
@@ -82,6 +86,21 @@ func failingDeps(t *testing.T) applianceDeps {
 		isServiceRunning: func(*config.Instance) bool {
 			t.Error("unexpected service probe")
 			return false
+		},
+		setup: func(platforms.Platform, config.Values, []io.Writer) *config.Instance {
+			t.Error("unexpected setup")
+			return nil
+		},
+		post: func(*Flags, *config.Instance, platforms.Platform) {
+			t.Error("unexpected flag handling")
+		},
+		runDaemon: func(platforms.Platform, *config.Instance) error {
+			t.Error("unexpected daemon run")
+			return nil
+		},
+		runTUI: func(platforms.Platform, *config.Instance) error {
+			t.Error("unexpected TUI run")
+			return nil
 		},
 	}
 }
@@ -243,7 +262,7 @@ func TestRunApplianceTUIShowsTUIAgainstSpawnedDaemon(t *testing.T) {
 		return func() { stopped++ }, nil
 	}
 	deps.isServiceRunning = func(*config.Instance) bool { return true }
-	calls := recordTUI(&deps, nil)
+	calls := recordTUI(deps, nil)
 
 	require.NoError(t, runApplianceTUIWith(deps, appliancePlatform(t), &config.Instance{}))
 	assert.Equal(t, []tuiCall{{
@@ -264,7 +283,7 @@ func TestRunApplianceTUIReportsTUIFailure(t *testing.T) {
 	}
 	deps.isServiceRunning = func(*config.Instance) bool { return false }
 	showErr := errors.New("no terminal")
-	calls := recordTUI(&deps, showErr)
+	calls := recordTUI(deps, showErr)
 
 	err := runApplianceTUIWith(deps, appliancePlatform(t), &config.Instance{})
 	require.ErrorIs(t, err, showErr)
@@ -365,7 +384,7 @@ func TestRunBackgroundServiceTUI(t *testing.T) {
 
 			svc := tt.svc
 			deps := failingDeps(t)
-			calls := recordTUI(&deps, tt.showErr)
+			calls := recordTUI(deps, tt.showErr)
 
 			err := runBackgroundServiceTUIWith(deps, appliancePlatform(t), &config.Instance{}, &svc)
 			if tt.wantErr != nil {
@@ -407,6 +426,159 @@ func TestDefaultApplianceDepsAreWired(t *testing.T) {
 	assert.NotNil(t, deps.showTUI)
 	assert.NotNil(t, deps.buildTUI)
 	assert.NotNil(t, deps.isServiceRunning)
+	assert.NotNil(t, deps.setup)
+	assert.NotNil(t, deps.post)
+	assert.NotNil(t, deps.runDaemon)
+	assert.NotNil(t, deps.runTUI)
+}
+
+type fakeInstaller struct {
+	err        error
+	out        io.Writer
+	binaryPath string
+	installs   int
+	uninstalls int
+}
+
+func (f *fakeInstaller) InstallCommand(_ context.Context, binaryPath string, out io.Writer) error {
+	f.installs++
+	f.binaryPath = binaryPath
+	f.out = out
+	return f.err
+}
+
+func (f *fakeInstaller) UninstallCommand(_ context.Context, out io.Writer) error {
+	f.uninstalls++
+	f.out = out
+	return f.err
+}
+
+func TestRunServiceInstallFlags(t *testing.T) {
+	t.Parallel()
+
+	failed := errors.New("boom")
+	tests := []struct {
+		err            error
+		name           string
+		wantErr        string
+		install        bool
+		uninstall      bool
+		wantHandled    bool
+		wantInstalls   int
+		wantUninstalls int
+	}{
+		{name: "neither flag", wantHandled: false},
+		{name: "install", install: true, wantHandled: true, wantInstalls: 1},
+		{name: "uninstall", uninstall: true, wantHandled: true, wantUninstalls: 1},
+		{name: "install wins over uninstall", install: true, uninstall: true, wantHandled: true, wantInstalls: 1},
+		{
+			name: "install failure", install: true, err: failed, wantHandled: true, wantInstalls: 1,
+			wantErr: "error installing service: boom",
+		},
+		{
+			name: "uninstall failure", uninstall: true, err: failed, wantHandled: true, wantUninstalls: 1,
+			wantErr: "error uninstalling service: boom",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			si := &fakeInstaller{err: tt.err}
+			var out bytes.Buffer
+			handled, err := RunServiceInstallFlags(si, "/storage/zaparoo/zaparoo", tt.install, tt.uninstall, &out)
+			assert.Equal(t, tt.wantHandled, handled)
+			assert.Equal(t, tt.wantInstalls, si.installs)
+			assert.Equal(t, tt.wantUninstalls, si.uninstalls)
+			if tt.wantInstalls > 0 {
+				assert.Equal(t, "/storage/zaparoo/zaparoo", si.binaryPath)
+			}
+			if tt.wantHandled {
+				assert.Same(t, &out, si.out)
+			}
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, failed)
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+type applianceRun struct {
+	cfg      *config.Instance
+	flags    *Flags
+	postedTo *config.Instance
+	writers  []io.Writer
+	daemon   int
+	tui      int
+}
+
+func recordAppliance(t *testing.T, runErr error) (*applianceDeps, *applianceRun) {
+	t.Helper()
+	rec := &applianceRun{cfg: &config.Instance{}}
+	deps := failingDeps(t)
+	deps.setup = func(_ platforms.Platform, defaults config.Values, writers []io.Writer) *config.Instance {
+		assert.Equal(t, config.BaseDefaults, defaults)
+		rec.writers = writers
+		return rec.cfg
+	}
+	deps.post = func(f *Flags, cfg *config.Instance, _ platforms.Platform) {
+		rec.flags = f
+		rec.postedTo = cfg
+	}
+	deps.runDaemon = func(_ platforms.Platform, cfg *config.Instance) error {
+		assert.Same(t, rec.cfg, cfg)
+		rec.daemon++
+		return runErr
+	}
+	deps.runTUI = func(_ platforms.Platform, cfg *config.Instance) error {
+		assert.Same(t, rec.cfg, cfg)
+		rec.tui++
+		return runErr
+	}
+	return deps, rec
+}
+
+func TestRunApplianceDaemonModeLogsPlainLines(t *testing.T) {
+	t.Parallel()
+
+	deps, rec := recordAppliance(t, nil)
+	flags := &Flags{}
+	require.NoError(t, runApplianceWith(deps, appliancePlatform(t), flags, true))
+
+	assert.Equal(t, []io.Writer{os.Stderr}, rec.writers)
+	assert.Same(t, flags, rec.flags)
+	assert.Same(t, rec.cfg, rec.postedTo)
+	assert.Equal(t, 1, rec.daemon)
+	assert.Equal(t, 0, rec.tui)
+}
+
+func TestRunApplianceInteractiveLogsToConsole(t *testing.T) {
+	t.Parallel()
+
+	deps, rec := recordAppliance(t, nil)
+	flags := &Flags{}
+	require.NoError(t, runApplianceWith(deps, appliancePlatform(t), flags, false))
+
+	require.Len(t, rec.writers, 1)
+	assert.IsType(t, zerolog.ConsoleWriter{}, rec.writers[0])
+	assert.Same(t, flags, rec.flags)
+	assert.Same(t, rec.cfg, rec.postedTo)
+	assert.Equal(t, 0, rec.daemon)
+	assert.Equal(t, 1, rec.tui)
+}
+
+func TestRunApplianceReportsRunFailure(t *testing.T) {
+	t.Parallel()
+
+	failed := errors.New("boom")
+	for _, asDaemon := range []bool{true, false} {
+		deps, _ := recordAppliance(t, failed)
+		err := runApplianceWith(deps, appliancePlatform(t), &Flags{}, asDaemon)
+		require.ErrorIs(t, err, failed)
+		assert.EqualError(t, err, "run failed: boom")
+	}
 }
 
 //nolint:paralleltest // sends a real signal to the test process

@@ -24,7 +24,6 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
-	"context"
 	_ "embed"
 	"flag"
 	"fmt"
@@ -107,17 +106,9 @@ func run() error {
 
 	flags.Pre(pl)
 
-	if *doInstall {
-		if err := serviceInstaller().InstallCommand(context.Background(), binaryPath, os.Stdout); err != nil {
-			return fmt.Errorf("error installing service: %w", err)
-		}
-		return nil
-	}
-	if *doUninstall {
-		if err := serviceInstaller().UninstallCommand(context.Background(), os.Stdout); err != nil {
-			return fmt.Errorf("error uninstalling service: %w", err)
-		}
-		return nil
+	handled, err := cli.RunServiceInstallFlags(serviceInstaller(), binaryPath, *doInstall, *doUninstall, os.Stdout)
+	if handled || err != nil {
+		return err //nolint:wrapcheck // already wrapped by cli
 	}
 
 	cfg := cli.Setup(

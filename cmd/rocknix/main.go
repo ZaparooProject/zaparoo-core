@@ -23,19 +23,15 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
-	"context"
 	_ "embed"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/rocknix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esbase"
-	"github.com/rs/zerolog"
 )
 
 //go:embed conf/zaparoo.service
@@ -69,43 +65,12 @@ func run() error {
 
 	flags.Pre(pl)
 
-	if *doInstall {
-		if err := serviceInstaller().InstallCommand(context.Background(), binaryPath, os.Stdout); err != nil {
-			return fmt.Errorf("error installing service: %w", err)
-		}
-		return nil
-	}
-	if *doUninstall {
-		if err := serviceInstaller().UninstallCommand(context.Background(), os.Stdout); err != nil {
-			return fmt.Errorf("error uninstalling service: %w", err)
-		}
-		return nil
+	handled, err := cli.RunServiceInstallFlags(serviceInstaller(), binaryPath, *doInstall, *doUninstall, os.Stdout)
+	if handled || err != nil {
+		return err //nolint:wrapcheck // already wrapped by cli
 	}
 
-	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
-	if *asDaemon {
-		logWriters = []io.Writer{os.Stderr}
-	}
-
-	cfg := cli.Setup(
-		pl,
-		config.BaseDefaults,
-		logWriters,
-	)
-
-	flags.Post(cfg, pl)
-
-	if *asDaemon {
-		if err := cli.RunApplianceDaemon(pl, cfg); err != nil {
-			return fmt.Errorf("run failed: %w", err)
-		}
-		return nil
-	}
-
-	if err := cli.RunApplianceTUI(pl, cfg); err != nil {
-		return fmt.Errorf("run failed: %w", err)
-	}
-	return nil
+	return cli.RunAppliance(pl, flags, *asDaemon) //nolint:wrapcheck // already wrapped by cli
 }
 
 // serviceInstaller puts the unit in the system.d directory on the storage

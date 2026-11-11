@@ -22,8 +22,10 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,10 +60,14 @@ type applianceDeps struct {
 		cfg *config.Instance, pl platforms.Platform, isRunning func() bool, logDestPath, logDestName string,
 	) (*tview.Application, error)
 	isServiceRunning func(*config.Instance) bool
+	setup            func(platforms.Platform, config.Values, []io.Writer) *config.Instance
+	post             func(*Flags, *config.Instance, platforms.Platform)
+	runDaemon        func(platforms.Platform, *config.Instance) error
+	runTUI           func(platforms.Platform, *config.Instance) error
 }
 
-func defaultApplianceDeps() applianceDeps {
-	return applianceDeps{
+func defaultApplianceDeps() *applianceDeps {
+	return &applianceDeps{
 		startService:      service.Start,
 		execAfterRollback: restart.ExecAfterRollback,
 		execIfRequested:   restart.ExecIfRequested,
@@ -68,7 +75,65 @@ func defaultApplianceDeps() applianceDeps {
 		showTUI:           tui.BuildAndRetry,
 		buildTUI:          tui.BuildMain,
 		isServiceRunning:  client.IsServiceRunning,
+		setup:             Setup,
+		post:              (*Flags).Post,
+		runDaemon:         RunApplianceDaemon,
+		runTUI:            RunApplianceTUI,
 	}
+}
+
+// ServiceInstaller installs and removes a platform's boot service.
+type ServiceInstaller interface {
+	InstallCommand(ctx context.Context, binaryPath string, out io.Writer) error
+	UninstallCommand(ctx context.Context, out io.Writer) error
+}
+
+// RunServiceInstallFlags runs the -install or -uninstall command when either
+// is set, and reports whether one ran.
+func RunServiceInstallFlags(
+	si ServiceInstaller,
+	binaryPath string,
+	install, uninstall bool,
+	out io.Writer,
+) (bool, error) {
+	switch {
+	case install:
+		if err := si.InstallCommand(context.Background(), binaryPath, out); err != nil {
+			return true, fmt.Errorf("error installing service: %w", err)
+		}
+		return true, nil
+	case uninstall:
+		if err := si.UninstallCommand(context.Background(), out); err != nil {
+			return true, fmt.Errorf("error uninstalling service: %w", err)
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// RunAppliance sets up logging and config for an appliance platform, then
+// runs the service in the foreground as a daemon or shows the TUI.
+func RunAppliance(pl platforms.Platform, flags *Flags, asDaemon bool) error {
+	return runApplianceWith(defaultApplianceDeps(), pl, flags, asDaemon)
+}
+
+func runApplianceWith(deps *applianceDeps, pl platforms.Platform, flags *Flags, asDaemon bool) error {
+	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
+	run := deps.runTUI
+	if asDaemon {
+		// The init system captures stderr, so it gets plain JSON lines.
+		logWriters = []io.Writer{os.Stderr}
+		run = deps.runDaemon
+	}
+
+	cfg := deps.setup(pl, config.BaseDefaults, logWriters)
+	deps.post(flags, cfg, pl)
+
+	if err := run(pl, cfg); err != nil {
+		return fmt.Errorf("run failed: %w", err)
+	}
+	return nil
 }
 
 // applianceLogPath is where the TUI offers to copy the log on appliance
@@ -97,7 +162,7 @@ func notifyShutdown() (sigs <-chan os.Signal, stop func()) {
 }
 
 func runApplianceDaemonWith(
-	deps applianceDeps,
+	deps *applianceDeps,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	sigs <-chan os.Signal,
@@ -140,7 +205,7 @@ func RunApplianceTUI(pl platforms.Platform, cfg *config.Instance) error {
 	return runApplianceTUIWith(defaultApplianceDeps(), pl, cfg)
 }
 
-func runApplianceTUIWith(deps applianceDeps, pl platforms.Platform, cfg *config.Instance) error {
+func runApplianceTUIWith(deps *applianceDeps, pl platforms.Platform, cfg *config.Instance) error {
 	stopDaemon, err := deps.spawnDaemon(cfg)
 	if err != nil {
 		return fmt.Errorf("error spawning daemon: %w", err)
@@ -178,7 +243,7 @@ func RunBackgroundServiceTUI(pl platforms.Platform, cfg *config.Instance, svc Ba
 }
 
 func runBackgroundServiceTUIWith(
-	deps applianceDeps,
+	deps *applianceDeps,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	svc BackgroundService,
