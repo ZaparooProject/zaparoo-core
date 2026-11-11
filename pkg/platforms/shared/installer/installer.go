@@ -83,6 +83,22 @@ func namesFromURL(rawURL, defaultName string) mediaNames {
 	}
 }
 
+// decodeDisplayText undoes percent-encoding in text that is only shown to the
+// user. A remote URL launch carries pre_notice and name in its query string,
+// where spaces arrive as %20. Text that is not valid percent-encoding, such as
+// "100% done", is shown as written. A "+" is left alone because it is a
+// literal plus in hand-written ZapScript.
+func decodeDisplayText(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	decoded, err := url.PathUnescape(s)
+	if err != nil {
+		return s
+	}
+	return decoded
+}
+
 // safeMediaFilename reports whether name may be joined onto an install
 // directory. The name is chosen by whoever serves the URL, so it has to be one
 // path segment that stays put: anything carrying a separator, or naming a
@@ -225,7 +241,8 @@ func InstallRemoteFile(
 	ctx, cancel := context.WithTimeout(ctx, maxDownloadTimeout)
 	defer cancel()
 
-	names := namesFromURL(fileURL, displayName)
+	preNotice = decodeDisplayText(preNotice)
+	names := namesFromURL(fileURL, decodeDisplayText(displayName))
 
 	localPath, err := findInstallDir(cfg, pl, systemID, names)
 	if err != nil {

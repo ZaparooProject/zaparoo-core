@@ -168,6 +168,7 @@ const (
 	evInput
 	evWatchEnded
 	evUIResult
+	evUIShown
 	evRefused
 	evBarrier
 )
@@ -282,11 +283,17 @@ type countdown struct {
 	id               uint64
 	index            int
 	kind             countdownKind
+	// wait is the countdown's full time, which its prompt also runs for. An
+	// exit countdown gets it again from the moment its prompt is shown.
+	wait time.Duration
 	// inputCancels is set when a press cancels it; scans cancel the same
 	// countdowns.
 	inputCancels bool
 	// prompted is set when a prompt is open for it.
 	prompted bool
+	// held is set while an exit countdown's prompt waits for a client to
+	// start and show it, which pushes the deadline out to the hold.
+	held bool
 }
 
 type watch struct {
@@ -618,6 +625,8 @@ func (e *Engine) handle(ev *event) {
 		}
 	case evUIResult:
 		e.onUIResult(ev)
+	case evUIShown:
+		e.onUIShown(ev)
 	case evBarrier:
 		if ev.fn != nil {
 			ev.fn()

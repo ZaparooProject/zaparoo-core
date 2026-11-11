@@ -185,7 +185,11 @@ func killRetroBatGame(cfg *config.Instance) error {
 	retroBatSleep(retroBatKillVerifyDelay)
 	_, running, checkErr := retroBatAPIRunningGame()
 	if checkErr != nil {
-		if errors.Is(checkErr, esapi.ErrInvalidRunningGameResponse) {
+		// ES answered but not with a usable game state, so the stop cannot be
+		// confirmed. Only an unreachable ES counts as the game being gone.
+		if errors.Is(checkErr, esapi.ErrInvalidRunningGameResponse) ||
+			errors.Is(checkErr, esapi.ErrUnexpectedStatus) ||
+			errors.Is(checkErr, esapi.ErrRouteUnsupported) {
 			return fmt.Errorf("failed to verify RetroBat process fallback: %w", checkErr)
 		}
 		log.Debug().Err(checkErr).Msg("ES API unavailable while verifying process fallback")

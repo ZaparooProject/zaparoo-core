@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -264,7 +265,12 @@ func (s *StartupServer) Shutdown(ctx context.Context) error {
 
 // WriteHealth renders the /health body for the current state. It is used by
 // both the startup handler and the full router so the two never disagree.
-func (s *StartupServer) WriteHealth(w http.ResponseWriter) {
+//
+// The body is the plain text "OK" once Core is ready, and the state name
+// before that. Clients compare that text exactly: Batocera's EmulationStation
+// only shows its Zaparoo menu when the body is "OK". A caller that asks for
+// application/json gets the state as JSON instead.
+func (s *StartupServer) WriteHealth(w http.ResponseWriter, r *http.Request) {
 	state := ServiceStateReady
 	if s != nil {
 		state = s.State()
@@ -272,6 +278,18 @@ func (s *StartupServer) WriteHealth(w http.ResponseWriter) {
 	// Always 200: the process really is alive and serving in every one of
 	// these states. Readiness is what the body carries, so callers checking
 	// only the status code keep working.
+	if !acceptsJSON(r) {
+		body := "OK"
+		if state != ServiceStateReady {
+			body = string(state)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(body)); err != nil {
+			log.Debug().Err(err).Msg("failed writing health response")
+		}
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(models.HealthCheckResponse{
@@ -280,6 +298,30 @@ func (s *StartupServer) WriteHealth(w http.ResponseWriter) {
 	}); err != nil {
 		log.Debug().Err(err).Msg("failed writing health response")
 	}
+}
+
+// acceptsJSON reports whether the request's Accept header names
+// application/json with a non-zero quality. Wildcards do not count, so a
+// client sending "*/*" keeps the plain body.
+func acceptsJSON(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	for _, value := range r.Header.Values("Accept") {
+		for _, part := range strings.Split(value, ",") {
+			mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+			if err != nil || mediaType != "application/json" {
+				continue
+			}
+			if q, ok := params["q"]; ok {
+				if weight, qErr := strconv.ParseFloat(q, 64); qErr != nil || weight <= 0 {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // refusal is what an unserved route says. The state matters: a caller told
@@ -304,7 +346,7 @@ func (s *StartupServer) serveStartup(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/health":
-		s.WriteHealth(w)
+		s.WriteHealth(w, r)
 	case r.URL.Path == "/" || r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/"):
 		s.servePage(w)
 	default:
@@ -387,7 +429,10 @@ footer { margin-top: 1.5rem; font-size: .85rem; opacity: .6; }
 (function () {
   var failed = {{.Failed}};
   function poll() {
-    fetch("/health", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (b) {
+    fetch("/health", {
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    }).then(function (r) { return r.json(); }).then(function (b) {
       if (b && b.state === "ready") { window.location.reload(); return; }
       if (b && ((b.state === "failed") !== failed)) { window.location.reload(); return; }
       setTimeout(poll, 2000);

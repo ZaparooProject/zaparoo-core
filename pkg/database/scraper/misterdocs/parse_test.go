@@ -335,6 +335,41 @@ func TestLoadManualRecords_FiltersDirectPDFs(t *testing.T) {
 	assert.Equal(t, []string{filepath.Join(dir, "Game.pdf")}, got)
 }
 
+// macOS leaves a "._" AppleDouble file beside every PDF it copies to a USB
+// drive. It sorts first and matches the same game, so taking it would shadow
+// the real manual with a file media.asset refuses to serve.
+func TestLoadManualRecords_SkipsAppleDoubleFiles(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Manuals")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	name := "7th Saga, The (USA).pdf"
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "._"+name), []byte("\x00\x05\x16\x07Mac OS X"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte("%PDF-1.4"), 0o600))
+
+	got, err := loadManualRecords(context.Background(), fs, dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(dir, name)}, got)
+}
+
+func TestImageFilesByStem_SkipsAppleDoubleFiles(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Boxart")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "._Game.png"), []byte("meta"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Game.png"), []byte("png"), 0o600))
+
+	images, err := imageFilesByStem(context.Background(), fs, dir)
+	require.NoError(t, err)
+	assert.Len(t, images, 1)
+	for _, path := range images {
+		assert.Equal(t, filepath.Join(dir, "Game.png"), path)
+	}
+}
+
 func TestNormalizePlayers(t *testing.T) {
 	t.Parallel()
 

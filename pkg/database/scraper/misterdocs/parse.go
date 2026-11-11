@@ -449,7 +449,8 @@ func appendManualRecord(
 	entry os.FileInfo,
 	result []string,
 ) ([]string, error) {
-	if !entry.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
+	if !entry.Mode().IsRegular() || isAppleDouble(entry.Name()) ||
+		!strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
 		return result, nil
 	}
 	path := filepath.Join(dir, entry.Name())
@@ -457,6 +458,14 @@ func appendManualRecord(
 		return nil, fmt.Errorf("misterdocs: manuals directory exceeds %d records", maxMetadataRecords)
 	}
 	return append(result, path), nil
+}
+
+// isAppleDouble reports whether name is a macOS AppleDouble file, the "._"
+// sibling macOS writes beside every file it copies to a FAT or exFAT drive.
+// It carries the real file's extension but holds only Finder metadata, and it
+// sorts before the real file, so taking it would shadow the real document.
+func isAppleDouble(name string) bool {
+	return strings.HasPrefix(name, "._")
 }
 
 func imageFilesByStem(ctx context.Context, fs afero.Fs, dir string) (map[string]string, error) {
@@ -480,7 +489,8 @@ func imageFilesByStem(ctx context.Context, fs afero.Fs, dir string) (map[string]
 			}
 			// The listing already says what each entry is, so no image is
 			// stat'd a second time.
-			if !entry.Mode().IsRegular() || !supportedImageExt(filepath.Ext(entry.Name())) {
+			if !entry.Mode().IsRegular() || isAppleDouble(entry.Name()) ||
+				!supportedImageExt(filepath.Ext(entry.Name())) {
 				continue
 			}
 			path := filepath.Join(dir, entry.Name())

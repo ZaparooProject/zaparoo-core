@@ -188,6 +188,29 @@ func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {
 	assert.Equal(t, 10, kills)
 }
 
+// An ES without /runningGame cannot confirm the game is gone, so a stop has
+// to kill it rather than take the failed check as proof it already exited.
+func TestStopActiveLauncher_KillsOnceWithoutRunningGameRoute(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{err: esapi.ErrRouteUnsupported}
+	kills := 0
+	opts := Options{
+		ID:  "amberelec",
+		API: api,
+		KillGame: func() error {
+			kills++
+			return nil
+		},
+	}
+	p, published := runningPlatform(t, &opts)
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, kills)
+	require.NotEmpty(t, *published)
+	assert.Nil(t, (*published)[len(*published)-1])
+}
+
 func TestStopActiveLauncher_DefaultKillIsEmuKill(t *testing.T) {
 	t.Parallel()
 
@@ -394,6 +417,68 @@ func TestESAPILaunch_UsesTheSystemsOwnPath(t *testing.T) {
 		filepath.Join(storageROMs, "nes", "b.nes"),
 		filepath.Join(storageROMs, "missing", "c.nes"),
 	}, api.launched)
+}
+
+// Two systems can both hold a game when one sits under the other. The
+// deepest one is how ES knows the game, whatever order the config map has.
+func TestESAPILaunch_NestedSystemsUseTheDeepest(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	storageROMs := filepath.Join(base, "storage", "roms")
+	require.NoError(t, os.MkdirAll(filepath.Join(storageROMs, "snes"), 0o750))
+	game := filepath.Join(storageROMs, "snes", "x.sfc")
+	require.NoError(t, os.WriteFile(game, nil, 0o600))
+	rootLink := filepath.Join(base, "roms")
+	snesLink := filepath.Join(base, "snesroms")
+	require.NoError(t, os.Symlink(storageROMs, rootLink))
+	require.NoError(t, os.Symlink(storageROMs, snesLink))
+	esDir := t.TempDir()
+	writeESSystemList(t, esDir, map[string]string{
+		"all":  rootLink,
+		"snes": filepath.Join(snesLink, "snes"),
+	})
+
+	for range 20 {
+		api := &fakeAPI{}
+		opts := Options{ID: "amberelec", API: api, DefaultROMRoot: storageROMs, ESConfigDirs: []string{esDir}}
+		_, err := New(&opts).esAPILaunch(nil, game, nil)
+		require.NoError(t, err)
+		require.Equal(t, []string{filepath.Join(snesLink, "snes", "x.sfc")}, api.launched)
+	}
+}
+
+// A custom launcher with no command launches through ES too, so it needs the
+// same path spelling as the system launchers.
+func TestCustomESLauncher_UsesTheSystemsOwnPath(t *testing.T) {
+	t.Parallel()
+
+	storageROMs, linkROMs, esDir := symlinkedROMs(t)
+	fs := helpers.NewMemoryFS()
+	require.NoError(t, fs.WriteFile("/launchers/gamecom.toml", []byte(`[[launchers.custom]]
+id = "MyGamecom"
+system = "GameCom"
+media_dirs = ["gamecom"]
+`), 0o600))
+	cfg, err := helpers.NewTestConfig(fs, "/config")
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadCustomLaunchers("/launchers"))
+
+	api := &fakeAPI{}
+	opts := Options{ID: "amberelec", API: api, DefaultROMRoot: storageROMs, ESConfigDirs: []string{esDir}}
+	p := New(&opts)
+
+	var launcher *platforms.Launcher
+	for _, l := range p.Launchers(cfg) {
+		if l.ID == "MyGamecom" {
+			launcher = &l
+			break
+		}
+	}
+	require.NotNil(t, launcher)
+	_, err = launcher.Launch(cfg, filepath.Join(storageROMs, "gamecom", "a.bin"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(linkROMs, "gamecom", "a.bin")}, api.launched)
 }
 
 type countingAPI struct {
