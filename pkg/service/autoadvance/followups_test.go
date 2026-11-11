@@ -415,8 +415,13 @@ func TestIdle_UnreportedStopHoldsBackTheRotation(t *testing.T) {
 	r.input.nextWatch(t)
 	r.tick(4*time.Minute + 59*time.Second)
 
-	r.host.userStop()
-	r.tick(time.Second)
+	// The stop and the rotation falling due happen in one engine turn. Done
+	// apart, a leftover wake can let the engine see the stop a second early
+	// and start the idle time over from then.
+	r.probe(func(*Engine) {
+		r.host.userStop()
+		r.clock.Advance(time.Second)
+	})
 	r.quiet()
 	r.tick(idleFor - time.Second)
 	r.quiet()
