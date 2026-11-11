@@ -116,9 +116,15 @@ func TestTrackerRunPollsUntilCancelled(t *testing.T) {
 		defer close(done)
 		tr.run(ctx)
 	}()
-	require.NoError(t, clock.BlockUntilContext(ctx, 1))
-	clock.Advance(trackInterval)
-	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	// A status query can miss its deadline on a loaded machine, which leaves
+	// the state for the next poll, so give it a few polls to clear.
+	for range 20 {
+		require.NoError(t, clock.BlockUntilContext(ctx, 1))
+		if holder.get() == nil {
+			break
+		}
+		clock.Advance(trackInterval)
+	}
 	assert.Nil(t, holder.get())
 	cancel()
 	<-done

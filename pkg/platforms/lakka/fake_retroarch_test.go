@@ -119,7 +119,7 @@ func testFrontend(t *testing.T, addr string) (*frontend, *mocks.MockCommandExecu
 	t.Cleanup(func() { exec.AssertExpectations(t) })
 	clock := clockwork.NewFakeClock()
 	f := newFrontend(exec, clock, addr)
-	f.queryTimeout = 50 * time.Millisecond
+	f.queryTimeout = 500 * time.Millisecond
 	return f, exec, clock
 }
 

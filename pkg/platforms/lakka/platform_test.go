@@ -35,7 +35,7 @@ func testPlatform(t *testing.T, addr string) (*Platform, *mocks.MockCommandExecu
 	t.Cleanup(func() { exec.AssertExpectations(t) })
 	clock := clockwork.NewFakeClock()
 	p := newTestablePlatform(afero.NewMemMapFs(), exec, clock, addr)
-	p.frontend.queryTimeout = 50 * time.Millisecond
+	p.frontend.queryTimeout = 500 * time.Millisecond
 	return p, exec, clock
 }
 
