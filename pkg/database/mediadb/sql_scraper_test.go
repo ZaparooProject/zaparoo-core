@@ -3579,7 +3579,7 @@ const purgeAppleDoubleVersion = 20261111120000
 
 // Manuals and artwork the docs scraper took from macOS "._" AppleDouble files
 // are dropped on upgrade, so the next docs scrape can write the real files.
-// Every other property survives.
+// Other property types, and files inside a "._" directory, survive.
 func TestPurgeAppleDoublePropertiesMigration(t *testing.T) {
 	db, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -3591,12 +3591,19 @@ func TestPurgeAppleDoublePropertiesMigration(t *testing.T) {
 	require.NoError(t, goose.DownTo(sqlDB, "migrations", purgeAppleDoubleVersion-1))
 	_, err := sqlDB.ExecContext(ctx, `
 		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (3, 3, 'manual');
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (4, 3, 'image-screenshot');
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 2, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 2, 'roms/zelda.sfc');
 		INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text) VALUES
 			(1, 3, '/media/usb0/docs/NES/Manuals/._Mario.pdf'),
-			(1, 2, '/media/usb0/docs/NES/Boxart/Mario.png');
+			(1, 2, '/media/usb0/docs/NES/Boxart/Mario.png'),
+			(2, 3, '/media/usb0/._docs/SNES/Manuals/Zelda.pdf');
 		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES
 			(1, 2, '/media/usb0/docs/NES/Boxart/._Mario.png'),
-			(1, 1, 'A plumber._ saves a princess');
+			(1, 4, '._Mario.png'),
+			(1, 1, 'See http://example.com/._notes'),
+			(2, 1, 'A plumber._ saves a princess');
 	`)
 	require.NoError(t, err)
 
@@ -3616,5 +3623,16 @@ func TestPurgeAppleDoublePropertiesMigration(t *testing.T) {
 	for i := range mediaProps {
 		mediaTexts = append(mediaTexts, mediaProps[i].Text)
 	}
-	assert.Equal(t, []string{"A plumber._ saves a princess"}, mediaTexts)
+	assert.Equal(t, []string{"See http://example.com/._notes"}, mediaTexts,
+		"only docs property types are purged, whatever their text holds")
+
+	otherTitle, err := db.GetMediaTitlePropertyMetadata(ctx, 2)
+	require.NoError(t, err)
+	require.Len(t, otherTitle, 1)
+	assert.Equal(t, "/media/usb0/._docs/SNES/Manuals/Zelda.pdf", otherTitle[0].Text,
+		"a \"._\" directory does not make its files AppleDouble")
+	otherMedia, err := db.GetMediaPropertyMetadata(ctx, 2)
+	require.NoError(t, err)
+	require.Len(t, otherMedia, 1)
+	assert.Equal(t, "A plumber._ saves a princess", otherMedia[0].Text)
 }
