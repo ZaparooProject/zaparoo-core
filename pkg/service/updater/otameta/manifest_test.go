@@ -180,6 +180,7 @@ func buildTargets() []struct{ platform, goarch, ext string } {
 		{platform: "batocera", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "bazzite", arches: []string{"amd64", "arm64"}},
 		{platform: "chimeraos", arches: []string{"amd64", "arm64"}},
+		{platform: "firmware", arches: []string{"arm64"}},
 		{platform: "libreelec", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "linux", arches: []string{"amd64", "arm64"}},
 		{platform: "mac", arches: []string{"amd64", "arm64"}},
@@ -188,7 +189,6 @@ func buildTargets() []struct{ platform, goarch, ext string } {
 		{platform: "replayos", arches: []string{"arm64"}},
 		{platform: "steamos", arches: []string{"amd64"}},
 		{platform: "windows", arches: []string{"386", "amd64", "arm64"}},
-		{platform: "zapos", arches: []string{"arm64"}},
 	}
 	zip := map[string]bool{"mac": true, "mister": true, "mistex": true, "windows": true}
 

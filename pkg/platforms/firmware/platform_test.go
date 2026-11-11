@@ -4,7 +4,7 @@
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package zapos
+package firmware
 
 import (
 	"fmt"
@@ -26,7 +26,7 @@ func TestNewPlatform(t *testing.T) {
 	platform := NewPlatform()
 
 	require.NotNil(t, platform.Base)
-	assert.Equal(t, platformids.ZapOS, platform.ID())
+	assert.Equal(t, platformids.Firmware, platform.ID())
 }
 
 func TestPlatformStartPreDoesNotRequireEmulators(t *testing.T) {

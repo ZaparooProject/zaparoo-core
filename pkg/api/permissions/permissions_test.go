@@ -215,7 +215,7 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.ChimeraOS,
 		platformids.Windows,
 		platformids.Mac,
-		platformids.ZapOS,
+		platformids.Firmware,
 		platformids.Recalbox,
 		platformids.RetroPie,
 		"future-platform",

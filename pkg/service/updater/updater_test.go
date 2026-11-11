@@ -728,10 +728,11 @@ releases:
     published_at: 2026-08-10T00:00:00Z
     assets:
       - id: 10
-        name: zaparoo-zapos_arm64-2.16.1.tar.gz
+        name: zaparoo-firmware_arm64-2.16.1.tar.gz
         size: 8123456
         sha256: aaaa
-        url: https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/zaparoo-zapos_arm64-2.16.1.tar.gz
+        url: https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/`+
+		`zaparoo-firmware_arm64-2.16.1.tar.gz
 `, generation)
 }
 

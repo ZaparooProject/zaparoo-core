@@ -53,8 +53,8 @@ var platformDocs = map[string]string{
 	"replayos":  "replayos.md",
 	"steamos":   "steamos/index.md",
 	"windows":   "windows/index.md",
-	// Interim packaging fallback until dedicated ZapOS docs are published.
-	"zapos": "linux/index.md",
+	// Interim packaging fallback until dedicated docs are published.
+	"firmware": "linux/index.md",
 }
 
 // platformURLs maps platform IDs to their online documentation URLs
@@ -71,8 +71,8 @@ var platformURLs = map[string]string{
 	"replayos":  "https://zaparoo.org/docs/platforms/replayos/",
 	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
-	// Interim packaging fallback until dedicated ZapOS docs are published.
-	"zapos": "https://zaparoo.org/docs/platforms/linux/",
+	// Interim packaging fallback until dedicated docs are published.
+	"firmware": "https://zaparoo.org/docs/platforms/linux/",
 }
 
 func stripFrontmatter(content string) string {

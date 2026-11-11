@@ -21,7 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/zapos"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/firmware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -55,7 +55,7 @@ func run() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigs)
 
-	platform := zapos.NewPlatform()
+	platform := firmware.NewPlatform()
 	flags := cli.SetupFlags()
 	daemonMode := flag.Bool("daemon", false, "run zaparoo in daemon mode")
 	flags.Pre(platform)

@@ -2,8 +2,8 @@ version: "3"
 
 tasks:
   build-arm64:
-    desc: Build ZapOS ARM64 binary
+    desc: Build Zaparoo Firmware ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:
-          PLATFORM: zapos
+          PLATFORM: firmware
