@@ -1,0 +1,16 @@
+version: "3"
+
+tasks:
+  build-amd64:
+    desc: Build ROCKNIX AMD64 binary
+    cmds:
+      - task: :zigcc:build-linux-amd64
+        vars:
+          PLATFORM: rocknix
+
+  build-arm64:
+    desc: Build ROCKNIX ARM64 binary
+    cmds:
+      - task: :zigcc:build-linux-arm64
+        vars:
+          PLATFORM: rocknix

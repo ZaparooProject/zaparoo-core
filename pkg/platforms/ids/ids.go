@@ -23,10 +23,12 @@ package ids
 
 const (
 	Android   = "android"
+	AmberELEC = "amberelec"
 	Batocera  = "batocera"
 	Bazzite   = "bazzite"
 	ChimeraOS = "chimeraos"
 	Firmware  = "firmware"
+	Knulli    = "knulli"
 	LibreELEC = "libreelec"
 	Linux     = "linux"
 	Mac       = "mac"
@@ -35,6 +37,7 @@ const (
 	Recalbox  = "recalbox"
 	ReplayOS  = "replayos"
 	RetroPie  = "retropie"
+	ROCKNIX   = "rocknix"
 	SteamOS   = "steamos"
 	Windows   = "windows"
 )

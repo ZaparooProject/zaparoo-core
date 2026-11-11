@@ -1,0 +1,32 @@
+[Unit]
+Description=Zaparoo Core
+Documentation=https://zaparoo.org/docs/
+After=emustation.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/storage
+
+[Service]
+Type=simple
+Environment=HOME=/storage
+WorkingDirectory=/storage/zaparoo
+ExecStart=/storage/zaparoo/zaparoo -daemon
+Restart=on-failure
+RestartSec=5s
+# Core exits 78 when starting again cannot help, currently a user database
+# written by a newer build than the one installed. Retrying that every five
+# seconds buries the explanation under copies of itself; failing here leaves it
+# readable in systemctl status. See docs/ota-runbook.md.
+RestartPreventExitStatus=78
+
+StandardOutput=journal
+StandardError=journal
+
+# Always yield to the running game.
+Nice=10
+CPUWeight=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+IOWeight=10
+
+[Install]
+WantedBy=rocknix.target

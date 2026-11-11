@@ -55,7 +55,9 @@ func TestServiceUnitsDeclineToRestartOnTheUnrecoverableStatus(t *testing.T) {
 	t.Parallel()
 
 	units := []string{
+		filepath.Join("..", "..", "cmd", "amberelec", "conf", "zaparoo.service"),
 		filepath.Join("..", "..", "cmd", "replayos", "conf", "zaparoo.service"),
+		filepath.Join("..", "..", "cmd", "rocknix", "conf", "zaparoo.service"),
 		filepath.Join("..", "platforms", "linux", "installer", "conf", "zaparoo.service"),
 	}
 	want := fmt.Sprintf("RestartPreventExitStatus=%d", ExitUnrecoverable)
@@ -84,10 +86,12 @@ func TestSupervisedEntrypointsMapTheUnrecoverableStatus(t *testing.T) {
 	t.Parallel()
 
 	entrypoints := []string{
+		filepath.Join("..", "..", "cmd", "amberelec", "main.go"),
 		filepath.Join("..", "..", "cmd", "bazzite", "main.go"),
 		filepath.Join("..", "..", "cmd", "chimeraos", "main.go"),
 		filepath.Join("..", "..", "cmd", "linux", "main.go"),
 		filepath.Join("..", "..", "cmd", "replayos", "main.go"),
+		filepath.Join("..", "..", "cmd", "rocknix", "main.go"),
 		filepath.Join("..", "..", "cmd", "steamos", "main.go"),
 	}
 

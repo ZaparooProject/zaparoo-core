@@ -547,17 +547,34 @@ func (e *Engine) take() []event {
 	return batch
 }
 
+func (e *Engine) queued() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.queue) > 0
+}
+
 func (e *Engine) run() {
 	defer e.wg.Done()
 	timer := e.clock.NewTimer(time.Hour)
 	timer.Stop()
 	defer timer.Stop()
 	for {
-		batch := e.take()
-		for i := range batch {
-			e.handle(&batch[i])
+		var batch []event
+		var now time.Time
+		for {
+			more := e.take()
+			for i := range more {
+				e.handle(&more[i])
+			}
+			batch = append(batch, more...)
+			// Everything posted before now is read must be handled before
+			// settling at now. Otherwise a choice made just ahead of a
+			// deadline loses to the deadline it beat.
+			now = e.clock.Now()
+			if !e.queued() {
+				break
+			}
 		}
-		now := e.clock.Now()
 		e.settle(now)
 		e.rearm(timer, now)
 		for i := range batch {
