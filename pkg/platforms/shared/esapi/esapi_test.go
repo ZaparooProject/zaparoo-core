@@ -186,6 +186,6 @@ func TestAPIRequest_StatusCodes(t *testing.T) {
 	require.ErrorIs(t, err, ErrRouteUnsupported)
 
 	_, err = sendAPIRequest(server.URL, "/forbidden", "", time.Second)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnexpectedStatus)
 	assert.NotErrorIs(t, err, ErrRouteUnsupported)
 }

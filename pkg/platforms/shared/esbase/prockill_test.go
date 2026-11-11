@@ -8,6 +8,7 @@ package esbase
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -31,13 +32,15 @@ type signalled struct {
 type fakeProcs struct {
 	fs       afero.Fs
 	stubborn map[int]bool
-	sent     []signalled
-	mu       syncutil.Mutex
+	// zombies exit on SIGTERM but are left unreaped.
+	zombies map[int]bool
+	sent    []signalled
+	mu      syncutil.Mutex
 }
 
 func newFakeProcs(t *testing.T) *fakeProcs {
 	t.Helper()
-	return &fakeProcs{fs: afero.NewMemMapFs(), stubborn: map[int]bool{}}
+	return &fakeProcs{fs: afero.NewMemMapFs(), stubborn: map[int]bool{}, zombies: map[int]bool{}}
 }
 
 func (f *fakeProcs) add(t *testing.T, pid int, comm, argv0 string) {
@@ -51,6 +54,11 @@ func (f *fakeProcs) signal(pid int, sig syscall.Signal) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, signalled{pid: pid, sig: sig})
+	if f.zombies[pid] {
+		stat := strconv.Itoa(pid) + " (my game) (x) Z 1 0 0"
+		//nolint:wrapcheck // fake process table
+		return afero.WriteFile(f.fs, filepath.Join(testProcRoot, strconv.Itoa(pid), "stat"), []byte(stat), 0o644)
+	}
 	if sig == syscall.SIGKILL || !f.stubborn[pid] {
 		return f.fs.RemoveAll(filepath.Join(testProcRoot, strconv.Itoa(pid))) //nolint:wrapcheck // fake process table
 	}
@@ -171,4 +179,76 @@ func TestProcessKiller_NothingToKill(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	assert.Empty(t, procs.signals())
+}
+
+// A game that exits on SIGTERM but whose parent has not reaped it yet is
+// done. The stop must not wait out the grace period and SIGKILL a zombie.
+func TestProcessKiller_UnreapedExitIsNotAlive(t *testing.T) {
+	t.Parallel()
+
+	procs := newFakeProcs(t)
+	procs.add(t, 400, "retroarch", "/usr/bin/retroarch")
+	procs.zombies[400] = true
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := procs.killer(clockwork.NewFakeClock()).Kill(context.Background(), []string{"retroarch"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Kill waited on a process that had already exited")
+	}
+	assert.Equal(t, []signalled{{pid: 400, sig: syscall.SIGTERM}}, procs.signals())
+}
+
+func TestProcessKiller_ZombieState(t *testing.T) {
+	t.Parallel()
+
+	procs := newFakeProcs(t)
+	k := procs.killer(clockwork.NewFakeClock())
+	for pid, stat := range map[int]string{
+		500: "500 (retroarch) S 1 0 0",
+		501: "501 (a) Z (b) R 1 0 0",
+		502: "502 retroarch Z",
+		504: "504 (my game) (x) Z 1 0 0",
+	} {
+		require.NoError(t, afero.WriteFile(procs.fs,
+			filepath.Join(testProcRoot, strconv.Itoa(pid), "stat"), []byte(stat), 0o644))
+	}
+	assert.False(t, k.zombie(500), "running")
+	assert.False(t, k.zombie(501), "the state follows the last parenthesis")
+	assert.False(t, k.zombie(502), "no name field")
+	assert.False(t, k.zombie(503), "no stat file")
+	assert.True(t, k.zombie(504), "zombie with parentheses in its name")
+}
+
+func TestProcessKiller_KillNowSendsSIGKILL(t *testing.T) {
+	t.Parallel()
+
+	procs := newFakeProcs(t)
+	procs.add(t, 200, "retroarch", "/usr/bin/retroarch")
+	procs.add(t, 201, "sh", "/bin/sh")
+
+	n, err := procs.killer(clockwork.NewFakeClock()).KillNow([]string{"retroarch", "bad name"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []signalled{{pid: 200, sig: syscall.SIGKILL}}, procs.signals())
+
+	_, err = procs.killer(clockwork.NewFakeClock()).KillNow([]string{"bad name"})
+	require.ErrorIs(t, err, ErrNoProcessNames)
+}
+
+func TestNewProcessKiller_UsesThisSystem(t *testing.T) {
+	t.Parallel()
+
+	k := NewProcessKiller()
+	assert.Equal(t, "/proc", k.ProcPath)
+	assert.Equal(t, os.Getpid(), k.SelfPID)
+	assert.Equal(t, 5*time.Second, k.Grace)
+	assert.NotNil(t, k.Signal)
+	assert.NotNil(t, k.FS)
+	assert.NotNil(t, k.Clock)
 }

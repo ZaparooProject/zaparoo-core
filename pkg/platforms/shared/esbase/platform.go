@@ -880,18 +880,31 @@ func (p *Platform) esPath(path string) string {
 	if err != nil {
 		return path
 	}
+	// Systems can nest, such as one at the ROM root and one in a folder
+	// under it. The deepest system holding the game is the one ES launches
+	// it from, and the comparison must not depend on map order.
+	best, bestReal := "", ""
 	for _, sysPath := range systemPaths {
-		realSys, err := filepath.EvalSymlinks(sysPath)
-		if err != nil {
+		realSys, evalErr := filepath.EvalSymlinks(sysPath)
+		if evalErr != nil {
 			continue
 		}
-		rel, err := filepath.Rel(realSys, realPath)
-		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		rel, relErr := filepath.Rel(realSys, realPath)
+		if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
-		return filepath.Join(sysPath, rel)
+		if len(realSys) > len(bestReal) || (len(realSys) == len(bestReal) && sysPath < best) {
+			best, bestReal = sysPath, realSys
+		}
 	}
-	return path
+	if best == "" {
+		return path
+	}
+	rel, err := filepath.Rel(bestReal, realPath)
+	if err != nil {
+		return path
+	}
+	return filepath.Join(best, rel)
 }
 
 // hasESSystem reports whether ES has a system for an ES-DE folder, under
@@ -1076,13 +1089,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		// process handle — the background tracker manages active media state.
 		if cl.Launch == nil {
 			cl.Lifecycle = platforms.LifecycleFireAndForget
-			cl.Launch = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := p.api().Launch(path)
-				if err != nil {
-					return nil, fmt.Errorf("failed to launch via API: %w", err)
-				}
-				return nil, nil //nolint:nilnil // API launches don't return a process handle
-			}
+			cl.Launch = p.esAPILaunch
 			// It can launch now, so it is no longer a scan-only entry that
 			// has to defer to another launcher for its system.
 			cl.ScanOnly = false
