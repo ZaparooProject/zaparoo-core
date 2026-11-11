@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -120,6 +121,29 @@ func (s *ServiceInstaller) Uninstall(ctx context.Context) error {
 			return fmt.Errorf("%s: %w", strings.Join(args, " "), err)
 		}
 	}
+	return nil
+}
+
+// InstallCommand runs the -install flag: it installs the service when the
+// running binary is binaryPath, the one the service starts, and tells the
+// user on out.
+func (s *ServiceInstaller) InstallCommand(ctx context.Context, binaryPath string, out io.Writer) error {
+	if err := CheckRunningInstallPath(binaryPath); err != nil {
+		return err
+	}
+	if err := s.Install(ctx); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "Zaparoo service installed and started.")
+	return nil
+}
+
+// UninstallCommand runs the -uninstall flag and tells the user on out.
+func (s *ServiceInstaller) UninstallCommand(ctx context.Context, out io.Writer) error {
+	if err := s.Uninstall(ctx); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "Zaparoo service uninstalled.")
 	return nil
 }
 

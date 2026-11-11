@@ -29,20 +29,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
-	"runtime/debug"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/knulli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
-	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -89,18 +84,7 @@ func main() {
 
 func run() error {
 	defer telemetry.Close()
-	defer func() {
-		if r := recover(); r != nil {
-			stack := debug.Stack()
-			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
-			log.Error().
-				Interface("panic", r).
-				Bytes("stack", stack).
-				Msg("recovered from panic")
-			telemetry.Flush()
-			os.Exit(1)
-		}
-	}()
+	defer cli.ExitOnPanic()
 
 	pl := knulli.NewPlatform()
 	flags := cli.SetupFlags()
@@ -124,19 +108,15 @@ func run() error {
 	flags.Pre(pl)
 
 	if *doInstall {
-		if err := esbase.CheckRunningInstallPath(binaryPath); err != nil {
+		if err := serviceInstaller().InstallCommand(context.Background(), binaryPath, os.Stdout); err != nil {
 			return fmt.Errorf("error installing service: %w", err)
 		}
-		if err := serviceInstaller().Install(context.Background()); err != nil {
-			return fmt.Errorf("error installing service: %w", err)
-		}
-		_, _ = fmt.Println("Zaparoo service installed and started.")
 		return nil
-	} else if *doUninstall {
-		if err := serviceInstaller().Uninstall(context.Background()); err != nil {
+	}
+	if *doUninstall {
+		if err := serviceInstaller().UninstallCommand(context.Background(), os.Stdout); err != nil {
 			return fmt.Errorf("error uninstalling service: %w", err)
 		}
-		_, _ = fmt.Println("Zaparoo service uninstalled.")
 		return nil
 	}
 
@@ -164,46 +144,8 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	// try to auto-start service if it's not running already
-	running, runningErr := svc.RunningForAutoStart()
-	if runningErr != nil {
-		return fmt.Errorf("error checking service status: %w", runningErr)
+	if err := cli.RunBackgroundServiceTUI(pl, cfg, svc); err != nil {
+		return fmt.Errorf("run failed: %w", err)
 	}
-	var startErr error
-	if !running {
-		startErr = svc.Start()
-		if startErr != nil {
-			log.Error().Err(startErr).Msg("could not start service")
-		}
-	}
-	isRunning := func() bool {
-		running, runningErr := svc.Running()
-		if runningErr != nil {
-			log.Error().Err(runningErr).Msg("service PID file conflict")
-			return false
-		}
-		return running
-	}
-
-	// start the tui
-	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
-		return tui.BuildMain(
-			cfg, pl,
-			isRunning,
-			path.Join(helpers.DataDir(pl), config.LogFile),
-			"storage",
-		)
-	})
-	if err != nil {
-		// With no service running there is nothing to fall back to.
-		if startErr != nil {
-			return fmt.Errorf("could not start service: %w", startErr)
-		}
-		// Launched without a terminal (no tty or TERM), there is no TUI to
-		// show. The service runs in its own process, so this is not a fault.
-		log.Warn().Err(err).Msg("TUI unavailable, service continues in the background")
-		_, _ = fmt.Fprintf(os.Stderr, "TUI unavailable (%s), service continues in the background.\n", err)
-	}
-
 	return nil
 }

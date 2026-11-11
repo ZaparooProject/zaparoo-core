@@ -7,6 +7,7 @@
 package esbase
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -268,4 +269,94 @@ func TestCheckRunningInstallPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, CheckRunningInstallPath(exe))
 	require.Error(t, CheckRunningInstallPath(filepath.Join(t.TempDir(), "zaparoo")))
+}
+
+func runningBinary(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	return exe
+}
+
+func TestServiceInstaller_InstallCommandInstallsFromTheServiceBinary(t *testing.T) {
+	t.Parallel()
+
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Run", mock.Anything, "systemctl", mock.Anything).Return(nil)
+	s := SystemdUnitInstaller("/storage/.config/system.d/zaparoo.service", "zaparoo.service", "[Unit]\n")
+	s.FS = afero.NewMemMapFs()
+	s.Cmd = cmd
+
+	var out bytes.Buffer
+	require.NoError(t, s.InstallCommand(context.Background(), runningBinary(t), &out))
+	assert.Equal(t, "Zaparoo service installed and started.\n", out.String())
+	exists, err := afero.Exists(s.FS, s.Path)
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestServiceInstaller_InstallCommandRefusesAnotherBinary(t *testing.T) {
+	t.Parallel()
+
+	cmd := &mocks.MockCommandExecutor{}
+	s := SystemdUnitInstaller("/storage/.config/system.d/zaparoo.service", "zaparoo.service", "[Unit]\n")
+	s.FS = afero.NewMemMapFs()
+	s.Cmd = cmd
+
+	var out bytes.Buffer
+	err := s.InstallCommand(context.Background(), "/storage/zaparoo/zaparoo", &out)
+	require.ErrorContains(t, err, "the service runs /storage/zaparoo/zaparoo")
+	assert.Empty(t, out.String())
+	cmd.AssertNotCalled(t, "Run", mock.Anything, mock.Anything, mock.Anything)
+	exists, err := afero.Exists(s.FS, s.Path)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestServiceInstaller_InstallCommandReportsInstallFailure(t *testing.T) {
+	t.Parallel()
+
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Run", mock.Anything, "systemctl", mock.Anything).Return(errors.New("no systemd"))
+	s := SystemdUnitInstaller("/storage/.config/system.d/zaparoo.service", "zaparoo.service", "[Unit]\n")
+	s.FS = afero.NewMemMapFs()
+	s.Cmd = cmd
+
+	var out bytes.Buffer
+	err := s.InstallCommand(context.Background(), runningBinary(t), &out)
+	require.ErrorContains(t, err, "systemctl daemon-reload: no systemd")
+	assert.Empty(t, out.String())
+}
+
+func TestServiceInstaller_UninstallCommand(t *testing.T) {
+	t.Parallel()
+
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Run", mock.Anything, "systemctl", mock.Anything).Return(nil)
+	s := SystemdUnitInstaller("/storage/.config/system.d/zaparoo.service", "zaparoo.service", "[Unit]\n")
+	s.FS = afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(s.FS, s.Path, []byte("[Unit]\n"), 0o644))
+	s.Cmd = cmd
+
+	var out bytes.Buffer
+	require.NoError(t, s.UninstallCommand(context.Background(), &out))
+	assert.Equal(t, "Zaparoo service uninstalled.\n", out.String())
+	exists, err := afero.Exists(s.FS, s.Path)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestServiceInstaller_UninstallCommandReportsFailure(t *testing.T) {
+	t.Parallel()
+
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Run", mock.Anything, "systemctl", mock.Anything).Return(errors.New("no systemd"))
+	s := SystemdUnitInstaller("/storage/.config/system.d/zaparoo.service", "zaparoo.service", "[Unit]\n")
+	s.FS = afero.NewMemMapFs()
+	s.Cmd = cmd
+
+	var out bytes.Buffer
+	err := s.UninstallCommand(context.Background(), &out)
+	require.ErrorContains(t, err, "systemctl daemon-reload: no systemd")
+	assert.Empty(t, out.String())
 }
