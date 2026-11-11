@@ -463,7 +463,9 @@ Every publishing run does the same thing, in this order:
 4. Run the client's own asset selection over the generated manifest, for every
    platform and architecture the build produces. Two archives a device could
    both install fails anywhere in the manifest; a missing archive fails on the
-   newest release in each channel, which is the one devices are offered. This
+   newest release in each channel, which is the one devices are offered, unless
+   that release predates the target's `Since` version in
+   `scripts/generate-update-manifest/targets.go`. This
    runs before the signing key is loaded.
 5. Sign both documents and verify those signatures locally.
 6. Check the publish directory holds those four files and nothing else, and

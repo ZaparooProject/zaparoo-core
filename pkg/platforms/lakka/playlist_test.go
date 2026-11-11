@@ -366,6 +366,35 @@ func TestPlaylistEntryLaunchesWithRecordedCore(t *testing.T) {
 	assert.Equal(t, want(systemCore, unlisted), launchArgs(t, &launcher, cfg, unlisted))
 }
 
+func TestPlaylistCoreMakesLauncherAvailableWithoutSystemCore(t *testing.T) {
+	t.Parallel()
+	p, _, _ := testPlatform(t, closedAddr(t))
+	cfg := testConfig(t)
+	require.NoError(t, afero.WriteFile(p.fs, retroArchExecutable, nil, 0o755))
+	withCore := filepath.Join(romsDir, "snes", "Core.sfc")
+	missingCore := filepath.Join(romsDir, "snes", "Missing.sfc")
+	writePlaylist(t, p.fs, snesPlaylistName, `{"items": [
+		{"path": "`+missingCore+`", "core_path": "/tmp/cores/missing_libretro.so"},
+		{"path": "`+filepath.Join(romsDir, "snes", "Missing2.sfc")+`", "core_path": "/tmp/cores/missing_libretro.so"},
+		{"path": "`+withCore+`", "core_path": "/tmp/cores/snes9x2010_libretro.so"}
+	]}`)
+
+	launcher := primarySNESLauncher(t, p.Launchers(cfg))
+	require.NotNil(t, launcher.Availability)
+	require.NotNil(t, launcher.Preflight)
+	require.Error(t, launcher.Availability(cfg), "neither the system core nor a recorded core is installed")
+	require.Error(t, launcher.Preflight(cfg, withCore, nil))
+
+	writeFile(t, p.fs, filepath.Join(retroArchCoresDir, "snes9x2010_libretro.so"))
+	require.NoError(t, launcher.Availability(cfg))
+	require.NoError(t, launcher.Preflight(cfg, withCore, nil), "the entry's recorded core can run it")
+	require.Error(t, launcher.Preflight(cfg, missingCore, nil), "this entry needs the missing system core")
+	require.Error(t, launcher.Preflight(cfg, filepath.Join(romsDir, "snes", "Unlisted.sfc"), nil))
+
+	writeFile(t, p.fs, filepath.Join(retroArchCoresDir, snesCore(t)))
+	require.NoError(t, launcher.Preflight(cfg, missingCore, nil))
+}
+
 func TestPlaylistCoreFallsBackWhenRetroArchMissing(t *testing.T) {
 	t.Parallel()
 	p, _, _ := testPlatform(t, closedAddr(t))

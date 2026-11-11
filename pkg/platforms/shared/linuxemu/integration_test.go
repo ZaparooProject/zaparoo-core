@@ -633,6 +633,48 @@ func TestAttachPlainESDEScannersUsesOnlyExplicitRoot(t *testing.T) {
 	assert.Equal(t, "Friendly Name", results[0].Name)
 }
 
+func TestAttachPlainESDEScannersForRootsUsesGivenRoots(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := filepath.Join(t.TempDir(), "ROMs")
+	romPath := filepath.Join(root, "nes", "game.nes")
+	require.NoError(t, os.MkdirAll(filepath.Dir(romPath), 0o750))
+	require.NoError(t, os.WriteFile(romPath, []byte("rom"), 0o600))
+	gamelistDir := filepath.Join(home, "ES-DE", "gamelists", "nes")
+	require.NoError(t, os.MkdirAll(gamelistDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(gamelistDir, "gamelist.xml"), []byte(
+		`<gameList><game><name>Friendly Name</name><path>./game.nes</path></game></gameList>`,
+	), 0o600))
+	cfg := &config.Instance{}
+	newLaunchers := func() []platforms.Launcher {
+		return []platforms.Launcher{{
+			ID:         "RetroArchFCEUMM",
+			SystemID:   systemdefs.SystemNES,
+			Folders:    []string{"nes"},
+			Extensions: []string{".nes"},
+		}}
+	}
+	options := NewOptions(home, sharedretroarch.Options{})
+
+	unconfigured := newLaunchers()
+	AttachPlainESDEScanners(cfg, options, unconfigured)
+	assert.Nil(t, unconfigured[0].Scanner, "no index roots configured")
+
+	AttachPlainESDEScannersForRoots(cfg, options, unconfigured, nil)
+	assert.Nil(t, unconfigured[0].Scanner, "no roots given")
+
+	launchers := newLaunchers()
+	AttachPlainESDEScannersForRoots(cfg, options, launchers, []string{root})
+	require.NotNil(t, launchers[0].Scanner)
+	results, err := launchers[0].Scanner(context.Background(), cfg, systemdefs.SystemNES, []platforms.ScanResult{{
+		Path: romPath, Name: "game",
+	}})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Friendly Name", results[0].Name)
+}
+
 func TestLaunchersUsesConfiguredNativeRetroArchForEmuDeck(t *testing.T) {
 	t.Parallel()
 

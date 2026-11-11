@@ -301,6 +301,7 @@ func (p *Platform) adaptLauncher(
 	if playlistSystem != "" {
 		build = p.playlistCommand(build, playlistSystem)
 		launcher.BuildLaunchCommand = build
+		p.playlistAvailability(launcher, playlistSystem)
 	}
 	launcher.Lifecycle = platforms.LifecycleFireAndForget
 	launcher.Kill = nil

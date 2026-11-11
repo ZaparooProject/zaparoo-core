@@ -102,7 +102,7 @@ func run() error {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	cfg := cli.Setup(
+	cfg := setupCLI(
 		pl,
 		config.BaseDefaults,
 		logWriters,
@@ -117,21 +117,32 @@ func run() error {
 	return runTUI(pl, cfg)
 }
 
+// Tests replace these; the defaults run the real service and TUI.
+var (
+	setupCLI      = cli.Setup
+	notifySignals = signal.Notify
+	startService  = service.Start
+	spawnDaemon   = daemon.SpawnDaemon
+	showTUI       = tui.BuildAndRetry
+	reexecAfter   = restart.ExecAfterRollback
+	reexecIfAsked = restart.ExecIfRequested
+)
+
 func runDaemon(pl *lakka.Platform, cfg *config.Instance) error {
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	notifySignals(sigs, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigs)
 
 	if runtime.GOARCH != "amd64" {
 		runtime.GOMAXPROCS(2)
 	}
 
-	svcResult, err := service.Start(pl, cfg)
+	svcResult, err := startService(pl, cfg)
 	if err != nil {
 		// The previous version is back on disk, but this process is still the
 		// image that failed and nothing here would start the restored one.
 		if errors.Is(err, updater.ErrRolledBack) {
-			return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
+			return fmt.Errorf("restarting after update rollback: %w", reexecAfter(err))
 		}
 
 		// A taken API port and a database newer than this build were already
@@ -151,7 +162,7 @@ func runDaemon(pl *lakka.Platform, cfg *config.Instance) error {
 		}
 	case <-svcResult.Done:
 		log.Info().Msg("service shut down internally")
-		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
+		if err := reexecIfAsked(svcResult.RestartRequested); err != nil {
 			return fmt.Errorf("failed to re-exec for restart: %w", err)
 		}
 	}
@@ -161,13 +172,13 @@ func runDaemon(pl *lakka.Platform, cfg *config.Instance) error {
 
 // runTUI connects to an existing daemon or spawns one, then displays the TUI.
 func runTUI(pl *lakka.Platform, cfg *config.Instance) error {
-	stopDaemon, err := daemon.SpawnDaemon(cfg)
+	stopDaemon, err := spawnDaemon(cfg)
 	if err != nil {
 		return fmt.Errorf("error spawning daemon: %w", err)
 	}
 	defer stopDaemon()
 
-	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err = showTUI(cfg, pl, func() (*tview.Application, error) {
 		logDestPath := filepath.Join(helpers.DataDir(pl), config.LogFile)
 		return tui.BuildMain(
 			cfg, pl,
@@ -182,8 +193,15 @@ func runTUI(pl *lakka.Platform, cfg *config.Instance) error {
 	return nil
 }
 
+// Tests replace these; the defaults act on the real system.
+var (
+	executable                   = os.Executable
+	installFS   afero.Fs         = afero.NewOsFs()
+	installExec command.Executor = &command.RealExecutor{}
+)
+
 func installer() (*lakka.Installer, error) {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return nil, fmt.Errorf("find zaparoo executable: %w", err)
 	}
@@ -192,8 +210,8 @@ func installer() (*lakka.Installer, error) {
 		return nil, fmt.Errorf("resolve zaparoo executable: %w", err)
 	}
 	return &lakka.Installer{
-		FS:         afero.NewOsFs(),
-		Exec:       &command.RealExecutor{},
+		FS:         installFS,
+		Exec:       installExec,
 		Unit:       serviceFile,
 		Executable: exe,
 	}, nil

@@ -255,24 +255,42 @@ func (f *frontend) launchTransient(ctx context.Context, argv []string) error {
 }
 
 // stop ends running content and leaves the RetroArch menu on screen.
+//
+// Core keeps ownership of what it launched until the stop is confirmed, so a
+// stop that fails leaves the tracker watching the game it could not end.
 func (f *frontend) stop(ctx context.Context) error {
-	f.mu.Lock()
-	f.launchedPath = ""
-	f.mu.Unlock()
+	launched := f.currentLaunch()
 
 	if f.transientActive(ctx) {
 		if err := f.systemctl(ctx, "stop", transientUnit); err != nil {
 			return fmt.Errorf("%w: stop retroarch game unit: %w", platforms.ErrStopFailed, err)
 		}
+		f.clearLaunch(launched)
 		return nil
 	}
 
+	start := f.clock.Now()
 	status, err := f.status(ctx)
+	// RetroArch does not answer while it loads content, so silence after a
+	// launch of Core's may be that launch still loading. Wait for it rather
+	// than let the next launch start over a game about to appear.
+	for err != nil && launched != "" && f.unitActive(ctx, retroArchService) {
+		if f.clock.Since(start) >= closeTimeout {
+			return fmt.Errorf("%w: retroarch is not answering: %w", platforms.ErrStopFailed, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", platforms.ErrStopFailed, ctx.Err())
+		case <-f.clock.After(pollInterval):
+		}
+		status, err = f.status(ctx)
+	}
 	if err != nil || !isLoaded(status) {
+		f.clearLaunch(launched)
 		return nil //nolint:nilerr // Nothing reachable is running content.
 	}
 
-	start := f.clock.Now()
+	start = f.clock.Now()
 	pressedAgain := false
 	if err := f.send(ctx, commandCloseContent); err != nil {
 		return fmt.Errorf("%w: %w", platforms.ErrStopFailed, err)
@@ -285,6 +303,7 @@ func (f *frontend) stop(ctx context.Context) error {
 		}
 		status, err := f.status(ctx)
 		if err == nil && !isLoaded(status) {
+			f.clearLaunch(launched)
 			return nil
 		}
 		elapsed := f.clock.Since(start)
@@ -423,11 +442,16 @@ func statusNamesContent(status, path string) bool {
 	if path == "" {
 		return false
 	}
-	fields := strings.Split(status, ",")
-	if len(fields) < 2 {
+	// RetroArch does not escape commas in the content name, so the name is
+	// everything between the system and the trailing crc32 field.
+	_, content, ok := strings.Cut(status, ",")
+	if !ok {
 		return false
+	}
+	if i := strings.LastIndex(content, ",crc32="); i >= 0 {
+		content = content[:i]
 	}
 	name := filepath.Base(path)
 	name = strings.TrimSuffix(name, filepath.Ext(name))
-	return name != "" && strings.EqualFold(strings.TrimSpace(fields[1]), name)
+	return name != "" && strings.EqualFold(strings.TrimSpace(content), name)
 }

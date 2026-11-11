@@ -140,20 +140,75 @@ func (p *Platform) playlistCommand(
 // playlist cannot point RetroArch at a library outside the cores directory.
 func (p *Platform) playlistCore(path, systemID string) (string, bool) {
 	item, ok := p.playlists.load().lookup(path, systemID)
-	if !ok || item.Core == "" {
+	if !ok {
 		return "", false
 	}
-	core := filepath.Base(filepath.Clean(item.Core))
+	return p.installedCore(item.Core)
+}
+
+// installedCore returns the file name of a core a playlist recorded when it
+// is installed and RetroArch can run it.
+func (p *Platform) installedCore(recorded string) (string, bool) {
+	if recorded == "" {
+		return "", false
+	}
+	core := filepath.Base(filepath.Clean(recorded))
 	if !strings.HasSuffix(core, "_libretro.so") {
-		log.Debug().Str("core", item.Core).Msg("ignoring retroarch playlist core that is not a libretro core")
+		log.Debug().Str("core", recorded).Msg("ignoring retroarch playlist core that is not a libretro core")
 		return "", false
 	}
 	if info, err := p.fs.Stat(filepath.Join(p.coresDir, core)); err != nil || info.IsDir() {
-		log.Debug().Str("core", item.Core).Msg("retroarch playlist core is not installed, using the system core")
+		log.Debug().Str("core", recorded).Msg("retroarch playlist core is not installed, using the system core")
 		return "", false
 	}
 	if info, err := p.fs.Stat(p.retroArchExec); err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
 		return "", false
 	}
 	return core, true
+}
+
+// playlistAvailability lets a system whose own core is missing still play the
+// playlist entries that recorded an installed core. The launcher is available
+// when either can run, and whether this path can is checked in Preflight,
+// before the game already playing is stopped.
+func (p *Platform) playlistAvailability(launcher *platforms.Launcher, systemID string) {
+	available := launcher.Availability
+	if available == nil {
+		return
+	}
+	launcher.Availability = func(cfg *config.Instance) error {
+		err := available(cfg)
+		if err != nil && p.hasPlaylistCore(systemID) {
+			return nil
+		}
+		return err
+	}
+	preflight := launcher.Preflight
+	launcher.Preflight = func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) error {
+		if _, ok := p.playlistCore(path, systemID); !ok {
+			if err := available(cfg); err != nil {
+				return err
+			}
+		}
+		if preflight != nil {
+			return preflight(cfg, path, opts)
+		}
+		return nil
+	}
+}
+
+// hasPlaylistCore reports whether any playlist entry of systemID recorded a
+// core that is installed. Each recorded core is checked once.
+func (p *Platform) hasPlaylistCore(systemID string) bool {
+	checked := make(map[string]bool)
+	for _, item := range p.playlists.cached().bySystem[systemID] {
+		if item.Core == "" || checked[item.Core] {
+			continue
+		}
+		checked[item.Core] = true
+		if _, ok := p.installedCore(item.Core); ok {
+			return true
+		}
+	}
+	return false
 }

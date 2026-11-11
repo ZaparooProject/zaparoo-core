@@ -215,10 +215,81 @@ func TestStopFailsWhenContentStaysLoaded(t *testing.T) {
 	ra := newFakeRetroArch(t, state.handle)
 	f, exec, clock := testFrontend(t, ra.addr())
 	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	f.launchedPath = testContent
 
 	var err error
 	drive(t, clock, pollInterval, func() { err = f.stop(context.Background()) })
 	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	assert.Equal(t, testContent, f.currentLaunch(), "a failed stop keeps the launch so the tracker still owns it")
+}
+
+func TestStopWaitsForLoadingLaunch(t *testing.T) {
+	t.Parallel()
+	state := &retroArchState{status: playingGame, silent: 2}
+	state.onCommand = func(s *retroArchState, msg string) {
+		if msg == commandCloseContent {
+			s.status = contentless
+		}
+	}
+	ra := newFakeRetroArch(t, state.handle)
+	f, exec, clock := testFrontend(t, ra.addr())
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	expectSystemctl(exec, nil, "is-active", "--quiet", retroArchService).Twice()
+	f.launchedPath = testContent
+
+	var err error
+	drive(t, clock, pollInterval, func() { err = f.stop(context.Background()) })
+	require.NoError(t, err)
+	assert.Equal(t, 1, ra.count(commandCloseContent), "the game that finished loading is closed")
+	assert.Empty(t, f.currentLaunch())
+}
+
+func TestStopFailsWhenLoadingLaunchNeverAnswers(t *testing.T) {
+	t.Parallel()
+	f, exec, clock := testFrontend(t, closedAddr(t))
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	exec.On("Run", mock.Anything, "systemctl", []string{"is-active", "--quiet", retroArchService}).Return(nil)
+	f.launchedPath = testContent
+
+	var err error
+	drive(t, clock, pollInterval, func() { err = f.stop(context.Background()) })
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	require.ErrorContains(t, err, "not answering")
+	assert.Equal(t, testContent, f.currentLaunch())
+}
+
+func TestStopLoadingLaunchEndsWithContext(t *testing.T) {
+	t.Parallel()
+	f, exec, clock := testFrontend(t, closedAddr(t))
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	expectSystemctl(exec, nil, "is-active", "--quiet", retroArchService)
+	f.launchedPath = testContent
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- f.stop(ctx) }()
+	require.NoError(t, clock.BlockUntilContext(context.Background(), 1))
+	cancel()
+	err := <-done
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, testContent, f.currentLaunch())
+}
+
+func TestStopUnreachableRetroArch(t *testing.T) {
+	t.Parallel()
+	// Nothing of Core's is loading: there is nothing to wait for.
+	f, exec, _ := testFrontend(t, closedAddr(t))
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	require.NoError(t, f.stop(context.Background()))
+
+	// Core launched something but RetroArch is not running at all.
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", transientUnit)
+	expectSystemctl(exec, errInactive, "is-active", "--quiet", retroArchService)
+	f.launchedPath = testContent
+	require.NoError(t, f.stop(context.Background()))
+	assert.Empty(t, f.currentLaunch())
 }
 
 func TestStopWithNothingLoadedSendsNothing(t *testing.T) {
@@ -290,6 +361,23 @@ func TestStatusNamesContent(t *testing.T) {
 		{name: "other", status: playingGame, path: "/storage/roms/snes/Other.sfc"},
 		{name: "contentless", status: contentless, path: testContent},
 		{name: "empty path", status: playingGame},
+		{
+			name:   "comma in name",
+			status: "GET_STATUS PLAYING snes,Game, The,crc32=1234",
+			path:   "/storage/roms/snes/Game, The.sfc",
+			want:   true,
+		},
+		{
+			name:   "no crc",
+			status: "GET_STATUS PLAYING snes,Game, The",
+			path:   "/storage/roms/snes/Game, The.sfc",
+			want:   true,
+		},
+		{
+			name:   "comma prefix only",
+			status: "GET_STATUS PLAYING snes,Game, The,crc32=1",
+			path:   "/storage/roms/snes/Game.sfc",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

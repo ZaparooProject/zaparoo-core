@@ -197,14 +197,14 @@ func NetworkCommandsEnabled(cfg string) bool {
 }
 
 // configValues parses RetroArch's key = "value" lines. RetroArch keeps the
-// last of duplicate keys.
+// first of duplicate keys.
 func configValues(cfg string) map[string]string {
 	values := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(cfg))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		key, value, ok := parseConfigLine(scanner.Text())
-		if ok {
+		if _, seen := values[key]; ok && !seen {
 			values[key] = value
 		}
 	}

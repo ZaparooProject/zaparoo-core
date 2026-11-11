@@ -63,7 +63,9 @@ func TestNetworkCommandsEnabled(t *testing.T) {
 	assert.True(t, NetworkCommandsEnabled("network_cmd_enable = \"true\"\n"))
 	assert.True(t, NetworkCommandsEnabled("network_cmd_enable = \"true\"\nnetwork_cmd_port = \"55355\"\n"))
 	assert.False(t, NetworkCommandsEnabled("network_cmd_enable = \"true\"\nnetwork_cmd_port = \"5000\"\n"))
-	assert.False(t, NetworkCommandsEnabled("network_cmd_enable = \"true\"\nnetwork_cmd_enable = \"false\"\n"))
+	// RetroArch keeps the first of duplicate keys.
+	assert.False(t, NetworkCommandsEnabled("network_cmd_enable = \"false\"\nnetwork_cmd_enable = \"true\"\n"))
+	assert.True(t, NetworkCommandsEnabled("network_cmd_enable = \"true\"\nnetwork_cmd_enable = \"false\"\n"))
 	assert.False(t, NetworkCommandsEnabled(""))
 }
 

@@ -57,6 +57,9 @@ type Platform struct {
 	emulationOptionsOverride *linuxemu.Options
 }
 
+// newProcScanner watches the real /proc; tests point it at a fake one.
+var newProcScanner = func() *procscanner.Scanner { return procscanner.New() }
+
 // NewPlatform creates a new Armada platform instance.
 func NewPlatform() *Platform {
 	return &Platform{
@@ -94,7 +97,9 @@ func (*Platform) RootDirs(cfg *config.Instance) []string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = os.Getenv("HOME")
+		// No home, so no default root; a relative one would resolve
+		// against wherever Core happens to run.
+		return nil
 	}
 	return []string{filepath.Join(home, "ROMs")}
 }
@@ -119,14 +124,16 @@ func (p *Platform) StartPost(
 	if !steamClient.IsSteamInstalled(cfg) {
 		return nil
 	}
-	p.procScanner = procscanner.New()
+	p.procScanner = newProcScanner()
 	if err := p.procScanner.Start(); err != nil {
 		log.Warn().Err(err).Msg("process scanner failed to start")
 		return nil
 	}
+	p.SetProtectedProcess(ownsCore)
 	p.steamTracker = steamtracker.NewPlatformIntegration(
 		p.procScanner, p.Base, activeMedia, setActiveMedia, steamClient.FindSteamDir(cfg),
 	)
+	p.steamTracker.IgnoreProcessTree(ownsCore)
 	p.steamTracker.Start()
 
 	return nil
@@ -191,7 +198,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
 	emuOpts := p.emulationOptions()
 	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
-	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
+	linuxemu.AttachPlainESDEScannersForRoots(cfg, emuOpts, ls, p.RootDirs(cfg))
 	allLaunchers := helpers.CombineParsedLaunchers(custom, ls)
 	p.gameMode.WrapLaunchers(allLaunchers)
 	return allLaunchers

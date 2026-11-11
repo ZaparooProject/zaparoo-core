@@ -21,7 +21,10 @@
 
 package armada
 
-import "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+import (
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+)
 
 var _ platforms.InputActivitySource = (*Platform)(nil)
 
@@ -34,9 +37,12 @@ func withoutControllers(c platforms.InputClass) platforms.InputClass {
 	return c &^ platforms.InputController
 }
 
+// baseCoverage probes the desktop's input devices; tests replace it.
+var baseCoverage = (*linuxbase.Base).InputCoverage
+
 // InputCoverage implements platforms.InputActivitySource. Keyboard and mouse
 // come from the shared desktop source; controllers are withheld (see
 // withoutControllers).
 func (p *Platform) InputCoverage() platforms.InputClass {
-	return withoutControllers(p.Base.InputCoverage())
+	return withoutControllers(baseCoverage(p.Base))
 }

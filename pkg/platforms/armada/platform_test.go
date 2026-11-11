@@ -274,3 +274,8 @@ func TestPlatformSteamLaunchEnvUsesSessionDirs(t *testing.T) {
 	})
 	assert.True(t, hasConfigHome, "Steam launches should carry the session environment: %v", env)
 }
+
+func TestPlatformRootDirs_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	assert.Empty(t, NewPlatform().RootDirs(newTestConfig(t)), "no relative ROM root without a home")
+}

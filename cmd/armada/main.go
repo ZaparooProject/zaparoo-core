@@ -50,6 +50,16 @@ func armadaDefaults() config.Values {
 	return defaults
 }
 
+// Tests replace these; the defaults act on the real system.
+var (
+	handleInstall   = cli.HandleInstall
+	handleUninstall = cli.HandleUninstall
+	geteuid         = os.Geteuid
+	setupCLI        = cli.Setup
+	startAndOpen    = cli.StartAndOpenBrowser
+	runApp          = cli.RunApp
+)
+
 func run() error {
 	defer telemetry.Close()
 	defer func() {
@@ -93,19 +103,19 @@ func run() error {
 	flags.Pre(pl)
 
 	if *install != "" {
-		if err := cli.HandleInstall(*install); err != nil {
+		if err := handleInstall(*install); err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
 		return nil
 	}
 	if *uninstall != "" {
-		if err := cli.HandleUninstall(*uninstall); err != nil {
+		if err := handleUninstall(*uninstall); err != nil {
 			return fmt.Errorf("uninstall failed: %w", err)
 		}
 		return nil
 	}
 
-	if os.Geteuid() == 0 {
+	if geteuid() == 0 {
 		return errors.New("zaparoo cannot be run as root")
 	}
 
@@ -114,10 +124,10 @@ func run() error {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	cfg := cli.Setup(pl, armadaDefaults(), logWriters)
+	cfg := setupCLI(pl, armadaDefaults(), logWriters)
 
 	if *start {
-		if err := cli.StartAndOpenBrowser(cfg); err != nil {
+		if err := startAndOpen(cfg); err != nil {
 			return fmt.Errorf("start failed: %w", err)
 		}
 		return nil
@@ -125,7 +135,7 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	if err := cli.RunApp(pl, cfg, *daemonMode); err != nil {
+	if err := runApp(pl, cfg, *daemonMode); err != nil {
 		return fmt.Errorf("run failed: %w", err)
 	}
 	return nil
