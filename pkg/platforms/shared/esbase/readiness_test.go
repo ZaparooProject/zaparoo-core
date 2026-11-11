@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func TestWaitForGame_ReadyAfterTheEmulatorReadsTheGame(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
 	clock := clockwork.NewFakeClock()
-	p := &Platform{clock: clock}
+	p := &Platform{opts: testOptions(), clock: clock}
 	p.launches().Note(game)
 	events := make(chan gamehandoff.Kind)
 	p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) { return events, nil }
@@ -84,7 +84,7 @@ func TestWaitForGame_WatchesTheRealFile(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
 	clock := clockwork.NewFakeClock()
-	p := &Platform{clock: clock}
+	p := &Platform{opts: testOptions(), clock: clock}
 	p.launches().Note(game)
 	done := make(chan error, 1)
 	go func() { done <- p.waitForGame(t.Context(), nil, gameMedia(game)) }()
@@ -117,7 +117,7 @@ func TestWaitForGame_WatchesTheRealFile(t *testing.T) {
 func TestWaitForGame_GameCoreDidNotLaunchIsReadyImmediately(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
-	p := &Platform{clock: clockwork.NewFakeClock()}
+	p := &Platform{opts: testOptions(), clock: clockwork.NewFakeClock()}
 	p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) {
 		t.Fatal("watched a game Core did not launch")
 		return nil, errors.New("unreachable")
@@ -130,7 +130,7 @@ func TestWaitForGame_StaleLaunchIsReadyImmediately(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
 	clock := clockwork.NewFakeClock()
-	p := &Platform{clock: clock}
+	p := &Platform{opts: testOptions(), clock: clock}
 	p.launches().Note(game)
 	clock.Advance(launchFreshness + time.Second)
 	p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) {
@@ -149,7 +149,7 @@ func TestWaitForGame_FolderOrMissingGameIsReadyImmediately(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := &Platform{clock: clockwork.NewFakeClock()}
+			p := &Platform{opts: testOptions(), clock: clockwork.NewFakeClock()}
 			p.launches().Note(path)
 			p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) {
 				t.Fatal("watched something that is not a game file")
@@ -164,7 +164,7 @@ func TestWaitForGame_FolderOrMissingGameIsReadyImmediately(t *testing.T) {
 func TestWaitForGame_WatchFailureIsUnavailable(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
-	p := &Platform{clock: clockwork.NewFakeClock()}
+	p := &Platform{opts: testOptions(), clock: clockwork.NewFakeClock()}
 	p.launches().Note(game)
 	p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) {
 		return nil, errors.New("inotify limit reached")
@@ -179,7 +179,7 @@ func TestWaitForGame_NeverOpenedIsReadyAfterTheWindow(t *testing.T) {
 	t.Parallel()
 	game := writeGame(t)
 	clock := clockwork.NewFakeClock()
-	p := &Platform{clock: clock}
+	p := &Platform{opts: testOptions(), clock: clock}
 	p.launches().Note(game)
 	p.watchGame = func(context.Context, string) (<-chan gamehandoff.Kind, error) {
 		return make(chan gamehandoff.Kind), nil
@@ -195,7 +195,7 @@ func TestWaitForGame_NeverOpenedIsReadyAfterTheWindow(t *testing.T) {
 
 func TestNoteLaunches_RecordsAndPassesThrough(t *testing.T) {
 	t.Parallel()
-	p := &Platform{clock: clockwork.NewFakeClock()}
+	p := &Platform{opts: testOptions(), clock: clockwork.NewFakeClock()}
 	boom := errors.New("launch failed")
 	var got string
 	launch := p.noteLaunches(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
@@ -215,7 +215,7 @@ func TestLaunchers_EmulationStationSystemsHaveReadinessProbe(t *testing.T) {
 	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
 	require.NoError(t, err)
 
-	launchers := (&Platform{}).Launchers(cfg)
+	launchers := (&Platform{opts: testOptions()}).Launchers(cfg)
 
 	var withProbe int
 	for i := range launchers {

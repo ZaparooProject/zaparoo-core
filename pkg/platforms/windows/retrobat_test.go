@@ -415,38 +415,48 @@ func TestKillRetroBatGame_ESAPINoopPropagatesFallbackError(t *testing.T) {
 }
 
 func TestKillRetroBatGame_ESAPINoopPropagatesFallbackVerificationError(t *testing.T) {
-	resetRetroBatKillHooks(t)
-
-	rootDir := "C:" + string(os.PathSeparator)
-	retroBatDir := filepath.Join(rootDir, "RetroBat")
-	verificationErr := fmt.Errorf(
-		"%w: running game response did not include game identity",
-		esapi.ErrInvalidRunningGameResponse,
-	)
-	callCount := 0
-	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
-		callCount++
-		if callCount <= retroBatKillRetries+1 {
-			return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
-		}
-		return esapi.RunningGameResponse{}, false, verificationErr
+	// An ES that answers without a usable game state cannot confirm the
+	// stop. Only an unreachable ES counts as the game being gone.
+	verificationErrs := map[string]error{
+		"invalid response": fmt.Errorf(
+			"%w: running game response did not include game identity",
+			esapi.ErrInvalidRunningGameResponse,
+		),
+		"unexpected status": fmt.Errorf("/runningGame: %w: 500 Internal Server Error", esapi.ErrUnexpectedStatus),
+		"route unsupported": fmt.Errorf("/runningGame: %w", esapi.ErrRouteUnsupported),
 	}
-	retroBatAPIEmuKill = func() error { return nil }
-	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
-	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
-		return []windowsProcessInfo{
-			{PID: 100, ExePath: filepath.Join(retroBatDir, "emulators", "retroarch", "retroarch.exe")},
-		}, nil
-	}
-	retroBatKillPIDTree = func(_ context.Context, _ uint32, _ string) error {
-		return nil
-	}
-	retroBatSleep = func(_ time.Duration) {}
+	for name, verificationErr := range verificationErrs {
+		t.Run(name, func(t *testing.T) {
+			resetRetroBatKillHooks(t)
 
-	err := killRetroBatGame(&config.Instance{})
+			rootDir := "C:" + string(os.PathSeparator)
+			retroBatDir := filepath.Join(rootDir, "RetroBat")
+			callCount := 0
+			retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+				callCount++
+				if callCount <= retroBatKillRetries+1 {
+					return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+				}
+				return esapi.RunningGameResponse{}, false, verificationErr
+			}
+			retroBatAPIEmuKill = func() error { return nil }
+			retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
+			retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+				return []windowsProcessInfo{
+					{PID: 100, ExePath: filepath.Join(retroBatDir, "emulators", "retroarch", "retroarch.exe")},
+				}, nil
+			}
+			retroBatKillPIDTree = func(_ context.Context, _ uint32, _ string) error {
+				return nil
+			}
+			retroBatSleep = func(_ time.Duration) {}
 
-	require.ErrorIs(t, err, verificationErr)
-	assert.Contains(t, err.Error(), "failed to verify RetroBat process fallback")
+			err := killRetroBatGame(&config.Instance{})
+
+			require.ErrorIs(t, err, verificationErr)
+			assert.Contains(t, err.Error(), "failed to verify RetroBat process fallback")
+		})
+	}
 }
 
 func TestKillWindowsProcessTree_RevalidatesPath(t *testing.T) {

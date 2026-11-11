@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"context"
@@ -176,4 +176,26 @@ func hotkeyControls(
 		},
 	}
 	return controls
+}
+
+// HotkeygenExit sends the universal exit signal through hotkeygen, the
+// recommended way to exit games and emulators where hotkeygen runs.
+func HotkeygenExit(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "hotkeygen", "--send", "exit")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("hotkeygen exit failed: %w", err)
+	}
+	return nil
+}
+
+// HotkeygenControls builds the system launcher controls around hotkeygen,
+// for Options.Controls.
+func HotkeygenControls(stop func() error) map[string]platforms.Control {
+	return hotkeyControls(afero.NewOsFs(), sendHotkey, stop)
+}
+
+// HotkeygenControlNames lists the controls HotkeygenControls defines, for
+// Options.ControlNames.
+func HotkeygenControlNames() []string {
+	return hotkeyControlNames()
 }

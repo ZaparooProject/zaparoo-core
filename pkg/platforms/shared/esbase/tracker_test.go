@@ -4,7 +4,7 @@
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package batocera
+package esbase
 
 import (
 	"testing"
@@ -34,6 +34,7 @@ func TestBackgroundTracker_StartsCorrectly(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -74,6 +75,7 @@ func TestBackgroundTracker_StartsWhenESAPIUnavailableAtStartup(t *testing.T) {
 	// Real clock so the short startup backoff actually elapses and the tracker
 	// ticker fires; maxStartupRetries keeps the failing probe fast (~100ms).
 	platform := &Platform{
+		opts:              testOptions(),
 		clock:             clockwork.NewRealClock(),
 		maxStartupRetries: 1,
 	}
@@ -142,6 +144,7 @@ func TestBackgroundTracker_StartsWhenStartupGameSystemUnknown(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -188,6 +191,7 @@ func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -263,6 +267,7 @@ func TestBackgroundTracker_DetectsExternalGameClose(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -324,6 +329,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotReachable(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -399,6 +405,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotActive(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -470,6 +477,7 @@ func TestBackgroundTracker_DetectsGameChange(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -532,6 +540,7 @@ func TestBackgroundTracker_StopsCleanly(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -573,6 +582,7 @@ func TestLaunchMedia_SetsKodiActiveFlag(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 		cfg:   cfg,
 	}
@@ -634,6 +644,7 @@ func TestStopActiveLauncher_UsesKodiFlagForExternalKodi(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 		cfg:   cfg,
 	}
@@ -695,6 +706,7 @@ func TestStopActiveLauncher_ClearsKodiActiveFlag(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 		cfg:   cfg,
 	}
@@ -742,6 +754,7 @@ func TestBackgroundTracker_DetectsExternalKodi(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 
@@ -794,6 +807,7 @@ func TestBackgroundTracker_PollingInterval(t *testing.T) {
 
 	fakeClock := clockwork.NewFakeClock()
 	platform := &Platform{
+		opts:  testOptions(),
 		clock: fakeClock,
 	}
 

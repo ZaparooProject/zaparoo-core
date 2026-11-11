@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package batocera
+package esbase
 
 import (
 	"context"
@@ -30,7 +30,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/jonboulle/clockwork"
@@ -278,7 +277,7 @@ func (p *Platform) checkAndUpdateRunningGame(
 	}
 
 	// Kodi is not active - check EmulationStation API
-	gameResp, isRunning, err := esapi.APIRunningGame()
+	gameResp, isRunning, err := p.api().RunningGame()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to check running game in background tracker")
 		return
@@ -328,7 +327,7 @@ func (p *Platform) checkAndUpdateRunningGame(
 	}
 
 	// Game is running - convert to ActiveMedia
-	systemID, err := fromBatoceraSystem(gameResp.SystemName)
+	systemID, err := p.fromESSystem(gameResp.SystemName)
 	if err != nil {
 		log.Warn().Err(err).Msgf("failed to convert system %s in background tracker", gameResp.SystemName)
 		return
@@ -351,9 +350,9 @@ func (p *Platform) checkAndUpdateRunningGame(
 	// EmulationStation can be controlled too. The emulator's hotkeys are not
 	// known yet, because configgen writes them after ES reports the game, so
 	// each control checks them when it runs.
-	if info, ok := esde.SystemMap[gameResp.SystemName]; ok {
+	if info, ok := esde.SystemMap[p.esdeFolder(gameResp.SystemName)]; ok {
 		newGame.LauncherID = info.GetLauncherID()
-		newGame.LauncherControls = hotkeyControlNames()
+		newGame.LauncherControls = p.controlNames()
 	}
 
 	// Check if this is actually a new game (compare by path)
