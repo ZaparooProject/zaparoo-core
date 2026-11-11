@@ -28,6 +28,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +68,7 @@ func getBody(t *testing.T, url string) (status int, body string) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	require.NoError(t, err)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -106,6 +109,8 @@ func TestStartupServer_AnswersBeforeTheDatabasesAreOpen(t *testing.T) {
 	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/app/", srv.Port()))
 	assert.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "Zaparoo is starting")
+	assert.Contains(t, body, `headers: { Accept: "application/json" }`,
+		"the page polls /health for its JSON state, which is only sent when asked for")
 }
 
 // A page that can only ever say "starting" becomes the thing people sit
@@ -261,4 +266,75 @@ func TestStartupServer_SetFailedDoesNotRelogAsError(t *testing.T) {
 	srv.SetFailed("Zaparoo cannot open your saved data", "Reinstall the newer version.", "")
 
 	assert.NotContains(t, logs.String(), "service entered failed state")
+}
+
+func recordHealth(t *testing.T, srv *StartupServer, accept ...string) (contentType, body string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", http.NoBody)
+	for _, value := range accept {
+		req.Header.Add("Accept", value)
+	}
+	rec := httptest.NewRecorder()
+	srv.WriteHealth(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	return rec.Header().Get("Content-Type"), rec.Body.String()
+}
+
+// Batocera's EmulationStation shows its Zaparoo menu only when /health is
+// exactly "OK", so that stays the default body. JSON is opt-in.
+func TestWriteHealth_PlainOKUnlessJSONIsAsked(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		accept []string
+	}{
+		{name: "no accept header"},
+		{name: "wildcard", accept: []string{"*/*"}},
+		{name: "text", accept: []string{"text/plain"}},
+		{name: "json refused", accept: []string{"text/plain, application/json;q=0"}},
+		{name: "malformed", accept: []string{"application/json;;=="}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			contentType, body := recordHealth(t, nil, tc.accept...)
+			assert.Equal(t, "OK", body)
+			assert.True(t, strings.HasPrefix(contentType, "text/plain"), contentType)
+		})
+	}
+}
+
+func TestWriteHealth_JSONWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		accept []string
+	}{
+		{name: "exact", accept: []string{"application/json"}},
+		{name: "among others", accept: []string{"text/html, application/json;q=0.9, */*;q=0.1"}},
+		{name: "second header", accept: []string{"text/html", "Application/JSON; charset=utf-8"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			contentType, body := recordHealth(t, nil, tc.accept...)
+			assert.Equal(t, "application/json", contentType)
+			assert.JSONEq(t, `{"status":"ok","state":"ready"}`, body)
+		})
+	}
+}
+
+// Before Core is ready the plain body must not read as "OK", or ES would offer
+// a tag write that the API cannot serve yet.
+func TestWriteHealth_PlainBodyIsNotOKUntilReady(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestStartupServer(t)
+	_, body := recordHealth(t, srv)
+	assert.Equal(t, string(ServiceStateStarting), body)
+
+	srv.SetFailed("headline", "detail", "/tmp/core.log")
+	_, body = recordHealth(t, srv)
+	assert.Equal(t, string(ServiceStateFailed), body)
 }
