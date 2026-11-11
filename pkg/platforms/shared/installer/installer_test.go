@@ -593,3 +593,61 @@ func TestFindInstallDirKeepsOrdinaryNames(t *testing.T) {
 		assert.Equal(t, filepath.Join(tempDir, "media", "NES"), filepath.Dir(got))
 	}
 }
+
+// A remote URL launch carries pre_notice and name in its query string, so the
+// loader and notice must show them decoded rather than as %20 runs.
+func TestInstallRemoteFile_DecodesDisplayText(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := setupMockPlatformWithTempDir(t, t.TempDir())
+	published := make(chan models.UIStateResponse, 8)
+	ui := uievents.New(clockwork.NewFakeClock(), nil, func(state models.UIStateResponse) {
+		published <- state
+	})
+
+	downloader := func(args DownloaderArgs) error {
+		require.NoError(t, os.WriteFile(args.tempPath, []byte("test"), 0o600))
+		return os.Rename(args.tempPath, args.finalPath)
+	}
+
+	_, err := InstallRemoteFile(
+		t.Context(), cfg, mockPlatform, ui,
+		"http://example.com/game.rom", "nes",
+		"Zaparoo%20notify%20test", "Super%20Kong", downloader,
+	)
+	require.NoError(t, err)
+	close(published)
+
+	messages := make(map[models.UIEventKind]string)
+	for state := range published {
+		for _, ev := range state.Events {
+			messages[ev.Kind] = ev.Message
+		}
+	}
+	assert.Equal(t, "Downloading Super Kong...", messages[models.UIEventKindLoader])
+	assert.Equal(t, "Zaparoo notify test", messages[models.UIEventKindNotice])
+}
+
+func TestDecodeDisplayText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "Insert disk 2", want: "Insert disk 2"},
+		{in: "Insert%20disk%202", want: "Insert disk 2"},
+		{in: "Caf%C3%A9", want: "Café"},
+		{in: "100% done", want: "100% done"},
+		{in: "C++ demo", want: "C++ demo"},
+		{in: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, decodeDisplayText(tt.in))
+		})
+	}
+}
