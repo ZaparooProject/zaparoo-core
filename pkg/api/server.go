@@ -389,6 +389,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodConfirm:   methods.HandleConfirm,
 		models.MethodUI:        methods.HandleUI,
 		models.MethodUIRespond: methods.HandleUIRespond,
+		models.MethodUIShown:   methods.HandleUIShown,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -2611,10 +2612,10 @@ func StartWithListener(
 	// /health is intentionally remote-accessible with no IP filter, no
 	// API key auth, and no rate limiting (only the global Recoverer/CORS
 	// middleware applies) so load balancers, uptime checks, and the
-	// app's discovery flow can reach it without credentials. The plain
-	// "OK" response intentionally leaks no information beyond liveness.
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		startup.WriteHealth(w)
+	// app's discovery flow can reach it without credentials. The body
+	// carries only the coarse service state, never anything more.
+	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+		startup.WriteHealth(w, req)
 	})
 
 	// Redirect root to app for users who forget /app/

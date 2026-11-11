@@ -376,6 +376,31 @@ func TestPrompt_SupersededByAnotherEvent(t *testing.T) {
 		r.quiet()
 	})
 
+	t.Run("a result posted as the deadline passes still wins", func(t *testing.T) {
+		t.Parallel()
+		var hc *hookClock
+		r := newRig(t, withUI(false), withClockHook(&hc))
+		gen := r.play(testPlaylist(3, 0, nil))
+		r.end(gen, exited)
+		var id uint64
+		r.probe(func(e *Engine) {
+			require.NotNil(t, e.cd)
+			id = e.cd.id
+		})
+		// The result lands, then the deadline passes, both between the
+		// engine taking its batch and reading the time.
+		hook := func() {
+			r.clock.Advance(time.Minute)
+			r.eng.post(&event{kind: evUIResult, gen: id, result: superseded, at: r.clock.Now()})
+		}
+		hc.hook.Store(&hook)
+		done := make(chan struct{})
+		r.eng.post(&event{kind: evBarrier, done: done, at: r.clock.Now()})
+		<-done
+		require.Nil(t, hc.hook.Load(), "the hook did not run")
+		r.quiet()
+	})
+
 	t.Run("a rotation goes ahead without it", func(t *testing.T) {
 		t.Parallel()
 		r := newRig(t, withUI(true))
@@ -415,8 +440,13 @@ func TestIdle_UnreportedStopHoldsBackTheRotation(t *testing.T) {
 	r.input.nextWatch(t)
 	r.tick(4*time.Minute + 59*time.Second)
 
-	r.host.userStop()
-	r.tick(time.Second)
+	// The stop and the rotation falling due happen in one engine turn. Done
+	// apart, a leftover wake can let the engine see the stop a second early
+	// and start the idle time over from then.
+	r.probe(func(*Engine) {
+		r.host.userStop()
+		r.clock.Advance(time.Second)
+	})
 	r.quiet()
 	r.tick(idleFor - time.Second)
 	r.quiet()

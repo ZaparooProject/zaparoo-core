@@ -42,6 +42,10 @@ var ErrInvalidRunningGameResponse = errors.New("invalid running game response")
 // route, as older forks lack /runningGame.
 var ErrRouteUnsupported = errors.New("EmulationStation API route not supported")
 
+// ErrUnexpectedStatus reports that EmulationStation answered with a status
+// other than success, so the request did not do what was asked.
+var ErrUnexpectedStatus = errors.New("unexpected EmulationStation API status")
+
 func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	return sendAPIRequest(apiURL, path, body, timeout)
 }
@@ -115,7 +119,7 @@ func sendAPIRequest(baseURL, path, body string, timeout time.Duration) ([]byte, 
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, fmt.Errorf("%s: %w", path, ErrRouteUnsupported)
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		return nil, fmt.Errorf("%s: unexpected status %s", path, resp.Status)
+		return nil, fmt.Errorf("%s: %w: %s", path, ErrUnexpectedStatus, resp.Status)
 	}
 
 	return respBody, nil
