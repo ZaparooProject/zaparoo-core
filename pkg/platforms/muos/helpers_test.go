@@ -22,6 +22,8 @@
 package muos
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -172,4 +174,122 @@ func newTestPlatform(t *testing.T, fs afero.Fs) (*Platform, *fakeSignals, *media
 		setActiveMedia: media.set,
 	}
 	return p, sigs, media
+}
+
+var errInjected = errors.New("injected failure")
+
+// failFs fails one operation on one path, for the error branches a memory
+// file system never takes. op is "open", "read", "write", "sync", "close",
+// "rename", "remove" or "mkdir". The first skip matching calls succeed.
+type failFs struct {
+	afero.Fs
+	op   string
+	path string
+	skip int
+}
+
+func (f *failFs) hit(op, name string) bool {
+	if f.op != op || filepath.Clean(name) != f.path {
+		return false
+	}
+	if f.skip > 0 {
+		f.skip--
+		return false
+	}
+	return true
+}
+
+func (f *failFs) wrap(file afero.File, name string) afero.File {
+	if filepath.Clean(name) != f.path {
+		return file
+	}
+	switch f.op {
+	case "read", "write", "sync", "close":
+		return &failFile{File: file, op: f.op}
+	}
+	return file
+}
+
+func (f *failFs) Open(name string) (afero.File, error) {
+	if f.hit("open", name) {
+		return nil, errInjected
+	}
+	file, err := f.Fs.Open(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // test double passes errors through
+	}
+	return f.wrap(file, name), nil
+}
+
+func (f *failFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
+	if f.hit("open", name) {
+		return nil, errInjected
+	}
+	file, err := f.Fs.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // test double passes errors through
+	}
+	return f.wrap(file, name), nil
+}
+
+func (f *failFs) MkdirAll(path string, perm os.FileMode) error {
+	if f.hit("mkdir", path) {
+		return errInjected
+	}
+	return f.Fs.MkdirAll(path, perm) //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFs) Rename(oldname, newname string) error {
+	if f.hit("rename", oldname) {
+		return errInjected
+	}
+	return f.Fs.Rename(oldname, newname) //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFs) Remove(name string) error {
+	if f.hit("remove", name) {
+		return errInjected
+	}
+	return f.Fs.Remove(name) //nolint:wrapcheck // test double passes errors through
+}
+
+type failFile struct {
+	afero.File
+	op string
+}
+
+func (f *failFile) Read(b []byte) (int, error) {
+	if f.op == "read" {
+		return 0, errInjected
+	}
+	return f.File.Read(b) //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFile) Write(b []byte) (int, error) {
+	if f.op == "write" {
+		return 0, errInjected
+	}
+	return f.File.Write(b) //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFile) WriteString(s string) (int, error) {
+	if f.op == "write" {
+		return 0, errInjected
+	}
+	return f.File.WriteString(s) //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFile) Sync() error {
+	if f.op == "sync" {
+		return errInjected
+	}
+	return f.File.Sync() //nolint:wrapcheck // test double passes errors through
+}
+
+func (f *failFile) Close() error {
+	err := f.File.Close()
+	if f.op == "close" {
+		return errInjected
+	}
+	return err //nolint:wrapcheck // test double passes errors through
 }

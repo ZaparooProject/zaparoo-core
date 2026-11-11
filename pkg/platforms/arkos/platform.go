@@ -379,7 +379,8 @@ func (p *Platform) endGame(pid int) {
 }
 
 // terminateTree stops a process ES started and its children: SIGTERM, then
-// SIGKILL for whatever is still running after esGameTermTimeout.
+// SIGKILL for whatever is still running after esGameTermTimeout. It waits on
+// the whole tree, since a wrapper shell can exit while its emulator lingers.
 func (p *Platform) terminateTree(pid int) {
 	root, err := process.NewProcess(int32(pid)) //nolint:gosec // PID fits in int32
 	if err != nil {
@@ -393,16 +394,28 @@ func (p *Platform) terminateTree(pid int) {
 	}
 	deadline := p.clock.Now().Add(esGameTermTimeout)
 	for p.clock.Now().Before(deadline) {
-		if running, _ := root.IsRunning(); !running {
+		if !slices.ContainsFunc(tree, processAlive) {
 			return
 		}
 		p.clock.Sleep(esGamePollEvery)
 	}
 	for _, proc := range tree {
-		if running, _ := proc.IsRunning(); running {
-			_ = proc.Kill()
+		if processAlive(proc) {
+			if err := proc.Kill(); err != nil {
+				log.Debug().Err(err).Int32("pid", proc.Pid).Msg("failed to kill process")
+			}
 		}
 	}
+}
+
+// processAlive reports whether proc still runs. An exited process waiting to
+// be reaped is not alive.
+func processAlive(proc *process.Process) bool {
+	if running, err := proc.IsRunning(); err != nil || !running {
+		return false
+	}
+	status, err := proc.Status()
+	return err != nil || !slices.Contains(status, process.Zombie)
 }
 
 func descendants(proc *process.Process) []*process.Process {

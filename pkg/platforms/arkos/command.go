@@ -47,6 +47,10 @@ func lookupFrontendAccount() (*account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("look up user %s: %w", frontendUser, err)
 	}
+	return accountFromUser(u)
+}
+
+func accountFromUser(u *user.User) (*account, error) {
 	uid, err := strconv.ParseUint(u.Uid, 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("parse uid %q: %w", u.Uid, err)
@@ -66,7 +70,7 @@ func lookupFrontendAccount() (*account, error) {
 	}
 	groupIDs, err := u.GroupIds()
 	if err != nil {
-		return nil, fmt.Errorf("look up groups of %s: %w", frontendUser, err)
+		return nil, fmt.Errorf("look up groups of %s: %w", u.Username, err)
 	}
 	for _, g := range groupIDs {
 		id, parseErr := strconv.ParseUint(g, 10, 32)

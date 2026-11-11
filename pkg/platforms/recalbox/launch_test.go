@@ -192,3 +192,30 @@ func TestSendStart_SpacesCommandsPastESRepeatGuard(t *testing.T) {
 	require.NoError(t, <-sent)
 	assert.Equal(t, "START|snes|/b", <-frames)
 }
+
+func TestLaunchGame_IgnoresIndexRootsESDoesNotList(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	rom := "/media/extra/snes/a.sfc"
+	writeFile(t, fs, rom, "rom")
+	p, _, _ := newTestPlatform(t, fs)
+	addr, frames := fakeES(t)
+	p.commandAddr = addr
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML("[launchers]\nindex_root = [\"/media/extra\"]\n"))
+
+	errs := make(chan error, 1)
+	go func() {
+		_, launchErr := p.launchGame(cfg, rom, nil)
+		errs <- launchErr
+	}()
+	select {
+	case launchErr := <-errs:
+		require.ErrorContains(t, launchErr, "no Recalbox system holds")
+	case frame := <-frames:
+		t.Fatalf("sent %q for a ROM outside ES's roots", frame)
+	case <-time.After(5 * time.Second):
+		t.Fatal("launch did not fail")
+	}
+}

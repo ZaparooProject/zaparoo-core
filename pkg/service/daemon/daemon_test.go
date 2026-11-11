@@ -205,6 +205,104 @@ func TestPrepareBinary_UsesServiceBinaryDir(t *testing.T) {
 	assert.Equal(t, result, again, "the staged copy is reused")
 }
 
+func binDirService(t *testing.T, binDir string) *Service {
+	t.Helper()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(),
+		TempDir: t.TempDir(),
+	})
+	return &Service{pl: binDirPlatform{MockPlatform: pl, dir: binDir}}
+}
+
+func TestPrepareBinary_CreatesPrivateServiceBinaryDir(t *testing.T) {
+	t.Parallel()
+	binDir := filepath.Join(t.TempDir(), "bin")
+	srcPath := filepath.Join(t.TempDir(), "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	_, err := binDirService(t, binDir).prepareBinary(srcPath)
+	require.NoError(t, err)
+	info, err := os.Stat(binDir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+}
+
+func TestPrepareBinary_RefusesUntrustedServiceBinaryDir(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		setup func(t *testing.T, binDir string)
+		name  string
+		want  string
+	}{
+		{
+			name: "writable by others",
+			want: "writable by others (777)",
+			setup: func(t *testing.T, binDir string) {
+				t.Helper()
+				require.NoError(t, os.Mkdir(binDir, 0o700))
+				require.NoError(t, os.Chmod(binDir, 0o777)) //nolint:gosec // the unsafe mode under test
+			},
+		},
+		{
+			name: "writable by group",
+			want: "writable by others (770)",
+			setup: func(t *testing.T, binDir string) {
+				t.Helper()
+				require.NoError(t, os.Mkdir(binDir, 0o700))
+				require.NoError(t, os.Chmod(binDir, 0o770)) //nolint:gosec // the unsafe mode under test
+			},
+		},
+		{
+			name: "symlink to another directory",
+			want: "is a symlink",
+			setup: func(t *testing.T, binDir string) {
+				t.Helper()
+				require.NoError(t, os.Symlink(t.TempDir(), binDir))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			binDir := filepath.Join(t.TempDir(), "bin")
+			tt.setup(t, binDir)
+			srcPath := filepath.Join(t.TempDir(), "zaparoo")
+			require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+			_, err := binDirService(t, binDir).prepareBinary(srcPath)
+			require.ErrorIs(t, err, errUntrustedBinaryDir)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// otherOwnerFs reports every path as owned by another user.
+type otherOwnerFs struct{ afero.Fs }
+
+type otherOwnerInfo struct{ os.FileInfo }
+
+func (otherOwnerInfo) Sys() any {
+	return &syscall.Stat_t{Uid: uint32(os.Geteuid()) + 1} //nolint:gosec // test uid
+}
+
+func (otherOwnerFs) LstatIfPossible(name string) (fi os.FileInfo, lstatCalled bool, err error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, true, err //nolint:wrapcheck // passthrough
+	}
+	return otherOwnerInfo{info}, true, nil
+}
+
+func TestEnsurePrivateDir_RefusesDirOwnedByAnotherUser(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "bin")
+	err := ensurePrivateDir(otherOwnerFs{afero.NewOsFs()}, dir)
+	require.ErrorIs(t, err, errUntrustedBinaryDir)
+	assert.Contains(t, err.Error(), "owned by uid")
+}
+
 func TestPrepareBinary_NoExtension(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -1710,4 +1808,40 @@ func TestOpenServiceStderr_RefusesEmptyLogDir(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, f)
 	assert.NoFileExists(t, config.StderrFile, "must never write to the working directory")
+}
+
+// plainFs hides the wrapped file system's Lstat support.
+type plainFs struct{ afero.Fs }
+
+// fixedStatFs reports the same Stat result for every path.
+type fixedStatFs struct {
+	afero.Fs
+	info os.FileInfo
+	err  error
+}
+
+func (f fixedStatFs) Stat(string) (os.FileInfo, error) { return f.info, f.err }
+
+func TestEnsurePrivateDir_Checks(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	file := filepath.Join(base, "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	fileInfo, err := os.Stat(file)
+	require.NoError(t, err)
+	osFs := afero.NewOsFs()
+
+	require.NoError(t, ensurePrivateDir(plainFs{osFs}, filepath.Join(base, "fresh")),
+		"a file system without Lstat is checked with Stat")
+
+	err = ensurePrivateDir(osFs, filepath.Join(file, "bin"))
+	require.ErrorContains(t, err, "error creating service binary directory")
+
+	errStat := errors.New("stat failed")
+	err = ensurePrivateDir(fixedStatFs{Fs: osFs, err: errStat}, filepath.Join(base, "unstattable"))
+	require.ErrorIs(t, err, errStat)
+
+	err = ensurePrivateDir(fixedStatFs{Fs: osFs, info: fileInfo}, filepath.Join(base, "replaced"))
+	require.ErrorIs(t, err, errUntrustedBinaryDir)
+	require.ErrorContains(t, err, "is not a directory")
 }

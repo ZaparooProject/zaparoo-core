@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -21,8 +23,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -240,6 +244,46 @@ func TestTerminateTree(t *testing.T) {
 	require.Error(t, <-done, "the shell was signalled")
 }
 
+func TestTerminateTree_KillsChildThatOutlivesWrapper(t *testing.T) {
+	t.Parallel()
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	p := NewPlatform()
+	// The wrapper exits on SIGTERM; its child ignores SIGTERM, like an
+	// emulator a launch script leaves behind.
+	//nolint:gosec // fixed test script
+	game := exec.CommandContext(context.Background(), "sh", "-c",
+		`(trap '' TERM; exec sleep 30) & echo $! > "$1"; wait`, "sh", pidFile)
+	require.NoError(t, game.Start())
+	done := make(chan error, 1)
+	go func() { done <- game.Wait() }()
+
+	var childPid int
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile) //nolint:gosec // test temp file
+		if err != nil {
+			return false
+		}
+		childPid, err = strconv.Atoi(strings.TrimSpace(string(data)))
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	child, err := process.NewProcess(int32(childPid)) //nolint:gosec // PID fits in int32
+	require.NoError(t, err)
+	// Wait until the child has exec'd sleep with SIGTERM ignored.
+	require.Eventually(t, func() bool {
+		name, nameErr := child.Name()
+		return nameErr == nil && name == "sleep"
+	}, 5*time.Second, 10*time.Millisecond)
+
+	p.terminateTree(game.Process.Pid)
+	require.Error(t, <-done, "the wrapper was signalled")
+	assert.Eventually(t, func() bool { return !processAlive(child) }, 5*time.Second, 10*time.Millisecond,
+		"the child that ignored SIGTERM was killed")
+	if processAlive(child) {
+		_ = child.Kill()
+	}
+}
+
 // eventLog records event scripts and game starts in the order they happen,
 // with the ES service commands run before each.
 type eventLog struct {
@@ -370,4 +414,128 @@ func TestStop_FiresPendingGameEnd(t *testing.T) {
 	p.pendingEnd = &pendingGameEnd{acct: testAccount(), pid: 1234}
 	require.NoError(t, p.Stop())
 	assert.Equal(t, []string{"end.sh | after "}, log.events)
+}
+
+func TestRootDirs_DedupesIndexRoots(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll("/roms", 0o755))
+	p := newTestPlatform(t, fs, newMockCmd())
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML("[launchers]\nindex_root = [\"/roms/\", \"/media/extra\"]\n"))
+
+	assert.Equal(t, []string{"/roms", "/media/extra"}, p.RootDirs(cfg))
+}
+
+func TestLaunchMedia_UnknownPathEndsLaunch(t *testing.T) {
+	t.Parallel()
+
+	cmd := newMockCmd()
+	p := newTestPlatform(t, newTestFs(t), cmd)
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, p.Launchers(cfg))
+	require.Error(t, p.LaunchMedia(cfg, "/nowhere/file.unknownext", nil, nil, nil))
+	assert.Empty(t, cmdCalls(cmd), "ES is left alone")
+	assert.False(t, p.fe.stopped)
+}
+
+func TestSupportedReaders(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlatform(t, afero.NewMemMapFs(), newMockCmd())
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	assert.NotEmpty(t, p.SupportedReaders(cfg))
+}
+
+func TestStartPost_RecoversESAndStopEndsScanner(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	writeFile(t, fs, esStoppedMarker, "")
+	cmd := newMockCmd()
+	p := newTestPlatform(t, fs, cmd)
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	var active *models.ActiveMedia
+	getActive := func() *models.ActiveMedia { return active }
+	setActive := func(m *models.ActiveMedia) { active = m }
+
+	require.NoError(t, p.StartPost(context.Background(), cfg, nil, getActive, setActive, nil, nil))
+	assert.Equal(t, []string{esStart}, cmdCalls(cmd), "a stale stop marker brings ES back")
+	assert.NotNil(t, p.procScanner)
+
+	require.NoError(t, p.Stop())
+	assert.Nil(t, p.procScanner)
+}
+
+func TestLaunchGame_LateFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no es_systems.cfg", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		writeFile(t, fs, testROM, "rom")
+		cmd := newMockCmd()
+		p := newTestPlatform(t, fs, cmd)
+		_, err := p.launchGame(nil, testROM, nil)
+		require.Error(t, err)
+		assert.Empty(t, cmdCalls(cmd))
+	})
+
+	t.Run("unsafe gamelist core", func(t *testing.T) {
+		t.Parallel()
+		fs := newTestFs(t)
+		writeFile(t, fs, testROM, "rom")
+		writeFile(t, fs, "/roms/snes/gamelist.xml",
+			gamelistXML(`<game><path>./Game (USA).sfc</path><core>snes9x;id</core></game>`))
+		cmd := newMockCmd()
+		p := newTestPlatform(t, fs, cmd)
+		_, err := p.launchGame(nil, testROM, nil)
+		require.ErrorContains(t, err, "snes9x;id")
+		assert.Empty(t, cmdCalls(cmd), "ES is never stopped for a launch that cannot run")
+	})
+
+	t.Run("ES does not stop", func(t *testing.T) {
+		t.Parallel()
+		fs := newTestFs(t)
+		writeFile(t, fs, testROM, "rom")
+		cmd := &mocks.MockCommandExecutor{}
+		cmd.On("Run", mock.Anything, "systemctl", []string{"stop", esService}).Return(errors.New("boom"))
+		p := newTestPlatform(t, fs, cmd)
+		_, err := p.launchGame(nil, testROM, nil)
+		require.ErrorContains(t, err, "stop EmulationStation")
+	})
+
+	t.Run("no process", func(t *testing.T) {
+		t.Parallel()
+		fs := newTestFs(t)
+		writeFile(t, fs, testROM, "rom")
+		cmd := newMockCmd()
+		p := newTestPlatform(t, fs, cmd)
+		p.startGame = func(*launchSpec) (*os.Process, error) { return nil, nil } //nolint:nilnil // the case under test
+		_, err := p.launchGame(nil, testROM, nil)
+		require.ErrorContains(t, err, "game process did not start")
+		assert.Equal(t, []string{esStop, esStart}, cmdCalls(cmd))
+	})
+}
+
+func TestTerminateTree_MissingProcess(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	done := make(chan struct{})
+	go func() {
+		p.terminateTree(1 << 30)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminateTree waited on a process that does not exist")
+	}
 }

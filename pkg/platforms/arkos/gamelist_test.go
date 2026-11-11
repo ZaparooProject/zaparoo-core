@@ -7,6 +7,7 @@
 package arkos
 
 import (
+	"encoding/xml"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -177,4 +178,83 @@ func TestResolveGameLaunch_UsesGamelistAndNameSetting(t *testing.T) {
 	assert.Equal(t, "retroarch32", launch.emulator)
 	assert.Equal(t, "snes9x2005", launch.core)
 	assert.Equal(t, "powersave", launch.governor)
+}
+
+func TestESStartPath(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, esStartPath(&esSystem{Name: "snes", Path: "  "}, testHome))
+	assert.Equal(t, "/roms/snes", esStartPath(testSNES(), testHome))
+	assert.Equal(t, testHome+"/roms/snes", esStartPath(&esSystem{Path: "~/roms/snes/"}, testHome))
+}
+
+func TestResolveGamelistPath(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, resolveGamelistPath("", "/roms/snes"))
+	assert.Equal(t, "/roms/snes", resolveGamelistPath(".", "/roms/snes"))
+	assert.Equal(t, "/roms/snes/a/b.sfc", resolveGamelistPath("./a//b.sfc", "/roms/snes"))
+	assert.Equal(t, "/other/b.sfc", resolveGamelistPath("/other/./b.sfc", "/roms/snes"))
+}
+
+func TestAttrUint(t *testing.T) {
+	t.Parallel()
+
+	attrs := []xml.Attr{
+		{Name: xml.Name{Local: "other"}, Value: "7"},
+		{Name: xml.Name{Local: "parentHash"}, Value: " 42 "},
+		{Name: xml.Name{Local: "bad"}, Value: "-1"},
+	}
+	assert.Equal(t, int64(42), attrUint(attrs, "parentHash"))
+	assert.Zero(t, attrUint(attrs, "bad"), "malformed reads as 0")
+	assert.Zero(t, attrUint(attrs, "missing"))
+}
+
+func TestFindGamelistEntry_Edges(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	_, ok := findGamelistEntry(fs, "/missing.xml", "/roms/snes", testROM, nil)
+	assert.False(t, ok, "missing file")
+
+	// Elements before <gameList> are skipped whole.
+	writeFile(t, fs, "/skip.xml", `<?xml version="1.0"?><other><game><path>./Game (USA).sfc</path></game></other>`+
+		gamelistXML(`<game><path>./Game (USA).sfc</path><core>snes9x</core></game>`))
+	meta, ok := findGamelistEntry(fs, "/skip.xml", "/roms/snes", testROM, nil)
+	require.True(t, ok)
+	assert.Equal(t, "snes9x", meta.core)
+
+	// A broken element before <gameList> ends the read.
+	writeFile(t, fs, "/broken-skip.xml", `<other><a>`)
+	_, ok = findGamelistEntry(fs, "/broken-skip.xml", "/roms/snes", testROM, nil)
+	assert.False(t, ok)
+
+	// Bad XML after a match drops it: ES would not load that file either.
+	writeFile(t, fs, "/bad.xml", `<gameList><game><path>./Game (USA).sfc</path><core>a</core></game>`+"\x00")
+	_, ok = findGamelistEntry(fs, "/bad.xml", "/roms/snes", testROM, nil)
+	assert.False(t, ok)
+
+	// Non-game elements are read and ignored.
+	writeFile(t, fs, "/folder.xml", gamelistXML(`<folder><path>./Game (USA).sfc</path><core>x</core></folder>`))
+	_, ok = findGamelistEntry(fs, "/folder.xml", "/roms/snes", testROM, nil)
+	assert.False(t, ok)
+}
+
+func TestMameRealName(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	assert.Equal(t, "sf2", mameRealName(fs, testHome, "sf2"), "no mamenames.xml")
+
+	userNames := filepath.Join(testHome, ".emulationstation", "resources", "mamenames.xml")
+	writeFile(t, fs, userNames, `<?xml version="1.0"?><names>
+<game><mamename>pacman</mamename><realname>Pac-Man</realname></game>
+<bios><mamename>neogeo</mamename></bios>
+<game><mamename>sf2</mamename><realname>Street Fighter II</realname></game>
+</names>`)
+	assert.Equal(t, "Street Fighter II", mameRealName(fs, testHome, "sf2"))
+	assert.Equal(t, "dkong", mameRealName(fs, testHome, "dkong"), "no entry")
+
+	writeFile(t, fs, userNames, `<names><game><mamename>sf2</mamename><realname>x`)
+	assert.Equal(t, "sf2", mameRealName(fs, testHome, "sf2"), "malformed entry")
 }

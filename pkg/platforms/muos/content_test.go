@@ -267,3 +267,109 @@ func TestReadOverlayAndLastPlayed(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "/mnt/mmc/ROMS/Game.gba", path)
 }
+
+func TestWriteContentFileFailuresLeaveNoRequest(t *testing.T) {
+	t.Parallel()
+	req := &contentRequest{name: "Game", romsDir: "/mnt/mmc/ROMS/", relDir: "GBA", file: "Game.gba"}
+	tmp := contentFile + ".tmp"
+	for _, op := range []string{"open", "write", "sync", "close", "rename"} {
+		fs := &failFs{Fs: newTestFs(t), op: op, path: tmp}
+		err := writeContentFile(fs, req)
+		require.ErrorIs(t, err, errInjected, op)
+		for _, path := range []string{tmp, contentFile} {
+			exists, existsErr := afero.Exists(fs, path)
+			require.NoError(t, existsErr)
+			assert.False(t, exists, "%s leaves %s", op, path)
+		}
+	}
+}
+
+func TestWriteAssetsFailures(t *testing.T) {
+	t.Parallel()
+	req := &contentRequest{assets: map[string]string{"gov": "extreme"}}
+
+	err := writeAssets(&failFs{Fs: newTestFs(t), op: "mkdir", path: runDir}, req)
+	require.ErrorIs(t, err, errInjected)
+	require.ErrorContains(t, err, "create "+runDir)
+
+	err = writeAssets(&failFs{Fs: newTestFs(t), op: "open", path: runDir + "/controller"}, req)
+	require.ErrorIs(t, err, errInjected)
+	require.ErrorContains(t, err, "write "+runDir+"/controller")
+}
+
+func TestRemoveIfExists(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	require.NoError(t, removeIfExists(fs, contentFile), "missing is fine")
+	writeFile(t, fs, contentFile, "x")
+	require.ErrorIs(t, removeIfExists(&failFs{Fs: fs, op: "remove", path: contentFile}, contentFile), errInjected)
+	require.NoError(t, removeIfExists(fs, contentFile))
+	exists, err := afero.Exists(fs, contentFile)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestReadLimitedReportsReadError(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	writeFile(t, fs, overlayFile, "Game\nsys\ncore")
+	_, err := readLimited(&failFs{Fs: fs, op: "read", path: overlayFile}, overlayFile, maxSmallFileSize)
+	require.ErrorIs(t, err, errInjected)
+}
+
+func TestReadAssetSkipsUnreadableFile(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	dir := infoDir("GBA")
+	writeFile(t, fs, filepath.Join(dir, "Game.gov"), "powersave")
+	writeFile(t, fs, filepath.Join(dir, "core.gov"), "ondemand")
+	assert.Equal(t, "powersave", readAsset(fs, "GBA", "Game", "gov"))
+
+	broken := &failFs{Fs: fs, op: "read", path: filepath.Join(dir, "Game.gov")}
+	assert.Equal(t, "ondemand", readAsset(broken, "GBA", "Game", "gov"), "falls through to the folder default")
+}
+
+func TestResolveContentManifestEdgeCases(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	writeFile(t, fs, filepath.Join(manifestRoots[0], "Test", "Bad Catalogue.json"),
+		`{"catalogue": "Bad\nCatalogue", "friendly": ["badcat"], "libretro": {"x": {"core": "x_libretro.so"}}}`)
+	writeFile(t, fs, filepath.Join(manifestRoots[0], "Test", "No Core.json"),
+		`{"friendly": ["nocore"], "libretro": {"x": {"governor": "performance"}}}`)
+	writeFile(t, fs, filepath.Join(testROMs, "badcat", "a.bin"), "rom")
+	writeFile(t, fs, filepath.Join(testROMs, "nocore", "a.bin"), "rom")
+	gba := filepath.Join(testROMs, "GBA", "Game.gba")
+	writeFile(t, fs, gba, "rom")
+	db := loadCoreDB(fs, "aarch64")
+
+	_, err := resolveContent(fs, db, filepath.Join(testROMs, "badcat", "a.bin"))
+	require.ErrorContains(t, err, "line break")
+
+	_, err = resolveContent(fs, db, filepath.Join(testROMs, "nocore", "a.bin"))
+	require.ErrorIs(t, err, errNoCore, "a default core without a core file is no assignment")
+
+	_, err = resolveContent(fs, nil, gba)
+	require.ErrorIs(t, err, errNoCore, "no manifests, no automatic assignment")
+}
+
+func TestReadOverlayAndLastPlayedRejectIncompleteState(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	writeFile(t, fs, overlayFile, "\nsys\ncore")
+	_, ok := readOverlay(fs)
+	assert.False(t, ok, "no content name")
+
+	writeFile(t, fs, lastPlayFile, "relative/Game.cfg\n")
+	_, ok = lastPlayedPath(fs, "Game")
+	assert.False(t, ok, "relative last_play")
+
+	cfg := filepath.Join(infoContentDir, "GBA", "Game.cfg")
+	writeFile(t, fs, lastPlayFile, cfg+"\n")
+	writeFile(t, fs, cfg, "Game\nc\ns\nc\n0\nt\n\nGBA\nGame.gba\n")
+	_, ok = lastPlayedPath(fs, "Game")
+	assert.False(t, ok, "no ROMS folder")
+
+	writeFile(t, fs, cfg, "Game\nc\ns\nc\n0\nt\n/mnt/mmc/ROMS/\nGBA\n\n")
+	_, ok = lastPlayedPath(fs, "Game")
+	assert.False(t, ok, "no file")
+}

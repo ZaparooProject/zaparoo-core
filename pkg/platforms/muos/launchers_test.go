@@ -149,3 +149,30 @@ func TestIsPlainFile(t *testing.T) {
 	assert.False(t, isPlainFile(nil, dir))
 	assert.False(t, isPlainFile(nil, filepath.Join(dir, "missing")))
 }
+
+func TestLaunchersWithoutExtensionsTestForFiles(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	require.NoError(t, fs.MkdirAll(filepath.Join(testROMs, "OpenBOR"), 0o755))
+	require.NoError(t, fs.MkdirAll(filepath.Join(testROMs, "GBA"), 0o755))
+	writeFile(t, fs, filepath.Join(infoContentDir, "OpenBOR", "core.cfg"), "openbor\nOpenBOR\n")
+	p, _, _ := newTestPlatform(t, fs)
+
+	openbor := launcherByID(t, p.platformLaunchers(), systemdefs.SystemOpenBOR)
+	assert.Empty(t, openbor.Extensions)
+	require.NotNil(t, openbor.Test)
+	gba := launcherByID(t, p.platformLaunchers(), systemdefs.SystemGBA)
+	assert.Nil(t, gba.Test)
+}
+
+func TestGenericLauncherReportsStartFailure(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPlatform(t, newTestFs(t))
+	cmd := &mocks.MockCommandExecutor{}
+	cmd.On("Start", mock.Anything, "/mnt/mmc/run.sh", []string(nil)).Return(os.ErrPermission)
+	p.cmd = cmd
+
+	generic := launcherByID(t, p.platformLaunchers(), "Generic")
+	_, err := generic.Launch(nil, "/mnt/mmc/run.sh", nil)
+	require.ErrorIs(t, err, os.ErrPermission)
+}

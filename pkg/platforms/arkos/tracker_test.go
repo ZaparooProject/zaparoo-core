@@ -202,3 +202,55 @@ func TestLookupSystem_ArkOSSystems(t *testing.T) {
 		assert.Equal(t, tt.wantLauncher, info.GetLauncherID(), tt.sys.Name)
 	}
 }
+
+func TestESGameMatcher_BadProcEntries(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	// 300's parent is a shell whose own stat is unreadable.
+	addProc(t, fs, 300, 200, "retroarch")
+	writeFile(t, fs, "/proc/200/comm", "sh\n")
+	m := &esGameMatcher{fs: fs, procDir: "/proc", roots: romRoots}
+	assert.False(t, m.Match(retroarchProc(300, "/roms/snes/Game.sfc")))
+
+	stats := map[string]string{
+		"no closing paren":  "9 (x S 1 1",
+		"too few fields":    "9 (x) S",
+		"ppid not a number": "9 (x) S abc 1",
+		"ppid zero":         "9 (x) S 0 1",
+	}
+	for name, stat := range stats {
+		writeFile(t, fs, "/proc/9/stat", stat)
+		_, ok := m.parent(9)
+		assert.False(t, ok, name)
+	}
+}
+
+func TestESGameTracking_NoActiveMediaSink(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlatform(t, newTestFs(t), newMockCmd())
+	p.setActiveMedia = nil
+	p.esGamePID = 300
+	p.esGamePath = "/roms/snes/Game.sfc"
+	p.esGameStopped(300)
+	assert.Zero(t, p.takeESGame(), "the game is forgotten even with nobody to tell")
+}
+
+func TestMediaForPath_NoESSystems(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlatform(t, afero.NewMemMapFs(), newMockCmd())
+	assert.Nil(t, p.mediaForPath("/roms/snes/Game.sfc"))
+}
+
+func TestLookupSystem_SkipsEmptyNames(t *testing.T) {
+	t.Parallel()
+
+	info, ok := lookupSystem(&esSystem{Path: "/roms/snes", Platform: " , "})
+	require.True(t, ok)
+	assert.Equal(t, "SNES", info.SystemID)
+
+	_, ok = lookupSystem(&esSystem{Name: "", Path: " ", Platform: ""})
+	assert.False(t, ok)
+}

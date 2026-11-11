@@ -92,39 +92,39 @@ func run() error {
 	// The root half of install and uninstall, run by -install and
 	// -uninstall through sudo.
 	if *installSystem != "" || *uninstallSystem {
-		exe, err := executablePath()
+		exe, err := findExecutable()
 		if err != nil {
 			return err
 		}
 		if *uninstallSystem {
-			if err := retropie.UninstallSystem(ctx, runInteractive); err != nil {
+			if err := uninstallSystemSide(ctx, runCommand); err != nil {
 				return fmt.Errorf("uninstall service: %w", err)
 			}
 			return nil
 		}
-		if err := retropie.InstallSystem(ctx, *installSystem, exe, runInteractive); err != nil {
+		if err := installSystemSide(ctx, *installSystem, exe, runCommand); err != nil {
 			return fmt.Errorf("install service: %w", err)
 		}
 		return nil
 	}
 
-	if os.Geteuid() == 0 {
+	if geteuid() == 0 {
 		return errors.New("zaparoo must not be run as root")
 	}
 
 	if *doInstall || *doUninstall {
-		exe, err := executablePath()
+		exe, err := findExecutable()
 		if err != nil {
 			return err
 		}
 		if *doUninstall {
-			if err := pl.Uninstall(ctx, exe, runInteractive); err != nil {
+			if err := userUninstall(pl, ctx, exe, runCommand); err != nil {
 				return fmt.Errorf("uninstall: %w", err)
 			}
 			_, _ = fmt.Println("Zaparoo service and RetroPie hooks removed.")
 			return nil
 		}
-		if err := pl.Install(ctx, exe, runInteractive); err != nil {
+		if err := userInstall(pl, ctx, exe, runCommand); err != nil {
 			return fmt.Errorf("install: %w", err)
 		}
 		_, _ = fmt.Println("Zaparoo installed. Reboot the console so EmulationStation " +
@@ -151,6 +151,17 @@ func run() error {
 
 	return runTUI(pl, cfg)
 }
+
+// Tests replace these; the defaults act on the real system.
+var (
+	geteuid             = os.Geteuid
+	findExecutable      = executablePath
+	runCommand          = runInteractive
+	userInstall         = (*retropie.Platform).Install
+	userUninstall       = (*retropie.Platform).Uninstall
+	installSystemSide   = retropie.InstallSystem
+	uninstallSystemSide = retropie.UninstallSystem
+)
 
 func executablePath() (string, error) {
 	exe, err := os.Executable()

@@ -187,19 +187,40 @@ func executable() (string, error) {
 	return resolved, nil
 }
 
+// Tests replace these; the defaults act on the real device.
+var (
+	findExecutable           = executable
+	initFS          afero.Fs = afero.NewOsFs()
+	stopService              = (*muos.Platform).StopService
+	uninstallScript          = (*muos.Platform).Uninstall
+	startService             = startInitScript
+)
+
 func install(pl *muos.Platform) error {
-	exe, err := executable()
+	exe, err := findExecutable()
 	if err != nil {
 		return err
 	}
-	if stopErr := pl.StopService(exe); stopErr != nil {
+	if stopErr := stopService(pl, exe); stopErr != nil {
 		return fmt.Errorf("error stopping running zaparoo service: %w", stopErr)
 	}
-	path, err := muos.Install(afero.NewOsFs(), exe)
+	path, err := muos.Install(initFS, exe)
 	if err != nil {
 		return fmt.Errorf("error installing init script: %w", err)
 	}
+	if err := startService(path); err != nil {
+		return err
+	}
 
+	_, _ = fmt.Printf("Zaparoo init script installed to %s and the service started.\n", path)
+	_, _ = fmt.Println("In Configuration, highlight General and press X for Advanced,")
+	_, _ = fmt.Println("then turn on User Init Scripts so it starts at boot.")
+	return nil
+}
+
+// startInitScript runs the init script detached, so the service it starts
+// outlives this command.
+func startInitScript(path string) error {
 	//nolint:gosec // G204: path is the init script this binary just wrote
 	cmd := exec.CommandContext(context.Background(), "sh", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -215,19 +236,15 @@ func install(pl *muos.Platform) error {
 		return fmt.Errorf("error starting zaparoo service: %w", err)
 	}
 	_ = cmd.Process.Release()
-
-	_, _ = fmt.Printf("Zaparoo init script installed to %s and the service started.\n", path)
-	_, _ = fmt.Println("In Configuration, highlight General and press X for Advanced,")
-	_, _ = fmt.Println("then turn on User Init Scripts so it starts at boot.")
 	return nil
 }
 
 func uninstall(pl *muos.Platform) error {
-	exe, err := executable()
+	exe, err := findExecutable()
 	if err != nil {
 		return err
 	}
-	if err := pl.Uninstall(exe); err != nil {
+	if err := uninstallScript(pl, exe); err != nil {
 		return fmt.Errorf("error uninstalling init script: %w", err)
 	}
 	_, _ = fmt.Println("Zaparoo init script removed and the service stopped.")

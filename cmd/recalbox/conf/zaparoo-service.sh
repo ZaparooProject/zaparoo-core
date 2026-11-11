@@ -21,6 +21,16 @@ if [ -f "$PIDFILE" ]; then
 fi
 echo $$ > "$PIDFILE"
 
+# /tmp is shared: only run from a directory this user owns and nobody else
+# can write to. Anything else at that path is removed and recreated.
+prepare_run_dir() {
+	if [ ! -L "$RUN_DIR" ] && [ -d "$RUN_DIR" ] &&
+		[ "$(stat -c %u:%a "$RUN_DIR" 2>/dev/null)" = "$(id -u):700" ]; then
+		return 0
+	fi
+	rm -rf "$RUN_DIR" && mkdir -m 700 "$RUN_DIR"
+}
+
 child=""
 stop() {
 	if [ -n "$child" ]; then
@@ -33,7 +43,7 @@ stop() {
 trap stop TERM INT HUP
 
 while :; do
-	if ! { mkdir -p "$RUN_DIR" && cp -f "$ZAPAROO_BIN" "$RUN_BIN.new" &&
+	if ! { prepare_run_dir && cp -f "$ZAPAROO_BIN" "$RUN_BIN.new" &&
 		chmod 755 "$RUN_BIN.new" && mv -f "$RUN_BIN.new" "$RUN_BIN"; }; then
 		rm -f "$RUN_BIN.new"
 		sleep "$RETRY_DELAY"
