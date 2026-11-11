@@ -109,6 +109,10 @@ type UIRespondParams struct {
 	ChoiceID string           `json:"choiceId,omitempty"`
 }
 
+type UIShownParams struct {
+	ID string `json:"id" validate:"required"`
+}
+
 type RunScriptParams struct {
 	Name      *string                  `json:"name"`
 	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`

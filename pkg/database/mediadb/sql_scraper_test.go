@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3571,4 +3572,67 @@ func TestApplyScrapeWriteWithoutSentinelStoresDataButNoMarker(t *testing.T) {
 			require.Zero(t, scraperTags, "no done marker is written")
 		})
 	}
+}
+
+// purgeAppleDoubleVersion is 20261111120000_purge_appledouble_properties.
+const purgeAppleDoubleVersion = 20261111120000
+
+// Manuals and artwork the docs scraper took from macOS "._" AppleDouble files
+// are dropped on upgrade, so the next docs scrape can write the real files.
+// Other property types, and files inside a "._" directory, survive.
+func TestPurgeAppleDoublePropertiesMigration(t *testing.T) {
+	db, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	sqlDB := db.sql.Load()
+
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", purgeAppleDoubleVersion-1))
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (3, 3, 'manual');
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (4, 3, 'image-screenshot');
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 2, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 2, 'roms/zelda.sfc');
+		INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text) VALUES
+			(1, 3, '/media/usb0/docs/NES/Manuals/._Mario.pdf'),
+			(1, 2, '/media/usb0/docs/NES/Boxart/Mario.png'),
+			(2, 3, '/media/usb0/._docs/SNES/Manuals/Zelda.pdf');
+		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES
+			(1, 2, '/media/usb0/docs/NES/Boxart/._Mario.png'),
+			(1, 4, '._Mario.png'),
+			(1, 1, 'See http://example.com/._notes'),
+			(2, 1, 'A plumber._ saves a princess');
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, goose.Up(sqlDB, "migrations"))
+
+	titleProps, err := db.GetMediaTitlePropertyMetadata(ctx, 1)
+	require.NoError(t, err)
+	titleTexts := make([]string, 0, len(titleProps))
+	for i := range titleProps {
+		titleTexts = append(titleTexts, titleProps[i].Text)
+	}
+	assert.Equal(t, []string{"/media/usb0/docs/NES/Boxart/Mario.png"}, titleTexts)
+
+	mediaProps, err := db.GetMediaPropertyMetadata(ctx, 1)
+	require.NoError(t, err)
+	mediaTexts := make([]string, 0, len(mediaProps))
+	for i := range mediaProps {
+		mediaTexts = append(mediaTexts, mediaProps[i].Text)
+	}
+	assert.Equal(t, []string{"See http://example.com/._notes"}, mediaTexts,
+		"only docs property types are purged, whatever their text holds")
+
+	otherTitle, err := db.GetMediaTitlePropertyMetadata(ctx, 2)
+	require.NoError(t, err)
+	require.Len(t, otherTitle, 1)
+	assert.Equal(t, "/media/usb0/._docs/SNES/Manuals/Zelda.pdf", otherTitle[0].Text,
+		"a \"._\" directory does not make its files AppleDouble")
+	otherMedia, err := db.GetMediaPropertyMetadata(ctx, 2)
+	require.NoError(t, err)
+	require.Len(t, otherMedia, 1)
+	assert.Equal(t, "A plumber._ saves a princess", otherMedia[0].Text)
 }

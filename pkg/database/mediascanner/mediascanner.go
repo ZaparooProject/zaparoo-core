@@ -399,20 +399,30 @@ func incompleteIndexedSystems(systems []systemdefs.System, completedSystems map[
 //   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
 //   - All platforms: Works with symlinks, UNC paths, network drives
 func FindPath(ctx context.Context, path string) (string, error) {
-	return findPathWithReadDir(ctx, path, readDirWithContext)
+	return findPathWithReadDir(ctx, path, readDirWithContext, false)
 }
 
 // findPathWithReadDir is FindPath's implementation with the directory-listing
 // function injected, so a discovery pass can share memoized listings across
 // many probes (see pathResolver) while one-off callers read directly.
+//
+// When foldMissing is set and the exact path does not exist, the component walk
+// still runs and matches each component case-insensitively, so a case-sensitive
+// filesystem holding roms/SNES satisfies a probe for roms/snes. Only the
+// discovery pass sets it: its listings are memoized, so the walk adds no
+// directory reads per probe. One-off callers keep the exact-existence check.
 func findPathWithReadDir(
 	ctx context.Context,
 	path string,
 	readDir func(ctx context.Context, path string) ([]os.DirEntry, error),
+	foldMissing bool,
 ) (string, error) {
-	// Check if path exists first
+	folding := false
 	if _, err := statWithContext(ctx, path); err != nil {
-		return "", fmt.Errorf("path does not exist: %s", path)
+		if !foldMissing || ctx.Err() != nil || errors.Is(err, ErrFsTimeout) {
+			return "", fmt.Errorf("path does not exist: %s", path)
+		}
+		folding = true
 	}
 
 	// Get absolute path to ensure we have a complete path
@@ -469,8 +479,9 @@ func findPathWithReadDir(
 		found := false
 
 		// On case-sensitive filesystems (Linux), prefer exact match first
-		// This prevents File.txt and file.txt ambiguity
-		if runtime.GOOS == "linux" {
+		// This prevents File.txt and file.txt ambiguity. A folding walk can
+		// meet a case-sensitive volume on any OS, so it always prefers exact.
+		if runtime.GOOS == "linux" || folding {
 			for _, entry := range entries {
 				if entry.Name() == part {
 					currentPath = filepath.Join(currentPath, entry.Name())
@@ -480,21 +491,30 @@ func findPathWithReadDir(
 			}
 		}
 
-		// Fallback to case-insensitive match (or first attempt on Windows/macOS)
+		// Fallback to case-insensitive match (or first attempt on Windows/macOS).
+		// Several case variants of one name can coexist on a case-sensitive
+		// filesystem; take the byte-wise smallest so the choice does not depend
+		// on listing order.
 		if !found {
+			match := ""
 			for _, entry := range entries {
-				if strings.EqualFold(entry.Name(), part) {
-					currentPath = filepath.Join(currentPath, entry.Name())
+				name := entry.Name()
+				if strings.EqualFold(name, part) && (!found || name < match) {
+					match = name
 					found = true
-					break
 				}
+			}
+			if found {
+				currentPath = filepath.Join(currentPath, match)
 			}
 		}
 
 		// Handle 8.3 short names on Windows (PROGRA~1)
 		// If component not found via ReadDir but path exists via Stat,
-		// it might be a short name or special filesystem entry
-		if !found {
+		// it might be a short name or special filesystem entry. A folding
+		// walk skips this: the exact path already failed to stat, and the
+		// extra stat would cost every missing probe a syscall.
+		if !found && !folding {
 			targetCheck := filepath.Join(currentPath, part)
 			if _, err := statWithContext(ctx, targetCheck); err == nil {
 				// Path exists but wasn't found in directory listing
