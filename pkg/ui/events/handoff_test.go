@@ -185,3 +185,58 @@ func TestServicePublishesChoiceMedia(t *testing.T) {
 	assert.NotSame(t, media, state.Events[0].Choices[0].Media)
 	assert.Nil(t, state.Events[0].Choices[1].Media)
 }
+
+func TestServiceHandOffReportsHold(t *testing.T) {
+	t.Parallel()
+
+	renderer := &handoffRenderer{handled: true, minOpen: time.Minute}
+	service, _ := newTestService(clockwork.NewFakeClock(), renderer)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.True(t, handle.HandedOff)
+	assert.Equal(t, time.Minute, handle.HandOffHold)
+	select {
+	case at := <-handle.Shown:
+		t.Fatalf("a handed-off event is not shown until a client says so, got %v", at)
+	default:
+	}
+}
+
+func TestServiceHandOffShownGivesFullTimeout(t *testing.T) {
+	t.Parallel()
+
+	renderer := &handoffRenderer{handled: true, minOpen: time.Minute}
+	clock := clockwork.NewFakeClock()
+	service, published := newTestService(clock, renderer)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindPicker,
+		Choices: []Choice{{Label: "One"}},
+		Timeout: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	_ = receiveState(t, published)
+	_ = receiveState(t, published)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+
+	clock.Advance(16 * time.Second)
+	require.NoError(t, service.Shown(handle.ID))
+	shown := receiveState(t, published)
+	require.Len(t, shown.Events, 1)
+	assert.Equal(t, clock.Now().Add(10*time.Second), *shown.Events[0].ExpiresAt,
+		"the hold gives way to the event's own timeout from the moment it is shown")
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+
+	clock.Advance(9 * time.Second)
+	select {
+	case result := <-handle.Results:
+		t.Fatalf("event resolved before its full timeout: %+v", result)
+	default:
+	}
+	clock.Advance(time.Second)
+	result := receiveResult(t, handle.Results)
+	assert.Equal(t, models.UIOutcomeTimedOut, result.Resolution.Outcome)
+}
