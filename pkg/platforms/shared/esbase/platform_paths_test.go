@@ -375,6 +375,40 @@ func TestStopUnpublishedGame_GivesUpAfterTheWait(t *testing.T) {
 	}
 }
 
+// Without /runningGame the game starting cannot be seen, so the stop waits out
+// the window and then kills once instead of never killing.
+func TestStopUnpublishedGame_KillsAfterTheWaitWithoutRunningGameRoute(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	kills := 0
+	p := New(&Options{
+		ID:  "amberelec",
+		API: &fakeAPI{err: esapi.ErrRouteUnsupported},
+		KillGame: func() error {
+			kills++
+			return nil
+		},
+	})
+	p.clock = clock
+	done := make(chan struct{})
+	go func() {
+		p.stopUnpublishedGame()
+		close(done)
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	assert.Zero(t, kills, "nothing is killed before the window ends")
+	clock.Advance(unpublishedGameWait)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("the stop never finished")
+	}
+	assert.Equal(t, 1, kills)
+}
+
 func TestSettle_DefaultsToTheRealClock(t *testing.T) {
 	t.Parallel()
 

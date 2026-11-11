@@ -188,6 +188,29 @@ func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {
 	assert.Equal(t, 10, kills)
 }
 
+// An ES without /runningGame cannot confirm the game is gone, so a stop has
+// to kill it rather than take the failed check as proof it already exited.
+func TestStopActiveLauncher_KillsOnceWithoutRunningGameRoute(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{err: esapi.ErrRouteUnsupported}
+	kills := 0
+	opts := Options{
+		ID:  "amberelec",
+		API: api,
+		KillGame: func() error {
+			kills++
+			return nil
+		},
+	}
+	p, published := runningPlatform(t, &opts)
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, kills)
+	require.NotEmpty(t, *published)
+	assert.Nil(t, (*published)[len(*published)-1])
+}
+
 func TestStopActiveLauncher_DefaultKillIsEmuKill(t *testing.T) {
 	t.Parallel()
 

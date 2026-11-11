@@ -484,6 +484,15 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 			time.Sleep(p.opts.KillRetryDelay)
 		}
 		_, running, err := p.api().RunningGame()
+		if errors.Is(err, esapi.ErrRouteUnsupported) {
+			// This ES cannot say whether a game is running, so asking again
+			// tells nothing. Kill once and treat the stop as done.
+			if killErr := p.killGame(); killErr != nil && !errors.Is(killErr, context.DeadlineExceeded) {
+				log.Warn().Err(killErr).Msg("failed to kill the running game")
+			}
+			killed = true
+			break
+		}
 		if err != nil {
 			// ES API is unavailable - assume kill succeeded
 			log.Warn().Err(err).Msg("ES API unavailable, assuming kill succeeded")
@@ -729,7 +738,17 @@ func (p *Platform) stopUnpublishedGame() {
 	}
 	deadline := clock.Now().Add(unpublishedGameWait)
 	for {
-		if _, running, err := p.api().RunningGame(); err == nil && running {
+		_, running, err := p.api().RunningGame()
+		if errors.Is(err, esapi.ErrRouteUnsupported) {
+			// This ES cannot report the game starting. Give it the whole
+			// window to start, then kill whatever it started.
+			clock.Sleep(deadline.Sub(clock.Now()))
+			if killErr := p.killGame(); killErr != nil {
+				log.Warn().Err(killErr).Msg("failed to stop a game that a stop overtook")
+			}
+			return
+		}
+		if err == nil && running {
 			log.Info().Msg("a stop came while the game was starting, stopping it")
 			if killErr := p.killGame(); killErr != nil {
 				log.Warn().Err(killErr).Msg("failed to stop a game that a stop overtook")
