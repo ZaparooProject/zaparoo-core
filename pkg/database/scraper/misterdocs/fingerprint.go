@@ -33,7 +33,7 @@ import (
 
 // fingerprintVersion is bumped when a change to matching or to what is
 // written means an unchanged system has to be scraped again.
-const fingerprintVersion = 1
+const fingerprintVersion = 2
 
 // sourceState describes every pack folder that serves targetID, in the order
 // the step would read them, without parsing any of them and without a stat
