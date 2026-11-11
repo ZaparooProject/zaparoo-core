@@ -24,9 +24,13 @@ body:
         - LibreELEC/CoreELEC
         - ReplayOS
         - Zaparoo Firmware
+        - Recalbox
+        - RetroPie
         - ROCKNIX
         - Knulli
         - AmberELEC
+        - ArkOS
+        - muOS
         - All platforms
       default: 0
     validations:

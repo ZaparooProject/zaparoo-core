@@ -15,6 +15,7 @@ dotenv: [".env"]
 includes:
   docker: ./scripts/tasks/docker.yml
   amberelec: ./scripts/tasks/amberelec.yml
+  arkos: ./scripts/tasks/arkos.yml
   batocera: ./scripts/tasks/batocera.yml
   bazzite: ./scripts/tasks/bazzite.yml
   chimeraos: ./scripts/tasks/chimeraos.yml
@@ -25,6 +26,7 @@ includes:
   mac: ./scripts/tasks/mac.yml
   mister: ./scripts/tasks/mister.yml
   mistex: ./scripts/tasks/mistex.yml
+  muos: ./scripts/tasks/muos.yml
   recalbox: ./scripts/tasks/recalbox.yml
   replayos: ./scripts/tasks/replayos.yml
   retropie: ./scripts/tasks/retropie.yml

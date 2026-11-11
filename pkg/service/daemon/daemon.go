@@ -327,13 +327,63 @@ func (s *Service) stopService() error {
 	return nil
 }
 
+// serviceBinaryDir is where the service's own copy of the binary lives, and
+// whether the platform chose it rather than it being DataDir.
+func (s *Service) serviceBinaryDir() (dir string, custom bool) {
+	if p, ok := s.pl.(platforms.ServiceBinaryDirProvider); ok {
+		if dir := p.ServiceBinaryDir(); dir != "" {
+			return dir, true
+		}
+	}
+	return helpers.DataDir(s.pl), false
+}
+
+// errUntrustedBinaryDir is returned when the service binary directory could
+// be changed by another user, who could then replace what the service runs.
+var errUntrustedBinaryDir = errors.New("service binary directory is not private")
+
+// ensurePrivateDir creates dir if needed and checks that only this user can
+// change it. A platform's binary directory can sit in a shared place such as
+// /tmp, where another user may have created it first.
+func ensurePrivateDir(fs afero.Fs, dir string) error {
+	if err := fs.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("error creating service binary directory: %w", err)
+	}
+	var info os.FileInfo
+	var err error
+	if lst, ok := fs.(afero.Lstater); ok {
+		info, _, err = lst.LstatIfPossible(dir)
+	} else {
+		info, err = fs.Stat(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("error checking service binary directory: %w", err)
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%w: %s is a symlink", errUntrustedBinaryDir, dir)
+	case !info.IsDir():
+		return fmt.Errorf("%w: %s is not a directory", errUntrustedBinaryDir, dir)
+	case info.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%w: %s is writable by others (%o)", errUntrustedBinaryDir, dir, info.Mode().Perm())
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("%w: %s is owned by uid %d", errUntrustedBinaryDir, dir, st.Uid)
+	}
+	return nil
+}
+
 // prepareBinary keeps a persistent service binary cache in DataDir so the
 // package-manager target can be replaced while the daemon is running.
 func (s *Service) prepareBinary(binPath string) (string, error) {
 	started := time.Now()
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
-	if err := fs.MkdirAll(dataDir, 0o750); err != nil {
+	dataDir, custom := s.serviceBinaryDir()
+	if custom {
+		if err := ensurePrivateDir(fs, dataDir); err != nil {
+			return "", err
+		}
+	} else if err := fs.MkdirAll(dataDir, 0o750); err != nil {
 		return "", fmt.Errorf("error creating data directory: %w", err)
 	}
 
@@ -444,7 +494,7 @@ func (s *Service) cachedServiceBinaryFromManifest(
 	}
 
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
+	dataDir, _ := s.serviceBinaryDir()
 	servicePath := serviceCachePath(dataDir, binPath, manifest.SourceHash)
 	if filepath.Clean(manifest.ServicePath) != filepath.Clean(servicePath) ||
 		!serviceCachePathValid(manifest.ServicePath, dataDir) {
@@ -718,7 +768,7 @@ func isServiceCacheFilename(name string) bool {
 
 func (s *Service) cleanupServiceBinaries(currentPath, previousPath string) {
 	fs := s.filesystem()
-	dataDir := helpers.DataDir(s.pl)
+	dataDir, _ := s.serviceBinaryDir()
 	entries, err := afero.ReadDir(fs, dataDir)
 	if err != nil {
 		log.Debug().Err(err).Msg("error reading service binary cache directory")
@@ -1390,7 +1440,7 @@ func (s *Service) serviceProcessIdentity(pid int) (bool, error) {
 		return true, nil
 	}
 
-	dataDir := helpers.DataDir(s.pl)
+	dataDir, _ := s.serviceBinaryDir()
 	exePath, exeErr := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
 	exePath = strings.TrimSuffix(exePath, " (deleted)")
 	if exeErr == nil && pathLooksLikeServiceBinary(exePath, dataDir) {

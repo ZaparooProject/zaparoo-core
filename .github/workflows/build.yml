@@ -150,9 +150,25 @@ jobs:
             arch: arm64
           - platform: amberelec
             arch: arm64
+          - platform: arkos
+            arch: arm64
           - platform: knulli
             arch: arm
           - platform: knulli
+            arch: arm64
+          - platform: muos
+            arch: arm64
+          - platform: recalbox
+            arch: amd64
+          - platform: recalbox
+            arch: arm
+          - platform: recalbox
+            arch: arm64
+          - platform: retropie
+            arch: amd64
+          - platform: retropie
+            arch: arm
+          - platform: retropie
             arch: arm64
           - platform: rocknix
             arch: amd64

@@ -176,8 +176,30 @@ detect_linux_distro() {
     fi
 
     # Handheld and appliance OSes that report a generic base in os-release
+    if [ -d "${root}"/opt/muos ]; then
+        echo "muos"
+        return
+    fi
+
     if [ -f "${root}"/usr/share/knulli/knulli.version ]; then
         echo "knulli"
+        return
+    fi
+
+    if [ -d "${root}"/recalbox/share ]; then
+        echo "recalbox"
+        return
+    fi
+
+    if [ -d "${root}"/opt/retropie ]; then
+        echo "retropie"
+        return
+    fi
+
+    # ArkOS reports Ubuntu and dArkOS reports Debian; both brand the boot theme
+    if [ -f "${root}"/usr/share/plymouth/themes/text.plymouth ] && \
+        grep -qi "arkos" "${root}"/usr/share/plymouth/themes/text.plymouth; then
+        echo "arkos"
         return
     fi
 
@@ -214,6 +236,16 @@ detect_linux_distro() {
     echo "${ID:-generic}"
 }
 
+userland_is_32bit() {
+    local bits
+    bits="$(getconf LONG_BIT 2>/dev/null || true)"
+    if [ -n "${bits}" ]; then
+        [ "${bits}" = "32" ]
+        return
+    fi
+    [ ! -e "${DETECT_ROOT:-}/lib/ld-linux-aarch64.so.1" ] && [ -e "${DETECT_ROOT:-}/lib/ld-linux-armhf.so.3" ]
+}
+
 detect_arch() {
     local arch
     arch="$(uname -m)"
@@ -223,7 +255,13 @@ detect_arch() {
             echo "amd64"
             ;;
         aarch64|arm64)
-            echo "arm64"
+            # A 32-bit userland on a 64-bit kernel (Raspberry Pi OS armhf with
+            # arm_64bit=1, a Pi 5) cannot run the arm64 build.
+            if userland_is_32bit; then
+                echo "arm"
+            else
+                echo "arm64"
+            fi
             ;;
         armv7l)
             echo "arm"
@@ -511,7 +549,14 @@ download_and_extract() {
     info "Extracting archive..."
     mkdir -p "${TMP_EXTRACT}"
 
-    if ! tar -xzf "${TMP_ARCHIVE}" -C "${TMP_EXTRACT}"; then
+    local extracted=true
+    if [ "${os_type}" = "muos" ]; then
+        # muOS ships a BusyBox tar built without gzip support.
+        gzip -dc "${TMP_ARCHIVE}" | tar -xf - -C "${TMP_EXTRACT}" || extracted=false
+    else
+        tar -xzf "${TMP_ARCHIVE}" -C "${TMP_EXTRACT}" || extracted=false
+    fi
+    if [ "${extracted}" != true ]; then
         abort "Failed to extract archive"
     fi
 
@@ -1304,9 +1349,26 @@ install_linux_generic() {
                 "knulli-services stop zaparoo_service"
             return 0
             ;;
-        recalbox|retropie)
-            warn "Embedded system detected (${distro})"
-            warn "Some features may require manual configuration"
+        arkos)
+            install_appliance arkos "ArkOS" /home/ark/.config/zaparoo/zaparoo
+            return 0
+            ;;
+        muos)
+            install_appliance muos "muOS" /mnt/mmc/MUOS/zaparoo/zaparoo
+            return 0
+            ;;
+        recalbox)
+            install_appliance recalbox "Recalbox" /recalbox/share/system/zaparoo/zaparoo
+            return 0
+            ;;
+        retropie)
+            # RetroPie runs Core as the RetroPie user; -install asks sudo
+            # for the root half itself.
+            if [ "$(id -u)" -eq 0 ]; then
+                abort "Run this installer as the RetroPie user (usually pi), not as root"
+            fi
+            install_appliance retropie "RetroPie" "${APP_PATH}"
+            return 0
             ;;
     esac
 
@@ -1669,8 +1731,15 @@ install_appliance() {
             info "[DRY-RUN] Would run: ${stop_cmd}"
         fi
         info "[DRY-RUN] Would install binary to: ${dest}"
-        info "[DRY-RUN] Would run: ${dest} -install"
+        if [ "${platform}" = recalbox ]; then
+            info "[DRY-RUN] Would run: ZAPAROO_APP=${dest} ${ZAPAROO_BIN} -install"
+        elif [ "${platform}" = arkos ] && [ "$(id -u)" != 0 ]; then
+            info "[DRY-RUN] Would run: sudo ${dest} -install"
+        else
+            info "[DRY-RUN] Would run: ${dest} -install"
+        fi
         success "[DRY-RUN] ${label} installation simulated"
+        appliance_run_hint "${platform}"
         return 0
     fi
 
@@ -1693,11 +1762,30 @@ install_appliance() {
     success "Installed to ${dest}"
 
     info "Installing service..."
-    if ! "${dest}" -install; then
+    if [ "${platform}" = recalbox ]; then
+        # The Recalbox share cannot execute files: run the downloaded copy and
+        # name the installed binary for the supervisor.
+        if ! ZAPAROO_APP="${dest}" "${ZAPAROO_BIN}" -install; then
+            abort "Failed to install service"
+        fi
+    elif [ "${platform}" = arkos ] && [ "$(id -u)" != 0 ]; then
+        # ArkOS users log in as ark, and the service is a system unit.
+        if ! run_privileged "${dest}" -install; then
+            abort "Failed to install service"
+        fi
+    elif ! "${dest}" -install; then
         abort "Failed to install service"
     fi
 
     success "${label} installation complete!"
+    appliance_run_hint "${platform}"
+}
+
+appliance_run_hint() {
+    if [ "$1" = recalbox ]; then
+        # The service runs a tmpfs copy because the share cannot execute files.
+        info "Run via SSH: /tmp/zaparoo-bin/zaparoo-start"
+    fi
 }
 
 # ============================================================================

@@ -113,7 +113,7 @@ func TestDefaultInputMode(t *testing.T) {
 		platformids.Mister, platformids.Mistex, platformids.Batocera,
 		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
 		platformids.ReplayOS, platformids.Knulli, platformids.ROCKNIX,
-		platformids.AmberELEC,
+		platformids.AmberELEC, platformids.ArkOS, platformids.MuOS,
 	} {
 		assert.Equal(t, config.InputModeUnrestricted, defaultInputMode(id),
 			"embedded platform %s should default to unrestricted", id)
