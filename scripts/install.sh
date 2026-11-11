@@ -664,7 +664,7 @@ verify_core_api() {
     local attempt=0 starting=0 announced=false
     local health state version_response actual_version actual_platform
     while [ "${attempt}" -lt "${CORE_API_VERIFY_ATTEMPTS}" ]; do
-        health="$(curl --fail --silent --show-error "http://127.0.0.1:7497/health" 2>/dev/null || true)"
+        health="$(curl --fail --silent --show-error -H 'Accept: application/json' "http://127.0.0.1:7497/health" 2>/dev/null || true)"
         state="$(json_string_field "state" "${health}")"
         if [ "${state}" = "failed" ]; then
             # Core is alive only to report a problem a person has to resolve.

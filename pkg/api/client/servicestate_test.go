@@ -72,6 +72,28 @@ func TestServiceState_ReadsEachStateFromTheHealthRoute(t *testing.T) {
 	}
 }
 
+// /health answers with plain text unless JSON is asked for, and the plain body
+// for a service still starting is not JSON. Without the Accept header the
+// decode fails and a starting service reads as ready.
+func TestServiceState_AsksForJSON(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "application/json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"starting","state":"starting"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("starting"))
+	}))
+	defer server.Close()
+
+	state, ok := ServiceState(testConfigWithPort(t, parseServerPort(t, server)))
+	require.True(t, ok)
+	assert.Equal(t, ServiceStateStarting, state)
+}
+
 // Nothing listening is the third case, and it has to be distinguishable from a
 // service that answered: SpawnDaemon starts a daemon for one and attaches for
 // the other.

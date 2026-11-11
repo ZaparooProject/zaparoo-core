@@ -215,6 +215,11 @@ test_verify_core_api_waits_out_a_reported_startup() {
             local url="${*: -1}" calls
             if [[ "${url}" == *"/health" ]]; then
                 calls="$(verify_core_api_health_calls "${counter}")"
+                # Core sends the JSON state only when asked for it.
+                if [[ "$*" != *"Accept: application/json"* ]]; then
+                    printf 'STARTING'
+                    return 0
+                fi
                 if [ "${calls}" -le 40 ]; then
                     printf '{"status":"starting","state":"starting"}'
                 else
