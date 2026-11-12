@@ -84,7 +84,10 @@ type peripheral struct {
 	// linkRole reports whether a device is connected to the adapter as a
 	// central, the adapter being the peripheral.
 	linkRole func(index uint16, addr [6]byte) (bool, error)
-	mu       syncutil.Mutex
+	// debts is where a bonding window that could not undo everything
+	// leaves the rest.
+	debts *bondDebts
+	mu    syncutil.Mutex
 	// bondStallTimeout is how long a device that just bonded has to use
 	// the GATT service before it is disconnected.
 	bondStallTimeout time.Duration
@@ -105,6 +108,7 @@ func newPeripheral(a *adapter) *peripheral {
 		bondStallTimeout: bondStallTimeout,
 		openBondEvents:   openMgmt,
 		linkRole:         connectedAsPeripheral,
+		debts:            processBondDebts,
 	}
 }
 
@@ -377,6 +381,11 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		return p.registrationFailed(ctx, err)
 	}
 	defer p.unregister(gattManagerIface+".UnregisterApplication", root)
+
+	// bluetoothd is answering again, so what a bonding window could not
+	// undo, usually because the adapter was lost under it, is undone
+	// before anyone can find the device.
+	p.settleBondDebts(ctx)
 
 	if err := exportAdvertisement(exp, p.a, advPath, adv); err != nil {
 		return err

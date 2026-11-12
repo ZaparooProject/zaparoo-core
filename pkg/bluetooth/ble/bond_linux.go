@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -131,6 +132,11 @@ type bondWindow struct {
 // AllowBonding implements Bonder.
 func (p *peripheral) AllowBonding(ctx context.Context) (BondWindow, error) {
 	a := p.a
+	// What an earlier window left owed goes first, so the bonds it could
+	// not remove are not carried into this window as if nobody accepted
+	// them.
+	p.settleBondDebts(ctx)
+
 	w := &bondWindow{
 		p:        p,
 		closed:   make(chan struct{}),
@@ -153,21 +159,40 @@ func (p *peripheral) AllowBonding(ctx context.Context) (BondWindow, error) {
 		return nil, fmt.Errorf("make bonding agent the default: %w", err)
 	}
 
-	v, err := a.getProperty(ctx, a.obj, adapterIface, "Pairable")
-	if err != nil {
+	if err := w.makePairable(ctx); err != nil {
 		w.unregister(ctx)
 		return nil, err
-	}
-	if pairable, ok := v.Value().(bool); !ok || !pairable {
-		if err := a.setProperty(ctx, a.obj, adapterIface, "Pairable", true); err != nil {
-			w.unregister(ctx)
-			return nil, err
-		}
-		w.restorePairable = true
 	}
 	w.watchBonds()
 	log.Info().Msg("bluetooth bonding open for Core's pairing")
 	return w, nil
+}
+
+// makePairable switches Pairable on for the window and works out whether
+// switching it back off is the window's to do. It is when the window found
+// it off, and when an earlier window found it off and could not switch it
+// back: that window's restore becomes this one's, since switching it off
+// now would close this window too.
+func (w *bondWindow) makePairable(ctx context.Context) error {
+	a := w.p.a
+	debts := w.p.debts
+	debts.settling.Lock()
+	defer debts.settling.Unlock()
+
+	v, err := a.getProperty(ctx, a.obj, adapterIface, "Pairable")
+	if err != nil {
+		return err
+	}
+	if pairable, ok := v.Value().(bool); !ok || !pairable {
+		if err := a.setProperty(ctx, a.obj, adapterIface, "Pairable", true); err != nil {
+			return err
+		}
+		w.restorePairable = true
+	}
+	if debts.takePairable(a.bondDebtKey()) {
+		w.restorePairable = true
+	}
+	return nil
 }
 
 // watchBonds starts reading the bonds bluetoothd makes without the agent.
@@ -232,11 +257,14 @@ func (p *peripheral) dropIfStalled(device dbus.ObjectPath, used <-chan struct{},
 		Msg("disconnected a bluetooth peer that bonded but did not reach Core's service; it reconnects bonded")
 }
 
-// Keep implements BondWindow.
+// Keep implements BondWindow. A device kept after its window failed to close
+// keeps its bond too.
 func (w *bondWindow) Keep(peer Peer) {
+	device := dbus.ObjectPath(peer.Path)
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.kept[dbus.ObjectPath(peer.Path)] = true
+	w.kept[device] = true
+	w.mu.Unlock()
+	w.p.debts.forget(w.p.a.bondDebtKey(), device)
 }
 
 // unregister removes the agent from bluetoothd and the bus.
@@ -249,52 +277,73 @@ func (w *bondWindow) unregister(ctx context.Context) {
 	_ = a.export(nil, w.path, agentIface)
 }
 
-// Close implements BondWindow.
+// Close implements BondWindow. A close that could not undo everything
+// returns an error and leaves the rest owed; closing again tries what the
+// adapter is still owed and returns nil once nothing is.
 func (w *bondWindow) Close(ctx context.Context) error {
-	var errs []error
+	first := false
+	var err error
 	w.once.Do(func() {
-		close(w.closed)
-		a := w.p.a
-		w.mu.Lock()
-		events := w.events
-		w.events = nil
-		w.mu.Unlock()
-		if events != nil {
-			_ = events.Close()
-		}
-		w.unregister(ctx)
-		if w.restorePairable {
-			if err := a.setProperty(ctx, a.obj, adapterIface, "Pairable", false); err != nil {
-				errs = append(errs, err)
-			}
-		}
-
-		w.mu.Lock()
-		var drop []dbus.ObjectPath
-		for path := range w.accepted {
-			if !w.kept[path] {
-				drop = append(drop, path)
-			}
-		}
-		w.mu.Unlock()
-
-		// Every accepted device that did not prove itself goes, paired or
-		// not yet: one still pairing would otherwise finish with a bond
-		// nobody checks.
-		for _, path := range drop {
-			err := a.call(ctx, a.obj, adapterIface+".RemoveDevice", path)
-			var dbusErr dbus.Error
-			if errors.As(err, &dbusErr) && dbusErr.Name == bluezErrNotExist {
-				err = nil
-			}
-			if err != nil {
-				errs = append(errs, fmt.Errorf("remove unproven bond: %w", err))
-				continue
-			}
-			log.Info().Str("peer", addressFromPath(path)).
-				Msg("removed a bluetooth bond that never completed Core's pairing")
-		}
-		log.Info().Msg("bluetooth bonding closed")
+		first = true
+		err = w.shut(ctx)
 	})
-	return errors.Join(errs...)
+	if first {
+		return err
+	}
+	return w.p.debts.settle(ctx, w.p.a)
+}
+
+// shut stops the window and undoes what it did to the adapter. Whatever
+// cannot be undone now is recorded as owed.
+func (w *bondWindow) shut(ctx context.Context) error {
+	close(w.closed)
+	a := w.p.a
+	w.mu.Lock()
+	events := w.events
+	w.events = nil
+	w.mu.Unlock()
+	if events != nil {
+		_ = events.Close()
+	}
+	w.unregister(ctx)
+
+	var errs []error
+	pairableOwed := false
+	if w.restorePairable {
+		if err := a.setProperty(ctx, a.obj, adapterIface, "Pairable", false); err != nil {
+			errs = append(errs, err)
+			pairableOwed = true
+		}
+	}
+
+	w.mu.Lock()
+	var drop []dbus.ObjectPath
+	for path := range w.accepted {
+		if !w.kept[path] {
+			drop = append(drop, path)
+		}
+	}
+	w.mu.Unlock()
+
+	// Every accepted device that did not prove itself goes, paired or
+	// not yet: one still pairing would otherwise finish with a bond
+	// nobody checks.
+	var owed []dbus.ObjectPath
+	for _, path := range drop {
+		if err := a.removeDevice(ctx, path); err != nil {
+			errs = append(errs, err)
+			owed = append(owed, path)
+			continue
+		}
+		log.Info().Str("peer", addressFromPath(path)).
+			Msg("removed a bluetooth bond that never completed Core's pairing")
+	}
+	log.Info().Msg("bluetooth bonding closed")
+	if len(errs) == 0 {
+		return nil
+	}
+	slices.Sort(owed)
+	w.p.debts.add(a.bondDebtKey(), pairableOwed, owed)
+	return fmt.Errorf("bonding cleanup incomplete (%s): %w",
+		describeBondDebt(pairableOwed, owed), errors.Join(errs...))
 }

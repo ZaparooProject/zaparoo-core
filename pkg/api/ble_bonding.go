@@ -31,6 +31,10 @@ import (
 // bluetoothd calls.
 const bondCloseTimeout = 10 * time.Second
 
+// bondCloseRetryInterval is how long the bonding loop waits before it tries
+// a failed close again when nothing else wakes it.
+const bondCloseRetryInterval = 30 * time.Second
+
 // A phone has to bond with the adapter to reconnect later, and the adapter
 // only lets it while Core's pairing PIN is shown. The bonding loop keeps a
 // window open exactly then, on the peripheral being served, and holds it
@@ -59,14 +63,51 @@ func (t *bleTransport) holdBonding() (release func()) {
 }
 
 // keepBond marks a peer that proved it is Core's client, so the bond it
-// made during the window stays.
+// made during the window stays. A window whose cleanup is still being
+// retried is told too, so the retry does not remove the bond.
 func (t *bleTransport) keepBond(peer ble.Peer) {
 	t.mu.Lock()
-	w := t.bondWindow
+	windows := append([]ble.BondWindow(nil), t.bondUnsettled...)
+	if t.bondWindow != nil {
+		windows = append(windows, t.bondWindow)
+	}
 	t.mu.Unlock()
-	if w != nil {
+	for _, w := range windows {
 		w.Keep(peer)
 	}
+}
+
+// closeBondWindow closes a bonding window, or tries again to finish closing
+// one.
+func closeBondWindow(w ble.BondWindow) error {
+	ctx, cancel := context.WithTimeout(context.Background(), bondCloseTimeout)
+	defer cancel()
+	//nolint:wrapcheck // logged by the caller, never returned further
+	return w.Close(ctx)
+}
+
+// retryBondCleanup closes again every window whose cleanup failed. A bond a
+// window accepted and could not remove is one nobody checked, so a window
+// is only let go once its close succeeds.
+func (t *bleTransport) retryBondCleanup() {
+	t.mu.Lock()
+	unsettled := append([]ble.BondWindow(nil), t.bondUnsettled...)
+	t.mu.Unlock()
+	if len(unsettled) == 0 {
+		return
+	}
+	left := unsettled[:0]
+	for _, w := range unsettled {
+		if err := closeBondWindow(w); err != nil {
+			log.Debug().Err(err).Msg("bluetooth bonding cleanup still incomplete")
+			left = append(left, w)
+			continue
+		}
+		log.Info().Msg("bluetooth bonding cleanup that failed earlier is done")
+	}
+	t.mu.Lock()
+	t.bondUnsettled = left
+	t.mu.Unlock()
 }
 
 // bondingLoop opens and closes the bonding window until the transport stops.
@@ -76,17 +117,23 @@ func (t *bleTransport) bondingLoop(pinChanged <-chan struct{}) {
 		owner  ble.Peripheral
 	)
 	closeWindow := func() {
+		w := window
+		window, owner = nil, nil
 		t.mu.Lock()
 		t.bondWindow = nil
 		t.mu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), bondCloseTimeout)
-		if err := window.Close(ctx); err != nil {
-			log.Warn().Err(err).Msg("closing bluetooth bonding")
+		err := closeBondWindow(w)
+		if err == nil {
+			return
 		}
-		cancel()
-		window, owner = nil, nil
+		log.Warn().Err(err).Msg("closing bluetooth bonding left cleanup undone; it will be retried")
+		t.mu.Lock()
+		t.bondUnsettled = append(t.bondUnsettled, w)
+		t.mu.Unlock()
 	}
 	defer func() {
+		// The last chance for a cleanup that failed earlier.
+		t.retryBondCleanup()
 		if window != nil {
 			closeWindow()
 		}
@@ -101,6 +148,9 @@ func (t *bleTransport) bondingLoop(pinChanged <-chan struct{}) {
 		bonder, canBond := p.(ble.Bonder)
 		want := pin != "" && canBond
 
+		// A failed cleanup is finished before a new window opens, so the
+		// bonds it left are not carried into the next pairing.
+		t.retryBondCleanup()
 		if window != nil && (owner != p || (!want && holds == 0)) {
 			closeWindow()
 		}
@@ -124,14 +174,27 @@ func (t *bleTransport) bondingLoop(pinChanged <-chan struct{}) {
 			timer = time.NewTimer(time.Until(expiresAt))
 			expired = timer.C
 		}
+		var retry <-chan time.Time
+		var retryTimer *time.Timer
+		t.mu.Lock()
+		unsettled := len(t.bondUnsettled)
+		t.mu.Unlock()
+		if unsettled > 0 {
+			retryTimer = time.NewTimer(bondCloseRetryInterval)
+			retry = retryTimer.C
+		}
 		select {
 		case <-t.ctx.Done():
 		case <-pinChanged:
 		case <-t.bondKick:
 		case <-expired:
+		case <-retry:
 		}
 		if timer != nil {
 			timer.Stop()
+		}
+		if retryTimer != nil {
+			retryTimer.Stop()
 		}
 		if t.ctx.Err() != nil {
 			return

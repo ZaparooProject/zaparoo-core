@@ -36,13 +36,16 @@ import (
 )
 
 // fakeBonder is a fake peripheral that can open bonding windows. It logs
-// what happens to them in order: "open", "keep:<path>" and "close".
+// what happens to them in order: "open", "keep:<path>", "close" and, for a
+// close that fails, "close-failed".
 type fakeBonder struct {
 	*mocks.FakePeripheral
 	err    error
 	events []string
 	opens  int
-	mu     syncutil.Mutex
+	// closeFails is how many closes still fail.
+	closeFails int
+	mu         syncutil.Mutex
 }
 
 type fakeBondWindow struct{ b *fakeBonder }
@@ -79,8 +82,19 @@ func (w *fakeBondWindow) Keep(peer ble.Peer) {
 func (w *fakeBondWindow) Close(context.Context) error {
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()
+	if w.b.closeFails > 0 {
+		w.b.closeFails--
+		w.b.events = append(w.b.events, "close-failed")
+		return errors.New("bluetoothd did not answer")
+	}
 	w.b.events = append(w.b.events, "close")
 	return nil
+}
+
+func (b *fakeBonder) failCloses(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closeFails = n
 }
 
 func (b *fakeBonder) waitFor(t *testing.T, want ...string) {
@@ -258,4 +272,75 @@ func TestBLEBonding_FailedPairFinishDoesNotKeep(t *testing.T) {
 
 	harness.mgr.CancelPairing()
 	bonder.waitFor(t, "open", "close")
+}
+
+// A window whose close failed left cleanup undone, so it is closed again
+// the next time the loop wakes, and once it has closed it is left alone.
+func TestBLEBonding_FailedCloseIsRetried(t *testing.T) {
+	t.Parallel()
+
+	harness := newPairingHarness(t)
+	bonder := &fakeBonder{}
+	rig := newBLETestRig(t, bleTestRigOptions{pairing: harness.mgr, bonder: bonder})
+
+	_, _, err := harness.mgr.StartPairing("member")
+	require.NoError(t, err)
+	bonder.waitFor(t, "open")
+
+	bonder.failCloses(2)
+	harness.mgr.CancelPairing()
+	bonder.waitFor(t, "open", "close-failed")
+
+	rig.transport.kickBonding()
+	bonder.waitFor(t, "open", "close-failed", "close-failed")
+
+	// A peer that proves itself meanwhile is kept by the window still owed.
+	peer := ble.Peer{Path: "/org/bluez/hci0/dev_11_22_33_44_55_66"}
+	rig.transport.keepBond(peer)
+	rig.transport.kickBonding()
+	bonder.waitFor(t, "open", "close-failed", "close-failed", "keep:"+peer.Path, "close")
+
+	rig.transport.stop()
+	assert.Equal(t, []string{"open", "close-failed", "close-failed", "keep:" + peer.Path, "close"}, bonder.log())
+}
+
+// The cleanup a failed close left is finished before the next window opens.
+func TestBLEBonding_FailedCloseIsRetriedBeforeNextWindow(t *testing.T) {
+	t.Parallel()
+
+	harness := newPairingHarness(t)
+	bonder := &fakeBonder{}
+	newBLETestRig(t, bleTestRigOptions{pairing: harness.mgr, bonder: bonder})
+
+	_, _, err := harness.mgr.StartPairing("member")
+	require.NoError(t, err)
+	bonder.waitFor(t, "open")
+
+	bonder.failCloses(1)
+	harness.mgr.CancelPairing()
+	bonder.waitFor(t, "open", "close-failed")
+
+	_, _, err = harness.mgr.StartPairing("member")
+	require.NoError(t, err)
+	bonder.waitFor(t, "open", "close-failed", "close", "open")
+}
+
+// Stopping gives a failed cleanup one more try.
+func TestBLEBonding_StopRetriesFailedClose(t *testing.T) {
+	t.Parallel()
+
+	harness := newPairingHarness(t)
+	bonder := &fakeBonder{}
+	rig := newBLETestRig(t, bleTestRigOptions{pairing: harness.mgr, bonder: bonder})
+
+	_, _, err := harness.mgr.StartPairing("member")
+	require.NoError(t, err)
+	bonder.waitFor(t, "open")
+
+	bonder.failCloses(1)
+	harness.mgr.CancelPairing()
+	bonder.waitFor(t, "open", "close-failed")
+
+	rig.transport.stop()
+	assert.Equal(t, []string{"open", "close-failed", "close"}, bonder.log())
 }

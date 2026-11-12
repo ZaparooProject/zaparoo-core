@@ -43,11 +43,24 @@ func servingPeripheral(t *testing.T, fake *fakeBluez, addr string) *peripheral {
 // application was registered.
 func servingPeripheralApp(t *testing.T, fake *fakeBluez, addr string) (*peripheral, appRegistration) {
 	t.Helper()
+	return servingPeripheralOwing(t, fake, addr, newBondDebts())
+}
+
+// servingPeripheralOwing is servingPeripheralApp on a new adapter connection
+// that shares debts, the way every connection of one process does.
+func servingPeripheralOwing(
+	t *testing.T, fake *fakeBluez, addr string, debts *bondDebts,
+) (*peripheral, appRegistration) {
+	t.Helper()
 	adapter, err := Open(t.Context(), WithBusAddress(addr))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = adapter.Close() })
 	p, err := adapter.Peripheral()
 	require.NoError(t, err)
+	lp, ok := p.(*peripheral)
+	require.True(t, ok)
+	// Keep what one test leaves owed away from the next.
+	lp.debts = debts
 	serveTestApplication(t, p)
 	var reg appRegistration
 	select {
@@ -56,8 +69,6 @@ func servingPeripheralApp(t *testing.T, fake *fakeBluez, addr string) (*peripher
 		t.Fatal("application was never registered")
 	}
 	fake.expectCall(t, "RegisterAdvertisement")
-	lp, ok := p.(*peripheral)
-	require.True(t, ok)
 	// Keep the window's bond watch off the host's real adapter.
 	lp.openBondEvents = func() (mgmtConn, error) { return nil, errors.New("no management socket in tests") }
 	lp.linkRole = func(uint16, [6]byte) (bool, error) { return false, errors.New("no links in tests") }

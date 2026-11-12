@@ -122,7 +122,15 @@ type fakeBluez struct {
 	advPaths    chan appRegistration
 	// agents receives each agent made the default.
 	agents chan appRegistration
-	mu     syncutil.Mutex
+	// removed is every device RemoveDevice was called for, in order.
+	removed []dbus.ObjectPath
+	// pairableSets is every value Pairable was set to, in order.
+	pairableSets []bool
+	mu           syncutil.Mutex
+	// failRemove is how many RemoveDevice calls still fail.
+	failRemove int
+	// failPairable is how many changes to Pairable are still rejected.
+	failPairable int
 	// discoveryBusy is how many StartDiscovery calls are still refused
 	// because an earlier session is winding down.
 	discoveryBusy int
@@ -150,6 +158,20 @@ func (f *fakeBluez) GetManagedObjects() (managedObjects, *dbus.Error) {
 		out[path] = ifaces
 	}
 	return out, nil
+}
+
+// setPairable is asked before Pairable changes.
+func (f *fakeBluez) setPairable(c *prop.Change) *dbus.Error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if on, ok := c.Value.(bool); ok {
+		f.pairableSets = append(f.pairableSets, on)
+	}
+	if f.failPairable > 0 {
+		f.failPairable--
+		return dbus.MakeFailedError(errors.New("busy"))
+	}
+	return nil
 }
 
 func (f *fakeBluez) record(call string) {
@@ -237,6 +259,16 @@ func (a *fakeAdapter) UnregisterAdvertisement(_ dbus.ObjectPath) *dbus.Error {
 
 func (a *fakeAdapter) RemoveDevice(path dbus.ObjectPath) *dbus.Error {
 	a.f.record("RemoveDevice:" + string(path))
+	a.f.mu.Lock()
+	a.f.removed = append(a.f.removed, path)
+	fail := a.f.failRemove > 0
+	if fail {
+		a.f.failRemove--
+	}
+	a.f.mu.Unlock()
+	if fail {
+		return dbus.MakeFailedError(errors.New("busy"))
+	}
 	if path == fakeDevicePath+"_gone" {
 		return dbus.NewError(bluezErrNotExist, []any{"Does Not Exist"})
 	}
@@ -364,7 +396,7 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 			}
 			return nil
 		}},
-		"Pairable": {Value: false, Writable: true, Emit: prop.EmitTrue},
+		"Pairable": {Value: false, Writable: true, Emit: prop.EmitTrue, Callback: f.setPairable},
 		"Roles":    {Value: []string{"central", "peripheral", "central-peripheral"}, Emit: prop.EmitConst},
 	}}
 	f.objects = managedObjects{

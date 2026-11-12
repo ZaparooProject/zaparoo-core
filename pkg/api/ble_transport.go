@@ -91,6 +91,9 @@ type bleTransport struct {
 	// lastServeErr is the last serve failure logged, so an adapter that
 	// keeps refusing the same way is reported once.
 	lastServeErr string
+	// bondUnsettled are closed windows whose cleanup failed and is still
+	// to be retried, owned by bondingLoop.
+	bondUnsettled []ble.BondWindow
 	// bondHolds counts pair.finish requests still being answered.
 	bondHolds int
 	wg        sync.WaitGroup
