@@ -117,7 +117,9 @@ type fakeBluez struct {
 	calls       chan string
 	appRoot     chan appRegistration
 	advPaths    chan appRegistration
-	mu          syncutil.Mutex
+	// agents receives each agent made the default.
+	agents chan appRegistration
+	mu     syncutil.Mutex
 	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
 	// when the controller cannot advertise.
 	refuseAdvert bool
@@ -224,6 +226,36 @@ func (a *fakeAdapter) UnregisterAdvertisement(_ dbus.ObjectPath) *dbus.Error {
 	return nil
 }
 
+func (a *fakeAdapter) RemoveDevice(path dbus.ObjectPath) *dbus.Error {
+	a.f.record("RemoveDevice:" + string(path))
+	if path == fakeDevicePath+"_gone" {
+		return dbus.NewError(bluezErrNotExist, []any{"Does Not Exist"})
+	}
+	return nil
+}
+
+// fakeAgentManager implements org.bluez.AgentManager1.
+type fakeAgentManager struct{ f *fakeBluez }
+
+func (m *fakeAgentManager) RegisterAgent(_ dbus.Sender, path dbus.ObjectPath, capability string) *dbus.Error {
+	m.f.record("RegisterAgent:" + string(path) + ":" + capability)
+	return nil
+}
+
+func (m *fakeAgentManager) RequestDefaultAgent(sender dbus.Sender, path dbus.ObjectPath) *dbus.Error {
+	m.f.record("RequestDefaultAgent")
+	select {
+	case m.f.agents <- appRegistration{sender: sender, path: path}:
+	default:
+	}
+	return nil
+}
+
+func (m *fakeAgentManager) UnregisterAgent(path dbus.ObjectPath) *dbus.Error {
+	m.f.record("UnregisterAgent:" + string(path))
+	return nil
+}
+
 // fakeDevice implements org.bluez.Device1 for the discovered device.
 type fakeDevice struct{ f *fakeBluez }
 
@@ -289,9 +321,10 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 		advPaths: make(chan appRegistration, 1),
 	}
 	adapterSpec := prop.Map{adapterIface: {
-		"Address": {Value: "00:11:22:33:44:55", Emit: prop.EmitConst},
-		"Powered": {Value: true, Writable: true, Emit: prop.EmitTrue},
-		"Roles":   {Value: []string{"central", "peripheral", "central-peripheral"}, Emit: prop.EmitConst},
+		"Address":  {Value: "00:11:22:33:44:55", Emit: prop.EmitConst},
+		"Powered":  {Value: true, Writable: true, Emit: prop.EmitTrue},
+		"Pairable": {Value: false, Writable: true, Emit: prop.EmitTrue},
+		"Roles":    {Value: []string{"central", "peripheral", "central-peripheral"}, Emit: prop.EmitConst},
 	}}
 	f.objects = managedObjects{
 		fakeAdapterPath: {
@@ -307,6 +340,8 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 	require.NoError(t, conn.Export(adapter, fakeAdapterPath, adapterIface))
 	require.NoError(t, conn.Export(adapter, fakeAdapterPath, gattManagerIface))
 	require.NoError(t, conn.Export(adapter, fakeAdapterPath, advManagerIface))
+	f.agents = make(chan appRegistration, 4)
+	require.NoError(t, conn.Export(&fakeAgentManager{f: f}, bluezPathPrefix, agentManagerIface))
 
 	f.deviceProp, err = prop.Export(conn, fakeDevicePath, prop.Map{deviceIface: {
 		"Address":          {Value: fakeDeviceAddr, Emit: prop.EmitConst},
@@ -408,6 +443,7 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	}
 	app := Application{Services: []Service{{
 		UUID:    "0da70001-b359-443b-836f-477d34b6a638",
+		Handle:  0x0100,
 		Primary: true,
 		Characteristics: []Characteristic{
 			{UUID: "0da70002-b359-443b-836f-477d34b6a638", Flags: []string{FlagWrite, FlagWriteWithoutResponse}},
@@ -446,6 +482,8 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	servicePath := reg.path + "/service0"
 	require.Contains(t, tree, servicePath)
 	assert.Equal(t, app.Services[0].UUID, stringProp(tree[servicePath][gattServiceIface], "UUID"))
+	assert.Equal(t, uint16(0x0100), tree[servicePath][gattServiceIface]["Handle"].Value(),
+		"the service asks for a fixed handle so a phone's cache stays valid")
 	rxPath, txPath, infoPath := servicePath+"/char0", servicePath+"/char1", servicePath+"/char2"
 	for _, p := range []dbus.ObjectPath{rxPath, txPath, infoPath} {
 		require.Contains(t, tree, p)
@@ -475,6 +513,9 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	case <-time.After(integrationWait):
 		t.Fatal("write never reached the handler")
 	}
+	// That peer is now a client, so advertising restarts for the next one.
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.expectCall(t, "RegisterAdvertisement")
 
 	// Reads are answered by the handler.
 	var value []byte
@@ -913,11 +954,12 @@ func TestIntegration_FindReturnsARememberedDeviceWithoutScanning(t *testing.T) {
 	fake.expectCall(t, "StartDiscovery")
 }
 
-// When a central connects, the advertisement is restarted so another can
-// find the device. A controller that cannot advertise while connected
-// refuses, which is not a reason to give the adapter up; the restart after
-// the central leaves is.
-func TestIntegration_AdvertisingRestartsWhenAPeerConnects(t *testing.T) {
+// When a central starts using Core's service, the advertisement is
+// restarted so another can find the device. A controller that cannot
+// advertise while connected refuses, which is not a reason to give the
+// adapter up; the restart after the client leaves is. Devices that never
+// touch the service, such as gamepads, never cause a restart.
+func TestIntegration_AdvertisingRestartsWhenAClientConnects(t *testing.T) {
 	addr := startSessionBus(t)
 	fake := newFakeBluez(t, addr)
 
@@ -927,26 +969,49 @@ func TestIntegration_AdvertisingRestartsWhenAPeerConnects(t *testing.T) {
 	peripheral, err := adapter.Peripheral()
 	require.NoError(t, err)
 	serveErr := serveTestApplication(t, peripheral)
+	var reg appRegistration
+	select {
+	case reg = <-fake.appRoot:
+	case <-time.After(integrationWait):
+		t.Fatal("application was never registered")
+	}
 	select {
 	case <-fake.advPaths:
 	case <-time.After(integrationWait):
 		t.Fatal("advertisement was never registered")
 	}
 	fake.expectCall(t, "RegisterAdvertisement")
+	txPath := reg.path + "/service0/char0"
+	readAs := func(device dbus.ObjectPath) {
+		t.Helper()
+		opts := map[string]dbus.Variant{"device": dbus.MakeVariant(device)}
+		require.NoError(t, fake.conn.Object(string(reg.sender), txPath).
+			Call(gattCharIface+".ReadValue", 0, opts).Err)
+	}
 
-	// A central connects: advertising is restarted for the next one.
-	fake.deviceProp.SetMust(deviceIface, "Connected", true)
+	// A gamepad connecting and leaving is none of Core's business.
+	gamepad := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_77")
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesAdded, gamepad,
+		map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(true)}}))
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, gamepad, []string{deviceIface}))
+	expectNoCall(t, fake, "UnregisterAdvertisement", "a gamepad restarted advertising")
+
+	// A client uses the service: advertising is restarted for the next one,
+	// once, however many requests it makes.
+	readAs(fakeDevicePath)
+	readAs(fakeDevicePath)
 	fake.expectCall(t, "UnregisterAdvertisement")
 	fake.expectCall(t, "RegisterAdvertisement")
+	expectNoCall(t, fake, "UnregisterAdvertisement", "a known client restarted advertising again")
 
-	// A second connects while the controller is at its limit: the refusal
+	// A second arrives while the controller is at its limit: the refusal
 	// is tolerated and the adapter stays.
 	fake.mu.Lock()
 	fake.refuseAdvert = true
 	fake.mu.Unlock()
 	second := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_02")
-	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesAdded, second,
-		map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(true)}}))
+	fake.connectDevice(t, second)
+	readAs(second)
 	fake.expectCall(t, "RegisterAdvertisement")
 	select {
 	case <-adapter.Gone():
@@ -956,8 +1021,274 @@ func TestIntegration_AdvertisingRestartsWhenAPeerConnects(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	// When a central leaves and the restart is still refused, nobody can
+	// When a client leaves and the restart is still refused, nobody can
 	// find the device, and the adapter is given up to be reopened.
+	fake.mu.Lock()
+	delete(fake.objects, second)
+	fake.mu.Unlock()
 	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, second, []string{deviceIface}))
-	waitGone(t, adapter, "a refused restart after a peer left")
+	waitGone(t, adapter, "a refused restart after a client left")
+}
+
+// connectDevice adds a connected device of the adapter to bluetoothd's
+// objects, which is how a gamepad or a client looks.
+func (f *fakeBluez) connectDevice(t *testing.T, path dbus.ObjectPath) {
+	t.Helper()
+	ifaces := map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(true)}}
+	f.mu.Lock()
+	f.objects[path] = ifaces
+	f.mu.Unlock()
+	require.NoError(t, f.conn.Emit(bluezRootPath, signalInterfacesAdded, path, ifaces))
+}
+
+// disconnectDevice marks a device of the adapter disconnected.
+func (f *fakeBluez) disconnectDevice(t *testing.T, path dbus.ObjectPath) {
+	t.Helper()
+	f.mu.Lock()
+	f.objects[path] = map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(false)}}
+	f.mu.Unlock()
+	require.NoError(t, f.conn.Emit(path, signalPropertiesChanged, deviceIface,
+		map[string]dbus.Variant{"Connected": dbus.MakeVariant(false)}, []string{}))
+}
+
+func (f *fakeBluez) setRefuseAdvert(refuse bool) {
+	f.mu.Lock()
+	f.refuseAdvert = refuse
+	f.mu.Unlock()
+}
+
+func expectServing(t *testing.T, adapter Adapter, serveErr <-chan error, why string) {
+	t.Helper()
+	select {
+	case <-adapter.Gone():
+		t.Fatalf("adapter given up: %s", why)
+	case err := <-serveErr:
+		t.Fatalf("Serve stopped (%s): %v", why, err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// Any central can connect and take the advertisement without ever using
+// Core's service, and a connection that fails to finish leaves some kernels
+// unable to switch advertising back on while bluetoothd still holds it
+// registered. Every disconnection registers it afresh; a device that goes
+// away without having disconnected, as a scan's devices do, does not.
+func TestIntegration_AdvertisingRestartsAfterAnyDisconnection(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	fake.expectCall(t, "RegisterAdvertisement")
+
+	scanned := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_55")
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, scanned, []string{deviceIface}))
+	expectNoCall(t, fake, "UnregisterAdvertisement", "a scanned device going away restarted advertising")
+
+	stranger := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_66")
+	fake.connectDevice(t, stranger)
+	fake.disconnectDevice(t, stranger)
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "advertising restarted after a disconnection")
+
+	// Paused advertising stays paused.
+	peripheral.SetAdvertising(false)
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.connectDevice(t, stranger)
+	fake.disconnectDevice(t, stranger)
+	expectNoCall(t, fake, "RegisterAdvertisement", "a disconnection brought paused advertising back")
+}
+
+// Many controllers cannot advertise while they hold a connection, and a
+// gamepad is enough. Serving starts anyway and advertising waits, trying
+// again whenever a device disconnects: some controllers can advertise
+// beside a classic link but not beside an LE one, so a refusal while
+// anything is still connected keeps it waiting rather than failing.
+func TestIntegration_AdvertisingWaitsForConnectionsToEnd(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+	gamepad := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_77")
+	headset := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_78")
+	fake.connectDevice(t, gamepad)
+	fake.connectDevice(t, headset)
+	fake.setRefuseAdvert(true)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "advertising refused while a gamepad is connected")
+
+	// The controller still says no while the headset is connected.
+	fake.disconnectDevice(t, gamepad)
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "advertising refused while the headset is connected")
+
+	fake.setRefuseAdvert(false)
+	fake.disconnectDevice(t, headset)
+	select {
+	case <-fake.advPaths:
+	case <-time.After(integrationWait):
+		t.Fatal("advertising did not start once nothing was connected")
+	}
+	expectServing(t, adapter, serveErr, "advertising started")
+}
+
+// A refusal with nothing connected is still a fault once advertising was
+// waiting: the adapter is given up to be reopened.
+func TestIntegration_AdvertisingWaitGivesUpWhenStillRefused(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+	gamepad := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_77")
+	fake.connectDevice(t, gamepad)
+	fake.setRefuseAdvert(true)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "advertising refused while a gamepad is connected")
+
+	fake.disconnectDevice(t, gamepad)
+	waitGone(t, adapter, "advertising refused with nothing connected")
+}
+
+// Resuming after a pause while a gamepad holds the controller waits the same
+// way, and a Core client leaving while a gamepad stays does too.
+func TestIntegration_ResumeAndRestartWaitWhileConnected(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	var reg appRegistration
+	select {
+	case reg = <-fake.appRoot:
+	case <-time.After(integrationWait):
+		t.Fatal("application was never registered")
+	}
+	fake.expectCall(t, "RegisterAdvertisement")
+
+	// Paused for controller pairing; the new gamepad stays connected.
+	peripheral.SetAdvertising(false)
+	fake.expectCall(t, "UnregisterAdvertisement")
+	gamepad := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_77")
+	fake.connectDevice(t, gamepad)
+	fake.setRefuseAdvert(true)
+	peripheral.SetAdvertising(true)
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "resume refused while a gamepad is connected")
+
+	// A client comes and goes while the gamepad stays.
+	client := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_02")
+	fake.connectDevice(t, client)
+	opts := map[string]dbus.Variant{"device": dbus.MakeVariant(client)}
+	require.NoError(t, fake.conn.Object(string(reg.sender), reg.path+"/service0/char0").
+		Call(gattCharIface+".ReadValue", 0, opts).Err)
+	fake.expectCall(t, "RegisterAdvertisement")
+	fake.disconnectDevice(t, client)
+	fake.expectCall(t, "RegisterAdvertisement")
+	expectServing(t, adapter, serveErr, "restart refused after a client left while a gamepad stays")
+
+	fake.setRefuseAdvert(false)
+	fake.disconnectDevice(t, gamepad)
+	select {
+	case <-fake.advPaths:
+	case <-time.After(integrationWait):
+		t.Fatal("advertising did not start once the gamepad left")
+	}
+}
+
+// Pausing advertising takes the advertisement down without ending Serve,
+// and resuming puts it back. While paused, a new client does not bring it
+// back.
+func TestIntegration_SetAdvertisingPausesAndResumes(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	var reg appRegistration
+	select {
+	case reg = <-fake.appRoot:
+	case <-time.After(integrationWait):
+		t.Fatal("application was never registered")
+	}
+	fake.expectCall(t, "RegisterAdvertisement")
+
+	peripheral.SetAdvertising(false)
+	fake.expectCall(t, "UnregisterAdvertisement")
+	peripheral.SetAdvertising(false)
+
+	opts := map[string]dbus.Variant{"device": dbus.MakeVariant(fakeDevicePath)}
+	require.NoError(t, fake.conn.Object(string(reg.sender), reg.path+"/service0/char0").
+		Call(gattCharIface+".ReadValue", 0, opts).Err)
+	expectNoCall(t, fake, "RegisterAdvertisement", "a client brought advertising back while paused")
+
+	peripheral.SetAdvertising(true)
+	fake.expectCall(t, "RegisterAdvertisement")
+	select {
+	case err := <-serveErr:
+		t.Fatalf("Serve stopped: %v", err)
+	case <-adapter.Gone():
+		t.Fatal("pausing advertising gave the adapter up")
+	default:
+	}
+}
+
+// A peripheral paused before Serve starts serves without advertising.
+func TestIntegration_ServeStartsPaused(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	peripheral.SetAdvertising(false)
+	_ = serveTestApplication(t, peripheral)
+	select {
+	case <-fake.appRoot:
+	case <-time.After(integrationWait):
+		t.Fatal("application was never registered")
+	}
+	expectNoCall(t, fake, "RegisterAdvertisement", "a paused peripheral advertised")
+
+	peripheral.SetAdvertising(true)
+	fake.expectCall(t, "RegisterAdvertisement")
+}
+
+// expectNoCall fails if the fake sees want within the advertising restart
+// delay and a margin.
+func expectNoCall(t *testing.T, fake *fakeBluez, want, msg string) {
+	t.Helper()
+	quiet := time.After(advRestartDelay + 500*time.Millisecond)
+	for {
+		select {
+		case call := <-fake.calls:
+			require.NotEqual(t, want, call, msg)
+		case <-quiet:
+			return
+		}
+	}
 }

@@ -48,11 +48,10 @@ const (
 
 	bluezErrFailed = "org.bluez.Error.Failed"
 
-	// advRestartDelay is how long after the last device connected or left
-	// the advertisement is restarted. Devices come and go in bursts, most of them not
-	// ours (every remembered controller is reported when an adapter comes
-	// up), and each restart is a round of commands to the controller, so
-	// a burst gets one restart.
+	// advRestartDelay is how long after the last client arrived or left
+	// the advertisement is restarted. Clients come and go in bursts, and
+	// each restart is a round of commands to the controller, so a burst
+	// gets one restart.
 	advRestartDelay = time.Second
 )
 
@@ -66,12 +65,132 @@ type peripheral struct {
 	a       *adapter
 	handler PeripheralHandler
 	chars   map[string]*gattChar
-	mu      syncutil.Mutex
-	serving bool
+	// clients holds the devices that have read or written one of the
+	// served characteristics during this Serve. Only they are Core's
+	// clients; every other device on the adapter, a gamepad above all, is
+	// none of Core's business.
+	clients map[dbus.ObjectPath]bool
+	// newClient carries a device's path the first time it uses the GATT
+	// service, for watchPeers.
+	newClient chan dbus.ObjectPath
+	// useWaiters are closed the next time their device uses the GATT
+	// service.
+	useWaiters map[dbus.ObjectPath][]chan struct{}
+	// advChanged wakes Serve after SetAdvertising.
+	advChanged chan struct{}
+	// openBondEvents opens the management socket a bond window reads new
+	// keys from.
+	openBondEvents func() (mgmtConn, error)
+	// linkRole reports whether a device is connected to the adapter as a
+	// central, the adapter being the peripheral.
+	linkRole func(index uint16, addr [6]byte) (bool, error)
+	mu       syncutil.Mutex
+	// bondStallTimeout is how long a device that just bonded has to use
+	// the GATT service before it is disconnected.
+	bondStallTimeout time.Duration
+	serving          bool
+	// advOff is set while advertising is switched off.
+	advOff bool
 }
 
 func newPeripheral(a *adapter) *peripheral {
-	return &peripheral{a: a, chars: make(map[string]*gattChar)}
+	return &peripheral{
+		a:          a,
+		chars:      make(map[string]*gattChar),
+		clients:    make(map[dbus.ObjectPath]bool),
+		newClient:  make(chan dbus.ObjectPath, 16),
+		advChanged: make(chan struct{}, 1),
+		useWaiters: make(map[dbus.ObjectPath][]chan struct{}),
+
+		bondStallTimeout: bondStallTimeout,
+		openBondEvents:   openMgmt,
+		linkRole:         connectedAsPeripheral,
+	}
+}
+
+// SetAdvertising implements Peripheral.
+func (p *peripheral) SetAdvertising(on bool) {
+	p.mu.Lock()
+	changed := p.advOff == on
+	p.advOff = !on
+	p.mu.Unlock()
+	if !changed {
+		return
+	}
+	select {
+	case p.advChanged <- struct{}{}:
+	default:
+	}
+}
+
+func (p *peripheral) advertisingOn() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.advOff
+}
+
+// noteClient records that the device at path used the GATT service.
+func (p *peripheral) noteClient(path dbus.ObjectPath) {
+	if path == "" {
+		return
+	}
+	p.mu.Lock()
+	for _, waiter := range p.useWaiters[path] {
+		close(waiter)
+	}
+	delete(p.useWaiters, path)
+	known := !p.serving || p.clients[path]
+	if !known {
+		p.clients[path] = true
+	}
+	p.mu.Unlock()
+	if known {
+		return
+	}
+	select {
+	case p.newClient <- path:
+	default:
+		// watchPeers is behind; it restarts advertising for the clients
+		// already queued, which covers this one too.
+	}
+}
+
+// awaitUse returns a channel closed the next time the device at path uses
+// the GATT service.
+func (p *peripheral) awaitUse(path dbus.ObjectPath) <-chan struct{} {
+	used := make(chan struct{})
+	p.mu.Lock()
+	p.useWaiters[path] = append(p.useWaiters[path], used)
+	p.mu.Unlock()
+	return used
+}
+
+// stopAwaitingUse drops a channel awaitUse returned.
+func (p *peripheral) stopAwaitingUse(path dbus.ObjectPath, used <-chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	waiters := p.useWaiters[path]
+	for i, waiter := range waiters {
+		if waiter == used {
+			waiters = slices.Delete(waiters, i, i+1)
+			break
+		}
+	}
+	if len(waiters) == 0 {
+		delete(p.useWaiters, path)
+	} else {
+		p.useWaiters[path] = waiters
+	}
+}
+
+// forgetClient reports whether the device at path was a client, and stops
+// treating it as one.
+func (p *peripheral) forgetClient(path dbus.ObjectPath) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	was := p.clients[path]
+	delete(p.clients, path)
+	return was
 }
 
 // objectManager implements org.freedesktop.DBus.ObjectManager for the
@@ -93,6 +212,7 @@ type gattChar struct {
 }
 
 func (c *gattChar) ReadValue(options map[string]dbus.Variant) ([]byte, *dbus.Error) {
+	c.p.noteClient(devicePathFromOptions(options))
 	value, err := c.p.currentHandler().OnRead(peerFromOptions(options), c.uuid)
 	if err != nil {
 		return nil, dbus.NewError(bluezErrFailed, []any{err.Error()})
@@ -107,6 +227,7 @@ func (c *gattChar) WriteValue(value []byte, options map[string]dbus.Variant) *db
 			mtu = int(m)
 		}
 	}
+	c.p.noteClient(devicePathFromOptions(options))
 	c.p.currentHandler().OnWrite(peerFromOptions(options), c.uuid, append([]byte(nil), value...), mtu)
 	return nil
 }
@@ -139,15 +260,25 @@ func (adv *advertisement) Release() *dbus.Error {
 // peerFromOptions reads the writing or reading device from the options
 // bluetoothd passes with every server-side ReadValue and WriteValue.
 func peerFromOptions(options map[string]dbus.Variant) Peer {
-	v, ok := options["device"]
-	if !ok {
-		return Peer{}
-	}
-	path, ok := v.Value().(dbus.ObjectPath)
-	if !ok {
+	path := devicePathFromOptions(options)
+	if path == "" {
 		return Peer{}
 	}
 	return peerFromPath(path)
+}
+
+// devicePathFromOptions reads the device object path from those options, or
+// "" when there is none.
+func devicePathFromOptions(options map[string]dbus.Variant) dbus.ObjectPath {
+	v, ok := options["device"]
+	if !ok {
+		return ""
+	}
+	path, ok := v.Value().(dbus.ObjectPath)
+	if !ok {
+		return ""
+	}
+	return path
 }
 
 // noopHandler stands in between Serve calls so a late callback from
@@ -176,7 +307,7 @@ type exportedObject struct {
 
 // exported tracks what Serve put on the bus so it can take it all down.
 type exported struct {
-	conn  *dbus.Conn
+	a     *adapter
 	paths []exportedObject
 }
 
@@ -185,7 +316,7 @@ func (e *exported) add(path dbus.ObjectPath, iface string) {
 }
 
 func (e *exported) export(v any, path dbus.ObjectPath, iface string) error {
-	if err := e.conn.Export(v, path, iface); err != nil {
+	if err := e.a.export(v, path, iface); err != nil {
 		return fmt.Errorf("export %s at %s: %w", iface, path, err)
 	}
 	e.add(path, iface)
@@ -193,7 +324,9 @@ func (e *exported) export(v any, path dbus.ObjectPath, iface string) error {
 }
 
 func (e *exported) exportProps(path dbus.ObjectPath, spec prop.Map) (*prop.Properties, error) {
-	props, err := prop.Export(e.conn, path, spec)
+	e.a.exportMu.Lock()
+	props, err := prop.Export(e.a.conn, path, spec)
+	e.a.exportMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("export properties at %s: %w", path, err)
 	}
@@ -203,7 +336,7 @@ func (e *exported) exportProps(path dbus.ObjectPath, spec prop.Map) (*prop.Prope
 
 func (e *exported) unexportAll() {
 	for i := len(e.paths) - 1; i >= 0; i-- {
-		_ = e.conn.Export(nil, e.paths[i].path, e.paths[i].iface)
+		_ = e.a.export(nil, e.paths[i].path, e.paths[i].iface)
 	}
 	e.paths = nil
 }
@@ -219,12 +352,14 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	p.serving = true
 	p.handler = h
 	p.chars = make(map[string]*gattChar)
+	p.clients = make(map[dbus.ObjectPath]bool)
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		p.serving = false
 		p.handler = nil
 		p.chars = make(map[string]*gattChar)
+		p.clients = make(map[dbus.ObjectPath]bool)
 		p.mu.Unlock()
 	}()
 
@@ -232,7 +367,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	root := dbus.ObjectPath(fmt.Sprintf("%s/app%d", exportRoot, n))
 	advPath := dbus.ObjectPath(fmt.Sprintf("%s/adv%d", exportRoot, n))
 
-	exp := &exported{conn: p.a.conn}
+	exp := &exported{a: p.a}
 	defer exp.unexportAll()
 
 	if err := p.exportApplication(exp, root, app); err != nil {
@@ -250,40 +385,164 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	// the moment the device becomes visible is not missed.
 	events, unsubscribe := p.subscribePeers()
 	defer unsubscribe()
-	if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
-		return p.registrationFailed(ctx, err)
+
+	registered := false
+	startAdvertising := func() error {
+		if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
+			return err
+		}
+		registered = true
+		return nil
 	}
-	defer p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
+	stopAdvertising := func() {
+		if registered {
+			p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
+			registered = false
+		}
+	}
+	defer stopAdvertising()
 
-	log.Info().
-		Str("name", adv.LocalName).
-		Strs("services", adv.ServiceUUIDs).
-		Msg("bluetooth peripheral advertising")
+	// waiting is set while the controller refuses to advertise because it
+	// holds a connection, which many cannot do at the same time. A gamepad
+	// on the adapter is enough. That is not a fault: advertising is tried
+	// again once nothing is connected, so no command reaches the
+	// controller while a gamepad is using it.
+	waiting := false
+	advertiseOrWait := func() error {
+		err := startAdvertising()
+		if err == nil {
+			waiting = false
+			return nil
+		}
+		if ctx.Err() != nil || !p.anyConnected(ctx) {
+			return err
+		}
+		if !waiting {
+			log.Info().Err(err).Msg("bluetooth advertising waits until nothing is connected to the adapter")
+		}
+		waiting = true
+		return nil
+	}
+	logAdvertising := func() {
+		log.Info().
+			Str("name", adv.LocalName).
+			Strs("services", adv.ServiceUUIDs).
+			Msg("bluetooth peripheral advertising")
+	}
 
-	p.watchPeers(ctx, events, func(peerLeft bool) {
-		// A controller stops advertising when a central connects.
-		// Registering the advertisement afresh puts it back on the air:
-		// straight away, if the controller can hold a connection and
-		// advertise at once, so a second client can find the device; and
-		// once that central leaves, when bluetoothd would otherwise keep
-		// the advertisement registered with nothing being sent.
-		p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
-		err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath)
+	if p.advertisingOn() {
+		if err := advertiseOrWait(); err != nil {
+			return p.registrationFailed(ctx, err)
+		}
+		if registered {
+			logAdvertising()
+		}
+	} else {
+		log.Info().Msg("bluetooth peripheral serving with advertising paused")
+	}
+
+	// restart registers the advertisement afresh. bluetoothd keeps an
+	// advertisement registered after the controller stopped sending it,
+	// which happens whenever a connection takes it, so this is what puts
+	// the device back on the air.
+	restart := func(why string) {
+		stopAdvertising()
+		err := advertiseOrWait()
 		switch {
 		case err == nil:
-			log.Debug().Bool("peerLeft", peerLeft).Msg("bluetooth advertisement restarted")
+			if registered {
+				log.Debug().Str("why", why).Msg("bluetooth advertisement restarted")
+			}
 		case ctx.Err() != nil:
-		case peerLeft:
+		default:
+			// Nothing is connected and the controller still says no, so
+			// nobody can find the device.
 			log.Warn().Err(err).Msg("bluetooth advertisement could not be restarted")
 			p.a.markGone()
-		default:
-			// A controller that cannot advertise while connected says no
-			// here. That is not a fault; advertising resumes when the
-			// peer leaves.
-			log.Debug().Err(err).Msg("bluetooth advertisement not restarted while a peer is connected")
+		}
+	}
+
+	p.watchPeers(ctx, events, func(peerLeft bool) {
+		// A controller stops advertising when a central connects. Restarting
+		// straight away lets a second client find the device on a controller
+		// that can hold a connection and advertise at once.
+		if !p.advertisingOn() {
+			return
+		}
+		why := "client arrived"
+		if peerLeft {
+			why = "client left"
+		}
+		restart(why)
+	}, func() {
+		on := p.advertisingOn()
+		if on == registered {
+			return
+		}
+		if !on {
+			stopAdvertising()
+			waiting = false
+			log.Info().Msg("bluetooth advertising paused")
+			return
+		}
+		if err := advertiseOrWait(); err != nil {
+			if ctx.Err() == nil {
+				log.Warn().Err(err).Msg("bluetooth advertising could not be resumed")
+				p.a.markGone()
+			}
+			return
+		}
+		if registered {
+			log.Info().Msg("bluetooth advertising resumed")
+		}
+	}, func() {
+		// A connection ended that was not one of Core's clients. It may
+		// have taken the advertisement: any central can connect, and one
+		// that fails to finish connecting leaves some kernels unable to
+		// switch advertising back on. While advertising waits for the
+		// adapter to be free, this may also be the moment it can start;
+		// a controller that still refuses keeps it waiting.
+		if !p.advertisingOn() {
+			return
+		}
+		if waiting && !registered {
+			if err := advertiseOrWait(); err != nil {
+				if ctx.Err() == nil {
+					log.Warn().Err(err).Msg("bluetooth advertising could not be started")
+					p.a.markGone()
+				}
+				return
+			}
+			if registered {
+				logAdvertising()
+			}
+			return
+		}
+		if registered {
+			restart("device disconnected")
 		}
 	})
 	return nil
+}
+
+// anyConnected reports whether bluetoothd says any device of this adapter
+// is connected. It only reads bluetoothd's state; nothing is sent to the
+// controller. A failed read counts as nothing connected.
+func (p *peripheral) anyConnected(ctx context.Context) bool {
+	objs, err := p.a.managedObjects(ctx)
+	if err != nil {
+		return false
+	}
+	prefix := p.a.devicePathPrefix()
+	for path, ifaces := range objs {
+		if !strings.HasPrefix(string(path), prefix) {
+			continue
+		}
+		if connected, ok := ifaces[deviceIface]["Connected"].Value().(bool); ok && connected {
+			return true
+		}
+	}
+	return false
 }
 
 // registrationFailed gives the adapter up when bluetoothd refused a
@@ -306,6 +565,9 @@ func (p *peripheral) exportApplication(exp *exported, root dbus.ObjectPath, app 
 			"UUID":    {Value: svc.UUID, Emit: prop.EmitConst},
 			"Primary": {Value: svc.Primary, Emit: prop.EmitConst},
 		}}
+		if svc.Handle != 0 {
+			svcSpec[gattServiceIface]["Handle"] = &prop.Prop{Value: svc.Handle, Emit: prop.EmitConst}
+		}
 		if _, err := exp.exportProps(svcPath, svcSpec); err != nil {
 			return err
 		}
@@ -398,7 +660,7 @@ func (p *peripheral) subscribePeers() (events <-chan *dbus.Signal, unsubscribe f
 			return false
 		}
 		switch sig.Name {
-		case signalPropertiesChanged, signalInterfacesAdded, signalInterfacesRemoved:
+		case signalPropertiesChanged, signalInterfacesRemoved:
 			return true
 		default:
 			return false
@@ -407,37 +669,45 @@ func (p *peripheral) subscribePeers() (events <-chan *dbus.Signal, unsubscribe f
 }
 
 // watchPeers reports peer disconnections until ctx ends or the adapter is
-// gone, and calls peersChanged once things have been quiet for
-// advRestartDelay after one or more devices connected or left, saying
-// whether any of them left.
+// gone, calls advertisingChanged after SetAdvertising, and calls
+// peersChanged once things have been quiet for
+// advRestartDelay after one or more of Core's clients arrived or left,
+// saying whether any of them left. deviceLeft is called the same way after
+// any other device of the adapter disconnected.
 //
-// Only a device that was connected counts. A scan fills bluetoothd with
-// device objects for everything in range and drops each one half a minute
-// later; treating those as departures restarted advertising continuously
-// while a reader was being scanned for, which is what the controller could
-// not take.
+// A client arrives when it first uses the GATT service, not when it
+// connects, because a connection alone does not say whose it is: every
+// gamepad and headset on the adapter connects too. A scan also fills
+// bluetoothd with device objects for everything in range and drops each
+// one half a minute later, so a device that goes away without having
+// disconnected does not count.
 func (p *peripheral) watchPeers(
-	ctx context.Context, events <-chan *dbus.Signal, peersChanged func(peerLeft bool),
+	ctx context.Context,
+	events <-chan *dbus.Signal,
+	peersChanged func(peerLeft bool),
+	advertisingChanged func(),
+	deviceLeft func(),
 ) {
-	// Stopped until a peer comes or goes.
+	// Stopped until a client comes or goes.
 	restart := time.NewTimer(advRestartDelay)
 	restart.Stop()
 	defer restart.Stop()
+	// Stopped until any device leaves; a burst, such as a scan's devices
+	// being dropped, gets one call.
+	settled := time.NewTimer(advRestartDelay)
+	settled.Stop()
+	defer settled.Stop()
 
-	connected := make(map[dbus.ObjectPath]bool)
 	anyLeft := false
-	arrived := func(path dbus.ObjectPath) {
-		if !connected[path] {
-			connected[path] = true
-			restart.Reset(advRestartDelay)
-		}
-	}
-	left := func(path dbus.ObjectPath) {
+	left := func(path dbus.ObjectPath, disconnected bool) {
 		p.currentHandler().OnDisconnect(peerFromPath(path))
-		if connected[path] {
-			delete(connected, path)
+		if p.forgetClient(path) {
 			anyLeft = true
 			restart.Reset(advRestartDelay)
+			return
+		}
+		if disconnected {
+			settled.Reset(advRestartDelay)
 		}
 	}
 
@@ -450,33 +720,27 @@ func (p *peripheral) watchPeers(
 		case <-restart.C:
 			peersChanged(anyLeft)
 			anyLeft = false
+		case <-settled.C:
+			deviceLeft()
+		case <-p.newClient:
+			restart.Reset(advRestartDelay)
+		case <-p.advChanged:
+			advertisingChanged()
 		case sig, ok := <-events:
 			if !ok {
 				return
-			}
-			if path, ifaces, added := interfacesAdded(sig); added {
-				// A central that connects to us arrives as a new device
-				// that is already connected.
-				if isConnected, present := changedBool(ifaces[deviceIface], "Connected"); present && isConnected {
-					arrived(path)
-				}
-				continue
 			}
 			if iface, changed, changedOK := propertiesChanged(sig); changedOK {
 				if iface != deviceIface {
 					continue
 				}
-				if isConnected, present := changedBool(changed, "Connected"); present {
-					if isConnected {
-						arrived(sig.Path)
-					} else {
-						left(sig.Path)
-					}
+				if isConnected, present := changedBool(changed, "Connected"); present && !isConnected {
+					left(sig.Path, true)
 				}
 				continue
 			}
 			if path, ifaces, removed := interfacesRemoved(sig); removed && slices.Contains(ifaces, deviceIface) {
-				left(path)
+				left(path, false)
 			}
 		}
 	}

@@ -77,14 +77,28 @@ type adapter struct {
 	address     string
 	roles       []Role
 	callTimeout time.Duration
-	goneOnce    sync.Once
-	closeOnce   sync.Once
+	// exportMu serializes changes to what the connection exports: godbus
+	// reads its object table unlocked while adding to it.
+	exportMu  syncutil.Mutex
+	goneOnce  sync.Once
+	closeOnce sync.Once
+}
+
+// export exports v at path on the adapter's connection, or removes the
+// export when v is nil.
+func (a *adapter) export(v any, path dbus.ObjectPath, iface string) error {
+	a.exportMu.Lock()
+	defer a.exportMu.Unlock()
+	if err := a.conn.Export(v, path, iface); err != nil {
+		return fmt.Errorf("export %s: %w", iface, err)
+	}
+	return nil
 }
 
 // Open connects to bluetoothd on a private bus connection and selects an
 // adapter: the lowest-numbered powered one, or the lowest-numbered one at
-// all when none is powered. With WithPowerOn a powered-off choice is
-// switched on.
+// all when none is powered. A powered-off choice is reported as
+// ErrPoweredOff, or switched on with WithPowerOn.
 func Open(ctx context.Context, opts ...Option) (Adapter, error) {
 	o := applyOptions(opts)
 
@@ -171,7 +185,10 @@ func (a *adapter) selectAdapter(ctx context.Context, powerOn bool) error {
 		}
 	}
 
-	if powered, ok := props["Powered"].Value().(bool); ok && !powered && powerOn {
+	if powered, ok := props["Powered"].Value().(bool); ok && !powered {
+		if !powerOn {
+			return ErrPoweredOff
+		}
 		log.Info().Str("adapter", string(a.path)).Msg("bluetooth adapter is powered off, powering on")
 		if err := a.setProperty(ctx, a.obj, adapterIface, "Powered", true); err != nil {
 			log.Warn().Err(err).Msg("failed to power on bluetooth adapter")

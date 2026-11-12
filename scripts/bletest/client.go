@@ -59,7 +59,7 @@ type clientOptions struct {
 	timeout   time.Duration
 }
 
-func runClient(ctx context.Context, args []string) error {
+func runClient(ctx context.Context, e env, args []string) error {
 	var o clientOptions
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	fs.StringVar(&o.link.address, "addr", "", "Core's Bluetooth address; scans for the Zaparoo service when empty")
@@ -86,7 +86,7 @@ func runClient(ctx context.Context, args []string) error {
 	}
 	o.link.withResponse = !*fast
 
-	adapter, err := openAdapter(ctx)
+	adapter, err := e.open(ctx)
 	if err != nil {
 		return err
 	}

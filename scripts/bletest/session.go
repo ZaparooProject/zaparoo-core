@@ -282,17 +282,19 @@ func newSession(l *link, creds *credentials, label string) (*session, error) {
 // (version, salt, token length, token) followed by the ciphertext, and every
 // later one is the ciphertext alone.
 func (s *session) seal(plaintext []byte) ([]byte, error) {
+	first := s.sent == 0
+	// Checked before the counter moves: a first frame that never went out
+	// must not turn the next one into a follow-on frame with no header.
+	if first && (s.token == "" || len(s.token) > 255) {
+		return nil, fmt.Errorf("auth token is %d bytes, want 1-255", len(s.token))
+	}
 	ct, err := crypto.Encrypt(s.c2s, s.c2sNonce, s.sent, plaintext, s.aad)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
-	first := s.sent == 0
 	s.sent++
 	if !first {
 		return ct, nil
-	}
-	if s.token == "" || len(s.token) > 255 {
-		return nil, fmt.Errorf("auth token is %d bytes, want 1-255", len(s.token))
 	}
 	frame := make([]byte, 0, 2+len(s.salt)+len(s.token)+len(ct))
 	frame = append(frame, encryptionVersion)

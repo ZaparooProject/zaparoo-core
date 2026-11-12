@@ -123,10 +123,12 @@ type pairingSession struct {
 
 // PairingManager owns the PIN and in-flight sessions (single mutex protects all state).
 type PairingManager struct {
-	pinExpiresAt    time.Time
-	db              database.UserDBI
-	notifChan       chan<- models.Notification
-	sessions        map[string]*pairingSession
+	pinExpiresAt time.Time
+	db           database.UserDBI
+	notifChan    chan<- models.Notification
+	sessions     map[string]*pairingSession
+	// pinWatchers are told each time the PIN appears or is cleared.
+	pinWatchers     map[int]chan struct{}
 	pin             string
 	pendingRole     string // role granted to the client paired with the current PIN
 	pinAttempts     int
@@ -136,6 +138,7 @@ type PairingManager struct {
 	pinTTL          time.Duration
 	sessionTTL      time.Duration
 	cleanupInterval time.Duration
+	nextWatcher     int
 	mu              syncutil.Mutex
 }
 
@@ -258,7 +261,40 @@ func (m *PairingManager) StartPairing(role string) (pin string, expiresAt time.T
 	m.pendingRole = role
 	// Drop any leftover sessions from a previous PIN — they cannot succeed.
 	m.sessions = make(map[string]*pairingSession)
+	m.notifyPINLocked()
 	return pin, m.pinExpiresAt, nil
+}
+
+// WatchPIN returns a channel that receives after every change to whether a
+// PIN is pending: shown, cancelled, used up or expired. A PIN that times
+// out is only noticed by the cleanup pass, so a watcher that cares about
+// the exact moment uses the expiry from PendingPIN. The returned function
+// stops the watch.
+func (m *PairingManager) WatchPIN() (changed <-chan struct{}, stop func()) {
+	ch := make(chan struct{}, 1)
+	m.mu.Lock()
+	if m.pinWatchers == nil {
+		m.pinWatchers = make(map[int]chan struct{})
+	}
+	id := m.nextWatcher
+	m.nextWatcher++
+	m.pinWatchers[id] = ch
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.pinWatchers, id)
+	}
+}
+
+// notifyPINLocked wakes every watcher without blocking. Caller must hold mu.
+func (m *PairingManager) notifyPINLocked() {
+	for _, ch := range m.pinWatchers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // CancelPairing clears the current PIN and any in-flight sessions. Safe to
@@ -275,6 +311,7 @@ func (m *PairingManager) clearPINLocked() {
 	m.pinExpiresAt = time.Time{}
 	m.pinAttempts = 0
 	m.sessions = make(map[string]*pairingSession)
+	m.notifyPINLocked()
 }
 
 // pairStartRequest is the JSON request body for POST /api/pair/start.

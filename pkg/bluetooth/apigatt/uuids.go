@@ -37,6 +37,12 @@ const (
 	// InfoCharUUID is a read-only JSON description of the endpoint the app
 	// reads before it speaks (see Info).
 	InfoCharUUID = "0da70004-b359-443b-836f-477d34b6a638"
+	// BondCharUUID reads empty and only over an encrypted link, so reading
+	// it makes a phone finish pairing with the stack first. The app reads it
+	// before subscribing to TX: BlueZ keeps a subscription under the address
+	// the phone connected with, and a pairing that reveals the phone's
+	// identity address leaves it there, so no notification would arrive.
+	BondCharUUID = "0da70005-b359-443b-836f-477d34b6a638"
 )
 
 const (
@@ -111,3 +117,8 @@ func NewInfo(deviceID string) Info {
 		Window:             SendWindow,
 	}
 }
+
+// ServiceHandle is where the service asks to sit in the ATT database, so
+// its handles are the same on every start. It is well clear of what BlueZ
+// registers for itself.
+const ServiceHandle uint16 = 0x0100

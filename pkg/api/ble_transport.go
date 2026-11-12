@@ -76,12 +76,20 @@ type bleTransport struct {
 	serveCancel context.CancelFunc
 	// unregister detaches serve from the bluetooth manager on stop.
 	unregister func()
+	// serving is the peripheral currently serving, nil between adapters.
+	serving ble.Peripheral
+	// bondWindow is the open bonding window, owned by bondingLoop.
+	bondWindow ble.BondWindow
+	// bondKick wakes bondingLoop.
+	bondKick chan struct{}
 	// lastServeErr is the last serve failure logged, so an adapter that
 	// keeps refusing the same way is reported once.
 	lastServeErr string
-	wg           sync.WaitGroup
-	mu           syncutil.Mutex
-	stopped      bool
+	// bondHolds counts pair.finish requests still being answered.
+	bondHolds int
+	wg        sync.WaitGroup
+	mu        syncutil.Mutex
+	stopped   bool
 }
 
 func newBLETransport(d *bleTransportDeps) *bleTransport {
@@ -90,10 +98,20 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 		pairLimiter:      rate.NewLimiter(bleTransportPairingRate, bleTransportPairingBurst),
 		sessions:         make(map[string]*bleSession),
 		refused:          make(map[string]time.Time),
+		bondKick:         make(chan struct{}, 1),
 	}
 	t.ctx, t.cancel = context.WithCancel(d.core.st.GetContext())
 	if t.clock == nil {
 		t.clock = clockwork.NewRealClock()
+	}
+	if d.pairing != nil {
+		pinChanged, stopWatch := d.pairing.WatchPIN()
+		t.wg.Add(1)
+		go func() {
+			defer t.wg.Done()
+			defer stopWatch()
+			t.bondingLoop(pinChanged)
+		}()
 	}
 	if d.notifBroker != nil {
 		notifs, subID := d.notifBroker.Subscribe(100)
@@ -107,15 +125,25 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 	return t
 }
 
+// platformID is the platform's ID, or empty when there is none.
+func (t *bleTransport) platformID() string {
+	if t.core.platform == nil {
+		return ""
+	}
+	return t.core.platform.ID()
+}
+
 // application is the GATT layout the app expects.
 func (*bleTransport) application() ble.Application {
 	return ble.Application{Services: []ble.Service{{
 		UUID:    apigatt.ServiceUUID,
+		Handle:  apigatt.ServiceHandle,
 		Primary: true,
 		Characteristics: []ble.Characteristic{
 			{UUID: apigatt.RXCharUUID, Flags: []string{ble.FlagWrite, ble.FlagWriteWithoutResponse}},
 			{UUID: apigatt.TXCharUUID, Flags: []string{ble.FlagNotify}},
 			{UUID: apigatt.InfoCharUUID, Flags: []string{ble.FlagRead}},
+			{UUID: apigatt.BondCharUUID, Flags: []string{ble.FlagEncryptRead}},
 		},
 	}}}
 }
@@ -143,6 +171,7 @@ func (t *bleTransport) serve(p ble.Peripheral) {
 	ctx, cancel := context.WithCancel(t.ctx)
 	t.serveCancel = cancel
 	t.peripheral = p
+	t.serving = p
 	// Counted under the lock so stop, which sets stopped under the same
 	// lock before waiting, can never miss this goroutine.
 	t.wg.Add(1)
@@ -151,27 +180,68 @@ func (t *bleTransport) serve(p ble.Peripheral) {
 	// The name is read once here: renaming the device takes effect the
 	// next time advertising starts.
 	adv := ble.Advertisement{LocalName: t.localName(), ServiceUUIDs: []string{apigatt.ServiceUUID}}
+	t.kickBonding()
 	go func() {
 		defer t.wg.Done()
+		t.serveWithRetries(ctx, p, adv)
+	}()
+}
+
+// serveWithRetries serves on p, starting again after a failure. Right after
+// an adapter reset BlueZ can take longer than the registration timeout, and
+// the manager only hands out a new peripheral when the adapter goes away, so
+// giving up on the first failure would leave Core silent until a restart.
+func (t *bleTransport) serveWithRetries(ctx context.Context, p ble.Peripheral, adv ble.Advertisement) {
+	delay := bleServeRetryDelay
+	for attempt := 1; ; attempt++ {
 		err := p.Serve(ctx, t.application(), adv, t)
-		switch {
-		case err != nil && ctx.Err() == nil:
-			t.mu.Lock()
-			repeat := t.lastServeErr == err.Error()
-			t.lastServeErr = err.Error()
-			t.mu.Unlock()
-			event := log.Warn()
-			if repeat {
-				event = log.Debug()
-			}
-			event.Err(err).Msg("bluetooth api transport stopped")
-		default:
-			log.Info().Msg("bluetooth api transport stopped")
+		t.mu.Lock()
+		if t.serving == p {
+			t.serving = nil
 		}
+		t.mu.Unlock()
+		t.kickBonding()
 		// Only this peripheral's sessions: a replacement may already be
 		// serving clients of its own.
 		t.closeSessions("transport stopped", p)
-	}()
+		if err == nil || ctx.Err() != nil {
+			log.Info().Msg("bluetooth api transport stopped")
+			return
+		}
+		t.logServeErr(err)
+		if attempt >= bleServeAttempts {
+			log.Warn().Int("attempts", attempt).
+				Msg("bluetooth api transport keeps failing; waiting for the adapter to change")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.clock.After(delay):
+		}
+		delay = min(delay*2, bleServeRetryMaxDelay)
+		t.mu.Lock()
+		if ctx.Err() != nil {
+			t.mu.Unlock()
+			return
+		}
+		t.serving = p
+		t.mu.Unlock()
+		t.kickBonding()
+	}
+}
+
+// logServeErr logs a serve failure, quietly when it repeats the last one.
+func (t *bleTransport) logServeErr(err error) {
+	t.mu.Lock()
+	repeat := t.lastServeErr == err.Error()
+	t.lastServeErr = err.Error()
+	t.mu.Unlock()
+	event := log.Warn()
+	if repeat {
+		event = log.Debug()
+	}
+	event.Err(err).Msg("bluetooth api transport stopped")
 }
 
 // stop ends serving and every session, then waits for the background work.
@@ -209,28 +279,40 @@ func (t *bleTransport) sessionFor(peer ble.Peer) *bleSession {
 	if peer.Path == "" {
 		return nil
 	}
+	s, created := t.lookupOrCreate(peer)
+	if created {
+		// Outside the lock: the device monitor is not the transport's to
+		// hold up.
+		notificationClientConnected(t.core.st)
+		log.Info().Str("peer", peer.Address).Msg("bluetooth client connected")
+	}
+	return s
+}
+
+// lookupOrCreate returns the peer's session, creating it unless the peer was
+// refused or there is nothing to serve it on, and reports whether it is new.
+func (t *bleTransport) lookupOrCreate(peer ble.Peer) (*bleSession, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.stopped {
-		return nil
+		return nil, false
 	}
 	if s, ok := t.sessions[peer.Path]; ok {
-		return s
+		return s, false
 	}
 	if at, ok := t.refused[peer.Path]; ok {
 		if t.clock.Since(at) < bleRefuseFor {
-			return nil
+			return nil, false
 		}
 		delete(t.refused, peer.Path)
 	}
 	if t.peripheral == nil {
-		return nil
+		return nil, false
 	}
 	s := newBLESession(t, peer, t.peripheral)
 	t.sessions[peer.Path] = s
 	t.lastServeErr = ""
-	log.Info().Str("peer", peer.Address).Msg("bluetooth client connected")
-	return s
+	return s, true
 }
 
 // refuse stops a peer whose session Core ended from starting another until
@@ -255,13 +337,23 @@ func (t *bleTransport) OnWrite(peer ble.Peer, charUUID string, value []byte, mtu
 	if !strings.EqualFold(charUUID, apigatt.RXCharUUID) {
 		return
 	}
-	if s := t.sessionFor(peer); s != nil {
+	s := t.sessionFor(peer)
+	if s == nil || !s.handleChunk(value, mtu) {
+		return
+	}
+	// The client is still connected and wants a clean start, so there is
+	// no farewell and no disconnect.
+	s.shutdownWith("client started a new session", false)
+	if s = t.sessionFor(peer); s != nil {
 		s.handleChunk(value, mtu)
 	}
 }
 
-// OnRead implements ble.PeripheralHandler: only Info is readable.
+// OnRead implements ble.PeripheralHandler: Info and Bond are readable.
 func (t *bleTransport) OnRead(_ ble.Peer, charUUID string) ([]byte, error) {
+	if strings.EqualFold(charUUID, apigatt.BondCharUUID) {
+		return []byte{}, nil
+	}
 	if !strings.EqualFold(charUUID, apigatt.InfoCharUUID) {
 		return nil, ble.ErrNotFound
 	}

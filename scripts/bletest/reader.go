@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -84,7 +85,7 @@ func (readerHandler) OnDisconnect(peer ble.Peer) {
 	log.Info().Str("peer", peer.Address).Msg("core disconnected")
 }
 
-func runReader(ctx context.Context, args []string) error {
+func runReader(ctx context.Context, e env, args []string) error {
 	fs := flag.NewFlagSet("reader", flag.ExitOnError)
 	name := fs.String("name", "bletest-reader", "advertised local name")
 	script := fs.String("script", "abc123:5s,-:3s", "what the reader sees, as uid:duration steps; - is no token")
@@ -97,7 +98,7 @@ func runReader(ctx context.Context, args []string) error {
 		return err
 	}
 
-	adapter, err := openAdapter(ctx)
+	adapter, err := e.open(ctx)
 	if err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func runReader(ctx context.Context, args []string) error {
 
 	for {
 		for _, step := range steps {
-			if err := playStep(ctx, peripheral, step); err != nil {
+			if err := playStep(ctx, e.clock, peripheral, step); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -146,10 +147,10 @@ func runReader(ctx context.Context, args []string) error {
 }
 
 // playStep holds one token on the reader, or none, for the step's duration.
-func playStep(ctx context.Context, peripheral ble.Peripheral, step readerStep) error {
+func playStep(ctx context.Context, clock clockwork.Clock, peripheral ble.Peripheral, step readerStep) error {
 	log.Info().Str("uid", step.uid).Dur("for", step.d).Msg("reader state")
-	deadline := time.After(step.d)
-	ticker := time.NewTicker(scanRepeat)
+	deadline := clock.After(step.d)
+	ticker := clock.NewTicker(scanRepeat)
 	defer ticker.Stop()
 	for {
 		if step.uid != "" {
@@ -164,7 +165,7 @@ func playStep(ctx context.Context, peripheral ble.Peripheral, step readerStep) e
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("interrupted: %w", ctx.Err())
-		case <-ticker.C:
+		case <-ticker.Chan():
 		}
 	}
 }

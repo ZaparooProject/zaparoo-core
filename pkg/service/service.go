@@ -536,7 +536,13 @@ func startServiceWithOptions(
 	)
 	notifBroker.Start()
 
-	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish)
+	// The Bluetooth manager only touches the adapter while the BLE
+	// transport is enabled. It is built here so the device monitor can
+	// pause its advertising while the user scans for or pairs a
+	// controller, and started below so the API can register for it.
+	bleManager := bluetooth.NewManager(cfg)
+
+	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish, bleManager.SetAdvertisingPaused)
 	st.SetDeviceMonitor(deviceMonitor)
 
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
@@ -898,9 +904,6 @@ func startServiceWithOptions(
 
 	discoveryService := discovery.New(cfg)
 
-	// The Bluetooth manager only touches the adapter while the BLE
-	// transport is enabled; started here so the API can register for it.
-	bleManager := bluetooth.NewManager(cfg)
 	bleManager.Start()
 
 	// Set up the idle scheduler before API startup so the in-flight

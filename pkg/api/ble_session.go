@@ -32,6 +32,7 @@ import (
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -57,6 +58,12 @@ const (
 	// bleRefuseFor is how long a peer whose session Core ended is ignored
 	// if it is never seen to disconnect.
 	bleRefuseFor = 30 * time.Second
+	// bleServeAttempts is how many times in a row serving on one adapter
+	// may fail before the transport waits for the adapter to change. The
+	// wait between attempts starts at bleServeRetryDelay and doubles.
+	bleServeAttempts      = 5
+	bleServeRetryDelay    = 2 * time.Second
+	bleServeRetryMaxDelay = 30 * time.Second
 	// bleAckTimeout is how long the writer waits, with the send window
 	// full, for the client to acknowledge anything at all.
 	bleAckTimeout = 30 * time.Second
@@ -186,18 +193,20 @@ func (s *bleSession) clientID() string {
 
 // handleChunk consumes one write to the RX characteristic. BlueZ delivers
 // each write on its own goroutine, so calls arrive in any order; the
-// sequence number in the chunk is what orders them.
-func (s *bleSession) handleChunk(chunk []byte, mtu int) {
+// sequence number in the chunk is what orders them. It reports true, having
+// consumed nothing, when the chunk starts a new session: the client has
+// given up on this one and opened another on the same connection.
+func (s *bleSession) handleChunk(chunk []byte, mtu int) (restart bool) {
 	h, payload, err := apigatt.ParseChunk(chunk)
 	if err != nil {
 		s.framingError(err)
-		return
+		return false
 	}
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	if mtu > 0 {
 		s.mtu = mtu
@@ -208,24 +217,33 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 	}
 	if h.Tag != s.tag {
 		s.mu.Unlock()
-		s.framingError(fmt.Errorf("%w: session tag changed", apigatt.ErrMalformedChunk))
-		return
+		if h.First && !h.Ack && h.Seq == 0 {
+			return true
+		}
+		// A straggler from a session the client has already left.
+		log.Debug().Str("peer", s.peer.Address).Uint16("tag", h.Tag).Msg("bluetooth chunk for another session dropped")
+		return false
 	}
 	if h.Ack {
 		// An acknowledgement may only move forward, and only over chunks
-		// that were actually sent.
+		// that were actually sent. One that arrives behind a later one was
+		// overtaken on the way and says nothing new.
 		valid := h.Seq-s.acked <= s.sent-s.acked
+		stale := !valid && s.acked-h.Seq <= apigatt.ReorderWindow
 		if valid {
 			s.acked = h.Seq
 		}
 		s.mu.Unlock()
+		if stale {
+			return false
+		}
 		if !valid {
 			s.framingError(fmt.Errorf("%w: acknowledgement of chunk %d never sent", apigatt.ErrSequence, h.Seq))
-			return
+			return false
 		}
 		signal(s.acks)
 		s.touchIdle()
-		return
+		return false
 	}
 	msgs, err := s.reasm.Push(h, payload)
 	s.watchGapLocked()
@@ -243,13 +261,14 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 
 	if err != nil {
 		s.framingError(err)
-		return
+		return false
 	}
 	if !queued {
 		s.shutdown("inbound queue overflow")
-		return
+		return false
 	}
 	s.touchIdle()
+	return false
 }
 
 // watchGapLocked starts, restarts or stops the timer that gives up on a
@@ -389,6 +408,7 @@ func (s *bleSession) handleMessage(msg []byte) {
 			timer.Reset(bleAuthenticatedIdleTimeout)
 		}
 		cs = frame.session
+		s.t.keepBond(s.peer)
 		log.Info().Str("peer", s.peer.Address).Msg("bluetooth client authenticated")
 	case frameUnsupportedVersion:
 		// The usual answer to this takes the place of the closing notice.
@@ -423,12 +443,8 @@ func (s *bleSession) handleMessage(msg []byte) {
 		return
 	}
 
-	platformID := ""
-	if s.t.core.platform != nil {
-		platformID = s.t.core.platform.ID()
-	}
 	env := s.t.core.newRequestEnv(
-		s.t.core.st.GetContext(), s.dispatcher.inputSession, s.clientID(), platformID, false,
+		s.t.core.st.GetContext(), s.dispatcher.inputSession, s.clientID(), s.t.platformID(), false,
 	)
 	env.ZapScriptHold = func() bool {
 		return s.dispatcher.holdZapScript(s.t.core.st.AcquireZapScriptHold)
@@ -516,7 +532,15 @@ func (s *bleSession) handlePairing(msg []byte) bool {
 			s.writePairingError(id, http.StatusBadRequest, "invalid request body")
 			return true
 		}
+		// Held until the peer is kept: a successful finish clears the
+		// PIN, which would otherwise close the window and drop the bond
+		// the phone just made.
+		release := s.t.holdBonding()
 		result, err = s.t.pairing.pairFinish(params, s.clientID())
+		if err == nil {
+			s.t.keepBond(s.peer)
+		}
+		release()
 	}
 	if err != nil {
 		status, public := pairingErrorStatus(err)
@@ -551,6 +575,15 @@ func (s *bleSession) writePairingError(id models.RPCID, status int, message stri
 	}
 }
 
+// grant is what this session's requests are granted: a paired role, never
+// local and never an API key, since Bluetooth carries neither.
+func (s *bleSession) grant(cs *apimiddleware.ClientSession) permissions.Grant {
+	return permissions.Grant{
+		PlatformID: s.t.platformID(),
+		Role:       permissions.Role(cs.ClientRole()),
+	}
+}
+
 // sendNotification encrypts and queues one notification for an
 // authenticated session, dropping what the link cannot afford.
 func (s *bleSession) sendNotification(method string, data []byte) {
@@ -558,6 +591,9 @@ func (s *bleSession) sendNotification(method string, data []byte) {
 	closed, state, cs, queued := s.closed, s.state, s.cs, s.outboundBytes
 	s.mu.Unlock()
 	if closed || state != bleAuthEncrypted || cs == nil {
+		return
+	}
+	if notificationGated(method) && !notificationAllowed(method, s.grant(cs)) {
 		return
 	}
 	backedUp := queued > bleOutboundHighWater/2 || len(s.outbound) > bleOutboundMessages/2
@@ -762,6 +798,7 @@ func (s *bleSession) shutdownWith(reason string, disconnect bool) {
 			timer.Stop()
 		}
 		s.t.forget(s)
+		notificationClientDisconnected(s.t.core.st)
 		if disconnect {
 			s.t.refuse(s.peer)
 		}

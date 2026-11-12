@@ -148,6 +148,8 @@ Server notifications (e.g. `media.started`) use this same format, encrypted with
 
 ### Binary envelope
 
+> **Provisional:** the binary envelope may still change before it is declared stable. The JSON envelope is stable.
+
 The JSON envelope above costs a third more bytes than the ciphertext it carries, because of base64. A client can use a binary envelope instead, which carries the ciphertext as it is. Everything else is unchanged: the same keys, nonces, counters, AAD and decrypted payload.
 
 The first frame is a short header followed by the ciphertext:

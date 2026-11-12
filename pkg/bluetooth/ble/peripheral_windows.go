@@ -26,12 +26,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 	gatt "github.com/saltosystems/winrt-go/windows/devices/bluetooth/genericattributeprofile"
-	"github.com/saltosystems/winrt-go/windows/foundation"
 )
 
 const (
@@ -60,32 +58,31 @@ var errAlreadyServing = errors.New("bluetooth: peripheral is already serving")
 type peripheral struct {
 	a       *adapter
 	handler PeripheralHandler
-	chars   map[string]*gatt.GattLocalCharacteristic
+	chars   map[string]localCharacteristic
 	// sessions holds the GATT session of every peer seen, keyed by device
 	// identifier, so its end can be reported.
 	sessions map[string]*peerSession
 	// subs caches each peer's subscription to a characteristic, keyed by
 	// characteristic and device. Looking one up takes several calls into
 	// the Bluetooth service, far too slow to do per notification.
-	subs    map[string]*gatt.GattSubscribedClient
+	subs    map[string]subscribedClient
 	mu      syncutil.Mutex
 	serving bool
 }
 
 // peerSession is one connected central.
 type peerSession struct {
-	session *gatt.GattSession
-	handler *foundation.TypedEventHandler
+	session serverSession
+	closed  eventHandle
 	peer    Peer
-	token   foundation.EventRegistrationToken
 }
 
 func newPeripheral(a *adapter) *peripheral {
 	return &peripheral{
 		a:        a,
-		chars:    make(map[string]*gatt.GattLocalCharacteristic),
+		chars:    make(map[string]localCharacteristic),
 		sessions: make(map[string]*peerSession),
-		subs:     make(map[string]*gatt.GattSubscribedClient),
+		subs:     make(map[string]subscribedClient),
 	}
 }
 
@@ -97,7 +94,7 @@ func subKey(charUUID, deviceID string) string {
 // characteristic, or all of them when charUUID is empty.
 func (p *peripheral) dropSubscriptions(charUUID string) {
 	p.mu.Lock()
-	var dropped []*gatt.GattSubscribedClient
+	var dropped []subscribedClient
 	for key, client := range p.subs {
 		if charUUID == "" || strings.HasPrefix(key, charUUID+"|") {
 			dropped = append(dropped, client)
@@ -106,15 +103,13 @@ func (p *peripheral) dropSubscriptions(charUUID string) {
 	}
 	p.mu.Unlock()
 	for _, client := range dropped {
-		client.Release()
+		client.release()
 	}
 }
 
 // subscription returns a peer's subscription to a characteristic, from the
 // cache when it is there. The cache owns the returned object.
-func (p *peripheral) subscription(
-	c *gatt.GattLocalCharacteristic, charUUID, deviceID string,
-) (*gatt.GattSubscribedClient, error) {
+func (p *peripheral) subscription(c localCharacteristic, charUUID, deviceID string) (subscribedClient, error) {
 	key := subKey(charUUID, deviceID)
 	p.mu.Lock()
 	client := p.subs[key]
@@ -122,19 +117,42 @@ func (p *peripheral) subscription(
 	if client != nil {
 		return client, nil
 	}
-	client, err := subscribedClient(c, deviceID)
+	client, err := findSubscribedClient(c, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	p.mu.Lock()
 	if existing := p.subs[key]; existing != nil {
 		p.mu.Unlock()
-		client.Release()
+		client.release()
 		return existing, nil
 	}
 	p.subs[key] = client
 	p.mu.Unlock()
 	return client, nil
+}
+
+// findSubscribedClient finds the subscription a device holds on a
+// characteristic. The caller releases it.
+func findSubscribedClient(c localCharacteristic, deviceID string) (subscribedClient, error) {
+	clients, err := c.subscribedClients()
+	if err != nil {
+		return nil, fmt.Errorf("subscribed clients: %w", err)
+	}
+	var found subscribedClient
+	for _, client := range clients {
+		if found == nil {
+			if id, idErr := client.deviceID(); idErr == nil && id == deviceID {
+				found = client
+				continue
+			}
+		}
+		client.release()
+	}
+	if found == nil {
+		return nil, fmt.Errorf("%w: peer is not subscribed", ErrNotFound)
+	}
+	return found, nil
 }
 
 type noopHandler struct{}
@@ -158,7 +176,7 @@ func properties(flags []string) gatt.GattCharacteristicProperties {
 	var out gatt.GattCharacteristicProperties
 	for _, f := range flags {
 		switch f {
-		case FlagRead:
+		case FlagRead, FlagEncryptRead:
 			out |= gatt.GattCharacteristicPropertiesRead
 		case FlagWrite:
 			out |= gatt.GattCharacteristicPropertiesWrite
@@ -204,7 +222,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		return err
 	}
 	defer func() {
-		if stopErr := provider.StopAdvertising(); stopErr != nil {
+		if stopErr := provider.stopAdvertising(); stopErr != nil {
 			log.Debug().Err(stopErr).Msg("bluetooth stop advertising failed")
 		}
 	}()
@@ -217,7 +235,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	// Windows stops advertising on its own when the radio is switched off
 	// or removed, and says so only through the status. The status also
 	// flickers, so it has to stay stopped for a while to count.
-	ticker := time.NewTicker(time.Second)
+	ticker := p.a.clock.NewTicker(time.Second)
 	defer ticker.Stop()
 	stoppedFor := 0
 	for {
@@ -226,8 +244,8 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 			return nil
 		case <-p.a.gone:
 			return nil
-		case <-ticker.C:
-			status, statusErr := provider.GetAdvertisementStatus()
+		case <-ticker.Chan():
+			status, statusErr := provider.advertisementStatus()
 			if statusErr == nil && advertising(status) {
 				stoppedFor = 0
 				continue
@@ -242,6 +260,12 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	}
 }
 
+// SetAdvertising implements Peripheral. It does nothing on Windows: Core
+// only pauses advertising while the user pairs a controller, and controller
+// pairing is a Linux feature. Serve treats advertising that stops as the
+// radio going away, so this must stay a no-op until that changes.
+func (*peripheral) SetAdvertising(bool) {}
+
 func advertising(status gatt.GattServiceProviderAdvertisementStatus) bool {
 	return status == gatt.GattServiceProviderAdvertisementStatusStarted ||
 		status == gatt.GattServiceProviderAdvertisementStatusStartedWithoutAllAdvertisementData
@@ -252,9 +276,9 @@ func (p *peripheral) reset() {
 	p.mu.Lock()
 	sessions := p.sessions
 	subs := p.subs
-	p.subs = make(map[string]*gatt.GattSubscribedClient)
+	p.subs = make(map[string]subscribedClient)
 	p.sessions = make(map[string]*peerSession)
-	p.chars = make(map[string]*gatt.GattLocalCharacteristic)
+	p.chars = make(map[string]localCharacteristic)
 	p.handler = nil
 	p.serving = false
 	p.mu.Unlock()
@@ -262,61 +286,31 @@ func (p *peripheral) reset() {
 		ps.release()
 	}
 	for _, client := range subs {
-		client.Release()
+		client.release()
 	}
 }
 
 // publish creates the service and its characteristics and wires their
 // events. The returned cleanup removes the handlers and releases the
 // objects.
-func (p *peripheral) publish(
-	ctx context.Context, svc *Service,
-) (provider *gatt.GattServiceProvider, cleanup func(), err error) {
-	svcGUID, err := guidFromUUID(svc.UUID)
-	if err != nil {
-		return nil, nil, err
-	}
-	op, err := gatt.GattServiceProviderCreateAsync(svcGUID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: create gatt service: %w", ErrUnavailable, err)
-	}
-	defer op.Release()
-	if err = await(ctx, op, gatt.SignatureGattServiceProviderResult); err != nil {
-		return nil, nil, fmt.Errorf("create gatt service: %w", err)
-	}
-	res, err := op.GetResults()
-	if err != nil {
-		return nil, nil, fmt.Errorf("create gatt service: %w", err)
-	}
-	result := (*gatt.GattServiceProviderResult)(res)
-	defer result.Release()
-	code, err := result.GetError()
+func (p *peripheral) publish(ctx context.Context, svc *Service) (provider serviceProvider, cleanup func(), err error) {
+	provider, code, err := p.a.host.createServiceProvider(ctx, svc.UUID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create gatt service: %w", err)
 	}
 	if codeErr := bluetoothError("create gatt service", code); codeErr != nil {
 		return nil, nil, codeErr
 	}
-	provider, err = result.GetServiceProvider()
-	if err != nil {
-		return nil, nil, fmt.Errorf("gatt service provider: %w", err)
-	}
-	local, err := provider.GetService()
-	if err != nil {
-		provider.Release()
-		return nil, nil, fmt.Errorf("gatt local service: %w", err)
-	}
-	defer local.Release()
 
 	var undo []func()
 	cleanup = func() {
 		for i := len(undo) - 1; i >= 0; i-- {
 			undo[i]()
 		}
-		provider.Release()
+		provider.release()
 	}
 	for i := range svc.Characteristics {
-		remove, charErr := p.publishCharacteristic(ctx, local, &svc.Characteristics[i])
+		remove, charErr := p.publishCharacteristic(ctx, provider, &svc.Characteristics[i])
 		if charErr != nil {
 			cleanup()
 			return nil, nil, charErr
@@ -329,129 +323,52 @@ func (p *peripheral) publish(
 // publishCharacteristic creates one characteristic and subscribes to its
 // reads, writes and subscription changes.
 func (p *peripheral) publishCharacteristic(
-	ctx context.Context, local *gatt.GattLocalService, ch *Characteristic,
+	ctx context.Context, provider serviceProvider, ch *Characteristic,
 ) (remove func(), err error) {
-	params, err := gatt.NewGattLocalCharacteristicParameters()
-	if err != nil {
-		return nil, fmt.Errorf("characteristic parameters: %w", err)
-	}
-	defer params.Release()
-	if err = params.SetCharacteristicProperties(properties(ch.Flags)); err != nil {
-		return nil, fmt.Errorf("characteristic properties: %w", err)
-	}
-	charGUID, err := guidFromUUID(ch.UUID)
-	if err != nil {
-		return nil, err
-	}
-	op, err := local.CreateCharacteristicAsync(charGUID, params)
-	if err != nil {
-		return nil, fmt.Errorf("create characteristic %s: %w", ch.UUID, err)
-	}
-	defer op.Release()
-	if err = await(ctx, op, gatt.SignatureGattLocalCharacteristicResult); err != nil {
-		return nil, fmt.Errorf("create characteristic %s: %w", ch.UUID, err)
-	}
-	res, err := op.GetResults()
-	if err != nil {
-		return nil, fmt.Errorf("create characteristic %s: %w", ch.UUID, err)
-	}
-	result := (*gatt.GattLocalCharacteristicResult)(res)
-	defer result.Release()
-	code, err := result.GetError()
+	c, code, err := provider.createCharacteristic(ctx, ch.UUID, properties(ch.Flags))
 	if err != nil {
 		return nil, fmt.Errorf("create characteristic %s: %w", ch.UUID, err)
 	}
 	if codeErr := bluetoothError("create characteristic "+ch.UUID, code); codeErr != nil {
 		return nil, codeErr
 	}
-	c, err := result.GetCharacteristic()
-	if err != nil {
-		return nil, fmt.Errorf("characteristic %s: %w", ch.UUID, err)
-	}
 
 	uuid := strings.ToLower(ch.UUID)
-	// Windows raises these one at a time and waits for the handler, and
-	// each write takes a round trip to fetch. Handled inline, a client
-	// writing without responses outruns that and writes are lost, so each
-	// one is taken off the callback: the event is held with a reference
-	// and a deferral, and the chunks' own sequence numbers restore order.
-	writeHandler := typedHandler(gatt.SignatureGattLocalCharacteristic, gatt.SignatureGattWriteRequestedEventArgs,
-		func(_, args unsafe.Pointer) {
-			event := (*gatt.GattWriteRequestedEventArgs)(args)
-			event.AddRef()
-			deferral, deferErr := event.GetDeferral()
-			go func() {
-				defer event.Release()
-				if deferErr == nil {
-					defer func() {
-						_ = deferral.Complete()
-						deferral.Release()
-					}()
-				}
-				p.onWrite(uuid, event)
-			}()
-		})
-	readHandler := typedHandler(gatt.SignatureGattLocalCharacteristic, gatt.SignatureGattReadRequestedEventArgs,
-		func(_, args unsafe.Pointer) { p.onRead(uuid, (*gatt.GattReadRequestedEventArgs)(args)) })
-	subHandler := typedHandler(gatt.SignatureGattLocalCharacteristic, objectSignature,
-		func(_, _ unsafe.Pointer) {
+	unwatch, err := c.watch(charEvents{
+		write: func(event writeEvent) { p.onWrite(uuid, event) },
+		read:  func(event readEvent) { p.onRead(uuid, event) },
+		subscribersChanged: func() {
 			p.dropSubscriptions(uuid)
 			p.currentHandler().OnSubscribe(Peer{}, uuid, true)
-		})
-
-	writeToken, err := c.AddWriteRequested(writeHandler)
+		},
+	})
 	if err != nil {
-		c.Release()
-		return nil, fmt.Errorf("watch writes to %s: %w", ch.UUID, err)
-	}
-	readToken, err := c.AddReadRequested(readHandler)
-	if err != nil {
-		c.Release()
-		return nil, fmt.Errorf("watch reads of %s: %w", ch.UUID, err)
-	}
-	subToken, err := c.AddSubscribedClientsChanged(subHandler)
-	if err != nil {
-		c.Release()
-		return nil, fmt.Errorf("watch subscriptions to %s: %w", ch.UUID, err)
+		c.release()
+		return nil, fmt.Errorf("watch %s: %w", ch.UUID, err)
 	}
 
 	p.mu.Lock()
 	p.chars[uuid] = c
 	p.mu.Unlock()
 	return func() {
-		_ = c.RemoveWriteRequested(writeToken)
-		_ = c.RemoveReadRequested(readToken)
-		_ = c.RemoveSubscribedClientsChanged(subToken)
-		writeHandler.Release()
-		readHandler.Release()
-		subHandler.Release()
-		c.Release()
+		unwatch()
+		c.release()
 	}, nil
 }
 
 // advertise starts advertising and waits for Windows to confirm it, which
 // is where a radio that cannot act as a peripheral is found out.
-func (*peripheral) advertise(ctx context.Context, provider *gatt.GattServiceProvider) error {
-	params, err := gatt.NewGattServiceProviderAdvertisingParameters()
-	if err != nil {
-		return fmt.Errorf("advertising parameters: %w", err)
-	}
-	defer params.Release()
-	if err = params.SetIsConnectable(true); err != nil {
-		return fmt.Errorf("advertising parameters: %w", err)
-	}
-	if err = params.SetIsDiscoverable(true); err != nil {
-		return fmt.Errorf("advertising parameters: %w", err)
-	}
-	if err = provider.StartAdvertisingWithParameters(params); err != nil {
-		return fmt.Errorf("%w: start advertising: %w", ErrRoleUnsupported, err)
+func (p *peripheral) advertise(ctx context.Context, provider serviceProvider) error {
+	if err := provider.startAdvertising(); err != nil {
+		return fmt.Errorf("start advertising: %w", err)
 	}
 
-	deadline := time.After(advertiseStartTimeout)
-	ticker := time.NewTicker(advertisePoll)
+	deadline := p.a.clock.NewTimer(advertiseStartTimeout)
+	defer deadline.Stop()
+	ticker := p.a.clock.NewTicker(advertisePoll)
 	defer ticker.Stop()
 	for {
-		status, statusErr := provider.GetAdvertisementStatus()
+		status, statusErr := provider.advertisementStatus()
 		if statusErr != nil {
 			return fmt.Errorf("advertising status: %w", statusErr)
 		}
@@ -463,13 +380,13 @@ func (*peripheral) advertise(ctx context.Context, provider *gatt.GattServiceProv
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("start advertising: %w", ctx.Err())
-		case <-deadline:
+		case <-deadline.Chan():
 			if status == gatt.GattServiceProviderAdvertisementStatusAborted {
 				return fmt.Errorf("%w: windows aborted advertising; the radio may be off or unable to advertise",
 					ErrRoleUnsupported)
 			}
 			return fmt.Errorf("%w: advertising did not start (status %d)", ErrUnavailable, status)
-		case <-ticker.C:
+		case <-ticker.Chan():
 		}
 	}
 }
@@ -477,35 +394,28 @@ func (*peripheral) advertise(ctx context.Context, provider *gatt.GattServiceProv
 // track remembers a peer's session the first time it is seen and reports
 // the peer leaving when the session closes. It takes ownership of session
 // when it keeps it and releases it otherwise.
-func (p *peripheral) track(session *gatt.GattSession) (Peer, error) {
-	peer, err := peerFromSession(session)
+func (p *peripheral) track(session serverSession) (Peer, error) {
+	id, err := session.deviceID()
 	if err != nil {
-		session.Release()
-		return Peer{}, err
+		session.release()
+		return Peer{}, fmt.Errorf("identify peer: %w", err)
 	}
+	// The device identifier stands in for the object path BlueZ would give.
+	peer := Peer{Path: id, Address: addressFromDeviceID(id)}
 	p.mu.Lock()
 	_, known := p.sessions[peer.Path]
 	p.mu.Unlock()
 	if known {
-		session.Release()
+		session.release()
 		return peer, nil
 	}
 
-	ps := &peerSession{session: session, peer: peer}
-	ps.handler = typedHandler(gatt.SignatureGattSession, gatt.SignatureGattSessionStatusChangedEventArgs,
-		func(_, args unsafe.Pointer) {
-			status, statusErr := (*gatt.GattSessionStatusChangedEventArgs)(args).GetStatus()
-			if statusErr == nil && status == gatt.GattSessionStatusClosed {
-				p.forget(peer.Path)
-			}
-		})
-	token, err := session.AddSessionStatusChanged(ps.handler)
+	closed, err := session.onClosed(func() { p.forget(peer.Path) })
 	if err != nil {
-		ps.handler.Release()
-		session.Release()
+		session.release()
 		return peer, nil //nolint:nilerr // the peer is still usable; only its departure goes unreported
 	}
-	ps.token = token
+	ps := &peerSession{session: session, closed: closed, peer: peer}
 
 	p.mu.Lock()
 	if _, raced := p.sessions[peer.Path]; raced {
@@ -519,9 +429,9 @@ func (p *peripheral) track(session *gatt.GattSession) (Peer, error) {
 }
 
 func (ps *peerSession) release() {
-	_ = ps.session.RemoveSessionStatusChanged(ps.token)
-	ps.handler.Release()
-	ps.session.Release()
+	ps.closed.remove()
+	ps.closed.release()
+	ps.session.release()
 }
 
 // forget drops a peer whose session ended and tells the handler.
@@ -538,14 +448,14 @@ func (p *peripheral) forget(path string) {
 	go ps.release()
 }
 
-func (p *peripheral) onWrite(uuid string, args *gatt.GattWriteRequestedEventArgs) {
-	session, err := args.GetSession()
+func (p *peripheral) onWrite(uuid string, event writeEvent) {
+	session, err := event.session()
 	if err != nil {
 		log.Debug().Err(err).Msg("bluetooth write without a session")
 		return
 	}
 	mtu := 0
-	if size, mtuErr := session.GetMaxPduSize(); mtuErr == nil {
+	if size, mtuErr := session.maxPduSize(); mtuErr == nil {
 		mtu = int(size)
 	}
 	peer, err := p.track(session)
@@ -561,54 +471,29 @@ func (p *peripheral) onWrite(uuid string, args *gatt.GattWriteRequestedEventArgs
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeFetchTimeout)
 	defer cancel()
-	op, err := args.GetRequestAsync()
+	request, err := event.request(ctx)
 	if err != nil {
 		fail("request", err)
 		return
 	}
-	defer op.Release()
-	if err = await(ctx, op, gatt.SignatureGattWriteRequest); err != nil {
-		fail("await request", err)
-		return
-	}
-	res, err := op.GetResults()
-	if err != nil || res == nil {
-		fail("request result", err)
-		return
-	}
-	request := (*gatt.GattWriteRequest)(res)
-	defer request.Release()
+	defer request.release()
 
-	buf, err := request.GetValue()
+	value, err := request.value()
 	if err != nil {
 		fail("value", err)
 		return
 	}
-	value, err := bufferBytes(buf)
-	buf.Release()
-	if err != nil {
-		fail("read value", err)
-		return
-	}
-	if option, optErr := request.GetOption(); optErr == nil && option == gatt.GattWriteOptionWriteWithResponse {
-		if respondErr := request.Respond(); respondErr != nil {
+	if option, optErr := request.option(); optErr == nil && option == gatt.GattWriteOptionWriteWithResponse {
+		if respondErr := request.respond(); respondErr != nil {
 			fail("respond", respondErr)
 		}
 	}
 	p.currentHandler().OnWrite(peer, uuid, value, mtu)
 }
 
-func (p *peripheral) onRead(uuid string, args *gatt.GattReadRequestedEventArgs) {
-	deferral, err := args.GetDeferral()
-	if err == nil {
-		defer func() {
-			_ = deferral.Complete()
-			deferral.Release()
-		}()
-	}
-
+func (p *peripheral) onRead(uuid string, event readEvent) {
 	peer := Peer{}
-	if session, sessionErr := args.GetSession(); sessionErr == nil {
+	if session, sessionErr := event.session(); sessionErr == nil {
 		if tracked, trackErr := p.track(session); trackErr == nil {
 			peer = tracked
 		}
@@ -616,77 +501,51 @@ func (p *peripheral) onRead(uuid string, args *gatt.GattReadRequestedEventArgs) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultCallTimeout)
 	defer cancel()
-	op, err := args.GetRequestAsync()
+	request, err := event.request(ctx)
 	if err != nil {
 		return
 	}
-	defer op.Release()
-	if err = await(ctx, op, gatt.SignatureGattReadRequest); err != nil {
-		return
-	}
-	res, err := op.GetResults()
-	if err != nil || res == nil {
-		return
-	}
-	request := (*gatt.GattReadRequest)(res)
-	defer request.Release()
+	defer request.release()
 
 	value, err := p.currentHandler().OnRead(peer, uuid)
 	if err != nil {
-		_ = request.RespondWithProtocolError(attErrorUnlikely)
+		_ = request.respondWithError(attErrorUnlikely)
 		return
 	}
 	// A client reading a long value asks for it in pieces.
-	if offset, offErr := request.GetOffset(); offErr == nil && int(offset) <= len(value) {
+	if offset, offErr := request.offset(); offErr == nil && int(offset) <= len(value) {
 		value = value[offset:]
 	}
-	buf, err := bytesBuffer(value)
-	if err != nil {
-		_ = request.RespondWithProtocolError(attErrorUnlikely)
-		return
+	if err := request.respondWithValue(value); err != nil {
+		_ = request.respondWithError(attErrorUnlikely)
 	}
-	defer buf.Release()
-	_ = request.RespondWithValue(buf)
 }
 
 // Notify sends value to peer alone, which Windows can do, or to every
 // subscriber when peer is the zero value.
 func (p *peripheral) Notify(peer Peer, charUUID string, value []byte) error {
+	uuid := strings.ToLower(charUUID)
 	p.mu.Lock()
-	c := p.chars[strings.ToLower(charUUID)]
+	c := p.chars[uuid]
 	p.mu.Unlock()
 	if c == nil {
 		return fmt.Errorf("%w: characteristic %s", ErrNotFound, charUUID)
 	}
-	buf, err := bytesBuffer(value)
-	if err != nil {
-		return err
-	}
-	defer buf.Release()
-
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultCallTimeout)
-	defer cancel()
 
 	if peer.Path == "" {
-		op, notifyErr := c.NotifyValueAsync(buf)
-		if notifyErr != nil {
-			return fmt.Errorf("notify %s: %w", charUUID, notifyErr)
-		}
-		defer op.Release()
-		signature := fmt.Sprintf("pinterface({%s};%s)",
-			collectionsVectorViewGUID, gatt.SignatureGattClientNotificationResult)
-		if err = await(ctx, op, signature); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultCallTimeout)
+		defer cancel()
+		if err := c.notifyAll(ctx, value); err != nil {
 			return fmt.Errorf("notify %s: %w", charUUID, err)
 		}
 		return nil
 	}
 
-	uuid := strings.ToLower(charUUID)
 	client, err := p.subscription(c, uuid, peer.Path)
 	if err != nil {
 		return fmt.Errorf("notify %s: %w", charUUID, err)
 	}
-	op, err := c.NotifyValueForSubscribedClientAsync(buf, client)
+	wait, err := c.notifyClient(value, client)
 	if err != nil {
 		// The cached subscription may have gone stale.
 		p.dropSubscriptions(uuid)
@@ -696,47 +555,13 @@ func (p *peripheral) Notify(peer Peer, charUUID string, value []byte) error {
 	// each to go out before handing over the next held the link to a few a
 	// second; the caller's own window is what bounds how many are queued.
 	go func() {
-		defer op.Release()
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), notifyResultTimeout)
 		defer waitCancel()
-		if waitErr := await(waitCtx, op, gatt.SignatureGattClientNotificationResult); waitErr != nil {
+		if waitErr := wait(waitCtx); waitErr != nil {
 			log.Debug().Err(waitErr).Str("characteristic", charUUID).Msg("bluetooth notification not confirmed")
 		}
 	}()
 	return nil
-}
-
-// subscribedClient finds the subscription a device holds on a
-// characteristic. The caller releases it.
-func subscribedClient(c *gatt.GattLocalCharacteristic, deviceID string) (*gatt.GattSubscribedClient, error) {
-	clients, err := c.GetSubscribedClients()
-	if err != nil {
-		return nil, fmt.Errorf("subscribed clients: %w", err)
-	}
-	defer clients.Release()
-	n, err := clients.GetSize()
-	if err != nil {
-		return nil, fmt.Errorf("subscribed clients: %w", err)
-	}
-	for i := range n {
-		item, itemErr := clients.GetAt(i)
-		if itemErr != nil || item == nil {
-			continue
-		}
-		client := (*gatt.GattSubscribedClient)(item)
-		session, sessionErr := client.GetSession()
-		if sessionErr != nil {
-			client.Release()
-			continue
-		}
-		id, idErr := sessionDeviceID(session)
-		session.Release()
-		if idErr == nil && id == deviceID {
-			return client, nil
-		}
-		client.Release()
-	}
-	return nil, fmt.Errorf("%w: peer is not subscribed", ErrNotFound)
 }
 
 // Disconnect cannot drop a central on Windows: the GATT server API has no

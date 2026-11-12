@@ -100,12 +100,37 @@ type FakeNotification struct {
 // FakePeripheral is an in-memory ble.Peripheral. Serve blocks until its
 // context ends; tests drive the handler it was given through Handler.
 type FakePeripheral struct {
-	handler       ble.PeripheralHandler
+	handler ble.PeripheralHandler
+	// ServeErr, when set, is returned by Serve at once, as when the
+	// adapter refuses to register the application.
+	ServeErr error
+	// NotifyErr, when set, is returned by every Notify.
+	NotifyErr     error
 	Notifications chan FakeNotification
 	app           ble.Application
 	adv           ble.Advertisement
+	failServeErr  error
 	disconnects   []ble.Peer
 	mu            syncutil.Mutex
+	serves        int
+	failServes    int
+	advOff        bool
+}
+
+// FailNextServes makes the next n Serve calls return err at once, as when
+// BlueZ is too busy after an adapter reset to register the application.
+func (p *FakePeripheral) FailNextServes(n int, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failServes = n
+	p.failServeErr = err
+}
+
+// Serves returns how many times Serve was called.
+func (p *FakePeripheral) Serves() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.serves
 }
 
 // NewFakePeripheral returns a peripheral whose Notifications channel
@@ -121,7 +146,16 @@ func (p *FakePeripheral) Serve(
 	p.handler = h
 	p.app = app
 	p.adv = adv
+	p.serves++
+	if p.failServes > 0 {
+		p.failServes--
+		p.mu.Unlock()
+		return p.failServeErr
+	}
 	p.mu.Unlock()
+	if p.ServeErr != nil {
+		return p.ServeErr
+	}
 	<-ctx.Done()
 	p.mu.Lock()
 	p.handler = nil
@@ -151,6 +185,9 @@ func (p *FakePeripheral) Advertisement() ble.Advertisement {
 }
 
 func (p *FakePeripheral) Notify(_ ble.Peer, charUUID string, value []byte) error {
+	if p.NotifyErr != nil {
+		return p.NotifyErr
+	}
 	n := FakeNotification{CharUUID: charUUID, Value: append([]byte(nil), value...)}
 	select {
 	case p.Notifications <- n:
@@ -164,6 +201,20 @@ func (p *FakePeripheral) Disconnect(_ context.Context, peer ble.Peer) error {
 	p.disconnects = append(p.disconnects, peer)
 	p.mu.Unlock()
 	return nil
+}
+
+// SetAdvertising implements ble.Peripheral.
+func (p *FakePeripheral) SetAdvertising(on bool) {
+	p.mu.Lock()
+	p.advOff = !on
+	p.mu.Unlock()
+}
+
+// Advertising reports whether advertising is switched on.
+func (p *FakePeripheral) Advertising() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.advOff
 }
 
 // Disconnects returns every peer Disconnect was called with.
@@ -182,6 +233,8 @@ type FakeFind struct {
 // Find for an unknown address blocks until the device is added or the
 // context ends, as a real scan does.
 type FakeCentral struct {
+	// ScanErr, when set, is returned by Scan.
+	ScanErr error
 	devices map[string]*FakeDevice
 	// added is closed and replaced whenever a device is added.
 	added chan struct{}
@@ -225,10 +278,13 @@ func (c *FakeCentral) Find(ctx context.Context, address string) (ble.Device, err
 
 // Scan reports every known device once, then waits for the context.
 func (c *FakeCentral) Scan(ctx context.Context, _ ble.ScanFilter) (<-chan ble.ScanResult, error) {
+	if c.ScanErr != nil {
+		return nil, c.ScanErr
+	}
 	c.mu.Lock()
 	results := make([]ble.ScanResult, 0, len(c.devices))
-	for addr := range c.devices {
-		results = append(results, ble.ScanResult{Address: addr, HasRSSI: true})
+	for addr, d := range c.devices {
+		results = append(results, ble.ScanResult{Address: addr, Name: d.Name, HasRSSI: true})
 	}
 	c.mu.Unlock()
 
@@ -256,9 +312,11 @@ type FakeDevice struct {
 	chars        map[string]*FakeCharacteristic
 	disconnected chan struct{}
 	Addr         string
-	dropOnce     sync.Once
-	mu           syncutil.Mutex
-	connected    bool
+	// Name is the local name the device advertises to a scan.
+	Name      string
+	dropOnce  sync.Once
+	mu        syncutil.Mutex
+	connected bool
 }
 
 func NewFakeDevice(address string) *FakeDevice {
@@ -330,7 +388,13 @@ func (d *FakeDevice) Drop() {
 // FakeCharacteristic is an in-memory ble.RemoteCharacteristic. Push feeds
 // notifications to subscribers.
 type FakeCharacteristic struct {
-	in chan []byte
+	// OnWrite, when set, sees every Write; its error is Write's.
+	OnWrite func(value []byte, withResponse bool) error
+	// ReadErr, MTUErr and SubscribeErr, when set, fail those calls.
+	ReadErr      error
+	MTUErr       error
+	SubscribeErr error
+	in           chan []byte
 	// Value is what Read returns; Link is the MTU reported.
 	Value []byte
 	Link  int
@@ -346,6 +410,9 @@ func (c *FakeCharacteristic) Push(value []byte) {
 }
 
 func (c *FakeCharacteristic) Subscribe(ctx context.Context) (<-chan []byte, error) {
+	if c.SubscribeErr != nil {
+		return nil, c.SubscribeErr
+	}
 	out := make(chan []byte, 64)
 	go func() {
 		defer close(out)
@@ -365,14 +432,23 @@ func (c *FakeCharacteristic) Subscribe(ctx context.Context) (<-chan []byte, erro
 	return out, nil
 }
 
-func (*FakeCharacteristic) Write(_ context.Context, _ []byte, _ bool) error {
+func (c *FakeCharacteristic) Write(_ context.Context, value []byte, withResponse bool) error {
+	if c.OnWrite != nil {
+		return c.OnWrite(append([]byte(nil), value...), withResponse)
+	}
 	return nil
 }
 
 func (c *FakeCharacteristic) Read(_ context.Context) ([]byte, error) {
+	if c.ReadErr != nil {
+		return nil, c.ReadErr
+	}
 	return append([]byte(nil), c.Value...), nil
 }
 
 func (c *FakeCharacteristic) MTU(_ context.Context) (int, error) {
+	if c.MTUErr != nil {
+		return 0, c.MTUErr
+	}
 	return c.Link, nil
 }

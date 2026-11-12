@@ -57,6 +57,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -2216,6 +2217,14 @@ func (l *servingListener) Accept() (net.Conn, error) {
 	return l.Listener.Accept() //nolint:wrapcheck // Preserve net.Error behavior for http.Server.
 }
 
+// BluetoothHost is what the API needs from the Bluetooth manager: a
+// peripheral to serve on whenever an adapter is ready, and whether it is
+// serving now.
+type BluetoothHost interface {
+	OnPeripheral(fn bluetooth.PeripheralFunc) (unregister func())
+	Serving() bool
+}
+
 // ListenerOptions supplies transport resources and an optional per-listener key provider.
 // APIKeys must be safe for concurrent calls. Nil preserves standalone configuration.
 //
@@ -2238,8 +2247,8 @@ type ListenerOptions struct {
 	Listener net.Listener
 	APIKeys  apimiddleware.APIKeyProvider
 	// Bluetooth, when set, also serves the API over Bluetooth Low Energy
-	// whenever the manager has an adapter ready.
-	Bluetooth *bluetooth.Manager
+	// whenever it has an adapter ready.
+	Bluetooth BluetoothHost
 	OnNetwork func(port int)
 	Network   bool
 }
@@ -2467,6 +2476,21 @@ func StartWithListener(
 	if err := methodMap.AddMethod(models.MethodClientsPairCancel,
 		methods.HandleClientsPairCancel(pairingMgr), false); err != nil {
 		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
+	}
+
+	endpoints := methods.DeviceEndpoints{
+		Port: port,
+		Name: func() string { return discovery.ResolveInstanceName(cfg) },
+		Addresses: networkAddresses(
+			listenAddr, opts.Listener == nil || networkListener != nil, localIPsProvider,
+		),
+	}
+	if opts.Bluetooth != nil {
+		endpoints.BLE = opts.Bluetooth.Serving
+	}
+	if err := methodMap.AddMethod(models.MethodDeviceEndpoints,
+		methods.HandleDeviceEndpoints(endpoints), false); err != nil {
+		log.Error().Err(err).Msg("error adding device.endpoints method")
 	}
 
 	encGateway := apimiddleware.NewEncryptionGateway(db.UserDB)

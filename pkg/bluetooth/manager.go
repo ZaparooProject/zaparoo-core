@@ -25,11 +25,14 @@ package bluetooth
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -50,7 +53,16 @@ const (
 	// worked. One lost sooner is failing to come up at all, and is retried
 	// quietly at watchInterval instead.
 	stableAfter = 2 * watchInterval
+
+	// maxFailures is how many failed attempts in a row the manager makes
+	// before it stops trying. An adapter that is missing or switched off
+	// is not a failure; one that is there and will not work is.
+	maxFailures = 5
 )
+
+// roleCentralPeripheral is the role BlueZ reports for a controller that can
+// scan for and hold a reader connection while it advertises.
+const roleCentralPeripheral = ble.RoleCentral + "-" + ble.RolePeripheral
 
 // PeripheralFunc is called with a ready peripheral each time one becomes
 // available. It must not block: start any long-running work on a goroutine.
@@ -59,38 +71,51 @@ type PeripheralFunc func(ble.Peripheral)
 // Manager keeps an adapter open while the BLE transport is enabled and
 // hands its peripheral side to whoever registered interest.
 type Manager struct {
-	cfg       *config.Instance
-	clock     clockwork.Clock
-	open      func(ctx context.Context) (ble.Adapter, error)
-	adapter   ble.Adapter
-	cancel    context.CancelFunc
-	done      chan struct{}
-	callbacks map[int]PeripheralFunc
-	openedAt  time.Time
-	mu        syncutil.Mutex
-	nextID    int
+	cfg        *config.Instance
+	clock      clockwork.Clock
+	open       func(ctx context.Context) (ble.Adapter, error)
+	adapter    ble.Adapter
+	peripheral ble.Peripheral
+	cancel     context.CancelFunc
+	done       chan struct{}
+	callbacks  map[int]PeripheralFunc
+	openedAt   time.Time
+	mu         syncutil.Mutex
+	nextID     int
 	// retries is how many quick attempts are left to get back an adapter
 	// that was lost. Only the watch loop touches it.
 	retries int
+	// failures counts attempts in a row that found an adapter and could
+	// not use it.
+	failures int
+	// gaveUp is set after maxFailures. The manager then only checks
+	// whether the adapter went away or the setting changed, either of
+	// which earns a fresh start.
+	gaveUp bool
 	// flapping is set while the adapter keeps opening and failing straight
 	// away, so that cycle is logged once and not every interval.
 	flapping bool
-	// unavailableReported and roleReported keep a machine that has no
-	// usable adapter from logging the same line every interval.
+	// absentReported, unavailableReported, roleReported and
+	// readerReported keep a machine that has no usable adapter from
+	// logging the same line every interval.
+	absentReported      bool
 	unavailableReported bool
 	roleReported        bool
-	started             bool
-	stopped             bool
+	readerReported      bool
+	// advertisingPaused is applied to every peripheral handed out.
+	advertisingPaused bool
+	started           bool
+	stopped           bool
 	// unsupported is set once the platform says it has no BlueZ at all.
 	unsupported bool
 }
 
-// NewManager builds a manager over the system's Bluetooth stack.
+// NewManager builds a manager over the system's Bluetooth stack. It never
+// powers the adapter on: the radio may be off on purpose, and switching it
+// on would disturb the device's gamepads.
 func NewManager(cfg *config.Instance) *Manager {
 	return newManagerWith(cfg, clockwork.NewRealClock(), func(ctx context.Context) (ble.Adapter, error) {
-		// The user enabled the transport, so a powered-off adapter is
-		// switched on for them.
-		return ble.Open(ctx, ble.WithPowerOn())
+		return ble.Open(ctx)
 	})
 }
 
@@ -146,6 +171,30 @@ func (m *Manager) Roles() []ble.Role {
 	return m.adapter.Roles()
 }
 
+// Serving reports whether a peripheral is open and handed out.
+func (m *Manager) Serving() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.peripheral != nil
+}
+
+// SetAdvertisingPaused stops or resumes advertising on the current
+// peripheral and any later one, without dropping connected clients. Core
+// pauses it while the user scans for or pairs a controller, so the radio
+// is free for that.
+func (m *Manager) SetAdvertisingPaused(paused bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.advertisingPaused == paused {
+		return
+	}
+	m.advertisingPaused = paused
+	if m.peripheral != nil {
+		m.peripheral.SetAdvertising(!paused)
+	}
+	log.Debug().Bool("paused", paused).Msg("bluetooth advertising pause changed")
+}
+
 // OnPeripheral registers fn to receive the peripheral now, if one is ready,
 // and again after every re-open. The returned function unregisters it.
 func (m *Manager) OnPeripheral(fn PeripheralFunc) func() {
@@ -153,13 +202,11 @@ func (m *Manager) OnPeripheral(fn PeripheralFunc) func() {
 	id := m.nextID
 	m.nextID++
 	m.callbacks[id] = fn
-	adapter := m.adapter
+	p := m.peripheral
 	m.mu.Unlock()
 
-	if adapter != nil {
-		if p, err := adapter.Peripheral(); err == nil {
-			fn(p)
-		}
+	if p != nil {
+		fn(p)
 	}
 	return func() {
 		m.mu.Lock()
@@ -207,17 +254,83 @@ func (m *Manager) run(ctx context.Context) {
 
 // lost closes an adapter that went away. One that had been working is worth
 // getting back quickly, so it arms the quick retries; one that failed as
-// soon as it was opened waits for the watch interval. It reports which.
+// soon as it was opened counts as a failure and waits for the watch
+// interval. It reports which.
 func (m *Manager) lost() (retryNow bool) {
 	m.mu.Lock()
 	stable := m.clock.Since(m.openedAt) >= stableAfter
 	m.flapping = !stable
+	if stable {
+		m.failures = 0
+	}
 	m.mu.Unlock()
 	m.closeAdapter("adapter went away")
 	if stable {
 		m.retries = lossRetryAttempts
+	} else {
+		m.failed(errors.New("adapter went away straight after opening"))
 	}
 	return stable
+}
+
+// failed counts one failed attempt and gives up after maxFailures.
+func (m *Manager) failed(err error) {
+	m.mu.Lock()
+	m.failures++
+	attempts := m.failures
+	giveUp := attempts >= maxFailures && !m.gaveUp
+	if giveUp {
+		m.gaveUp = true
+	}
+	m.mu.Unlock()
+	if !giveUp {
+		return
+	}
+	m.retries = 0
+	log.Warn().Err(err).Int("attempts", attempts).
+		Msg("bluetooth app transport keeps failing; giving up until the adapter or the setting changes")
+}
+
+// resetFailures gives the manager a fresh start.
+func (m *Manager) resetFailures() {
+	m.mu.Lock()
+	wasGivenUp := m.gaveUp
+	m.failures = 0
+	m.gaveUp = false
+	m.mu.Unlock()
+	if wasGivenUp {
+		log.Info().Msg("bluetooth adapter or setting changed, trying the app transport again")
+	}
+}
+
+func (m *Manager) givenUp() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gaveUp
+}
+
+// absent reports whether err means there is simply no adapter to use: none
+// plugged in, switched off, or no Bluetooth service running.
+func absent(err error) bool {
+	return errors.Is(err, ble.ErrPoweredOff) ||
+		errors.Is(err, ble.ErrNoAdapter) ||
+		errors.Is(err, ble.ErrUnavailable)
+}
+
+// readerConfigured reports whether a Bluetooth LE reader is set up to
+// connect.
+func (m *Manager) readerConfigured() bool {
+	ids := []string{simpleserialble.DriverID}
+	info := config.DriverInfo{ID: simpleserialble.DriverID, DefaultEnabled: true}
+	if !m.cfg.IsReaderEnabled(info, config.ReaderEnableContextManualConnect) {
+		return false
+	}
+	for _, c := range m.cfg.Readers().Connect {
+		if c.IsEnabled() && readers.MatchesDriverID(ids, c.Driver) {
+			return true
+		}
+	}
+	return false
 }
 
 // tick reconciles the adapter with configuration: closed while disabled,
@@ -231,32 +344,77 @@ func (m *Manager) tick(ctx context.Context) {
 	}
 	if !m.cfg.BLEEnabled() {
 		m.closeAdapter("disabled by configuration")
+		m.resetFailures()
 		return
 	}
 
 	m.mu.Lock()
 	current := m.adapter
+	openedAt := m.openedAt
 	m.mu.Unlock()
 	if current != nil {
 		select {
 		case <-current.Gone():
 			m.lost()
 		default:
+			if m.readerConfigured() && !ble.SupportsRole(current.Roles(), roleCentralPeripheral) {
+				// A reader added while the transport was serving takes the
+				// adapter over; the next pass logs why.
+				m.closeAdapter("bluetooth reader configured")
+				return
+			}
+			if m.clock.Since(openedAt) >= stableAfter {
+				m.mu.Lock()
+				m.failures = 0
+				m.mu.Unlock()
+			}
 			return
 		}
 	}
 
 	adapter, err := m.open(ctx)
 	if err != nil {
-		if errors.Is(err, ble.ErrUnsupported) {
+		switch {
+		case errors.Is(err, ble.ErrUnsupported):
 			// Nothing will change that on this platform, and the transport
 			// is on by default, so say nothing and stop asking.
 			m.mu.Lock()
 			m.unsupported = true
 			m.mu.Unlock()
-			return
+		case absent(err):
+			m.resetFailures()
+			m.reportAbsent(err)
+		default:
+			if !m.givenUp() {
+				m.reportUnavailable(err)
+				m.failed(err)
+			}
 		}
-		m.reportUnavailable(err)
+		return
+	}
+	m.mu.Lock()
+	m.absentReported = false
+	m.mu.Unlock()
+
+	if m.givenUp() {
+		// Opening only reads the adapter's properties; it is how a given-up
+		// manager notices the adapter going away and coming back, which
+		// shows up above as absent.
+		_ = adapter.Close()
+		return
+	}
+
+	if m.readerConfigured() && !ble.SupportsRole(adapter.Roles(), roleCentralPeripheral) {
+		m.mu.Lock()
+		reported := m.readerReported
+		m.readerReported = true
+		m.mu.Unlock()
+		if !reported {
+			log.Info().Str("adapter", adapter.Address()).Strs("roles", roleStrings(adapter)).
+				Msg("bluetooth reader configured and the adapter cannot run it alongside the app " +
+					"transport; leaving the app transport off")
+		}
+		_ = adapter.Close()
 		return
 	}
 
@@ -272,54 +430,102 @@ func (m *Manager) tick(ctx context.Context) {
 				Msg("bluetooth adapter cannot act as a peripheral, app transport unavailable")
 		}
 		_ = adapter.Close()
+		m.failed(err)
 		return
 	}
 
+	reloadKeys(ctx, adapter)
+
 	m.mu.Lock()
 	m.adapter = adapter
+	m.peripheral = peripheral
 	m.openedAt = m.clock.Now()
 	flapping := m.flapping
 	m.unavailableReported = false
 	m.roleReported = false
+	m.readerReported = false
+	peripheral.SetAdvertising(!m.advertisingPaused)
 	callbacks := make([]PeripheralFunc, 0, len(m.callbacks))
 	for _, fn := range m.callbacks {
 		callbacks = append(callbacks, fn)
 	}
 	m.mu.Unlock()
 
-	roles := make([]string, 0, len(adapter.Roles()))
-	for _, r := range adapter.Roles() {
-		roles = append(roles, string(r))
-	}
 	event := log.Info()
 	if flapping {
 		event = log.Debug()
 	}
-	event.Str("adapter", adapter.Address()).Strs("roles", roles).Msg("bluetooth adapter ready")
+	event.Str("adapter", adapter.Address()).Strs("roles", roleStrings(adapter)).Msg("bluetooth adapter ready")
 
 	for _, fn := range callbacks {
 		fn(peripheral)
 	}
 }
 
+// reloadKeys hands the controller the long-term keys of bonded devices
+// where the platform supports it, so a phone bonded earlier can reconnect
+// even when bluetoothd failed to load them at boot.
+func reloadKeys(ctx context.Context, adapter ble.Adapter) {
+	kr, ok := adapter.(ble.KeyReloader)
+	if !ok {
+		return
+	}
+	n, err := kr.ReloadLongTermKeys(ctx)
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		log.Debug().Err(err).Msg("no permission to reload bluetooth long-term keys")
+	case err != nil:
+		log.Warn().Err(err).Str("adapter", adapter.Address()).Msg("failed to reload bluetooth long-term keys")
+	case n > 0:
+		log.Info().Int("keys", n).Str("adapter", adapter.Address()).Msg("reloaded bluetooth long-term keys")
+	}
+}
+
+func roleStrings(adapter ble.Adapter) []string {
+	roles := make([]string, 0, len(adapter.Roles()))
+	for _, r := range adapter.Roles() {
+		roles = append(roles, string(r))
+	}
+	return roles
+}
+
+// reportAbsent logs once that there is no adapter to use, until one shows
+// up again.
+func (m *Manager) reportAbsent(err error) {
+	m.mu.Lock()
+	reported := m.absentReported
+	m.absentReported = true
+	m.mu.Unlock()
+	if reported {
+		log.Debug().Err(err).Msg("bluetooth still unavailable")
+		return
+	}
+	if errors.Is(err, ble.ErrPoweredOff) {
+		log.Info().Msg("bluetooth is off; Core leaves it off and will use it once it is switched on")
+		return
+	}
+	log.Info().Err(err).Msg("bluetooth unavailable, will keep checking")
+}
+
 // reportUnavailable logs the first failure at info and later ones at debug,
-// so a machine without Bluetooth does not fill the log.
+// so a machine with a broken adapter does not fill the log.
 func (m *Manager) reportUnavailable(err error) {
 	m.mu.Lock()
 	reported := m.unavailableReported
 	m.unavailableReported = true
 	m.mu.Unlock()
 	if reported {
-		log.Debug().Err(err).Msg("bluetooth still unavailable")
+		log.Debug().Err(err).Msg("bluetooth adapter still failing to open")
 		return
 	}
-	log.Info().Err(err).Msg("bluetooth unavailable, will keep checking")
+	log.Info().Err(err).Msg("bluetooth adapter failed to open, will retry")
 }
 
 func (m *Manager) closeAdapter(reason string) {
 	m.mu.Lock()
 	adapter := m.adapter
 	m.adapter = nil
+	m.peripheral = nil
 	flapping := m.flapping
 	m.mu.Unlock()
 	if adapter == nil {

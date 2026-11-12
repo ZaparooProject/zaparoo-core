@@ -43,6 +43,10 @@ var (
 	// ErrNoAdapter is returned when the Bluetooth service is running but no
 	// adapter is plugged in.
 	ErrNoAdapter = errors.New("bluetooth: no bluetooth adapter")
+	// ErrPoweredOff is returned when the adapter is switched off. Core
+	// never switches one on unless asked to with WithPowerOn: the adapter
+	// may be off on purpose, and it is shared with the device's gamepads.
+	ErrPoweredOff = errors.New("bluetooth: adapter is powered off")
 	// ErrRoleUnsupported is returned when the adapter cannot take the
 	// requested role.
 	ErrRoleUnsupported = errors.New("bluetooth: adapter does not support this role")
@@ -67,6 +71,9 @@ const (
 	FlagWrite                = "write"
 	FlagWriteWithoutResponse = "write-without-response"
 	FlagNotify               = "notify"
+	// FlagEncryptRead is read over an encrypted link only. A phone that
+	// reads it over a plain one pairs first and then retries the read.
+	FlagEncryptRead = "encrypt-read"
 )
 
 // DefaultCallTimeout bounds a single D-Bus round trip.
@@ -153,6 +160,34 @@ type Adapter interface {
 	Close() error
 }
 
+// KeyReloader is implemented by adapters that can hand the controller the
+// LE long-term keys the system keeps on disk. On Linux that works around
+// BlueZ 5.61 to 5.63, which can fail to load them at boot, leaving every
+// bonded phone unable to reconnect.
+type KeyReloader interface {
+	// ReloadLongTermKeys loads the stored keys and reports how many. It
+	// sends nothing when there are none.
+	ReloadLongTermKeys(ctx context.Context) (int, error)
+}
+
+// Bonder is implemented by peripherals that can let a phone bond while
+// Core's own pairing is open.
+type Bonder interface {
+	// AllowBonding makes the adapter accept bonding from peers that have
+	// used Core's service, until the window is closed.
+	AllowBonding(ctx context.Context) (BondWindow, error)
+}
+
+// BondWindow is an open bonding window.
+type BondWindow interface {
+	// Keep marks a peer whose bond should survive Close: one that went on
+	// to finish Core's pairing.
+	Keep(peer Peer)
+	// Close stops accepting bonds and removes the bonds made during the
+	// window by peers that were not kept.
+	Close(ctx context.Context) error
+}
+
 // Peer identifies a remote central connected to the local GATT server.
 type Peer struct {
 	// Path is the BlueZ Device1 object path, unique per connection.
@@ -172,7 +207,13 @@ type Characteristic struct {
 type Service struct {
 	UUID            string
 	Characteristics []Characteristic
-	Primary         bool
+	// Handle, when not zero, asks the stack to place the service at this
+	// ATT handle. A phone caches a bonded device's handles and is told
+	// only where the new ones are when they move, so it keeps reading the
+	// old ones. BlueZ otherwise places a service after every one it has
+	// held since it started, which moves it on every restart.
+	Handle  uint16
+	Primary bool
 }
 
 // Application is the set of local services registered together.
@@ -215,6 +256,11 @@ type Peripheral interface {
 	Notify(peer Peer, charUUID string, value []byte) error
 	// Disconnect drops a peer's connection.
 	Disconnect(ctx context.Context, peer Peer) error
+	// SetAdvertising stops or resumes advertising without ending Serve or
+	// any connection. It holds across Serve calls on this peripheral, so it
+	// may be set before Serve starts. Advertising is on until it is
+	// switched off.
+	SetAdvertising(on bool)
 }
 
 // ScanFilter narrows a scan. The zero value reports every LE device.

@@ -63,6 +63,7 @@ type bleTestRig struct {
 	peripheral *mocks.FakePeripheral
 	clock      *clockwork.FakeClock
 	cfg        *config.Instance
+	st         *state.State
 	inboxes    map[uint16]chan []byte
 	mu         syncutil.Mutex
 }
@@ -72,6 +73,8 @@ type bleTestRigOptions struct {
 	encGateway  *apimiddleware.EncryptionGateway
 	pairing     *PairingManager
 	notifBroker *broker.Broker
+	// bonder, when set, is served in place of a plain fake peripheral.
+	bonder *fakeBonder
 }
 
 func newBLETestRig(t *testing.T, opts bleTestRigOptions) *bleTestRig {
@@ -101,7 +104,12 @@ func newBLETestRig(t *testing.T, opts bleTestRigOptions) *bleTestRig {
 		clock:       clock,
 	})
 	peripheral := mocks.NewFakePeripheral()
-	transport.serve(peripheral)
+	if opts.bonder != nil {
+		opts.bonder.FakePeripheral = peripheral
+		transport.serve(opts.bonder)
+	} else {
+		transport.serve(peripheral)
+	}
 	require.Eventually(t, func() bool { return peripheral.Handler() != nil }, bleTestTimeout, 5*time.Millisecond)
 	t.Cleanup(transport.stop)
 
@@ -110,6 +118,7 @@ func newBLETestRig(t *testing.T, opts bleTestRigOptions) *bleTestRig {
 		peripheral: peripheral,
 		clock:      clock,
 		cfg:        cfg,
+		st:         st,
 		inboxes:    make(map[uint16]chan []byte),
 	}
 	go rig.route(t.Context())
@@ -459,6 +468,15 @@ func TestBLESession_InfoCharacteristic(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBLESession_BondCharacteristicReadsEmpty(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	data, err := rig.peripheral.Handler().OnRead(ble.Peer{}, apigatt.BondCharUUID)
+	require.NoError(t, err)
+	assert.Empty(t, data)
+}
+
 func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 	t.Parallel()
 
@@ -788,16 +806,73 @@ func TestBLESession_BadAcknowledgementClosesSession(t *testing.T) {
 	client.waitClosed(t)
 }
 
-func TestBLESession_ChangedTagClosesSession(t *testing.T) {
+// A late chunk from a session the client has already left is dropped rather
+// than taken for a framing error.
+func TestBLESession_ChunkWithAnotherTagIsDropped(t *testing.T) {
 	t.Parallel()
 
 	rig := newBLETestRig(t, bleTestRigOptions{})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 	client.openPending(t)
-	require.NotNil(t, client.session())
+	s := client.session()
+	require.NotNil(t, s)
 
 	client.write(apigatt.EncodeAck(client.tag+1, 0))
-	client.waitClosed(t)
+	client.expectNothing(t)
+	assert.Same(t, s, client.session())
+}
+
+// A client may give up on a session and start another on the same
+// connection, as the app does between pairing and the encrypted session.
+// The old session ends quietly and the new one is served.
+func TestBLESession_NewTagStartsANewSession(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	old := rig.client("11:22:33:44:55:66", 7, 185)
+	old.openPending(t)
+	oldSession := old.session()
+	require.NotNil(t, oldSession)
+
+	client := rig.client("11:22:33:44:55:66", 8, 185)
+	client.send(t, first.binary(t))
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
+	assert.NotSame(t, oldSession, client.session())
+	old.expectNothing(t)
+}
+
+// Acknowledgements are written one after another but BlueZ hands each to its
+// own goroutine, so a later one can overtake an earlier one.
+func TestBLESession_OvertakenAcknowledgementIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: largeMethodMap(t, 20_000), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, apigatt.DefaultMTU)
+	client.silent = true
+
+	client.send(t, first.binary(t))
+	receive := func(want int) {
+		t.Helper()
+		for range want {
+			select {
+			case <-client.inbox:
+			case <-time.After(bleTestTimeout):
+				t.Fatal("transport stopped short of the window")
+			}
+		}
+	}
+	receive(apigatt.SendWindow)
+
+	client.write(apigatt.EncodeAck(client.tag, apigatt.SendWindow))
+	client.write(apigatt.EncodeAck(client.tag, apigatt.SendWindow/2))
+
+	receive(apigatt.SendWindow)
+	assert.NotNil(t, client.session())
 }
 
 // BlueZ hands every write to its own goroutine, so chunks of back-to-back
@@ -1126,11 +1201,17 @@ func TestBLETransport_Application(t *testing.T) {
 	require.Len(t, app.Services, 1)
 	assert.Equal(t, apigatt.ServiceUUID, app.Services[0].UUID)
 	assert.True(t, app.Services[0].Primary)
-	uuids := make([]string, 0, 3)
+	assert.Equal(t, apigatt.ServiceHandle, app.Services[0].Handle)
+	uuids := make([]string, 0, 4)
 	for _, c := range app.Services[0].Characteristics {
 		uuids = append(uuids, c.UUID)
+		if c.UUID == apigatt.BondCharUUID {
+			assert.Equal(t, []string{ble.FlagEncryptRead}, c.Flags, "Bond is readable over an encrypted link only")
+		}
 	}
-	assert.ElementsMatch(t, []string{apigatt.RXCharUUID, apigatt.TXCharUUID, apigatt.InfoCharUUID}, uuids)
+	assert.ElementsMatch(t, []string{
+		apigatt.RXCharUUID, apigatt.TXCharUUID, apigatt.InfoCharUUID, apigatt.BondCharUUID,
+	}, uuids)
 
 	adv := rig.peripheral.Advertisement()
 	assert.Equal(t, []string{apigatt.ServiceUUID}, adv.ServiceUUIDs)
@@ -1159,4 +1240,66 @@ func TestBLETransport_AdvertisesConfiguredName(t *testing.T) {
 	transport.serve(replacement)
 	require.Eventually(t, func() bool { return replacement.Handler() != nil }, bleTestTimeout, 5*time.Millisecond)
 	assert.Equal(t, "Den", replacement.Advertisement().LocalName)
+}
+
+func TestBLETransport_ServesAgainAfterAFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	st, _ := state.NewState(nil, "test-boot")
+	t.Cleanup(st.StopService)
+	clock := clockwork.NewFakeClock()
+	transport := newBLETransport(&bleTransportDeps{
+		core: &requestDeps{cfg: cfg, st: st}, methodMap: &MethodMap{}, clock: clock,
+	})
+	t.Cleanup(transport.stop)
+
+	peripheral := mocks.NewFakePeripheral()
+	peripheral.FailNextServes(2, errors.New("register advertisement: context deadline exceeded"))
+	transport.serve(peripheral)
+
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	assert.Equal(t, 1, peripheral.Serves())
+	clock.Advance(bleServeRetryDelay)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	assert.Equal(t, 2, peripheral.Serves())
+	clock.Advance(2 * bleServeRetryDelay)
+
+	require.Eventually(t, func() bool { return peripheral.Serves() == 3 }, bleTestTimeout, 5*time.Millisecond)
+	assert.Never(t, func() bool { return peripheral.Serves() > 3 }, 50*time.Millisecond, 5*time.Millisecond)
+	assert.NotNil(t, peripheral.Handler())
+}
+
+func TestBLETransport_StopsRetryingAfterRepeatedFailures(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	st, _ := state.NewState(nil, "test-boot")
+	t.Cleanup(st.StopService)
+	clock := clockwork.NewFakeClock()
+	transport := newBLETransport(&bleTransportDeps{
+		core: &requestDeps{cfg: cfg, st: st}, methodMap: &MethodMap{}, clock: clock,
+	})
+	t.Cleanup(transport.stop)
+
+	peripheral := mocks.NewFakePeripheral()
+	peripheral.FailNextServes(bleServeAttempts+1, errors.New("no advertising"))
+	transport.serve(peripheral)
+
+	for range bleServeAttempts - 1 {
+		require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+		clock.Advance(bleServeRetryMaxDelay)
+	}
+	require.Eventually(t, func() bool { return peripheral.Serves() == bleServeAttempts },
+		bleTestTimeout, 5*time.Millisecond)
+	clock.Advance(time.Hour)
+	assert.Never(t, func() bool { return peripheral.Serves() > bleServeAttempts },
+		50*time.Millisecond, 5*time.Millisecond)
+
+	// A new adapter starts over.
+	replacement := mocks.NewFakePeripheral()
+	transport.serve(replacement)
+	require.Eventually(t, func() bool { return replacement.Handler() != nil }, bleTestTimeout, 5*time.Millisecond)
 }

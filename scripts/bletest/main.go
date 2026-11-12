@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -50,25 +51,31 @@ import (
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: "15:04:05.000"})
 	zerolog.TimeFieldFormat = time.RFC3339Nano
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx, env{open: openAdapter, clock: clockwork.NewRealClock()}, os.Args[1:])
+	stop()
+	if err != nil {
 		log.Fatal().Err(err).Msg("failed")
 	}
 }
 
-func run() error {
-	if len(os.Args) < 2 {
+// env is what a mode needs from the machine, so tests can supply fakes.
+type env struct {
+	clock clockwork.Clock
+	open  func(ctx context.Context) (ble.Adapter, error)
+}
+
+func run(ctx context.Context, e env, args []string) error {
+	if len(args) < 1 {
 		return errors.New("usage: bletest client|reader [flags]")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	switch os.Args[1] {
+	switch args[0] {
 	case "client":
-		return runClient(ctx, os.Args[2:])
+		return runClient(ctx, e, args[1:])
 	case "reader":
-		return runReader(ctx, os.Args[2:])
+		return runReader(ctx, e, args[1:])
 	default:
-		return fmt.Errorf("unknown mode %q; want client or reader", os.Args[1])
+		return fmt.Errorf("unknown mode %q; want client or reader", args[0])
 	}
 }
 

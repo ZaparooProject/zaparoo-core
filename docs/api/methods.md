@@ -6749,6 +6749,56 @@ On Windows, controllers are read through XInput: at most four, with no name or I
 }
 ```
 
+### device.endpoints
+
+**Access:** Localhost or any authenticated client.
+
+Query where else the API can be reached. A client connected over [Bluetooth LE](index.md#bluetooth-le) calls this after authenticating to find the network API, and moves to it when it can open an encrypted WebSocket session there, which also proves it reached the same device. A client connected over the network uses `ble` to learn whether it can fall back to Bluetooth LE.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type     | Required | Description                                                                                                                        |
+| :-------- | :------- | :------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| deviceId  | string   | Yes      | Core's device ID, the same one network discovery publishes. Match records of one device found over different transports with it. |
+| name      | string   | Yes      | The name the device goes by, the same one network discovery publishes.                                                             |
+| scheme    | string   | Yes      | WebSocket scheme of the network API. Always `ws`.                                                                                  |
+| addresses | string[] | Yes      | LAN addresses the network API answers on. Empty when it only listens on loopback or on a socket the host supplied.                |
+| port      | number   | Yes      | Port of the network API.                                                                                                           |
+| ble       | boolean  | Yes      | Whether the API is currently served over Bluetooth LE.                                                                             |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7d1b2c3e-2f90-4b8e-9a52-1e0f6c4d8a21",
+  "method": "device.endpoints"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7d1b2c3e-2f90-4b8e-9a52-1e0f6c4d8a21",
+  "result": {
+    "deviceId": "3f6c1e2a-9b4d-4c8e-a1f2-5d7e9b0c4a36",
+    "name": "MiSTer",
+    "scheme": "ws",
+    "addresses": ["192.168.1.40"],
+    "port": 7497,
+    "ble": true
+  }
+}
+```
+
 ### device.power.reboot
 
 **Access:** Requires `device.power`.
