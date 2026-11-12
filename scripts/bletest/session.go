@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
@@ -73,7 +74,22 @@ func (c *credentials) save(path string) error {
 	if err != nil {
 		return fmt.Errorf("encode credentials: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	// A mode only applies to a file being created, so writing in place would
+	// leave an existing file as readable as it already was. A new file moved
+	// over it is private whatever was there before.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	_, err = tmp.Write(data)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	return nil

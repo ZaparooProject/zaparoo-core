@@ -46,6 +46,11 @@ func TestParseScript(t *testing.T) {
 	require.EqualError(t, err, `script step "abc123" is not uid:duration`)
 	_, err = parseScript("abc123:soon")
 	require.ErrorContains(t, err, `script step "abc123:soon"`)
+	// A step that takes no time would let a looping script spin.
+	_, err = parseScript("abc123:0s")
+	require.EqualError(t, err, `script step "abc123:0s" needs a duration above zero`)
+	_, err = parseScript("abc123:1s,-:-1s")
+	require.EqualError(t, err, `script step "-:-1s" needs a duration above zero`)
 }
 
 type readerRig struct {
@@ -189,6 +194,16 @@ func TestReaderStopsWhenServingFails(t *testing.T) {
 		}
 		cancel()
 	}
+}
+
+func TestReaderStopsMidStepWhenServingFails(t *testing.T) {
+	t.Parallel()
+	r := newReaderRig(t)
+	r.adapter.Periph.ServeErr = errors.New("advertisement refused")
+	r.start(t.Context(), "-script", "-:1h", "-loop=false")
+
+	// The clock never moves, so only the serve failure can end the step.
+	require.EqualError(t, r.result(t), "serve: advertisement refused")
 }
 
 func TestReaderSetupFailures(t *testing.T) {

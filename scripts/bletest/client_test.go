@@ -202,6 +202,16 @@ func TestClientExpectDroppedHonoursInterrupt(t *testing.T) {
 	require.ErrorIs(t, o.run(ctx, l), context.DeadlineExceeded)
 }
 
+func TestExpectDroppedTakesAClosedLinkAsTheDrop(t *testing.T) {
+	t.Parallel()
+	// The receive loop can end, closing msgs, before the device reports the
+	// disconnect.
+	l := &link{dev: mocks.NewFakeDevice(fakeCoreAddr), msgs: make(chan []byte)}
+	close(l.msgs)
+
+	require.NoError(t, expectDropped(t.Context(), l, "a fault"))
+}
+
 func TestClientRunFailures(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

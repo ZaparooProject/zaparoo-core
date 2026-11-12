@@ -60,6 +60,10 @@ func parseScript(script string) ([]readerStep, error) {
 		if err != nil {
 			return nil, fmt.Errorf("script step %q: %w", part, err)
 		}
+		// A step that takes no time would let a looping script spin.
+		if d <= 0 {
+			return nil, fmt.Errorf("script step %q needs a duration above zero", part)
+		}
 		if uid == "-" {
 			uid = ""
 		}
@@ -125,12 +129,15 @@ func runReader(ctx context.Context, e env, args []string) error {
 
 	for {
 		for _, step := range steps {
-			if err := playStep(ctx, e.clock, peripheral, step); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
+			err := playStep(ctx, e.clock, peripheral, served, step)
+			if errors.Is(err, errServeEnded) || (err != nil && ctx.Err() != nil) {
+				return nil
+			}
+			if err != nil {
 				return err
 			}
+			// A step that ran to its end can still have raced serving
+			// stopping.
 			select {
 			case err := <-served:
 				if err != nil {
@@ -146,8 +153,19 @@ func runReader(ctx context.Context, e env, args []string) error {
 	}
 }
 
+// errServeEnded is serving having stopped without a failure.
+var errServeEnded = errors.New("serve ended")
+
 // playStep holds one token on the reader, or none, for the step's duration.
-func playStep(ctx context.Context, clock clockwork.Clock, peripheral ble.Peripheral, step readerStep) error {
+// It ends early if serving does, so a long step cannot hide a reader that
+// Core can no longer see.
+func playStep(
+	ctx context.Context,
+	clock clockwork.Clock,
+	peripheral ble.Peripheral,
+	served <-chan error,
+	step readerStep,
+) error {
 	log.Info().Str("uid", step.uid).Dur("for", step.d).Msg("reader state")
 	deadline := clock.After(step.d)
 	ticker := clock.NewTicker(scanRepeat)
@@ -163,6 +181,11 @@ func playStep(ctx context.Context, clock clockwork.Clock, peripheral ble.Periphe
 		select {
 		case <-deadline:
 			return nil
+		case err := <-served:
+			if err != nil {
+				return fmt.Errorf("serve: %w", err)
+			}
+			return errServeEnded
 		case <-ctx.Done():
 			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case <-ticker.Chan():

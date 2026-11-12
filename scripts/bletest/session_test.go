@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -45,6 +46,32 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	got, err := loadCredentials(path)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+func TestCredentialsSaveTightensAnExistingFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	//nolint:gosec // the loose mode is what the save has to correct
+	require.NoError(t, os.Chmod(path, 0o644))
+
+	want := &credentials{DeviceID: "dev", AuthToken: "tok", PairingKey: "a2V5"}
+	require.NoError(t, want.save(path))
+
+	got, err := loadCredentials(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temporary file is left behind")
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not have POSIX file modes")
+	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "a file that was readable by others no longer is")
 }
 
 func TestCredentialsErrors(t *testing.T) {

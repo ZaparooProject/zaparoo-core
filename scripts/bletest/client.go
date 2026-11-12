@@ -231,7 +231,13 @@ func expectDropped(ctx context.Context, l *link, what string) error {
 	case <-l.dev.Disconnected():
 		log.Info().Msgf("PASS: core dropped the connection after %s", what)
 		return nil
-	case msg := <-l.msgs:
+	case msg, ok := <-l.msgs:
+		// The receive loop closes msgs when the link ends, which can be seen
+		// here before the disconnect is.
+		if !ok {
+			log.Info().Msgf("PASS: core dropped the connection after %s", what)
+			return nil
+		}
 		// A stack that cannot drop the link, as on Windows, can only say
 		// so: Core's closing notice is a plaintext error.
 		var notice struct {
