@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -126,7 +127,12 @@ type Reader struct {
 	activeTokens map[string]*tokens.Token
 	device       config.ReadersConnect
 	wg           sync.WaitGroup
+	closeOnce    sync.Once
 	mu           syncutil.RWMutex
+	// feedEnded is set when the detector's event feed closes on its own,
+	// as when its D-Bus connection drops. The reader then sees no more
+	// mounts, so it reports itself disconnected to be replaced.
+	feedEnded atomic.Bool
 }
 
 // NewReader creates a new external drive reader instance.
@@ -203,6 +209,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 	r.device = device
 	r.scanChan = iq
 	r.stopChan = make(chan struct{})
+	r.feedEnded.Store(false)
 
 	// Start the detector
 	if err := r.detector.Start(); err != nil {
@@ -219,8 +226,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 }
 
 func (r *Reader) Close() error {
-	// Check if Open() was called (stopChan is only initialized in Open)
-	if r.stopChan != nil {
+	// stopChan is only initialized in Open. A reader can be closed more than
+	// once, for example by State.SetReader replacing it and then by shutdown,
+	// and closing stopChan twice panics.
+	if r.stopChan == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
 		close(r.stopChan)
 		r.wg.Wait()
 
@@ -229,7 +241,7 @@ func (r *Reader) Close() error {
 		}
 
 		log.Info().Msg("external drive reader stopped")
-	}
+	})
 
 	return nil
 }
@@ -244,6 +256,7 @@ func (r *Reader) processEvents() {
 
 		case event, ok := <-r.detector.Events():
 			if !ok {
+				r.endFeed()
 				return
 			}
 
@@ -255,12 +268,25 @@ func (r *Reader) processEvents() {
 
 		case deviceID, ok := <-r.detector.Unmounts():
 			if !ok {
+				r.endFeed()
 				return
 			}
 
 			r.handleUnmountEvent(deviceID)
 		}
 	}
+}
+
+// endFeed records that the detector stopped delivering events. A feed closed
+// by Close is the reader shutting down, not a lost connection.
+func (r *Reader) endFeed() {
+	select {
+	case <-r.stopChan:
+		return
+	default:
+	}
+	log.Warn().Msg("external drive event feed ended")
+	r.feedEnded.Store(true)
 }
 
 // getBaseDevice extracts the base device path from a partition device path.
@@ -597,7 +623,7 @@ func (r *Reader) Path() string {
 func (r *Reader) Connected() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.detector != nil
+	return r.detector != nil && !r.feedEnded.Load()
 }
 
 func (r *Reader) Info() string {

@@ -23,6 +23,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -31,11 +34,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -43,7 +46,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
@@ -89,36 +91,6 @@ func playlistForLog(pls *playlists.Playlist) any {
 		Truncated:     len(pls.Items) - showing,
 		Items:         pls.Items[:showing],
 	}
-}
-
-// isExpectedLaunchError reports whether a token-launch error is an expected
-// user/operational condition that should be logged at Warn rather than Error
-// (keeping it out of Sentry). These are not bugs: a missing file, a playlist
-// control command with nothing playing, a double-tap during an active launch,
-// a user-supplied system or command that doesn't exist, a script that doesn't
-// parse, or a launch refused by configuration, by a hook, or by the bound the
-// token carries.
-func isExpectedLaunchError(err error) bool {
-	return errors.Is(err, zapscript.ErrFileNotFound) ||
-		errors.Is(err, titles.ErrNoMatch) ||
-		errors.Is(err, titles.ErrLowConfidence) ||
-		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
-		errors.Is(err, zapscript.ErrInvalidScript) ||
-		errors.Is(err, zapscript.ErrInvalidArguments) ||
-		errors.Is(err, zapscript.ErrUnknownCommand) ||
-		errors.Is(err, zapscript.ErrUnsupportedControlAction) ||
-		errors.Is(err, zapscript.ErrCommandBlocked) ||
-		errors.Is(err, zapscript.ErrCommandNotPermitted) ||
-		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
-		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
-		errors.Is(err, zapscript.ErrRemoteSource) ||
-		errors.Is(err, state.ErrLaunchInProgress) ||
-		errors.Is(err, platforms.ErrScriptAlreadyRunning) ||
-		errors.Is(err, state.ErrLaunchBlockedByHook) ||
-		errors.Is(err, state.ErrLaunchRequiresProfile) ||
-		errors.Is(err, playtime.ErrLimitReached) ||
-		errors.Is(err, systemdefs.ErrUnknownSystem) ||
-		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
 
 // reportRunFailure tells every client that a run ended in failure. pls is the
@@ -238,6 +210,16 @@ func executeTokenZapScript(
 		plsc.HoldToken = nil
 	}
 
+	// A stop command holds the media stop gate while it runs. If a command
+	// panics and the caller recovers, the gate still has to open, or every
+	// later launch waits on it forever.
+	var heldStopGate func()
+	defer func() {
+		if heldStopGate != nil {
+			heldStopGate()
+		}
+	}()
+
 	for i := 0; i < len(cmds); i++ {
 		if err := runCtx.Err(); err != nil {
 			return err
@@ -296,7 +278,8 @@ func executeTokenZapScript(
 			}
 		}
 
-		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
+		mediaReadyGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+		awaitMedia := !hadMedia && launchedEarlier(cmds[:i])
 
 		var cmdEnv gozapscript.ArgExprEnv
 		if exprEnv != nil {
@@ -355,6 +338,72 @@ func executeTokenZapScript(
 			return prepareErr
 		}
 
+		if current := plsc.Current; token.Source == tokens.SourcePlaylist && current != nil &&
+			(current.EngineStarted || current.StopStamped) {
+			// Checked again as the launch is about to take the launch gate,
+			// the last point it can be called off without touching media.
+			inner := skipLaunch
+			skipLaunch = func(target platforms.ResolvedLaunch) bool {
+				if launchOvertaken(svc, current) {
+					log.Debug().Str("playlist", current.ID).Msg("automatic launch dropped, it was overtaken")
+					return true
+				}
+				return inner != nil && inner(target)
+			}
+		}
+		if note := plsc.LaunchResolved; note != nil {
+			// The launcher is known by the time the launch asks whether to go
+			// ahead, which is the earliest the playlist worker can learn how
+			// its media will be published.
+			inner := skipLaunch
+			skipLaunch = func(target platforms.ResolvedLaunch) bool {
+				note(launcherPublishesLater(target.Launcher))
+				return inner != nil && inner(target)
+			}
+		}
+
+		acquireLaunch := svc.State.AcquireMediaLaunch
+		if current := plsc.Current; token.Source == tokens.SourcePlaylist && current != nil &&
+			(current.EngineStarted || current.StopStamped) {
+			// Checked once more with the launch gate held: a stop that held it
+			// has finished by now, and a launch decided or issued before it
+			// is called off rather than started under it.
+			acquireLaunch = func() (platforms.MediaLaunchAccess, error) {
+				access, err := svc.State.AcquireMediaLaunch()
+				if err != nil {
+					return access, fmt.Errorf("acquire media launch: %w", err)
+				}
+				if launchOvertaken(svc, current) {
+					access.Release()
+					log.Debug().Str("playlist", current.ID).Msg("launch dropped, a stop came before it began")
+					return platforms.MediaLaunchAccess{}, zapscript.ErrMediaLaunchSkipped
+				}
+				return access, nil
+			}
+		}
+		releaseStopGate := func() {}
+		if !inHookContext && commandStopsPrimaryNow(cmd) {
+			// A stop waits for a launch in flight, the way the stop API does,
+			// so it ends the media that launch publishes. Hook scripts run
+			// from inside launches and stops, and never take the gate. Like
+			// the stop API, it first calls off a launch that is still settling.
+			svc.State.LauncherManager().NewContext()
+			release, gateErr := svc.State.AcquireMediaStop(runCtx)
+			if gateErr != nil {
+				return &runfailure.CommandError{
+					Name: cmd.Name, Err: fmt.Errorf("wait for in-flight media launch: %w", gateErr),
+				}
+			}
+			released := false
+			releaseStopGate = func() {
+				if !released {
+					released = true
+					release()
+				}
+			}
+			heldStopGate = releaseStopGate
+		}
+
 		result, err := zapscript.RunCommand(
 			runCtx,
 			svc.Platform, svc.Config,
@@ -372,19 +421,24 @@ func executeTokenZapScript(
 			svc.DB,
 			&zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
-				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
+				AcquireMediaLaunch: acquireLaunch,
+				RecordMediaStop:    svc.State.RecordMediaStop,
+				StopSeq:            svc.State.UserStopSeq,
 				SkipMediaLaunch:    skipLaunch,
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
-					return waitForMediaReady(ctx, svc, mediaReadyGen)
+					return waitForMediaReady(ctx, svc, mediaReadyGen, awaitMedia)
 				},
 				PlaybackManager:  svc.PlaybackManager,
 				UI:               svc.UI,
 				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
+				BackgroundMedia:  svc.State.BackgroundMedia,
+				PlaylistMemory:   playlistMemoryFor(svc),
 			},
 			&cmdEnv,
 		)
+		releaseStopGate()
 		if err != nil {
 			return &runfailure.CommandError{Name: cmd.Name, Err: err}
 		}
@@ -444,13 +498,18 @@ func executeTokenZapScript(
 					return fmt.Errorf("normalize playlist slot: %w", slotErr)
 				}
 			}
+			// A clear names its slot but leaves the slot with no playlist.
+			next := result.Playlist
+			if next != nil && next.Clear {
+				next = nil
+			}
 			if resultSlot == mediaslot.Background {
-				currentBackground = result.Playlist
+				currentBackground = next
 			} else {
-				currentPrimary = result.Playlist
+				currentPrimary = next
 			}
 			if currentPlaylist == nil || currentPlaylist.Slot == resultSlot {
-				currentPlaylist = result.Playlist
+				currentPlaylist = next
 			}
 		}
 
@@ -629,7 +688,13 @@ func stopNativePlaybackBeforePrimaryCommand(
 	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
 		return nil
 	}
+	reason := models.MediaStopReasonReplaced
+	if stopsPrimaryMedia {
+		reason = models.MediaStopReasonStopped
+	}
+	cancelStop := svc.State.RecordMediaStop(reason)
 	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		cancelStop()
 		return fmt.Errorf("stop native audio before primary command: %w", err)
 	}
 	svc.State.SetActiveMedia(nil)
@@ -674,11 +739,32 @@ func pauseBackgroundForPrimaryLaunch(
 	return nil
 }
 
+// runPlaylistLaunch launches the playlist's current item, ends the launch
+// reservation, and only then queues the move past an item that failed: the
+// move reserves a launch of its own, which the one still held would refuse.
+func runPlaylistLaunch(svc *ServiceContext, pls *playlists.Playlist, player audio.Player) {
+	var skip *playlists.Playlist
+	func() {
+		defer svc.State.LauncherManager().EndPlaylistLaunch()
+		skip = launchPlaylistMedia(svc, pls, player)
+	}()
+	if skip == nil {
+		return
+	}
+	select {
+	case svc.PlaylistQueue <- skip:
+	case <-svc.State.GetContext().Done():
+	}
+}
+
+// launchPlaylistMedia launches the item and returns the move to queue past it
+// when it failed in the background slot, where music should carry on rather
+// than stop for one missing file; nil otherwise.
 func launchPlaylistMedia(
 	svc *ServiceContext,
 	pls *playlists.Playlist,
 	player audio.Player,
-) {
+) *playlists.Playlist {
 	t := tokens.Token{
 		Text:     pls.Current().ZapScript,
 		ScanTime: time.Now(),
@@ -704,14 +790,26 @@ func launchPlaylistMedia(
 
 	mediaGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
 	backgroundBefore := svc.State.BackgroundMedia()
+	// Media this launch publishes belongs to the item; the engine binds it.
+	if launchOvertaken(svc, pls) {
+		// A stop or another update came after the engine decided on this move
+		// and before its launch began, and wins.
+		log.Debug().Str("playlist", pls.ID).Int("index", pls.Index).
+			Msg("automatic playlist launch dropped, it was overtaken")
+		return nil
+	}
+	var publishesLater atomic.Bool
+	plsc.LaunchResolved = publishesLater.Store
+	svc.AutoAdvance.ItemLaunching(pls)
 	err := runTokenZapScript(svc, t, plsc, nil, false)
+	svc.AutoAdvance.ItemLaunched(pls, err, publishesLater.Load())
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior silent-no-op
 	// success, not a launch failure, so a disabled setting doesn't play a
 	// fail sound or record a failed history entry.
 	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
 	if err != nil && !disabled {
-		if isExpectedLaunchError(err) {
+		if zapscript.IsExpectedRunError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
 			log.Error().Err(err).Msgf("error launching token")
@@ -721,15 +819,26 @@ func launchPlaylistMedia(
 		// The playlist was stored as playing before this item was tried.
 		// Nothing is playing, so leave it paused: clients read the truth,
 		// playing it again retries this item, and next still moves on.
-		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) &&
-			svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
-			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
-				Msg("playlist item failed to launch, playlist paused")
+		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) {
+			if pls.Slot == mediaslot.Background && !launchOvertaken(svc, pls) {
+				// Music carries on past a track that cannot play, such as
+				// a file deleted since the index was built.
+				if next, ok := playlists.SkipFailed(*pls); ok {
+					log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+						Msg("playlist item failed to launch, skipping it")
+					return next
+				}
+			}
+			if svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
+				log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+					Msg("playlist item failed to launch, playlist paused")
+				svc.AutoAdvance.PlaylistChanged(pls.Slot)
+			}
 		}
 	}
 
 	if pls.Slot == mediaslot.Background {
-		return
+		return nil
 	}
 
 	now := time.Now()
@@ -760,6 +869,7 @@ func launchPlaylistMedia(
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
 	}
+	return nil
 }
 
 // reservePlaylistLaunch reserves the launch an update is about to start, and
@@ -774,6 +884,9 @@ func reservePlaylistLaunch(svc *ServiceContext, pls *playlists.Playlist) bool {
 	}
 	log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
 		Msg("another launch is in progress, playlist update refused")
+	if pls.EngineStarted {
+		svc.AutoAdvance.ItemRefused(pls)
+	}
 	return false
 }
 
@@ -814,9 +927,105 @@ func clearPlaylistSlot(svc *ServiceContext, slot string) {
 		}
 		svc.State.SetBackgroundPlaylist(nil)
 		svc.State.SetBackgroundMedia(nil)
-		return
+	} else {
+		svc.State.SetActivePlaylist(nil)
 	}
-	svc.State.SetActivePlaylist(nil)
+	svc.AutoAdvance.PlaylistChanged(slot)
+}
+
+// launchOvertaken reports whether a playlist update that launches something
+// has been overtaken before its launch began: a stop came after the update was
+// issued, or, for a move of the auto-advance engine, another update of its
+// playlist did. The state the stop itself left, or the other update, stands.
+func launchOvertaken(svc *ServiceContext, pls *playlists.Playlist) bool {
+	if pls == nil || !pls.Playing {
+		return false
+	}
+	if pls.EngineStarted {
+		return svc.State.StopEpoch() > pls.StopSeq || !sameMove(openPlaylist(svc, pls.Slot), pls)
+	}
+	return pls.StopStamped && svc.State.UserStopSeq() > pls.StopSeq
+}
+
+// sameMove reports whether open is the playlist the move of pls stored, or a
+// copy of it that only changed shuffle, repeat or rotation settings in place.
+func sameMove(open, pls *playlists.Playlist) bool {
+	return open == pls || (open != nil && pls.Move != 0 && open.Move == pls.Move)
+}
+
+// playlistMoveSeq numbers the moves that store a playlist.
+var playlistMoveSeq atomic.Uint64
+
+// commandStopsPrimaryNow reports whether cmd stops the running primary media
+// itself, as opposed to queueing something that does later. Such a command
+// has to wait for a launch in flight, or it finds nothing to stop and the
+// launch then goes on to start what it was meant to end.
+func commandStopsPrimaryNow(cmd gozapscript.Command) bool {
+	if commandTargetsBackgroundSlot(cmd) {
+		return false
+	}
+	switch cmd.Name {
+	case gozapscript.ZapScriptCmdStop, gozapscript.ZapScriptCmdPlaylistStop, gozapscript.ZapScriptCmdPlaylistPause:
+		return true
+	case gozapscript.ZapScriptCmdLaunchSystem:
+		return len(cmd.Args) == 1 && strings.EqualFold(cmd.Args[0], platforms.SystemMenu)
+	default:
+		return false
+	}
+}
+
+func openPlaylist(svc *ServiceContext, slot string) *playlists.Playlist {
+	if slot == mediaslot.Background {
+		return svc.State.GetBackgroundPlaylist()
+	}
+	return svc.State.GetActivePlaylist()
+}
+
+// engineMoveStillWanted reports whether a move the auto-advance engine decided
+// on still applies to the playlist now open: the same playlist, on the same
+// item, in the same state it was decided from, and with no stop of the media
+// requested since.
+func engineMoveStillWanted(svc *ServiceContext, move, active *playlists.Playlist) bool {
+	if active == nil || active.ID != move.ID || active.Index != move.EngineFromIndex {
+		return false
+	}
+	if move.EngineFromArmed {
+		if !active.Armed {
+			return false
+		}
+	} else if !active.Playing || active.PausedByFailure {
+		return false
+	}
+	return svc.State.StopEpoch() <= move.StopSeq
+}
+
+// playlistMemoryFor returns the playlist memory commands use, nil when
+// nothing is remembered, so a missing memory never reaches them as a typed nil.
+func playlistMemoryFor(svc *ServiceContext) platforms.PlaylistMemory {
+	if svc.PlaylistMemory == nil {
+		return nil
+	}
+	return svc.PlaylistMemory
+}
+
+// storePlaylist makes pls the playlist of its slot as a new move, and tells
+// the auto-advance engine, which drops any countdown that belonged to the one
+// it replaced.
+func storePlaylist(svc *ServiceContext, slot string, pls *playlists.Playlist) {
+	pls.Move = playlistMoveSeq.Add(1)
+	storePlaylistInPlace(svc, slot, pls)
+}
+
+// storePlaylistInPlace stores pls as a change to the playlist open now, one
+// that launches nothing, so a launch begun for the open playlist is still the
+// one wanted.
+func storePlaylistInPlace(svc *ServiceContext, slot string, pls *playlists.Playlist) {
+	if slot == mediaslot.Background {
+		svc.State.SetBackgroundPlaylist(pls)
+	} else {
+		svc.State.SetActivePlaylist(pls)
+	}
+	svc.AutoAdvance.PlaylistChanged(slot)
 }
 
 func handlePlaylist(
@@ -838,13 +1047,73 @@ func handlePlaylist(
 		activePlaylist = svc.State.GetBackgroundPlaylist()
 	}
 
+	if pls != nil && pls.Intent != playlists.IntentNone {
+		// A play or pause meets the playlist as it is now, so it cannot undo
+		// a move, shuffle or repeat change that got here first.
+		if pls = playlists.ApplyIntent(activePlaylist, pls); pls == nil {
+			return
+		}
+	}
+
+	if pls != nil && pls.EngineStarted && !engineMoveStillWanted(svc, pls, activePlaylist) {
+		// The engine decided on this move from a playlist, or before a stop,
+		// that has since changed, so the person who changed it got there first.
+		log.Debug().Str("id", pls.ID).Str("slot", slot).Msg("automatic playlist move dropped, it was overtaken")
+		return
+	}
+
+	if pls != nil && pls.EngineStarted {
+		// Shuffle or repeat may have changed since the engine decided; the
+		// move it makes is the one the playlist as it is now calls for.
+		pls = autoadvance.ReconcileMove(activePlaylist, pls)
+	}
+
+	if pls != nil && !pls.EngineStarted && pls.Playing && pls.StopStamped && svc.State.UserStopSeq() > pls.StopSeq {
+		// A stop came after this was issued and before its launch began. The
+		// state the stop leaves, whether cleared, paused or re-armed, stands.
+		log.Debug().Str("id", pls.ID).Str("slot", slot).Msg("playlist update dropped, a stop came after it")
+		return
+	}
+
 	switch {
+	case pls == nil && slot == mediaslot.Primary && activePlaylist != nil && activePlaylist.Idle > 0:
+		// A nil update means primary media was changed by something that is
+		// not the playlist: a card or an app launched a game, or a held card
+		// was taken away. That closes an ordinary playlist, but an idle
+		// playlist exists to wait for the device to go quiet, so it goes back
+		// to waiting with its items and position instead of disappearing.
+		// Only an explicit Clear, such as playlist.stop, or another playlist
+		// replacing it ends it.
+		rearmed := playlists.Rearm(*activePlaylist)
+		log.Info().Any("pls", playlistForLog(rearmed)).Msg("idle playlist re-armed after outside launch")
+		storePlaylist(svc, slot, rearmed)
+		return
 	case pls == nil || pls.Clear:
 		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Str("slot", slot).Msg("clearing playlist")
+			if pls != nil && pls.Completed {
+				// It played to its end, so it starts over next time.
+				svc.PlaylistMemory.Forget(activePlaylist)
+			}
 		}
 		clearPlaylistSlot(svc, slot)
+		return
+	case pls.Reconfigure:
+		// Only the rotation settings changed, such as the user choosing to stop
+		// rotating: nothing is launched and the position and playback stay.
+		if activePlaylist == nil || activePlaylist.ID != pls.ID || activePlaylist.DeckID != pls.DeckID {
+			log.Debug().Str("id", pls.ID).Msg("playlist reconfiguration ignored; it is not the active playlist")
+			return
+		}
+		reconfigured := *activePlaylist
+		reconfigured.Advance = pls.Advance
+		reconfigured.Idle = pls.Idle
+		reconfigured.Countdown = pls.Countdown
+		reconfigured.CountdownSet = pls.CountdownSet
+		reconfigured.Armed = pls.Armed
+		log.Info().Any("pls", playlistForLog(&reconfigured)).Msg("reconfiguring playlist in place")
+		storePlaylistInPlace(svc, slot, &reconfigured)
 		return
 	case pls.Refresh:
 		// The content of the active playlist changed underneath it, such as a
@@ -862,23 +1131,34 @@ func handlePlaylist(
 			clearPlaylistSlot(svc, slot)
 			return
 		}
-		refreshed := *activePlaylist
-		refreshed.Name = pls.Name
-		refreshed.Items = pls.Items
-		refreshed.Loop = pls.Loop
-		refreshed.LoopOne = pls.LoopOne
-		if refreshed.Index >= len(refreshed.Items) {
-			refreshed.Index = len(refreshed.Items) - 1
+		refreshed, currentKept := refreshedPlaylist(activePlaylist, pls)
+		log.Info().Any("pls", playlistForLog(refreshed)).Msg("refreshing playlist in place")
+		if activePlaylist.Shuffled {
+			if currentKept {
+				svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, refreshed.Index)
+			} else {
+				// The item is gone and the index now names another one, so
+				// nothing bound to the old item may follow it there.
+				svc.AutoAdvance.ItemRemoved(slot, activePlaylist.ID, activePlaylist.Index)
+			}
 		}
-		if refreshed.Index < 0 {
-			refreshed.Index = 0
+		storePlaylistInPlace(svc, slot, refreshed)
+		return
+	case pls.ModeChange:
+		// Shuffle or repeat changed on the playlist open now: nothing is
+		// launched and the current item and playback stay.
+		if activePlaylist == nil {
+			log.Debug().Str("slot", slot).Msg("playlist mode change ignored; no playlist is open")
+			return
 		}
-		log.Info().Any("pls", playlistForLog(&refreshed)).Msg("refreshing playlist in place")
-		if slot == mediaslot.Background {
-			svc.State.SetBackgroundPlaylist(&refreshed)
-		} else {
-			svc.State.SetActivePlaylist(&refreshed)
+		changed, err := modeChangedPlaylist(activePlaylist, pls)
+		if err != nil {
+			log.Warn().Err(err).Str("slot", slot).Msg("playlist mode change ignored")
+			return
 		}
+		log.Info().Any("pls", playlistForLog(changed)).Msg("changing playlist shuffle and repeat")
+		svc.AutoAdvance.ItemMoved(slot, activePlaylist.ID, activePlaylist.Index, changed.Index)
+		storePlaylistInPlace(svc, slot, changed)
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
@@ -888,11 +1168,7 @@ func handlePlaylist(
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
-		if slot == mediaslot.Background {
-			svc.State.SetBackgroundPlaylist(pls)
-		} else {
-			svc.State.SetActivePlaylist(pls)
-		}
+		storePlaylist(svc, slot, pls)
 		if pls.Playing {
 			log.Info().Any("pls", playlistForLog(pls)).Msg("setting new playlist, launching token")
 			if slot == mediaslot.Background {
@@ -905,8 +1181,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
-				defer svc.State.LauncherManager().EndPlaylistLaunch()
-				launchPlaylistMedia(svc, pls, player)
+				runPlaylistLaunch(svc, pls, player)
 			}()
 		} else {
 			log.Info().Any("pls", playlistForLog(pls)).Msg("setting new playlist")
@@ -923,11 +1198,7 @@ func handlePlaylist(
 				if pls.Slot == "" {
 					pls.Slot = slot
 				}
-				if slot == mediaslot.Background {
-					svc.State.SetBackgroundPlaylist(pls)
-				} else {
-					svc.State.SetActivePlaylist(pls)
-				}
+				storePlaylist(svc, slot, pls)
 				log.Info().Any("pls", playlistForLog(pls)).
 					Msg("switching playlist, its current item is already playing")
 				return
@@ -948,11 +1219,7 @@ func handlePlaylist(
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
-		if slot == mediaslot.Background {
-			svc.State.SetBackgroundPlaylist(pls)
-		} else {
-			svc.State.SetActivePlaylist(pls)
-		}
+		storePlaylist(svc, slot, pls)
 		if pls.Playing {
 			if resumesPlayback {
 				log.Info().Any("pls", playlistForLog(pls)).Str("slot", slot).Msg("resuming playlist playback")
@@ -975,8 +1242,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
-				defer svc.State.LauncherManager().EndPlaylistLaunch()
-				launchPlaylistMedia(svc, pls, player)
+				runPlaylistLaunch(svc, pls, player)
 			}()
 		} else {
 			if svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {
@@ -988,6 +1254,59 @@ func handlePlaylist(
 		}
 		return
 	}
+}
+
+// refreshedPlaylist returns active with the items and name of the refresh
+// update, keeping its position, playback and repeat. A shuffled playlist takes
+// the new items as its load order and shuffles them again, keeping its
+// current item current. For a shuffled playlist it reports whether the
+// current item is still in it; when it is not, the index is kept in range and
+// names another item.
+func refreshedPlaylist(active, update *playlists.Playlist) (refreshed *playlists.Playlist, currentKept bool) {
+	next := *active
+	next.Name = update.Name
+	next.Items = update.Items
+	if !active.Shuffled {
+		next.Index = min(max(next.Index, 0), len(next.Items)-1)
+		return &next, true
+	}
+	current := active.Current()
+	idx := playlists.LocateItem(update.Items, current.ZapScript, -1)
+	if idx < 0 {
+		idx = slices.Index(update.Items, current)
+	}
+	next.Shuffled = false
+	next.Original = nil
+	next.Index = max(idx, 0)
+	reshuffled := playlists.SetShuffle(&next, true)
+	if idx < 0 {
+		// The current item is gone; keep the position rather than jump to
+		// whatever shuffled to the front.
+		reshuffled.Index = min(max(active.Index, 0), len(reshuffled.Items)-1)
+	}
+	return reshuffled, idx >= 0
+}
+
+// modeChangedPlaylist returns active with the shuffle and repeat settings of
+// a ModeChange update applied.
+func modeChangedPlaylist(active, update *playlists.Playlist) (*playlists.Playlist, error) {
+	changed := active
+	if update.ShuffleSet {
+		changed = playlists.SetShuffle(changed, update.Shuffle)
+	}
+	if update.Repeat != nil {
+		var err error
+		changed, err = playlists.SetRepeat(changed, *update.Repeat)
+		if err != nil {
+			return nil, fmt.Errorf("set playlist repeat: %w", err)
+		}
+	}
+	if changed == active {
+		// Nothing asked for; store a copy so the update is still a new value.
+		copied := *active
+		changed = &copied
+	}
+	return changed, nil
 }
 
 var (
@@ -1052,6 +1371,11 @@ func handleQueuedToken(
 	}
 
 	log.Info().Msgf("processing token: %v", tokenForLog(&t))
+
+	if t.Source == tokens.SourceAPI || t.Source == tokens.SourceGMC || t.Source == tokens.SourceRemote {
+		// An app or a remote asking for something is a person at the device.
+		svc.AutoAdvance.NoteUserActivity()
+	}
 
 	if err := svc.Platform.ScanHook(&t); err != nil {
 		log.Error().Err(err).Msgf("error writing tmp scan result")
@@ -1243,7 +1567,7 @@ func launchQueuedToken(
 	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
 	failed := err != nil && !disabled
 	if failed {
-		if isExpectedLaunchError(err) {
+		if zapscript.IsExpectedRunError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
 			log.Error().Err(err).Msgf("error launching token")
@@ -1289,10 +1613,61 @@ func recordTokenHistory(svc *ServiceContext, he *database.HistoryEntry) {
 		if svc.BackgroundWG != nil {
 			defer svc.BackgroundWG.Done()
 		}
-		if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
-			log.Error().Err(histErr).Msgf("error adding history")
+		ctx := context.Background()
+		if svc.State != nil {
+			ctx = svc.State.GetContext()
+		}
+		if histErr := writeTokenHistory(
+			ctx, svc.DB.UserDB, he, tokenHistoryRetryDelays, sleepContext,
+		); histErr != nil {
+			log.WithLevel(database.StorageFailureLevel(histErr)).Err(histErr).Msg("error adding history")
 		}
 	}()
+}
+
+// tokenHistoryRetryDelays are the waits before each retry of a token history
+// write that lost the user database's write lock. Every attempt has already
+// waited out SQLite's busy timeout, so a long maintenance write is the usual
+// cause, and a short pause lets it finish.
+var tokenHistoryRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+// writeTokenHistory adds a token history entry, retrying when another write
+// held the lock past the busy timeout. Nothing waits on it, so retrying costs
+// no caller anything. Retries stop once ctx is done, but the first attempt
+// always runs so a write queued at shutdown still lands.
+func writeTokenHistory(
+	ctx context.Context,
+	userDB database.UserDBI,
+	he *database.HistoryEntry,
+	retryDelays []time.Duration,
+	sleep func(context.Context, time.Duration) error,
+) error {
+	started := time.Now()
+	for attempt := 0; ; attempt++ {
+		err := userDB.AddHistory(he)
+		sqliteErr, contended := database.LockContention(err)
+		if !contended {
+			return err //nolint:wrapcheck // the caller logs it as the history write failure
+		}
+		if attempt >= len(retryDelays) || sleep(ctx, retryDelays[attempt]) != nil {
+			return fmt.Errorf("token history write [sqlite_code=%d sqlite_extended_code=%d "+
+				"attempts=%d elapsed_ms=%d]: %w",
+				int(sqliteErr.Code), int(sqliteErr.ExtendedCode), attempt+1,
+				time.Since(started).Milliseconds(), err)
+		}
+	}
+}
+
+// sleepContext waits for d, returning ctx's error if it ends first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // bare ctx.Err is the contract
+	case <-timer.C:
+		return nil
+	}
 }
 
 // runTokenZapScriptRecovering runs the token's ZapScript and converts a panic

@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -190,7 +191,9 @@ func (f *Flags) Pre(pl platforms.Platform) {
 // situation already surfaced on stderr — so it logs at Warn to stay out of
 // Sentry; any other failure logs at Error.
 func logClientCommandError(err error, msg string) {
-	if isConnectionRefused(err) {
+	// The service is stopped, starting, or restarting: not a fault.
+	if isConnectionRefused(err) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, client.ErrServiceUnavailable) {
 		log.Warn().Err(err).Msg(msg)
 		return
 	}

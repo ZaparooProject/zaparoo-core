@@ -44,6 +44,7 @@ func TestRequestStructSizes(t *testing.T) {
 		{"VIGEM_UNPLUG_TARGET", unsafe.Sizeof(vigemUnplugTarget{}), 8},
 		{"XUSB_REPORT", unsafe.Sizeof(xusbReport{}), 12},
 		{"XUSB_SUBMIT_REPORT", unsafe.Sizeof(xusbSubmitReport{}), 20},
+		{"XUSB_GET_USER_INDEX", unsafe.Sizeof(xusbGetUserIndex{}), 12},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -75,6 +76,7 @@ func TestIoctlCodes(t *testing.T) {
 		{"IOCTL_VIGEM_CHECK_VERSION", ioctlCheckVersion, 0x2AA00C},
 		{"IOCTL_VIGEM_WAIT_DEVICE_READY", ioctlWaitDeviceReady, 0x2AA010},
 		{"IOCTL_XUSB_SUBMIT_REPORT", ioctlXusbSubmitReport, 0x2AA808},
+		{"IOCTL_XUSB_GET_USER_INDEX", ioctlXusbGetUserIndex, 0x2AE81C},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

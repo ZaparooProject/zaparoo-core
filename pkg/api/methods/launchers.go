@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -111,7 +112,7 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	resp := make([]models.Launcher, 0, len(all))
 	for i := range all {
 		l := all[i]
-		if !matchesSystemFilter(l.SystemID, systemFilter) {
+		if launchables.IsLauncherID(l.ID) || !matchesSystemFilter(l.SystemID, systemFilter) {
 			continue
 		}
 		var groups []string
@@ -168,12 +169,13 @@ func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:goc
 		log.Error().Err(err).Msg("error reloading config")
 		return nil, errors.New("error reloading config")
 	}
+	ReloadMediaThumbCache(env.Config)
 
 	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
 	err = env.Config.LoadCustomLaunchers(launchersDir)
 	if err != nil {
-		if errors.Is(err, config.ErrCustomLauncherUnknownFields) {
-			return nil, models.ClientErr(errors.New("error loading custom launchers"))
+		if errors.Is(err, config.ErrCustomLauncherUnknownFields) || errors.Is(err, config.ErrCustomLauncherInvalid) {
+			return nil, models.ClientErrf("error loading custom launchers: %w", err)
 		}
 		log.Error().Err(err).Msg("error loading custom launchers")
 		return nil, errors.New("error loading custom launchers")

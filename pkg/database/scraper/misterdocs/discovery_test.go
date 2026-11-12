@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,8 +80,54 @@ func TestDiscoverSources_FindsArtworkAndManualsByFormat(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.ElementsMatch(t, []sourceDir{
-		{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork},
+		{
+			Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageBoxart, Metadata: true,
+		},
 		{Path: manuals, SystemID: systemdefs.SystemFDS, Kind: sourceManuals},
+	}, sources)
+}
+
+func TestDiscoverSources_FindsScreenshotAndTitlePacks(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	// SNES carries all three packs; Genesis only the two screen packs.
+	snes := filepath.Join(root, "docs", "SNES")
+	genesis := filepath.Join(root, "docs", "Genesis")
+	for _, dir := range []string{
+		filepath.Join(snes, "Artwork"), filepath.Join(snes, "Screenshots"), filepath.Join(snes, "titles"),
+		filepath.Join(genesis, "Screenshots"), filepath.Join(genesis, "Titles"),
+	} {
+		require.NoError(t, fs.MkdirAll(dir, 0o750))
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "index.tsv"), []byte("#name\tkey\n"), 0o600))
+	}
+
+	sources, err := discoverSources(fs, []string{root})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []sourceDir{
+		{
+			Path: filepath.Join(snes, "Artwork"), SystemID: systemdefs.SystemSNES, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageBoxart, Metadata: true,
+		},
+		{
+			Path: filepath.Join(snes, "Screenshots"), SystemID: systemdefs.SystemSNES, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageScreenshot,
+		},
+		{
+			Path: filepath.Join(snes, "titles"), SystemID: systemdefs.SystemSNES, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageTitleshot,
+		},
+		// With no box pack, the screenshot pack's own metadata files are read.
+		{
+			Path: filepath.Join(genesis, "Screenshots"), SystemID: systemdefs.SystemGenesis, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageScreenshot, Metadata: true,
+		},
+		{
+			Path: filepath.Join(genesis, "Titles"), SystemID: systemdefs.SystemGenesis, Kind: sourceArtwork,
+			Image: tags.TagPropertyImageTitleshot,
+		},
 	}, sources)
 }
 
@@ -99,7 +146,10 @@ func TestDiscoverSources_SkipsUnreadableRootAndContinues(t *testing.T) {
 
 	sources, err := discoverSources(fs, []string{deniedBase, goodBase})
 	require.NoError(t, err)
-	assert.Equal(t, []sourceDir{{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork}}, sources)
+	assert.Equal(t, []sourceDir{{
+		Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork,
+		Image: tags.TagPropertyImageBoxart, Metadata: true,
+	}}, sources)
 }
 
 func TestDiscoverSources_IgnoresUnsupportedLayouts(t *testing.T) {
@@ -238,5 +288,8 @@ func TestDiscoverSources_AcceptsArtworkDirectoryWithoutIndex(t *testing.T) {
 
 	sources, err := discoverSources(fs, []string{root})
 	require.NoError(t, err)
-	assert.Equal(t, []sourceDir{{Path: artwork, SystemID: systemdefs.SystemGenesis, Kind: sourceArtwork}}, sources)
+	assert.Equal(t, []sourceDir{{
+		Path: artwork, SystemID: systemdefs.SystemGenesis, Kind: sourceArtwork,
+		Image: tags.TagPropertyImageBoxart, Metadata: true,
+	}}, sources)
 }

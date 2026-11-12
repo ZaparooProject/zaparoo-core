@@ -66,6 +66,27 @@ func TestParseKeyCombo(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name:      "mister user button combo",
+			input:     "{lctrl+lalt+ralt}",
+			wantCodes: []int{29, 56, 100}, // KEY_LEFTCTRL, KEY_LEFTALT, KEY_RIGHTALT
+			wantCombo: true,
+			wantErr:   false,
+		},
+		{
+			name:      "right ctrl aliases",
+			input:     "{rightctrl+rctrl}",
+			wantCodes: []int{97, 97}, // KEY_RIGHTCTRL
+			wantCombo: true,
+			wantErr:   false,
+		},
+		{
+			name:      "right alt alias",
+			input:     "{rightalt}",
+			wantCodes: []int{100}, // KEY_RIGHTALT
+			wantCombo: false,
+			wantErr:   false,
+		},
+		{
 			name:      "single escape key",
 			input:     "{esc}",
 			wantCodes: []int{1}, // KEY_ESC

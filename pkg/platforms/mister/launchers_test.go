@@ -62,6 +62,7 @@ func TestMGLLaunchErrorReporting(t *testing.T) {
 		level string
 	}{
 		{name: "missing requested MGL", err: missingErr, level: "warn"},
+		{name: "MGL inside a zip", err: mgls.ErrLaunchFileInZip, level: "warn"},
 		{name: "missing internal file", err: os.ErrNotExist, level: "error"},
 		{name: "permission failure", err: os.ErrPermission, level: "error"},
 	} {
@@ -431,16 +432,15 @@ func TestBuildFvpCommand(t *testing.T) {
 	require.NotNil(t, cmd.SysProcAttr)
 	assert.True(t, cmd.SysProcAttr.Setsid, "should set Setsid for new session")
 
-	// Verify environment
-	hasLDPath := false
+	// Verify environment. os/exec passes the last value of a repeated key, so
+	// the launcher's own entry wins over one Core inherited.
+	ldPath := ""
 	for _, env := range cmd.Env {
-		if strings.HasPrefix(env, "LD_LIBRARY_PATH=") {
-			hasLDPath = true
-			assert.Contains(t, env, misterconfig.LinuxDir)
-			break
+		if value, ok := strings.CutPrefix(env, "LD_LIBRARY_PATH="); ok {
+			ldPath = value
 		}
 	}
-	assert.True(t, hasLDPath, "should set LD_LIBRARY_PATH")
+	assert.Contains(t, ldPath, misterconfig.LinuxDir, "should set LD_LIBRARY_PATH")
 }
 
 func TestBuildFvpCommand_DifferentPaths(t *testing.T) {
@@ -682,7 +682,7 @@ func TestArcadeLauncherExtensions(t *testing.T) {
 	}
 
 	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
-	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
+	assert.Equal(t, []string{"_Arcade", "_Utility"}, arcadeLauncher.Folders)
 	assert.Equal(t, arcadeOrganizerScanDirectoryExcludes, arcadeLauncher.ScanDirectoryExcludes)
 	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_Organized")
 	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_1 A-E")
@@ -746,6 +746,11 @@ func TestRecentMediaLaunchers(t *testing.T) {
 		folders    []string
 		extensions []string
 	}{
+		{
+			name: "Apple II", id: systemdefs.SystemAppleII, systemID: systemdefs.SystemAppleII,
+			folders:    []string{"Apple-II"},
+			extensions: []string{".dsk", ".do", ".po", ".nib", ".woz", ".hdv"},
+		},
 		{
 			name: "Apple IIGS", id: systemdefs.SystemAppleIIGS, systemID: systemdefs.SystemAppleIIGS,
 			folders:    []string{"Apple-IIgs"},
@@ -891,8 +896,8 @@ func TestN64LauncherExtensions(t *testing.T) {
 
 	require.NotNil(t, n64Launcher, "N64 launcher should exist")
 
-	// Verify all three N64 ROM formats are supported
-	expectedExts := []string{".n64", ".z64", ".v64"}
+	// Verify all three N64 ROM formats and 64DD disk images are supported
+	expectedExts := []string{".n64", ".z64", ".v64", ".ndd"}
 	for _, ext := range expectedExts {
 		assert.Contains(t, n64Launcher.Extensions, ext,
 			"N64 launcher should support %s extension", ext)
@@ -984,7 +989,7 @@ func TestGameboyLaunchMGLPaths(t *testing.T) {
 		{id: "Gameboy", system: "Gameboy", extension: ".gb"},
 		{id: "GameboyColor", system: "GameboyColor", extension: ".gbc", setName: "GBC"},
 		{id: "RAGameboy", system: "Gameboy", extension: ".gb", setName: "RA_Gameboy", ra: true, sameDir: true},
-		{id: "RAGameboyColor", system: "GameboyColor", extension: ".gbc", setName: "RA_GBC", ra: true},
+		{id: "RAGameboyColor", system: "GameboyColor", extension: ".gbc", setName: "RA_GBC", ra: true, sameDir: true},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			t.Parallel()
@@ -996,11 +1001,8 @@ func TestGameboyLaunchMGLPaths(t *testing.T) {
 			require.NoError(t, err)
 			core := *base
 			if tc.ra {
-				setName, found := retroAchievementsSetName(tc.id)
-				require.True(t, found)
-				require.NoError(t, configureAltCoreWithDefaultSetName(
-					&core, tc.id, "_RA_Cores/Cores/Gameboy", setName, tc.sameDir, nil,
-				))
+				definition := retroAchievementsCore(tc.id, tc.system, "_RA_Cores/Cores/Gameboy")
+				require.NoError(t, configureAltCoreDefinition(&core, definition, nil))
 			}
 			folders := []string{"GAMEBOY"}
 			if tc.system == "GameboyColor" {
@@ -1038,53 +1040,75 @@ func TestGameboyLaunchMGLPaths(t *testing.T) {
 	}
 }
 
-func TestRetroAchievementsSetNameSameDirRegression(t *testing.T) {
+// Regression for #1721: RA launchers for systems sharing another core's RBF
+// (Game Gear, GBC, FDS, ...) omitted same_dir, so Main looked for the game
+// under a games/RA_<name> folder that does not exist.
+func TestRetroAchievementsCoresUseSameDir(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		launcherID  string
-		wantSetName string
-		wantSameDir bool
-	}{
-		{launcherID: "RANES", wantSetName: "RA_NES", wantSameDir: true},
-		{launcherID: "RASNES", wantSetName: "RA_SNES", wantSameDir: true},
-		{launcherID: "RAGameboy", wantSetName: "RA_Gameboy", wantSameDir: true},
-		{launcherID: "RAGBA", wantSetName: "RA_GBA", wantSameDir: true},
-		{launcherID: "RANintendo64", wantSetName: "RA_N64", wantSameDir: true},
-		{launcherID: "RAPSX", wantSetName: "RA_PSX", wantSameDir: true},
-		{launcherID: "RAMegaDrive", wantSetName: "RA_MegaDrive", wantSameDir: true},
-		{launcherID: "RAMegaCD", wantSetName: "RA_MegaCD", wantSameDir: true},
-		{launcherID: "RASMS", wantSetName: "RA_SMS", wantSameDir: true},
-		{launcherID: "RANeoGeo", wantSetName: "RA_NeoGeo", wantSameDir: true},
-		{launcherID: "RATurboGrafx16", wantSetName: "RA_TurboGrafx16", wantSameDir: true},
-		{launcherID: "RAAtari2600", wantSetName: "RA_Atari7800", wantSameDir: true},
-		{launcherID: "RAAtari7800", wantSetName: "RA_Atari7800", wantSameDir: true},
-		{launcherID: "RAS32X", wantSetName: "RA_S32X", wantSameDir: true},
-		{launcherID: "RASaturn", wantSetName: "RA_Saturn", wantSameDir: true},
-		{launcherID: "RAFDS", wantSetName: "RA_FDS", wantSameDir: false},
-		{launcherID: "RAGameboyColor", wantSetName: "RA_GBC", wantSameDir: false},
-		{launcherID: "RAGameGear", wantSetName: "RA_GameGear", wantSameDir: false},
-		{launcherID: "RANeoGeoCD", wantSetName: "RA_NeoGeoCD", wantSameDir: false},
-		{launcherID: "RASuperGameboy", wantSetName: "RA_SGB", wantSameDir: false},
-		{launcherID: "RATurboGrafx16CD", wantSetName: "RA_TurboGrafx16CD", wantSameDir: false},
+	byID := make(map[string]platforms.Launcher)
+	for _, launcher := range CreateLaunchers(NewPlatform()) {
+		byID[launcher.ID] = launcher
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.launcherID, func(t *testing.T) {
+	cases := map[string]string{
+		"RANES":            "_RA_Cores/Cores/NES",
+		"RASNES":           "_RA_Cores/Cores/SNES",
+		"RAGameboy":        "_RA_Cores/Cores/Gameboy",
+		"RAGBA":            "_RA_Cores/Cores/GBA",
+		"RANintendo64":     "_RA_Cores/Cores/N64",
+		"RAPSX":            "_RA_Cores/Cores/PSX",
+		"RAMegaDrive":      "_RA_Cores/Cores/MegaDrive",
+		"RAMegaCD":         "_RA_Cores/Cores/MegaCD",
+		"RASMS":            "_RA_Cores/Cores/SMS",
+		"RANeoGeo":         "_RA_Cores/Cores/NeoGeo",
+		"RATurboGrafx16":   "_RA_Cores/Cores/TurboGrafx16",
+		"RAAtari2600":      "_RA_Cores/Cores/Atari7800",
+		"RAAtari7800":      "_RA_Cores/Cores/Atari7800",
+		"RAS32X":           "_RA_Cores/Cores/S32X",
+		"RASaturn":         "_RA_Cores/Cores/Saturn",
+		"RAFDS":            "_RA_Cores/Cores/NES",
+		"RAGameboyColor":   "_RA_Cores/Cores/Gameboy",
+		"RAGameGear":       "_RA_Cores/Cores/SMS",
+		"RANeoGeoCD":       "_RA_Cores/Cores/NeoGeo",
+		"RASuperGameboy":   "_RA_Cores/Cores/Gameboy",
+		"RATurboGrafx16CD": "_RA_Cores/Cores/TurboGrafx16",
+	}
+
+	for launcherID, rbfPath := range cases {
+		t.Run(launcherID, func(t *testing.T) {
 			t.Parallel()
 
-			core := cores.Core{ID: tc.launcherID}
-			err := configureAltCoreWithDefaultSetName(
-				&core, tc.launcherID, "_RA_Cores/Cores/Gameboy", tc.wantSetName, tc.wantSameDir, nil,
-			)
+			launcher, ok := byID[launcherID]
+			require.True(t, ok)
+			assert.Equal(t, []string{rbfPath}, cores.GlobalRBFCache.AltCorePaths(launcherID))
+			wantSetName, ok := retroAchievementsSetName(launcherID)
+			require.True(t, ok)
 
-			require.NoError(t, err)
-			assert.Equal(t, tc.launcherID, core.LauncherID)
-			assert.Equal(t, "_RA_Cores/Cores/Gameboy", core.RBF)
-			assert.Equal(t, tc.wantSetName, core.SetName)
-			assert.Equal(t, tc.wantSameDir, core.SetNameSameDir)
+			core := retroAchievementsCore(launcherID, launcher.SystemID, rbfPath)
+			assert.Equal(t, launcherID, core.LauncherID)
+			assert.Equal(t, launcher.SystemID, core.ID)
+			assert.Equal(t, rbfPath, core.RBF)
+			assert.Equal(t, wantSetName, core.SetName)
+			assert.True(t, core.SetNameSameDir)
 		})
 	}
+}
+
+func TestRetroAchievementsGameGearMGL(t *testing.T) {
+	t.Parallel()
+
+	base, err := cores.GetCore("GameGear")
+	require.NoError(t, err)
+	core := *base
+	definition := retroAchievementsCore("RAGameGear", "GameGear", "_RA_Cores/Cores/SMS")
+	require.NoError(t, configureAltCoreDefinition(&core, definition, nil))
+
+	rom := filepath.Join(string(filepath.Separator), "media", "usb1", "games", "GameGear", "Ristar (World).gg")
+	document, err := mgls.GenerateMgl(&core, core.RBF, rom, "")
+	require.NoError(t, err)
+	assert.Contains(t, document, `<setname same_dir="1">RA_GameGear</setname>`)
+	assert.Contains(t, document, `path="../../../../..`+rom+`"`)
 }
 
 func TestSetNameOptions(t *testing.T) {
@@ -1438,6 +1462,25 @@ func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid set_name")
+}
+
+// TestLaunchersExcludeLoadCoreFilesInsideZips verifies every MiSTer launcher,
+// including those added beside CreateLaunchers, marks the files Main loads
+// through load_core as unloadable from inside a zip, so ZipsAsDirs scanning
+// does not index them.
+func TestLaunchersExcludeLoadCoreFilesInsideZips(t *testing.T) {
+	t.Parallel()
+
+	launchers := NewPlatform().Launchers(&config.Instance{})
+	require.NotEmpty(t, launchers)
+	seen := map[string]bool{}
+	for i := range launchers {
+		seen[launchers[i].ID] = true
+		assert.Equal(t, []string{".mgl", ".mra", ".rbf"}, launchers[i].NoArchiveExtensions, launchers[i].ID)
+	}
+	for _, id := range []string{systemdefs.SystemX68000, systemdefs.SystemArcade, systemdefs.SystemNeoGeo} {
+		assert.True(t, seen[id], id)
+	}
 }
 
 // The scan_duplicates opt-in is applied by the launcher matcher, not by the

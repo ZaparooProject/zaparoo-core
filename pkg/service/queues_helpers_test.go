@@ -729,3 +729,24 @@ func TestShouldRunBeforeExitHook(t *testing.T) {
 		})
 	}
 }
+
+func TestLaunchedEarlier(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, launchedEarlier(nil))
+	assert.False(t, launchedEarlier([]gozapscript.Command{{Name: gozapscript.ZapScriptCmdDelay}}))
+	assert.True(t, launchedEarlier([]gozapscript.Command{
+		{Name: gozapscript.ZapScriptCmdDelay},
+		{Name: gozapscript.ZapScriptCmdLaunch},
+	}))
+	assert.True(t, launchedEarlier([]gozapscript.Command{{Name: gozapscript.ZapScriptCmdLaunchTitle}}))
+	assert.False(t, launchedEarlier([]gozapscript.Command{
+		{Name: gozapscript.ZapScriptCmdLaunch},
+		{Name: gozapscript.ZapScriptCmdStop},
+	}), "a stop ends the launched media")
+	assert.True(t, launchedEarlier([]gozapscript.Command{
+		{Name: gozapscript.ZapScriptCmdLaunch},
+		{Name: gozapscript.ZapScriptCmdStop},
+		{Name: gozapscript.ZapScriptCmdLaunch},
+	}))
+}

@@ -16,19 +16,23 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
@@ -43,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -55,19 +60,23 @@ const (
 )
 
 type Platform struct {
-	clock          clockwork.Clock
-	lastKnownGame  *models.ActiveMedia
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	stopTracker    func() error
-	cfg            *config.Instance
-	esConfigCache  *ESSystemConfig
+	clock           clockwork.Clock
+	launcherManager platforms.LauncherContextManager
+	lastKnownGame   *models.ActiveMedia
+	activeMedia     func() *models.ActiveMedia
+	setActiveMedia  func(*models.ActiveMedia)
+	trackedProcess  *os.Process
+	stopTracker     func() error
+	cfg             *config.Instance
+	esConfigCache   *ESSystemConfig
+	launchLog       *gamehandoff.LaunchLog
+	watchGame       func(ctx context.Context, path string) (<-chan gamehandoff.Kind, error)
 	shared.InputManager
 	maxStartupRetries int
 	processMu         syncutil.RWMutex
 	trackerMu         syncutil.RWMutex
 	esConfigMu        syncutil.RWMutex
+	launchLogMu       syncutil.Mutex
 	kodiActive        bool
 }
 
@@ -78,6 +87,7 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
@@ -124,13 +134,14 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 func (p *Platform) StartPost(
 	_ context.Context,
 	cfg *config.Instance,
-	_ platforms.LauncherContextManager,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
 	_ *idle.Scheduler,
 ) error {
 	p.cfg = cfg
+	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
@@ -313,13 +324,64 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
+// dropPyGameModules leaves out the .py files that sit beside a .pygame file:
+// the .pygame file is the game, and the .py files beside it are its modules.
+// Indexed, they turned up as games of their own, and launch.random:DOS fell
+// back to one of them. A .py file with no .pygame beside it is a game.
+func dropPyGameModules(results []platforms.ScanResult) []platforms.ScanResult {
+	gameDirs := map[string]bool{}
+	for i := range results {
+		if strings.EqualFold(filepath.Ext(results[i].Path), ".pygame") {
+			gameDirs[filepath.Dir(results[i].Path)] = true
+		}
+	}
+	if len(gameDirs) == 0 {
+		return results
+	}
+	kept := results[:0]
+	for i := range results {
+		if strings.EqualFold(filepath.Ext(results[i].Path), ".py") && gameDirs[filepath.Dir(results[i].Path)] {
+			continue
+		}
+		kept = append(kept, results[i])
+	}
+	return kept
+}
+
+// esGameRunning reports whether EmulationStation is running a game. It is
+// unknown, and an error, when ES's API cannot be reached.
+func esGameRunning(context.Context, *config.Instance, *models.ActiveMedia) (bool, error) {
+	_, running, err := esapi.APIRunningGame()
+	if err != nil {
+		return false, fmt.Errorf("ask EmulationStation for its running game: %w", err)
+	}
+	return running, nil
+}
+
+// stopHasTarget reports whether a stop has anything to act on. A game the
+// tracker has seen running counts even with no media published for it: Core
+// declines to publish a game that ES started after a stop that landed too
+// early, and the stop that follows is for that game.
+func stopHasTarget(activeMedia *models.ActiveMedia, kodiActive, hasTrackedProcess, trackedGame bool) bool {
+	return activeMedia != nil || kodiActive || hasTrackedProcess || trackedGame
+}
+
 func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
+
+	// Any stop that is not a launch replacing its predecessor cancels the
+	// launcher context, even with nothing running: a launch still settling
+	// after its own preemption has nothing for this stop to act on, and must
+	// learn it was stopped instead of starting the next game unattended.
+	if reason != platforms.StopForPreemption && p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
 
 	// Check if Kodi is the active launcher (either launched via Zaparoo or detected externally)
 	activeMedia := p.activeMedia()
 	p.trackerMu.RLock()
 	kodiActive := p.kodiActive
+	trackedGame := p.lastKnownGame != nil
 	p.trackerMu.RUnlock()
 
 	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
@@ -333,7 +395,7 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	hasTrackedProcess := p.trackedProcess != nil
 	p.processMu.RUnlock()
 
-	if activeMedia == nil && !kodiActive && !hasTrackedProcess {
+	if !stopHasTarget(activeMedia, kodiActive, hasTrackedProcess, trackedGame) {
 		log.Debug().Msg("no active launcher to stop, skipping hotkeygen")
 		return nil
 	}
@@ -572,6 +634,60 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 	return nil
 }
 
+// esSettleDelay is how long EmulationStation needs to settle around a launch.
+const esSettleDelay = 2 * time.Second
+
+// settle waits d on the platform clock, returning early with the context's
+// error when the launch is stopped meanwhile.
+func (p *Platform) settle(ctx context.Context, d time.Duration) error {
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle interrupted: %w", ctx.Err())
+	case <-clock.After(d):
+		return nil
+	}
+}
+
+// unpublishedGameWait bounds how long to wait for EmulationStation to report
+// a game whose launch a stop overtook, and unpublishedGamePoll is how often it
+// asks. EmulationStation takes a few seconds to start an emulator.
+const (
+	unpublishedGameWait = 10 * time.Second
+	unpublishedGamePoll = 500 * time.Millisecond
+)
+
+func (p *Platform) hasActiveMedia() bool {
+	return p.activeMedia != nil && p.activeMedia() != nil
+}
+
+// stopUnpublishedGame stops the game a launch started after a stop overtook
+// it. The game may not be running yet, so it waits for EmulationStation to
+// report one, up to unpublishedGameWait.
+func (p *Platform) stopUnpublishedGame() {
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	deadline := clock.Now().Add(unpublishedGameWait)
+	for {
+		if _, running, err := esapi.APIRunningGame(); err == nil && running {
+			log.Info().Msg("a stop came while the game was starting, stopping it")
+			if killErr := esapi.APIEmuKill(); killErr != nil {
+				log.Warn().Err(killErr).Msg("failed to stop a game that a stop overtook")
+			}
+			return
+		}
+		if !clock.Now().Before(deadline) {
+			return
+		}
+		clock.Sleep(unpublishedGamePoll)
+	}
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
@@ -586,6 +702,13 @@ func (p *Platform) LaunchMedia(
 		launcher = &foundLauncher
 	}
 
+	// A stop that arrives while this launch is settling cancels this context.
+	// The preemption stop issued below does not.
+	launchCtx := context.Background()
+	if p.launcherManager != nil {
+		launchCtx = p.launcherManager.GetContext()
+	}
+
 	// exit current media if one is running
 	_, running, err := esapi.APIRunningGame()
 	if err != nil {
@@ -598,19 +721,28 @@ func (p *Platform) LaunchMedia(
 		// Check if we should preserve the running app (e.g., both launchers use same Kodi instance)
 		if !p.shouldKeepRunningInstance(cfg, launcher) {
 			log.Info().Msg("exiting current media")
+			cancelStop := opts.RecordStop(models.MediaStopReasonReplaced)
 			err = p.StopActiveLauncher(platforms.StopForPreemption)
 			if err != nil {
+				cancelStop()
 				return fmt.Errorf("failed to stop active launcher: %w", err)
 			}
 			// Delay to allow EmulationStation to settle
 			// (Kodi stop already includes process verification polling)
-			time.Sleep(2 * time.Second)
+			if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
+				return fmt.Errorf("launch media: stopped while replacing running media: %w", settleErr)
+			}
 		} else {
 			// We're keeping the running instance (e.g., switching between Kodi movies)
 			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
 			log.Info().Msg("keeping running instance, clearing old active media before switching")
+			opts.RecordStop(models.MediaStopReasonReplaced)
 			p.setActiveMedia(nil)
 		}
+	}
+
+	if ctxErr := launchCtx.Err(); ctxErr != nil {
+		return fmt.Errorf("launch media: stopped before launch: %w", ctxErr)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
@@ -627,9 +759,18 @@ func (p *Platform) LaunchMedia(
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
+	// A stop that came while the game was starting overtook this launch. Core
+	// then published no media for the game, so that stop found nothing to
+	// stop and the game would keep running unnoticed.
+	if launchCtx.Err() != nil && !isKodiLauncher(launcher.ID) && !p.hasActiveMedia() {
+		p.stopUnpublishedGame()
+	}
+
 	// Delay for non-Kodi launches (ES API needs settling time)
 	if !isKodiLauncher(launcher.ID) {
-		time.Sleep(2 * time.Second)
+		if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
+			log.Debug().Err(settleErr).Msg("stopped while EmulationStation settled after launch")
+		}
 	}
 
 	// Update Kodi tracking state for background tracker
@@ -652,6 +793,22 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
+// esAPILaunch launches path through EmulationStation's API, which returns no
+// process handle.
+func esAPILaunch(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	if err := esapi.APILaunch(path); err != nil {
+		return nil, fmt.Errorf("failed to launch via API: %w", err)
+	}
+	return nil, nil //nolint:nilnil // API launches don't return a process handle
+}
+
+// esSystemsMissingOnBatocera are ES-DE folders Batocera's EmulationStation has
+// no system for. A game indexed there cannot be started: ES's launch API does
+// nothing for it, while Core reports the launch as done.
+var esSystemsMissingOnBatocera = map[string]struct{}{ //nolint:gochecknoglobals // Static folder set.
+	"doom": {},
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
 	launchers = append(launchers,
@@ -666,20 +823,23 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 
 	for folder, info := range esde.SystemMap {
+		if _, missing := esSystemsMissingOnBatocera[folder]; missing {
+			continue
+		}
 		launchers = append(launchers, platforms.Launcher{
-			ID:         info.GetLauncherID(),
-			SystemID:   info.SystemID,
-			Extensions: info.Extensions,
-			Folders:    []string{folder},
+			ID:           info.GetLauncherID(),
+			SystemID:     info.SystemID,
+			Extensions:   info.Extensions,
+			Folders:      []string{folder},
+			ScanExcludes: esde.ScanExcludes(info.SystemID),
+			Controls: hotkeyControls(afero.NewOsFs(), sendHotkey, func() error {
+				return p.StopActiveLauncher(platforms.StopForMenu)
+			}),
 			// SkipFilesystemScan defaults to false - built-in scanner will find all ROM files
 			// Scanner function adds metadata from gamelist.xml
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := esapi.APILaunch(path)
-				if err != nil {
-					return nil, fmt.Errorf("failed to launch via API: %w", err)
-				}
-				return nil, nil //nolint:nilnil // API launches don't return a process handle
-			},
+			Launch:       p.noteLaunches(esAPILaunch),
+			WaitForReady: p.waitForGame,
+			GameRunning:  esGameRunning,
 			Scanner: func(
 				ctx context.Context,
 				cfg *config.Instance,
@@ -711,7 +871,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 					filteredResults = append(filteredResults, result)
 				}
-				results = filteredResults
+				results = dropPyGameModules(filteredResults)
 
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {
@@ -770,7 +930,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Extensions:    []string{".sh"},
 		AllowListOnly: true,
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			err := exec.CommandContext(context.Background(), path).Start()
+			err := command.StartAndReap(exec.CommandContext(context.Background(), path))
 			if err != nil {
 				return nil, fmt.Errorf("failed to start command: %w", err)
 			}
@@ -829,6 +989,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return helpers.CombineParsedLaunchers(customLaunchers, launchers)
 }
 
+// RendersUIKind reports the events PresentUI can show: only notices and
+// loaders, which are shown as Batocera notifications.
+func (*Platform) RendersUIKind(kind models.UIEventKind) bool {
+	return kind == models.UIEventKindNotice || kind == models.UIEventKindLoader
+}
+
 func (*Platform) PresentUI(
 	_ context.Context,
 	event *models.UIEvent,
@@ -861,5 +1027,8 @@ func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+	}
 }

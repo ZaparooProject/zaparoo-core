@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -329,6 +330,37 @@ func TestClientLaunch(t *testing.T) {
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "steam", []string{"steam://rungameid/456"})
+	})
+
+	t.Run("passes_launch_env_to_command", func(t *testing.T) {
+		t.Parallel()
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		env := []string{"DISPLAY=:1"}
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+		client.launchEnv = func() []string { return env }
+
+		_, err := client.Launch(nil, "steam://123/GameName", &platforms.LaunchOptions{Action: "run"})
+
+		require.NoError(t, err)
+		mockCmd.AssertCalled(t, "StartWithOptions", mock.Anything, command.StartOptions{Env: env},
+			"xdg-open", []string{"steam://rungameid/123"})
+		mockCmd.AssertNotCalled(t, "Start", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("launch_env_error_is_reported", func(t *testing.T) {
+		t.Parallel()
+
+		mockCmd := &mocks.MockCommandExecutor{}
+		mockCmd.On("StartWithOptions", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(errors.New("command failed"))
+		client := NewClientWithExecutor(Options{}, mockCmd)
+		client.launchEnv = func() []string { return nil }
+
+		_, err := client.Launch(nil, "steam://123/Game", &platforms.LaunchOptions{Action: "run"})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to launch Steam")
 	})
 
 	t.Run("handles_rungameid_format", func(t *testing.T) {

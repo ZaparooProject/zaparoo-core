@@ -77,7 +77,7 @@ func ScanTV(
 		}
 
 		for _, ep := range episodes {
-			label := show.Label + " - " + ep.Label
+			label := episodeName(show, ep)
 			results = append(results, platforms.ScanResult{
 				Name:   label,
 				Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiEpisode, strconv.Itoa(ep.ID), label),
@@ -103,7 +103,7 @@ func ScanSongs(
 	}
 
 	for _, song := range songs {
-		name := song.Artist + " - " + song.Album + " - " + song.Label
+		name := songName(&song)
 		results = append(results, platforms.ScanResult{
 			Name:   name,
 			Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiSong, strconv.Itoa(song.ID), name),

@@ -126,3 +126,66 @@ func TestGenerateRejectsMediaThatNeedsNoMGL(t *testing.T) {
 		t.Fatalf("expected the direct-launch sentinel, got: %v", err)
 	}
 }
+
+func TestGenerateOptions(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("NES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgl.Generate(core, "_Console/NES", "/media/fat/games/NES/a.nes", "",
+		mgl.Option{Name: "Model", Value: "Master"},
+		mgl.Option{Name: "Slot & 1", Value: "Mega\"SCC", Page: "Machine", Default: true},
+		mgl.Option{Name: "", Value: "ignored"},
+		mgl.Option{Name: "ignored", Value: ""},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\t<option name=\"Model\" value=\"Master\"/>\n" +
+		"\t<option name=\"Slot &amp; 1\" value=\"Mega&quot;SCC\" page=\"Machine\" default=\"1\"/>\n" +
+		"</mistergamedescription>"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("options missing from MGL:\n%s", got)
+	}
+}
+
+func TestGenerateOptionsWithOverrideAndNoMedia(t *testing.T) {
+	t.Parallel()
+
+	core := &catalog.Core{}
+	opt := mgl.Option{Name: "Model", Value: "Master"}
+	got, err := mgl.Generate(core, "_Computer/BBCMicro", "", "", opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `<option name="Model" value="Master"/>`) {
+		t.Fatalf("core-only MGL lost its option:\n%s", got)
+	}
+	got, err = mgl.Generate(core, "_Computer/BBCMicro", "/x.ssd", "\t<file/>\n", opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got, "\t<file/>\n\t<option name=\"Model\" value=\"Master\"/>\n</mistergamedescription>") {
+		t.Fatalf("override MGL lost its option:\n%s", got)
+	}
+}
+
+func TestGenerateReset(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("NES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgl.Generate(core, "_Console/NES", "/media/fat/games/NES/a.nes", "",
+		mgl.Option{Name: "Model", Value: "Master"}, mgl.Reset{Delay: 2, Hold: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\t<option name=\"Model\" value=\"Master\"/>\n\t<reset delay=\"2\" hold=\"1\"/>\n</mistergamedescription>"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("reset missing from MGL:\n%s", got)
+	}
+}

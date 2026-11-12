@@ -64,6 +64,17 @@ type scraperImpl struct {
 	db       database.MediaDBI
 	fs       afero.Fs
 	listings *sourceDirListings
+	// dirNames holds one listing of each media directory of the system being
+	// scraped, so a row's candidate filenames are ruled out in memory instead
+	// of with a stat apiece.
+	dirNames *esmedia.DirNames
+	// run adds up the systems a run over whole systems has finished, for the
+	// update that ends it.
+	run runCounts
+}
+
+type runCounts struct {
+	processed, matched, skipped int
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
@@ -76,6 +87,12 @@ func NewPlatformScraper() platforms.Scraper {
 		ID:                 scraperID,
 		Name:               "ES media folders",
 		SupportedSystemIDs: []string{},
+		// Art in a system's media folder describes this device, so it is read
+		// after every index and wins over catalog sources. A system with no
+		// media folder costs one directory listing.
+		SupportsFillMissing:    true,
+		AutoScrapeAllLaunchers: true,
+		AutoScrapeOrder:        scraper.AutoOrderDevice,
 		Scrape: func(
 			ctx context.Context,
 			cfg *config.Instance,
@@ -131,7 +148,9 @@ func resolveSystemsFromPlatform(
 	}
 
 	pathsBySystem := make(map[string][]string, len(sysDefs))
-	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
+	systemPaths := mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs)
+	for i := range systemPaths {
+		pathResult := &systemPaths[i]
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
 
@@ -255,12 +274,16 @@ func (s *scraperImpl) scrapeLoop(
 		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
 		return
 	}
+	s.run = runCounts{}
 	for systemIdx := range systems {
 		if !s.scrapeSystem(ctx, opts, systems, systemIdx, ch) {
 			return
 		}
 	}
-	ch <- scraper.ScrapeUpdate{TotalSteps: len(systems), CurrentStep: len(systems), Done: true}
+	ch <- scraper.ScrapeUpdate{
+		Processed: s.run.processed, Total: s.run.processed, Matched: s.run.matched, Skipped: s.run.skipped,
+		TotalSteps: len(systems), CurrentStep: len(systems), Done: true,
+	}
 }
 
 // scrapeSystem scrapes one system. It returns false when the run has ended,
@@ -282,11 +305,14 @@ func (s *scraperImpl) scrapeSystem(
 
 	availableDirs := s.availableDirsByRoot(ctx, system.ROMPaths)
 	if opts.Scope == nil && !opts.Force && !hasArtworkDirs(availableDirs) {
+		logUnrecognisedMediaDirs(system.ID, availableDirs, opts.FillMissing)
 		return s.finishSystemWithoutArtwork(ctx, opts, systems, systemIdx, ch)
 	}
 	// Hand the system's working set back to the OS before the next one, so a
 	// run's peak is one system rather than the sum of them.
 	defer debug.FreeOSMemory()
+	s.dirNames = esmedia.NewDirNames(s.fs)
+	defer func() { s.dirNames = nil }()
 
 	var completed map[int64]struct{}
 	var selection scraper.ScopedSelection
@@ -392,8 +418,9 @@ func (s *scraperImpl) scrapeSystem(
 			}
 		} else {
 			write := &database.ScrapeWrite{
-				Sentinel:   scraper.SentinelTagInfo(scraperID),
-				MediaProps: props,
+				Sentinel:    scraper.SentinelTagInfo(scraperID),
+				MediaProps:  props,
+				FillMissing: opts.FillMissing,
 			}
 			if opts.RunID != "" {
 				write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
@@ -511,11 +538,38 @@ func (s *scraperImpl) scrapeSystem(
 		}
 		return false
 	}
+	s.run.processed += processed
+	s.run.matched += matched
+	s.run.skipped += skipped
 	return true
 }
 
 // hasArtworkDirs reports whether any root has a media directory an artwork
 // lookup would search. Without one no media or folder lookup can find a file.
+// logUnrecognisedMediaDirs names the media subfolders a system has when none
+// of them is one Core reads, which is what a wrongly named art folder looks
+// like. A system with no media folder says nothing, and the automatic run
+// after an index only logs at debug level: a media folder holding just videos
+// or manuals is normal and would repeat on every index.
+func logUnrecognisedMediaDirs(systemID string, availableDirs map[string]map[string]string, automatic bool) {
+	var found []string
+	for _, dirs := range availableDirs {
+		for _, path := range dirs {
+			found = append(found, filepath.Base(path))
+		}
+	}
+	if len(found) == 0 {
+		return
+	}
+	sort.Strings(found)
+	event := log.Info()
+	if automatic {
+		event = log.Debug()
+	}
+	event.Str("system", systemID).Strs("folders", found).
+		Msg("localmedia: media folder has no recognised artwork subfolder (boxart, screenshots, titleshots, ...)")
+}
+
 func hasArtworkDirs(availableDirs map[string]map[string]string) bool {
 	for _, dirs := range availableDirs {
 		if len(dirs) == 0 {
@@ -722,7 +776,7 @@ func (s *scraperImpl) findArtworkFile(
 				file = findSourceFile(ctx, s.listings, fallbackNames, candidates, dirs)
 			}
 		} else {
-			file = esmedia.FindFileFS(s.fs, fallbackNames, candidates, dirs)
+			file = esmedia.FindFileIn(s.fs, s.dirNames, fallbackNames, candidates, dirs)
 		}
 		if file != nil {
 			return file
@@ -939,7 +993,7 @@ func isLocalMediaPropForNames(prop *database.MediaProperty, roots, fallbackNames
 		for _, dir := range candidates {
 			for _, name := range fallbackNames {
 				candidate := filepath.Clean(filepath.Join(root, "media", dir, name))
-				if propPath == candidate {
+				if strings.EqualFold(propPath, candidate) {
 					return true
 				}
 			}

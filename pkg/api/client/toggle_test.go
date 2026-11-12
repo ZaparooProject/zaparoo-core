@@ -24,11 +24,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"syscall"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +44,18 @@ func TestDisableZapScriptErrorClassification(t *testing.T) {
 		name, level string
 	}{
 		{name: "refused", failure: fmt.Errorf("dial: %w", syscall.ECONNREFUSED), level: "warn"},
+		{name: "reset by restart", failure: fmt.Errorf("dial: %w", syscall.ECONNRESET), level: "warn"},
+		{
+			name: "service starting",
+			failure: websocketDialError(websocket.ErrBadHandshake,
+				&http.Response{StatusCode: http.StatusServiceUnavailable}),
+			level: "warn",
+		},
+		{
+			name:    "handshake refused",
+			failure: websocketDialError(websocket.ErrBadHandshake, &http.Response{StatusCode: http.StatusUnauthorized}),
+			level:   "error",
+		},
 		{name: "timeout", failure: context.DeadlineExceeded, level: "error"},
 		{name: "auth", failure: errors.New("unauthorized"), level: "error"},
 		{name: "protocol", failure: errors.New("invalid response"), level: "error"},

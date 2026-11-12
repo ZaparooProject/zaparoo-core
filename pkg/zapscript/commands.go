@@ -28,19 +28,24 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
@@ -54,10 +59,14 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	RecordMediaStop    func(reason string) (cancel func())
+	StopSeq            func() uint64
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
+	BackgroundMedia    func() *apimodels.ActiveMedia
+	PlaylistMemory     platforms.PlaylistMemory
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager
@@ -84,8 +93,74 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
-	errAmbiguousPath       = errors.New("ambiguous case-insensitive path")
+	// ErrWriteNotAlone is returned when a write shares a script with other
+	// commands. A write arms the next card scanned, which only works when it
+	// is the token's whole script.
+	ErrWriteNotAlone = errors.New("write must be the only command on a token")
+	// ErrWriteUnsupported is returned when a write that is a script's only
+	// command reaches the runner anyway, as it does from a control script.
+	// Only a scanned token or a run request arms writes.
+	ErrWriteUnsupported = errors.New("write can only run from a scanned token or run request")
+	errAmbiguousPath    = errors.New("ambiguous case-insensitive path")
 )
+
+// IsExpectedRunError reports whether a failed command or token run is an
+// expected user, configuration or environment condition that should be logged
+// at Warn rather than Error (keeping it out of Sentry). These are not bugs: a
+// missing file or title, media no launcher handles, a double-tap during an
+// active launch, a user-supplied system, command or argument that isn't valid,
+// a launcher whose program or service isn't available, a user script that
+// failed, or a run refused by configuration, by a hook, or by the bound the
+// token carries. Cancellation is handled separately by callers.
+func IsExpectedRunError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, target := range expectedRunErrors {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+var expectedRunErrors = []error{
+	ErrFileNotFound,
+	ErrInvalidScript,
+	ErrInvalidArguments,
+	// A command written with the wrong arguments is the script's mistake.
+	ErrArgCount,
+	ErrRequiredArgs,
+	ErrUnknownCommand,
+	ErrWriteNotAlone,
+	ErrWriteUnsupported,
+	// Refusals by configuration are the setting working, not a bug.
+	ErrCommandBlocked,
+	ErrCommandNotPermitted,
+	ErrExecuteNotAllowed,
+	ErrExecuteTimeout,
+	ErrExecuteExitStatus,
+	ErrHTTPNotAllowed,
+	ErrRemoteSource,
+	ErrNoHistory,
+	ErrNoPlaylistActive,
+	ErrNoControlCapabilities,
+	ErrUnsupportedControlAction,
+	titles.ErrNoMatch,
+	titles.ErrLowConfidence,
+	systemdefs.ErrUnknownSystem,
+	helpers.ErrNoLauncher,
+	virtualpath.ErrSchemeMismatch,
+	platforms.ErrScriptAlreadyRunning,
+	platforms.ErrLauncherUnavailable,
+	// A playlist move refused while another launch runs is busy, the same as
+	// a launch the guard refuses.
+	state.ErrLaunchInProgress,
+	state.ErrLaunchBlockedByHook,
+	state.ErrLaunchRequiresProfile,
+	state.ErrRunZapScriptDisabled,
+	playtime.ErrLimitReached,
+}
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
 func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
@@ -149,6 +224,8 @@ func lookupCmd(name string) (cmdFunc, bool) {
 
 			zapscript.ZapScriptCmdPlaytimeExtend: cmdPlaytimeExtend,
 
+			zapscript.ZapScriptCmdWrite: cmdWrite,
+
 			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
 			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
 			zapscript.ZapScriptCmdMisterScript:    forwardCmd,
@@ -189,6 +266,7 @@ func isSensitiveCommand(cmdName string) bool {
 	switch cmdName {
 	case zapscript.ZapScriptCmdProfile,
 		zapscript.ZapScriptCmdPlaytimeExtend,
+		zapscript.ZapScriptCmdWrite,
 		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
 		zapscript.ZapScriptCmdInputKeyboard,
@@ -244,6 +322,19 @@ func IsValidCommand(cmdName string) bool {
 	return ok
 }
 
+// cmdWrite handles a write that reached the command runner. A write on its
+// own is armed by the token pipeline before any command runs, so one that
+// gets here shares its script with other commands or came from a path that
+// does not arm writes.
+//
+//nolint:gocritic // single-use parameter in command handler
+func cmdWrite(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.TotalCommands != 1 {
+		return platforms.CmdResult{}, ErrWriteNotAlone
+	}
+	return platforms.CmdResult{}, ErrWriteUnsupported
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	result, err := pl.ForwardCmd(&env)
@@ -256,6 +347,10 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 	if _, err := fs.Stat(path); err == nil {
 		return path, nil
+	} else if errors.Is(err, syscall.ENOTDIR) {
+		// A path that runs through a file, such as a <file>.nsf/<n> track,
+		// does not exist on disk; a launcher may still vouch for it.
+		return "", fmt.Errorf("%w: %s", os.ErrNotExist, path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
@@ -273,9 +368,17 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		current = "."
 	}
 
-	for _, part := range parts {
+	currentIsDir := true
+	for i, part := range parts {
 		if part == "" {
 			continue
+		}
+		if !currentIsDir {
+			// The path runs on through a file, such as a <file>.nsf/<n>
+			// track. It is not on disk, but the corrected path is what a
+			// launcher may vouch for.
+			rest := append([]string{current}, parts[i:]...)
+			return filepath.Join(rest...), fmt.Errorf("%w: %s", os.ErrNotExist, path)
 		}
 		entries, err := afero.ReadDir(fs, current)
 		if err != nil {
@@ -283,15 +386,16 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 		}
 
 		exactMatched := false
-		var foldMatches []string
+		var foldMatches []os.FileInfo
 		for _, entry := range entries {
 			if entry.Name() == part {
 				current = filepath.Join(current, entry.Name())
+				currentIsDir = entry.IsDir()
 				exactMatched = true
 				break
 			}
 			if strings.EqualFold(entry.Name(), part) {
-				foldMatches = append(foldMatches, entry.Name())
+				foldMatches = append(foldMatches, entry)
 			}
 		}
 		if exactMatched {
@@ -301,10 +405,15 @@ func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 			return "", os.ErrNotExist
 		}
 		if len(foldMatches) > 1 {
+			names := make([]string, 0, len(foldMatches))
+			for _, m := range foldMatches {
+				names = append(names, m.Name())
+			}
 			return "", fmt.Errorf("%w: component %q in %s matches %s", errAmbiguousPath, part, current,
-				strings.Join(foldMatches, ", "))
+				strings.Join(names, ", "))
 		}
-		current = filepath.Join(current, foldMatches[0])
+		current = filepath.Join(current, foldMatches[0].Name())
+		currentIsDir = foldMatches[0].IsDir()
 	}
 
 	return current, nil
@@ -350,11 +459,28 @@ func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
 	return roots
 }
 
-// Check all games folders for a relative path to a file
+// FindLaunchFile resolves a launch path with the lookup rules a launch uses:
+// an absolute path as is, a relative one under the games folders, and a
+// virtual entry a launcher vouches for. It returns ErrFileNotFound when
+// nothing matches.
+func FindLaunchFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
+	path string,
+) (string, error) {
+	return findFile(fs, pl, cfg, launchers, path)
+}
+
+// Check all games folders for a relative path to a file. A path that is not
+// on disk is still found when one of the platform's launchers vouches for it
+// as a virtual entry, such as a game named in a listing file.
 func findFile(
 	fs afero.Fs,
 	pl platforms.Platform,
 	cfg *config.Instance,
+	launchers *platforms.LauncherSnapshot,
 	path string,
 	pathRoots ...string,
 ) (string, error) {
@@ -363,13 +489,14 @@ func findFile(
 	statPath := lookupPath
 	var virtualParts []string
 
-	// if the file is inside a zip or virtual list, we just check that file exists
+	// if the file is inside a zip, a disk image or a virtual list, we just check
+	// that file exists
 	// TODO: both of these things are very specific to mister, it would be good to
 	//       have a more generic way of handling this for other platforms, or
 	//       implement them from zaparoo(?)
 	for i, p := range ps {
 		ext := filepath.Ext(strings.ToLower(p))
-		if ext == ".zip" || ext == ".txt" {
+		if ext == ".zip" || ext == ".txt" || ext == ".vhd" {
 			statPath = virtualStatPath(lookupPath, ps, i+1)
 			virtualParts = ps[i+1:]
 			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
@@ -382,11 +509,18 @@ func findFile(
 		rootDirs := pathLookupRoots(pl.RootDirs(cfg), pathRoots...)
 		candidates = make([]string, 0, len(rootDirs))
 		for _, gf := range rootDirs {
-			candidates = append(candidates, filepath.Join(gf, statPath))
+			candidate := filepath.Join(gf, statPath)
+			// A relative path names a file below a games folder. One that
+			// climbs out of it with ".." is not looked up.
+			if !helpers.PathHasPrefix(candidate, gf) {
+				continue
+			}
+			candidates = append(candidates, candidate)
 		}
 	}
 
 	var firstNonNotExistErr error
+	var missing []string
 	for _, candidate := range candidates {
 		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
 		if err == nil {
@@ -399,8 +533,29 @@ func findFile(
 		if errors.Is(err, errAmbiguousPath) {
 			return "", err
 		}
-		if !errors.Is(err, os.ErrNotExist) && firstNonNotExistErr == nil {
-			firstNonNotExistErr = err
+		if !errors.Is(err, os.ErrNotExist) {
+			if firstNonNotExistErr == nil {
+				firstNonNotExistErr = err
+			}
+			continue
+		}
+		if len(virtualParts) == 0 {
+			// A case-corrected path is what a launcher would know it by.
+			if resolvedPath != "" {
+				candidate = resolvedPath
+			}
+			missing = append(missing, candidate)
+		}
+	}
+	if len(missing) > 0 {
+		all := vouchingLaunchers(launchers.Get(pl, cfg), helpers.GlobalLauncherCache)
+		for _, candidate := range missing {
+			for i := range all {
+				if all[i].VirtualPathExists != nil && all[i].VirtualPathExists(cfg, candidate) {
+					log.Debug().Str("launcher", all[i].ID).Msgf("found virtual entry: %s", candidate)
+					return candidate, nil
+				}
+			}
 		}
 	}
 	if firstNonNotExistErr != nil {
@@ -408,6 +563,24 @@ func findFile(
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
+}
+
+// vouchingLaunchers is every launcher a missing path may be vouched for by:
+// the platform's, plus those only the launcher cache carries, such as native
+// audio, which launch selection uses too.
+func vouchingLaunchers(platformLaunchers []platforms.Launcher, cache *helpers.LauncherCache) []platforms.Launcher {
+	if cache == nil {
+		return platformLaunchers
+	}
+	all := slices.Clone(platformLaunchers)
+	cached := cache.GetAllLaunchers()
+	for i := range cached {
+		id := cached[i].ID
+		if !slices.ContainsFunc(all, func(p platforms.Launcher) bool { return p.ID == id }) {
+			all = append(all, cached[i])
+		}
+	}
+	return all
 }
 
 // effectiveScanMode returns the scan mode that applies to the token currently
@@ -494,6 +667,7 @@ func RunCommand(
 	}
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
+	cmd = foldURLQuery(cmd)
 
 	linkValue, linkOwned, linkErr := checkZapLink(cfg, pl, db, cmd)
 	if linkErr != nil {
@@ -525,7 +699,7 @@ func RunCommand(
 			newCmds = append(newCmds, script.Cmds[1:]...)
 		}
 
-		cmd = script.Cmds[0]
+		cmd = foldURLQuery(script.Cmds[0])
 		// A link the account vouched for as the user's own card or deck runs
 		// trusted, the way a card the user wrote does; any other link body
 		// runs untrusted. The answer only ever keeps trust, never restores
@@ -572,10 +746,14 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		RecordMediaStop:    opts.RecordMediaStop,
+		StopSeq:            opts.StopSeq,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
+		BackgroundMedia:    opts.BackgroundMedia,
+		PlaylistMemory:     opts.PlaylistMemory,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
 		Launchers:          &platforms.LauncherSnapshot{},
@@ -642,7 +820,12 @@ func RunCommand(
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
-	if IsMediaLaunchingCommand(cmd.Name) {
+	// launch.random with a rotation, or on a deck, only queues a playlist, the
+	// way playlist.play does, and each item takes the guard when it launches.
+	// Holding it here would make the command's own playlist update look like a
+	// second launch and be refused.
+	releaseGuard := func() {}
+	if IsMediaLaunchingCommand(cmd.Name) && !isQueuedRandom(&cmd) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}
@@ -659,7 +842,8 @@ func RunCommand(
 			if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 			}
-			defer opts.LauncherManager.EndLaunch()
+			releaseGuard = sync.OnceFunc(opts.LauncherManager.EndLaunch)
+			defer releaseGuard()
 		}
 		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
@@ -671,6 +855,13 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
+	if playlistFile, ok := errors.AsType[*audioPlaylistLaunchError](err); ok {
+		// The playlist's first item launches from the playlist queue and
+		// takes the launch guard itself, so this command lets it go first.
+		releaseGuard()
+		log.Info().Str("path", playlistFile.path).Msg("playing audio playlist file")
+		res, err = startAudioPlaylistFile(&env, playlistFile.path)
+	}
 	if errors.Is(err, errMediaLaunchSkipped) {
 		// A resolved no-op is successful, including when wrapped by random
 		// or last-played launch handlers. Preserve metadata and chained commands.
@@ -682,21 +873,7 @@ func RunCommand(
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
-		case errors.Is(err, ErrFileNotFound),
-			errors.Is(err, ErrInvalidArguments),
-			errors.Is(err, platforms.ErrScriptAlreadyRunning),
-			// A playlist move refused while another launch runs is busy, the
-			// same as a launch the guard refuses.
-			errors.Is(err, state.ErrLaunchInProgress),
-			errors.Is(err, systemdefs.ErrUnknownSystem),
-			errors.Is(err, titles.ErrNoMatch),
-			errors.Is(err, ErrNoControlCapabilities),
-			errors.Is(err, ErrUnsupportedControlAction),
-			errors.Is(err, ErrNoHistory),
-			// Refusals by configuration are the setting working, not a bug.
-			errors.Is(err, ErrExecuteNotAllowed),
-			errors.Is(err, ErrHTTPNotAllowed),
-			errors.Is(err, ErrRemoteSource):
+		case IsExpectedRunError(err):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", logCmd)

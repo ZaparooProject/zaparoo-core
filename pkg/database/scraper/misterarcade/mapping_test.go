@@ -223,7 +223,7 @@ func TestBuildWriteNotesEveryDroppedValue(t *testing.T) {
 	t.Parallel()
 	entry := Entry{
 		SetName: "odd", Category: "Unheard Of - Genre", Platform: "Mystery Board",
-		Series: "Some New Saga", Region: "Hispanic", Players: "many", NumButtons: "9",
+		Series: "Some New Saga", Region: "Hispanic", Players: "many", NumButtons: "10",
 		MoveInputs: "hovercraft yoke", Year: "19xx", Resolution: "25kHz",
 	}
 	unmapped := &scraper.UnmappedValues{}
@@ -418,7 +418,7 @@ func TestButtonTag(t *testing.T) {
 		{column: "20", want: "buttons:20"},
 		{column: "12", want: "buttons:12"},
 		// Counts the vocabulary does not list are not written.
-		{column: "9", want: ""},
+		{column: "10", want: ""},
 		{column: "32", want: ""},
 		{column: "0", want: ""},
 		{column: "", want: ""},

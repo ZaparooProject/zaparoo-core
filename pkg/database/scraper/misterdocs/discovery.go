@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/spf13/afero"
 )
 
@@ -42,10 +43,42 @@ const (
 	sourceManuals
 )
 
+// imageDir is one image folder of the pack format and the property its
+// images are stored as.
+type imageDir struct {
+	name     string
+	property tags.TagValue
+}
+
+// imageDirs lists the image folders a system can carry. The box pack and the
+// screenshot and title packs install side by side, each with the same file
+// set. The order is also the order of preference for a system's metadata.
+var imageDirs = []imageDir{ //nolint:gochecknoglobals // Fixed pack format folders.
+	{name: artworkDirName, property: tags.TagPropertyImageBoxart},
+	{name: "Screenshots", property: tags.TagPropertyImageScreenshot},
+	{name: "Titles", property: tags.TagPropertyImageTitleshot},
+}
+
+// imageDirIndex returns the position in imageDirs of a folder name, or -1.
+func imageDirIndex(name string) int {
+	for i := range imageDirs {
+		if strings.EqualFold(name, imageDirs[i].name) {
+			return i
+		}
+	}
+	return -1
+}
+
 type sourceDir struct {
 	Path     string
 	SystemID string
-	Kind     sourceKind
+	// Image is the property an artwork source's images are stored as.
+	Image tags.TagValue
+	Kind  sourceKind
+	// Metadata marks the one image folder of a system directory whose
+	// gameinfo and synopsis files are read. Every pack ships the same ones,
+	// so reading them once per system is enough.
+	Metadata bool
 }
 
 func candidateDocsRoots(roots []string) []string {
@@ -104,6 +137,9 @@ func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
 			if readErr != nil {
 				continue
 			}
+			// The preferred image folder found so far, as positions in
+			// imageDirs and result.
+			metadataDir, metadataSource := len(imageDirs), -1
 			for _, child := range children {
 				if !child.IsDir() || child.Mode()&os.ModeSymlink != 0 {
 					continue
@@ -111,9 +147,12 @@ func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
 				path := filepath.Join(systemDir, child.Name())
 				var kind sourceKind
 				var systemID string
+				var image tags.TagValue
+				dirIndex := imageDirIndex(child.Name())
 				switch {
-				case strings.EqualFold(child.Name(), artworkDirName) && hasArtworkContent(fs, path):
+				case dirIndex >= 0 && hasArtworkContent(fs, path):
 					kind = sourceArtwork
+					image = imageDirs[dirIndex].property
 					systemID = resolveSourceSystem(systemEntry.Name(), "")
 				case strings.Contains(strings.ToLower(child.Name()), "manual"):
 					kind = sourceManuals
@@ -129,7 +168,13 @@ func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
 					continue
 				}
 				seen[key] = struct{}{}
-				result = append(result, sourceDir{Path: path, SystemID: systemID, Kind: kind})
+				result = append(result, sourceDir{Path: path, SystemID: systemID, Kind: kind, Image: image})
+				if kind == sourceArtwork && dirIndex < metadataDir {
+					metadataDir, metadataSource = dirIndex, len(result)-1
+				}
+			}
+			if metadataSource >= 0 {
+				result[metadataSource].Metadata = true
 			}
 		}
 	}
@@ -183,7 +228,7 @@ func pathWithin(path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// hasArtworkContent reports whether an Artwork directory holds anything worth
+// hasArtworkContent reports whether an image directory holds anything worth
 // loading. The index resolves every dump not filed under its own key, but a
 // pack shipped without one still serves exact-key images, so a directory with
 // images and no index is a valid source rather than a directory to ignore.

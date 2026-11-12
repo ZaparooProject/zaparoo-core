@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
@@ -203,7 +204,12 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 	if !found {
 		gameName, found = steam.FindAppNameByAppID(appID)
 	}
-	if !found {
+	// A named app is reported under the path the library scan indexes it
+	// by. An app with no manifest is not in the index under any path.
+	mediaPath := fmt.Sprintf("steam://%d", appID)
+	if found {
+		mediaPath = steam.MediaPath(appID, gameName)
+	} else {
 		gameName = steam.FormatGameName(appID, "")
 	}
 
@@ -222,7 +228,7 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 	activeMedia := models.NewActiveMedia(
 		systemdefs.SystemPC,
 		systemMeta.Name,
-		fmt.Sprintf("steam://%d", appID),
+		mediaPath,
 		gameName,
 		"Steam",
 	)
@@ -233,6 +239,12 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 	}
 
 	pi.trackReaperProcess(appID, reaperPID)
+	if publishDeclined(pi.activeMedia()) && pi.base != nil {
+		log.Info().Int("appID", appID).Msg("Steam game started after a stop meant for it, stopping it")
+		if err := pi.base.StopActiveLauncher(platforms.StopForMenu); err != nil {
+			log.Warn().Err(err).Int("appID", appID).Msg("failed to stop a Steam game a stop was meant for")
+		}
+	}
 }
 
 func (pi *PlatformIntegration) publishActiveMediaIfActive(

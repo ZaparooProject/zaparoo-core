@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -56,21 +57,22 @@ var errNotAFile = errors.New("source path names no file")
 // Platform implements platforms.Platform for Android. Token readers, input
 // and screenshots have no host capability yet and report ErrNotSupported.
 type Platform struct {
-	host             Host
+	snapshotAt       time.Time
 	launcherContexts platforms.LauncherContextManager
-	db               *database.Database
+	host             Host
+	historyHooks     platforms.MediaHistoryHooks
+	deviceChanged    func()
+	folders          map[string]string
+	clock            func() time.Time
+	snapshot         *hostSnapshot
 	entryByID        map[string]*catalogEntry
-	// folders maps each source root ID to the host reference it was made
-	// from, as of the last SourceRoots call.
-	folders      map[string]string
-	snapshotAt   time.Time
-	clock        func() time.Time
-	snapshot     *hostSnapshot
-	settings     platforms.Settings
-	historyHooks platforms.MediaHistoryHooks
-	entries      []catalogEntry
-	mu           syncutil.RWMutex
-	snapshotMu   syncutil.Mutex
+	deviceStatus     *DeviceStatus
+	db               *database.Database
+	settings         platforms.Settings
+	entries          []catalogEntry
+	mu               syncutil.RWMutex
+	deviceMu         syncutil.RWMutex
+	snapshotMu       syncutil.Mutex
 }
 
 var (
@@ -300,12 +302,15 @@ func (*Platform) ManagedByPackageManager() bool { return true }
 // Scrapers offers the libretro thumbnail scraper (box art, screenshots and
 // title screens for indexed media, matched by libretro's own sanitised name;
 // it never runs automatically after indexing, since it is the only scraper
-// that downloads) and, once a host is present, an app icon scraper for
-// installed apps offered as media.
+// that downloads), the embedded game catalog and, once a host is present, an
+// app icon scraper for installed apps offered as media.
 func (p *Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	folderCovers := localmedia.NewPlatformScraper()
-	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails, folderCovers.ID: folderCovers}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	scrapers := map[string]platforms.Scraper{
+		thumbnails.ID: thumbnails, folderCovers.ID: folderCovers, catalog.ID: catalog,
+	}
 	if p.host != nil {
 		apps := p.appScraper()
 		scrapers[apps.ID] = apps

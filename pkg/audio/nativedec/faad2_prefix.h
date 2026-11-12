@@ -1,0 +1,129 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Renames every external symbol of the vendored libfaad so it cannot clash
+// with another C library linked into the same binary: libfaad exports
+// generic names such as cfftf, mes and get_sample_rate. Included before
+// neaacdec.h and before the libfaad sources. The list is the set of
+// global symbols the faad2_unity.c object defines (nm -g --defined-only);
+// regenerate it when the vendored faad2 is updated.
+
+#ifndef ZAPAROO_FAAD2_PREFIX_H
+#define ZAPAROO_FAAD2_PREFIX_H
+
+/* Static build: nothing is exported from a DLL. */
+#define NEAACDECAPI
+
+#define adts_frame zap_faad_adts_frame
+#define AudioSpecificConfig2 zap_faad_AudioSpecificConfig2
+#define AudioSpecificConfigFromBitfile zap_faad_AudioSpecificConfigFromBitfile
+#define can_decode_ot zap_faad_can_decode_ot
+#define cfftb zap_faad_cfftb
+#define cfftf zap_faad_cfftf
+#define cffti zap_faad_cffti
+#define cfftu zap_faad_cfftu
+#define DCT4_32 zap_faad_DCT4_32
+#define dct4_kernel zap_faad_dct4_kernel
+#define derived_frequency_table zap_faad_derived_frequency_table
+#define drc_decode zap_faad_drc_decode
+#define drc_end zap_faad_drc_end
+#define drc_init zap_faad_drc_init
+#define DST4_32 zap_faad_DST4_32
+#define envelope_noise_dequantisation zap_faad_envelope_noise_dequantisation
+#define envelope_time_border_vector zap_faad_envelope_time_border_vector
+#define err_msg zap_faad_err_msg
+#define extract_envelope_data zap_faad_extract_envelope_data
+#define extract_noise_floor_data zap_faad_extract_noise_floor_data
+#define faad_byte_align zap_faad_faad_byte_align
+#define faad_endbits zap_faad_faad_endbits
+#define faad_flushbits_ex zap_faad_faad_flushbits_ex
+#define faad_free zap_faad_faad_free
+#define faad_getbitbuffer zap_faad_faad_getbitbuffer
+#define faad_get_processed_bits zap_faad_faad_get_processed_bits
+#define faad_imdct zap_faad_faad_imdct
+#define faad_initbits zap_faad_faad_initbits
+#define faad_malloc zap_faad_faad_malloc
+#define faad_mdct zap_faad_faad_mdct
+#define faad_mdct_end zap_faad_faad_mdct_end
+#define faad_mdct_init zap_faad_faad_mdct_init
+#define faad_resetbits zap_faad_faad_resetbits
+#define filter_bank_end zap_faad_filter_bank_end
+#define filter_bank_init zap_faad_filter_bank_init
+#define filter_bank_ltp zap_faad_filter_bank_ltp
+#define GASpecificConfig zap_faad_GASpecificConfig
+#define get_adif_header zap_faad_get_adif_header
+#define get_sample_rate zap_faad_get_sample_rate
+#define get_sr_index zap_faad_get_sr_index
+#define hf_adjustment zap_faad_hf_adjustment
+#define hf_generation zap_faad_hf_generation
+#define huffman_scale_factor zap_faad_huffman_scale_factor
+#define huffman_spectral_data zap_faad_huffman_spectral_data
+#define huffman_spectral_data_2 zap_faad_huffman_spectral_data_2
+#define ic_prediction zap_faad_ic_prediction
+#define ifilter_bank zap_faad_ifilter_bank
+#define is_decode zap_faad_is_decode
+#define is_ltp_ot zap_faad_is_ltp_ot
+#define limiter_frequency_table zap_faad_limiter_frequency_table
+#define lt_prediction zap_faad_lt_prediction
+#define lt_update_state zap_faad_lt_update_state
+#define master_frequency_table zap_faad_master_frequency_table
+#define master_frequency_table_fs0 zap_faad_master_frequency_table_fs0
+#define max_pred_sfb zap_faad_max_pred_sfb
+#define max_tns_sfb zap_faad_max_tns_sfb
+#define mes zap_faad_mes
+#define ms_decode zap_faad_ms_decode
+#define NeAACDecAudioSpecificConfig zap_faad_NeAACDecAudioSpecificConfig
+#define NeAACDecClose zap_faad_NeAACDecClose
+#define NeAACDecDecode zap_faad_NeAACDecDecode
+#define NeAACDecDecode2 zap_faad_NeAACDecDecode2
+#define NeAACDecGetCapabilities zap_faad_NeAACDecGetCapabilities
+#define NeAACDecGetCurrentConfiguration zap_faad_NeAACDecGetCurrentConfiguration
+#define NeAACDecGetErrorMessage zap_faad_NeAACDecGetErrorMessage
+#define NeAACDecGetVersion zap_faad_NeAACDecGetVersion
+#define NeAACDecInit zap_faad_NeAACDecInit
+#define NeAACDecInit2 zap_faad_NeAACDecInit2
+#define NeAACDecOpen zap_faad_NeAACDecOpen
+#define NeAACDecPostSeekReset zap_faad_NeAACDecPostSeekReset
+#define NeAACDecSetConfiguration zap_faad_NeAACDecSetConfiguration
+#define ne_rng zap_faad_ne_rng
+#define noise_floor_time_border_vector zap_faad_noise_floor_time_border_vector
+#define output_to_PCM zap_faad_output_to_PCM
+#define pns_decode zap_faad_pns_decode
+#define pns_reset_pred_state zap_faad_pns_reset_pred_state
+#define ps_data zap_faad_ps_data
+#define ps_decode zap_faad_ps_decode
+#define ps_free zap_faad_ps_free
+#define ps_init zap_faad_ps_init
+#define pulse_decode zap_faad_pulse_decode
+#define qmfa_end zap_faad_qmfa_end
+#define qmfa_init zap_faad_qmfa_init
+#define qmfs_end zap_faad_qmfs_end
+#define qmfs_init zap_faad_qmfs_init
+#define qmf_start_channel zap_faad_qmf_start_channel
+#define qmf_stop_channel zap_faad_qmf_stop_channel
+#define raw_data_block zap_faad_raw_data_block
+#define reconstruct_channel_pair zap_faad_reconstruct_channel_pair
+#define reconstruct_single_channel zap_faad_reconstruct_single_channel
+#define reordered_spectral_data zap_faad_reordered_spectral_data
+#define reset_all_predictors zap_faad_reset_all_predictors
+#define rvlc_decode_scale_factors zap_faad_rvlc_decode_scale_factors
+#define rvlc_scale_factor_data zap_faad_rvlc_scale_factor_data
+#define sbrDecodeCoupleFrame zap_faad_sbrDecodeCoupleFrame
+#define sbrDecodeEnd zap_faad_sbrDecodeEnd
+#define sbrDecodeInit zap_faad_sbrDecodeInit
+#define sbrDecodeSingleFrame zap_faad_sbrDecodeSingleFrame
+#define sbrDecodeSingleFramePS zap_faad_sbrDecodeSingleFramePS
+#define sbr_envelope zap_faad_sbr_envelope
+#define sbr_extension_data zap_faad_sbr_extension_data
+#define sbr_noise zap_faad_sbr_noise
+#define sbr_qmf_analysis_32 zap_faad_sbr_qmf_analysis_32
+#define sbr_qmf_synthesis_32 zap_faad_sbr_qmf_synthesis_32
+#define sbr_qmf_synthesis_64 zap_faad_sbr_qmf_synthesis_64
+#define sbrReset zap_faad_sbrReset
+#define tns_decode_frame zap_faad_tns_decode_frame
+#define tns_encode_frame zap_faad_tns_encode_frame
+#define unmap_envelope_noise zap_faad_unmap_envelope_noise
+#define window_grouping_info zap_faad_window_grouping_info
+
+#endif

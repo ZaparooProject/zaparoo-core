@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -41,7 +42,14 @@ import (
 
 const nesPlaylist = "Nintendo - Nintendo Entertainment System"
 
-var thumbDir = filepath.Join("data", "thumbs")
+var thumbDir = filepath.Join("data", "images", "libretro")
+
+func testDir(*config.Instance, platforms.Platform) string { return thumbDir }
+
+// imageRef is the images:// path the scraper records for a thumbnail.
+func imageRef(playlist, kind, name string) string {
+	return config.ImagePath("libretro/" + playlist + "/" + kind + "/" + name + ".png")
+}
 
 // fakeServer serves a directory listing and PNGs for the names it holds.
 type fakeServer struct {
@@ -137,12 +145,12 @@ func (db *fakeDB) ApplyScrapeResult(_ context.Context, mediaID, titleID int64, w
 }
 
 func runScrape(
-	t *testing.T, server *fakeServer, fs afero.Fs, db *fakeDB, opts scraper.ScrapeOptions,
+	t *testing.T, server http.Handler, fs afero.Fs, db *fakeDB, opts scraper.ScrapeOptions,
 ) scraper.ScrapeUpdate {
 	t.Helper()
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
-	s := newScraper(ts.URL, func(platforms.Platform) string { return thumbDir })
+	s := newScraper(ts.URL, testDir, nil)
 	updates := make(chan scraper.ScrapeUpdate, 64)
 	require.NoError(t, s.Scrape(t.Context(), nil, nil, fs, &database.Database{MediaDB: db}, opts,
 		platforms.ScraperCustomOptions{}, updates))
@@ -171,22 +179,26 @@ func TestScrapeDownloadsMatchedThumbnailsOnce(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 3, last.Processed)
+	require.Equal(t, 3, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 2, last.Matched)
 	require.Equal(t, 1, last.Skipped)
 
 	props := map[int64][]database.MediaProperty{}
 	for _, w := range db.writes {
-		require.Equal(t, scraper.SentinelTagInfo(scraperID), w.Write.Sentinel)
-		require.Equal(t, []database.TagInfo{scraper.RunTagInfo(scraperID, "r1")}, w.Write.MediaTags)
+		require.Equal(t, scraper.SentinelTagInfo(ScraperID), w.Write.Sentinel)
+		require.Equal(t, []database.TagInfo{scraper.RunTagInfo(ScraperID, "r1")}, w.Write.MediaTags)
 		require.True(t, w.Write.FillMissing)
 		props[w.MediaDBID] = w.Write.MediaProps
 	}
 	box := filepath.Join(thumbDir, nesPlaylist, "Named_Boxarts", "3-D WorldRunner (USA).png")
 	require.Equal(t, []database.MediaProperty{
-		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: box},
+		{
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+			Text:    imageRef(nesPlaylist, "Named_Boxarts", "3-D WorldRunner (USA)"),
+		},
 		{
 			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
-			Text:    filepath.Join(thumbDir, nesPlaylist, "Named_Snaps", "3-D WorldRunner (USA).png"),
+			Text:    imageRef(nesPlaylist, "Named_Snaps", "3-D WorldRunner (USA)"),
 		},
 	}, props[1])
 	require.Len(t, props[2], 1, "a No-Intro name found by title")
@@ -223,7 +235,7 @@ func TestScrapeSkipsCompletedAndUnsupported(t *testing.T) {
 
 func TestScrapeReportsUnreachableServerWithoutFailingTheRun(t *testing.T) {
 	t.Parallel()
-	s := newScraper("http://127.0.0.1:1", func(platforms.Platform) string { return thumbDir })
+	s := newScraper("http://127.0.0.1:1", testDir, nil)
 	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/A (USA).nes"}}}
 	updates := make(chan scraper.ScrapeUpdate, 16)
 	require.NoError(t, s.Scrape(t.Context(), nil, nil, afero.NewMemMapFs(), &database.Database{MediaDB: db},
@@ -281,7 +293,7 @@ func TestScrapeMatchesArcadeSetsByTitle(t *testing.T) {
 	db := &arcadeDB{fakeDB: fakeDB{media: []database.MediaWithFullPath{
 		{DBID: 1, Path: "/roms/arcade/dkong.zip", TitleSlug: "donkeykong"},
 	}}}
-	s := newScraper(ts.URL, func(platforms.Platform) string { return thumbDir })
+	s := newScraper(ts.URL, testDir, nil)
 	updates := make(chan scraper.ScrapeUpdate, 16)
 	require.NoError(t, s.Scrape(t.Context(), nil, nil, afero.NewMemMapFs(), &database.Database{MediaDB: db},
 		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
@@ -289,7 +301,7 @@ func TestScrapeMatchesArcadeSetsByTitle(t *testing.T) {
 	}
 	require.Len(t, db.writes, 1)
 	require.Equal(t,
-		filepath.Join(thumbDir, "MAME", "Named_Boxarts", "Donkey Kong (US set 1).png"),
+		imageRef("MAME", "Named_Boxarts", "Donkey Kong (US set 1)"),
 		db.writes[0].Write.MediaProps[0].Text)
 }
 
@@ -319,7 +331,7 @@ func TestScrapeMatchesScummVMTargetsByTitle(t *testing.T) {
 		Path: "source://" + strings.Repeat("a", 64) +
 			"/ScummVM/Indiana%20Jones%20and%20the%20Fate%20of%20Atlantis%20%28CD%20DOS%29/atlantis.scummvm",
 	}}}}
-	s := newScraper(ts.URL, func(platforms.Platform) string { return thumbDir })
+	s := newScraper(ts.URL, testDir, nil)
 	updates := make(chan scraper.ScrapeUpdate, 16)
 	require.NoError(t, s.Scrape(t.Context(), nil, nil, afero.NewMemMapFs(), &database.Database{MediaDB: db},
 		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
@@ -327,7 +339,7 @@ func TestScrapeMatchesScummVMTargetsByTitle(t *testing.T) {
 	}
 	require.Len(t, db.writes, 1)
 	require.Equal(t,
-		filepath.Join(thumbDir, "ScummVM", "Named_Boxarts", "Indiana Jones and the Fate of Atlantis.png"),
+		imageRef("ScummVM", "Named_Boxarts", "Indiana Jones and the Fate of Atlantis"),
 		db.writes[0].Write.MediaProps[0].Text)
 }
 
@@ -415,4 +427,158 @@ func TestScrapeWritesMatchesInBatches(t *testing.T) {
 	}
 	require.Equal(t, batchSize+3, total)
 	require.Less(t, len(db.batches), batchSize+3, "rows are not written one transaction each")
+}
+
+// writeLocalThumbnail writes a thumbnail into the libretro folder and returns
+// the images:// path a scrape records for it.
+func writeLocalThumbnail(t *testing.T, fs afero.Fs, playlist, kind, name string) string {
+	t.Helper()
+	path := filepath.Join(thumbDir, playlist, kind, name+".png")
+	require.NoError(t, afero.WriteFile(fs, path, []byte("\x89PNG\r\n\x1a\nlocal"), 0o644))
+	return imageRef(playlist, kind, name)
+}
+
+// A user who drops a correctly named PNG into a thumbnail folder gets it
+// matched without the title being in the server's listing or index.txt, and
+// without a single download.
+func TestScrapeMatchesLocalThumbnailsMissingFromTheListing(t *testing.T) {
+	t.Parallel()
+	server := &fakeServer{images: map[string]bool{"Named_Boxarts/Other (USA)": true}}
+	fs := afero.NewMemMapFs()
+	const name = "Super Smash Bros. - Smash Remix"
+	box := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", name)
+	snap := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Snaps", name)
+	title := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Titles", name)
+	db := &fakeDB{media: []database.MediaWithFullPath{
+		{DBID: 1, MediaTitleDBID: 11, Path: "/roms/NES/" + name + ".nes"},
+	}}
+
+	last := runScrape(t, server, fs, db, scraper.ScrapeOptions{})
+
+	require.NoError(t, last.FatalErr)
+	require.Equal(t, 1, last.Matched)
+	require.Len(t, db.writes, 1)
+	require.Equal(t, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: box},
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot), Text: snap},
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageTitleshot), Text: title},
+	}, db.writes[0].Write.MediaProps)
+	for _, request := range server.requests {
+		require.NotContains(t, request, name, "a thumbnail already on disk is never downloaded")
+	}
+}
+
+// libretro has no folder for a romhack at all: the server answers 404 for the
+// listing, and local files are all there is.
+func TestScrapeMatchesLocalThumbnailsWhenTheServerHasNoPlaylist(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", "Homebrew")
+	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/NES/Homebrew.nes"}}}
+	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+
+	last := runScrape(t, notFound, fs, db, scraper.ScrapeOptions{})
+
+	require.Equal(t, 1, last.Matched)
+	require.Len(t, db.writes, 1)
+}
+
+// Being offline is not a reason to forget thumbnails already on disk.
+func TestScrapeUsesLocalThumbnailsWhenTheServerIsUnreachable(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", "Homebrew")
+	s := newScraper("http://127.0.0.1:1", testDir, nil)
+	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/NES/Homebrew.nes"}}}
+	updates := make(chan scraper.ScrapeUpdate, 16)
+	require.NoError(t, s.Scrape(t.Context(), nil, nil, fs, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.Equal(t, 1, last.Matched)
+	require.Len(t, db.writes, 1)
+	require.Len(t, db.writes[0].Write.MediaProps, 1, "the local box art is kept")
+	require.Equal(t, database.TagInfo{}, db.writes[0].Write.Sentinel,
+		"the snap and title could not be fetched, so the row is retried")
+}
+
+// A download that fails costs only that image: the ones the row already has
+// are written, and the row is not marked done, so the next run fetches the
+// rest.
+func TestScrapeKeepsPartialThumbnailsAndLeavesTheRowUnmarked(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	box := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", "A (USA)")
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch path, _ := url.PathUnescape(r.URL.EscapedPath()); {
+		case strings.Contains(path, "/Named_Snaps/"):
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case strings.HasSuffix(path, "/Named_Boxarts/"):
+			_, _ = w.Write([]byte(`<a href="A%20%28USA%29.png">x</a>`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/NES/A (USA).nes"}}}
+
+	last := runScrape(t, handler, fs, db, scraper.ScrapeOptions{RunID: "r1"})
+
+	require.NoError(t, last.FatalErr)
+	require.Equal(t, 1, last.Matched)
+	require.Len(t, db.writes, 1)
+	write := db.writes[0].Write
+	require.Equal(t, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: box},
+	}, write.MediaProps)
+	require.Equal(t, database.TagInfo{}, write.Sentinel, "an incomplete row is not marked done")
+	require.Empty(t, write.MediaTags, "nor does it count as complete for the run")
+}
+
+// A run stops with the reason before a download would leave the image
+// folder's filesystem short of space, and keeps what it had already found.
+func TestScrapeStopsWhenTheImageFolderIsLowOnSpace(t *testing.T) {
+	t.Parallel()
+	server := &fakeServer{images: map[string]bool{
+		"Named_Boxarts/A (USA)": true,
+		"Named_Snaps/A (USA)":   true,
+	}}
+	ts := httptest.NewServer(server)
+	t.Cleanup(ts.Close)
+	fs := afero.NewMemMapFs()
+	box := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Boxarts", "A (USA)")
+	title := writeLocalThumbnail(t, fs, nesPlaylist, "Named_Titles", "A (USA)")
+	db := &fakeDB{media: []database.MediaWithFullPath{{DBID: 1, Path: "/roms/NES/A (USA).nes"}}}
+	var asked []string
+	var askedMu syncutil.Mutex
+	freeSpace := func(dir string) (uint64, error) {
+		askedMu.Lock()
+		defer askedMu.Unlock()
+		asked = append(asked, dir)
+		return 1 << 20, nil
+	}
+	s := newScraper(ts.URL, testDir, freeSpace)
+	updates := make(chan scraper.ScrapeUpdate, 16)
+	require.NoError(t, s.Scrape(t.Context(), nil, nil, fs, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+
+	require.True(t, last.Done)
+	require.ErrorContains(t, last.FatalErr, "not enough free space for images")
+	require.ErrorContains(t, last.FatalErr, "1 MB free, need at least 500 MB")
+	askedMu.Lock()
+	require.NotEmpty(t, asked)
+	require.Equal(t, thumbDir, asked[0], "the image folder's filesystem is checked")
+	askedMu.Unlock()
+	require.Zero(t, server.count("/"+nesPlaylist+"/Named_Snaps/"), "no download is started")
+	require.Len(t, db.writes, 1)
+	require.Equal(t, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: box},
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageTitleshot), Text: title},
+	}, db.writes[0].Write.MediaProps, "the thumbnails already on disk are recorded, before and after the stop")
+	require.Equal(t, database.TagInfo{}, db.writes[0].Write.Sentinel, "the row is retried by a later run")
 }

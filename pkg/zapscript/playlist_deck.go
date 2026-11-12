@@ -23,13 +23,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"time"
 
-	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/rs/zerolog/log"
@@ -70,13 +67,43 @@ func adoptZapLinkDeck(db *database.Database, link, body string) string {
 	return cmd.String()
 }
 
-// loadDeckPlaylist builds a playlist from a deck on this device, refreshing
-// it from its source first when that is quick.
+// ErrNotDeckLink reports a link that is not a ZapLink serving a playlist.
+var ErrNotDeckLink = errors.New("link does not serve a deck")
+
+// FetchDeckLink fetches the playlist a ZapLink serves, for keeping it as a
+// deck without a tap. The link is held to the same check a tap is: its host
+// must say through /.well-known/zaparoo that it serves ZapScript, which also
+// lets the kept copy refresh from it when it opens. The body is cached like a
+// tapped link's. It fails with ErrNotDeckLink when the link is not a ZapLink
+// or does not serve a playlist.
+func FetchDeckLink(
+	ctx context.Context, db *database.Database, link, platformID string,
+) (decks.PlaylistArg, error) {
+	if db == nil || db.UserDB == nil {
+		return decks.PlaylistArg{}, decks.ErrNoUserDB
+	}
+	if !isZapLink(link, db) {
+		return decks.PlaylistArg{}, fmt.Errorf("%w: host does not serve zap links", ErrNotDeckLink)
+	}
+	body, err := getRemoteZapScriptContext(ctx, link, platformID)
+	if err != nil {
+		return decks.PlaylistArg{}, fmt.Errorf("fetch deck link: %w", err)
+	}
+	_, arg, ok := decks.ParseServedPlaylist(string(body))
+	if !ok {
+		return decks.PlaylistArg{}, ErrNotDeckLink
+	}
+	if cacheErr := db.UserDB.UpdateZapLinkCache(link, string(body)); cacheErr != nil {
+		log.Debug().Err(cacheErr).Msg("failed to update zap link cache")
+	}
+	return arg, nil
+}
+
+// loadDeckItems reads a deck on this device as a collection, refreshing it
+// from its source first when that is quick.
 //
-//nolint:gocritic // env is passed by pointer from the playlist loader
-func loadDeckPlaylist(
-	pl platforms.Platform, env *platforms.CmdEnv, deckID string, args *zapscript.PlaylistArgs,
-) (*playlists.Playlist, error) {
+//nolint:gocritic // env is passed by pointer from the callers that hold it
+func loadDeckItems(pl platforms.Platform, env *platforms.CmdEnv, deckID string) (*collection, error) {
 	if env.Database == nil || env.Database.UserDB == nil {
 		return nil, fmt.Errorf("%w: %s", ErrDeckNotFound, deckID)
 	}
@@ -99,29 +126,20 @@ func loadDeckPlaylist(
 	for _, item := range decks.PlaylistItems(ctx, env.Database.MediaDB, deck) {
 		items = append(items, playlists.PlaylistItem{Name: item.Name, ZapScript: item.ZapScript})
 	}
-	if zapscript.IsModeShuffle(args.Mode) && len(items) > 1 {
-		//nolint:gosec // Playlist order is not security sensitive.
-		rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
-	}
-
-	pls := playlists.NewPlaylist(decks.PlaylistID(deck), deck.Name, items)
-	pls.DeckID = deck.DeckID
-	// Only the user's own decks are trusted, and only when whatever asked for
-	// this one was trusted too. A cached copy of somebody else's deck runs its
-	// items the way its ZapLink would, whatever script opened it; owning the
-	// deck never restores trust an untrusted script had already lost, or an
-	// item of somebody else's playlist could name a deck ID and have the
-	// user's own input and program commands run for it.
-	pls.Unsafe = !deck.Owned || env.Unsafe
-	pls.AllowedCommands = env.AllowedCommands
-	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
-	if slotErr != nil {
-		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
-	}
-	pls.Slot = slot
-	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
-	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
-	return pls, nil
+	return &collection{
+		id:     decks.PlaylistID(deck),
+		name:   deck.Name,
+		deckID: deck.DeckID,
+		items:  items,
+		// Only the user's own decks are trusted, and only when whatever asked
+		// for this one was trusted too. A cached copy of somebody else's deck
+		// runs its items the way its ZapLink would, whatever script opened
+		// it; owning the deck never restores trust an untrusted script had
+		// already lost, or an item of somebody else's playlist could name a
+		// deck ID and have the user's own input and program commands run for
+		// it.
+		unsafe: !deck.Owned || env.Unsafe,
+	}, nil
 }
 
 // refreshDeck brings a deck up to date as it opens. An owned deck opens its

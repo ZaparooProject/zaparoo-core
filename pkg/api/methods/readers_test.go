@@ -20,9 +20,11 @@
 package methods_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +36,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -335,6 +339,48 @@ func TestHandleReaderWrite(t *testing.T) {
 		assert.False(t, setCalled, "setWroteToken should not be called when token is nil")
 		m.AssertExpectations(t)
 	})
+}
+
+// Errors with an expected physical or user cause stay out of Sentry, which
+// takes Error-level events. Genuine hardware failures stay at Error.
+func TestHandleReaderWrite_LogLevel(t *testing.T) {
+	// Not parallel: captures the global logger.
+	tests := []struct {
+		err   error
+		name  string
+		level string
+	}{
+		{
+			name:  "reader unplugged",
+			err:   fmt.Errorf("%w: failed to poll for tag: input / output error", readers.ErrReaderDisconnected),
+			level: `"level":"warn"`,
+		},
+		{name: "no tag presented", err: readers.ErrTagNotDetected, level: `"level":"warn"`},
+		{name: "unsupported tag", err: readers.ErrUnsupportedTagType, level: `"level":"warn"`},
+		{name: "tag pulled away mid-write", err: readers.ErrTagRemoved, level: `"level":"warn"`},
+		{name: "cancelled", err: context.Canceled, level: `"level":"debug"`},
+		{name: "hardware failure", err: errors.New("hardware failure"), level: `"level":"error"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(zerolog.SyncWriter(&buf)).Level(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			m := createWriteCapableReader("reader-1")
+			m.On("Write", "test data").Return(nil, tt.err)
+
+			_, err := methods.HandleReaderWrite(json.RawMessage(`{"text": "test data"}`), []readers.Reader{m}, nil, nil)
+
+			require.Error(t, err)
+			assert.Contains(t, buf.String(), tt.level)
+			if tt.level != `"level":"error"` {
+				assert.NotContains(t, buf.String(), `"level":"error"`)
+			}
+		})
+	}
 }
 
 func TestHandleReaderWriteCancel(t *testing.T) {

@@ -21,11 +21,13 @@ package playlists_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewPlaylist_DefaultSlot(t *testing.T) {
@@ -253,4 +255,270 @@ func TestCurrent_ClampsWithoutMutating(t *testing.T) {
 		assert.Equal(t, tt.index, p.Index, "Current must not write the index")
 	}
 	assert.Equal(t, playlists.PlaylistItem{}, (&playlists.Playlist{Index: 4}).Current())
+}
+
+func TestRearm(t *testing.T) {
+	t.Parallel()
+
+	token := &tokens.Token{UID: "card"}
+	pls := &playlists.Playlist{
+		ID: "p", Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, Index: 1, Playing: true,
+		Idle: time.Minute, HoldToken: token, Unsafe: true, PausedByFailure: true, EngineStarted: true,
+	}
+	got := playlists.Rearm(*pls)
+	assert.True(t, got.Armed)
+	assert.False(t, got.Playing)
+	assert.False(t, got.PausedByFailure)
+	assert.Nil(t, got.HoldToken, "whatever held the playlist open is gone")
+	assert.Equal(t, 1, got.Index)
+	assert.Len(t, got.Items, 2)
+	assert.True(t, got.Unsafe)
+	assert.False(t, got.EngineStarted)
+	assert.True(t, pls.Playing, "the original is untouched")
+}
+
+func TestPlayAndPauseDisarm(t *testing.T) {
+	t.Parallel()
+
+	armed := playlists.Playlist{Armed: true, Idle: time.Minute, Items: []playlists.PlaylistItem{{Name: "a"}}}
+	assert.False(t, playlists.Play(armed).Armed)
+	assert.True(t, playlists.Play(armed).Playing)
+	assert.False(t, playlists.Pause(armed).Armed)
+	assert.True(t, playlists.Next(armed).Armed, "moving the cursor keeps it waiting")
+}
+
+func TestStopRotating(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.Playlist{
+		ID: "p", Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, Index: 1, Playing: true,
+		Advance: time.Minute, Countdown: time.Second, CountdownSet: true,
+	}
+	got := playlists.StopRotating(pls)
+	assert.True(t, got.Reconfigure)
+	assert.Zero(t, got.Advance)
+	assert.Zero(t, got.Idle)
+	assert.Equal(t, 1, got.Index)
+	assert.True(t, got.Playing)
+	assert.True(t, got.CountdownSet, "the notice setting stays")
+}
+
+func TestTransitionDropsPerUpdateFlags(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.Playlist{
+		Items: []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}}, EngineStarted: true, Reconfigure: true,
+		Clear: true, Refresh: true, ForceRelaunch: true, FromPlaylistItem: true,
+	}
+	for name, got := range map[string]*playlists.Playlist{
+		"next":     playlists.Next(pls),
+		"previous": playlists.Previous(pls),
+		"goto":     playlists.Goto(pls, 1),
+		"play":     playlists.Play(pls),
+		"pause":    playlists.Pause(pls),
+	} {
+		assert.False(t, got.EngineStarted, name)
+		assert.False(t, got.Reconfigure, name)
+		assert.False(t, got.Clear, name)
+		assert.False(t, got.Refresh, name)
+		assert.False(t, got.ForceRelaunch, name)
+		assert.False(t, got.FromPlaylistItem, name)
+	}
+}
+
+func TestEffectiveCountdown(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, playlists.DefaultCountdown, (&playlists.Playlist{}).EffectiveCountdown())
+	assert.Equal(t, time.Duration(0), (&playlists.Playlist{CountdownSet: true}).EffectiveCountdown())
+	custom := &playlists.Playlist{Countdown: 3 * time.Second, CountdownSet: true}
+	assert.Equal(t, 3*time.Second, custom.EffectiveCountdown())
+}
+
+func scriptsOf(items []playlists.PlaylistItem) []string {
+	return playlists.ItemScripts(items)
+}
+
+func modeTestPlaylist() *playlists.Playlist {
+	p := playlists.NewPlaylist("id", "name", []playlists.PlaylistItem{
+		{ZapScript: "a"}, {ZapScript: "b"}, {ZapScript: "c"}, {ZapScript: "d"}, {ZapScript: "e"},
+	})
+	p.Index = 2
+	p.Playing = true
+	p.Loop = true
+	return p
+}
+
+func TestSetShuffle_OnMovesCurrentFirstAndKeepsPlayback(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+
+	on := playlists.SetShuffle(p, true)
+	assert.True(t, on.Shuffled)
+	assert.Equal(t, 0, on.Index)
+	assert.Equal(t, "c", on.Current().ZapScript)
+	assert.ElementsMatch(t, scriptsOf(p.Items), scriptsOf(on.Items))
+	assert.Equal(t, scriptsOf(p.Items), scriptsOf(on.Original), "the order before shuffling is kept")
+	assert.True(t, on.Playing)
+	assert.True(t, on.Loop)
+	assert.False(t, p.Shuffled, "the input is not changed")
+	assert.Equal(t, 2, p.Index)
+}
+
+func TestSetShuffle_OffRestoresLoadOrderAtCurrentItem(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+	on := playlists.SetShuffle(p, true)
+	moved := playlists.Goto(*on, 3)
+	current := moved.Current()
+
+	off := playlists.SetShuffle(moved, false)
+	assert.False(t, off.Shuffled)
+	assert.Nil(t, off.Original)
+	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, scriptsOf(off.Items))
+	assert.Equal(t, current, off.Current())
+}
+
+func TestSetShuffle_OffWithoutLoadOrderOnlyClearsFlag(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+	p.Shuffled = true // as restored from a snapshot written before load orders were kept
+	p.Items = []playlists.PlaylistItem{{ZapScript: "e"}, {ZapScript: "a"}, {ZapScript: "c"}}
+	p.Index = 1
+
+	off := playlists.SetShuffle(p, false)
+	assert.False(t, off.Shuffled)
+	assert.Equal(t, []string{"e", "a", "c"}, scriptsOf(off.Items))
+	assert.Equal(t, 1, off.Index)
+}
+
+func TestSetShuffle_SameStateIsUnchanged(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+	same := playlists.SetShuffle(p, false)
+	assert.Equal(t, scriptsOf(p.Items), scriptsOf(same.Items))
+	assert.Equal(t, p.Index, same.Index)
+
+	on := playlists.SetShuffle(p, true)
+	again := playlists.SetShuffle(on, true)
+	assert.Equal(t, scriptsOf(on.Items), scriptsOf(again.Items),
+		"shuffling an already shuffled playlist keeps its order")
+}
+
+func TestSetShuffle_DuplicateItemsStayOnTheirScript(t *testing.T) {
+	t.Parallel()
+	p := playlists.NewPlaylist("id", "name", []playlists.PlaylistItem{
+		{ZapScript: "x"}, {ZapScript: "y"}, {ZapScript: "x"},
+	})
+	p.Index = 2
+	on := playlists.SetShuffle(p, true)
+	off := playlists.SetShuffle(on, false)
+	assert.Equal(t, "x", off.Current().ZapScript)
+}
+
+func TestSetRepeat(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+
+	one, err := playlists.SetRepeat(p, "one")
+	require.NoError(t, err)
+	assert.True(t, one.LoopOne)
+	assert.False(t, one.Loop)
+	assert.Equal(t, playlists.RepeatOne, one.RepeatMode())
+	assert.Equal(t, 2, one.Index)
+	assert.True(t, one.Playing)
+
+	all, err := playlists.SetRepeat(one, "ALL")
+	require.NoError(t, err)
+	assert.Equal(t, playlists.RepeatAll, all.RepeatMode())
+
+	off, err := playlists.SetRepeat(all, "off")
+	require.NoError(t, err)
+	assert.Equal(t, playlists.RepeatNone, off.RepeatMode())
+	assert.False(t, off.Loop)
+	assert.False(t, off.LoopOne)
+
+	_, err = playlists.SetRepeat(p, "sometimes")
+	require.ErrorIs(t, err, playlists.ErrInvalidRepeat)
+}
+
+func TestShuffleItems_KeepsLoadOrder(t *testing.T) {
+	t.Parallel()
+	p := modeTestPlaylist()
+	loaded := scriptsOf(p.Items)
+
+	playlists.ShuffleItems(p)
+	assert.True(t, p.Shuffled)
+	assert.Equal(t, loaded, scriptsOf(p.Original))
+	assert.ElementsMatch(t, loaded, scriptsOf(p.Items))
+}
+
+func TestTransition_DropsModeChange(t *testing.T) {
+	t.Parallel()
+	repeat := playlists.RepeatOne
+	p := modeTestPlaylist()
+	p.ModeChange = true
+	p.ShuffleSet = true
+	p.Shuffle = true
+	p.Repeat = &repeat
+
+	next := playlists.Next(*p)
+	assert.False(t, next.ModeChange)
+	assert.False(t, next.ShuffleSet)
+	assert.False(t, next.Shuffle)
+	assert.Nil(t, next.Repeat)
+}
+
+func TestSkipFailedStepsPastAnItemUntilAFullCycle(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	pls.Playing = true
+
+	next, ok := playlists.SkipFailed(*pls)
+	require.True(t, ok)
+	assert.Equal(t, 1, next.Index)
+	assert.Equal(t, 1, next.SkipRun)
+
+	next, ok = playlists.SkipFailed(*next)
+	require.True(t, ok)
+	assert.Equal(t, 2, next.Index)
+
+	_, ok = playlists.SkipFailed(*next)
+	assert.False(t, ok, "every other item has failed")
+	assert.Zero(t, playlists.Next(*next).SkipRun, "any other move starts the count over")
+}
+
+func TestSkipFailedStopsAtTheEndOfAPlaylistThatDoesNotLoop(t *testing.T) {
+	t.Parallel()
+
+	pls := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	pls.Index = 2
+	_, ok := playlists.SkipFailed(*pls)
+	assert.False(t, ok)
+
+	pls.Loop = true
+	next, ok := playlists.SkipFailed(*pls)
+	require.True(t, ok)
+	assert.Equal(t, 0, next.Index)
+}
+
+func TestApplyIntentMeetsThePlaylistAsItIs(t *testing.T) {
+	t.Parallel()
+
+	open := playlists.NewPlaylist("p", "p", []playlists.PlaylistItem{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	open.Index = 2
+	open.Loop = true
+	open.Playing = true
+
+	paused := playlists.ApplyIntent(open, playlists.IntentUpdate("background", false))
+	require.NotNil(t, paused)
+	assert.False(t, paused.Playing)
+	assert.Equal(t, 2, paused.Index, "the open playlist's place is kept")
+	assert.True(t, paused.Loop)
+
+	resumed := playlists.ApplyIntent(paused, playlists.IntentUpdate("background", true))
+	require.NotNil(t, resumed)
+	assert.True(t, resumed.Playing)
+	assert.Nil(t, playlists.ApplyIntent(nil, playlists.IntentUpdate("background", true)))
 }

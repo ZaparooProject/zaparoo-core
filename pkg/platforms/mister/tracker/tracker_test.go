@@ -3,10 +3,12 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +18,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -778,6 +783,9 @@ func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
 		ID:         "Genesis",
 		SystemID:   systemdefs.SystemGenesis,
 		Extensions: []string{".md"},
+		Controls: map[string]platforms.Control{
+			platforms.ControlToggleMenu: {}, platforms.ControlReset: {},
+		},
 	}})
 	helpers.GlobalLauncherCache = testCache
 	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
@@ -807,6 +815,8 @@ func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
 	assert.Equal(t, gamePath, published.Path)
 	assert.Equal(t, gamePath, tr.ActiveGamePath)
 	assert.Equal(t, systemdefs.SystemGenesis+"/"+filepath.Base(gamePath), tr.ActiveGameID)
+	assert.Equal(t, "Genesis", published.LauncherID, "games started outside Zaparoo name their launcher")
+	assert.Equal(t, []string{platforms.ControlReset, platforms.ControlToggleMenu}, published.LauncherControls)
 
 	// What DoLaunch published for the same launch, by the game's own path.
 	launched := models.NewActiveMedia(
@@ -1344,8 +1354,15 @@ func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
 
 			published := tt.existing
 			var publishCalled bool
+			mockPl := mocks.NewMockPlatform()
+			mockPl.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+				{ID: "Other"},
+				{ID: ArcadeSystem, Controls: map[string]platforms.Control{
+					platforms.ControlReset: {}, platforms.ControlToggleMenu: {},
+				}},
+			}).Maybe()
 			tr := &Tracker{
-				pl:           &arcadeCachePlatform{MockPlatform: mocks.NewMockPlatform(), setname: "esprade"},
+				pl:           &arcadeCachePlatform{MockPlatform: mockPl, setname: "esprade"},
 				coreNameFile: coreFile,
 				NameMap: []NameMapping{
 					{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
@@ -1365,6 +1382,9 @@ func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
 				require.NotNil(t, published)
 				assert.Equal(t, ArcadeSystem, published.SystemID)
 				assert.Equal(t, "ESP Ra.De.", published.Name)
+				assert.Equal(t, ArcadeSystem, published.LauncherID)
+				assert.Equal(t,
+					[]string{platforms.ControlReset, platforms.ControlToggleMenu}, published.LauncherControls)
 			}
 		})
 	}
@@ -1423,4 +1443,198 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 			assert.Equal(t, tt.wantSettle, settle)
 		})
 	}
+}
+
+// A console launcher's media, and native audio, are not described by
+// ACTIVEGAME. The empty signal Core wrote when it stopped the previous media
+// can reach the tracker after the new launch has published, and must not clear
+// it.
+func TestLoadGameEmptyActiveGameKeepsMediaItDoesNotDescribe(t *testing.T) {
+	t.Parallel()
+
+	for _, launcherID := range []string{VideoLauncherID, ScummVMLauncherID, platforms.NativeAudioLauncherID} {
+		t.Run(launcherID, func(t *testing.T) {
+			t.Parallel()
+			current := models.NewActiveMedia(
+				systemdefs.SystemVideo, "Video", "/media/fat/games/Video/a.mp4", "A", launcherID,
+			)
+			cleared := 0
+			tr := &Tracker{
+				ActiveGameID:   "stale/id",
+				readActiveGame: func() (string, error) { return "", nil },
+				activeMedia:    func() *models.ActiveMedia { return current },
+				setActiveMedia: func(m *models.ActiveMedia) {
+					if m == nil {
+						cleared++
+						current = nil
+					}
+				},
+			}
+
+			tr.loadGame()
+
+			assert.Zero(t, cleared)
+			assert.NotNil(t, current)
+			assert.Empty(t, tr.ActiveGameID, "tracker state is still retired")
+		})
+	}
+}
+
+func TestLoadGameEmptyActiveGameClearsCoreMedia(t *testing.T) {
+	t.Parallel()
+
+	current := models.NewActiveMedia(systemdefs.SystemGenesis, "Genesis", "/media/fat/games/Genesis/a.md", "A", "")
+	tr := &Tracker{
+		ActiveGameID:   "Genesis/a.md",
+		readActiveGame: func() (string, error) { return "", nil },
+		activeMedia:    func() *models.ActiveMedia { return current },
+		setActiveMedia: func(m *models.ActiveMedia) { current = m },
+	}
+
+	tr.loadGame()
+
+	assert.Nil(t, current, "a core game quit through the OSD must still clear")
+	assert.Empty(t, tr.ActiveGameID)
+}
+
+// coreLoadStopPlatform implements the optional platformWithCoreLoadStops
+// interface and records the cores it was told about.
+type coreLoadStopPlatform struct {
+	*mocks.MockPlatform
+	stop  string
+	cores []string
+}
+
+func (p *coreLoadStopPlatform) StopCoreLoadedAfterStop(core string) bool {
+	p.cores = append(p.cores, core)
+	return core == p.stop
+}
+
+// A core that comes up after a stop meant for it is sent back to the menu by
+// the platform, and the tracker must not publish the game it is running.
+func TestLoadCoreLeavesCoreStoppedAfterStopUnpublished(t *testing.T) {
+	t.Parallel()
+
+	coreFile := filepath.Join(t.TempDir(), "CORENAME")
+	require.NoError(t, os.WriteFile(coreFile, []byte("esprade"), 0o600))
+
+	pl := &coreLoadStopPlatform{MockPlatform: mocks.NewMockPlatform(), stop: "esprade"}
+	var published *models.ActiveMedia
+	tr := &Tracker{
+		pl:           pl,
+		coreNameFile: coreFile,
+		ActiveCore:   misterconfig.MenuCore,
+		NameMap: []NameMapping{
+			{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
+		},
+		activeMedia:    func() *models.ActiveMedia { return published },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+		setActiveGame:  func(string) error { return nil },
+	}
+
+	tr.LoadCore()
+
+	assert.Equal(t, []string{"esprade"}, pl.cores)
+	assert.Nil(t, published, "a core stopped on arrival is not published")
+}
+
+// SAM writes a temp MGL that can be left truncated, and ACTIVEGAME keeps
+// naming it, so every core change re-reads the same broken file. It is
+// third-party input: worth one warning, never an error per core change.
+func TestLoadCoreMalformedMGLIsNotAnError(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared logger and
+	// GlobalLauncherCache, and ResolvePath changes the working directory.
+
+	var logs bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	originalCache := helpers.GlobalLauncherCache
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{}).Maybe()
+	pl.On("RootDirs", mock.Anything).Return([]string{}).Maybe()
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+
+	dir := t.TempDir()
+	mglPath := filepath.Join(dir, "SAM_Game.mgl")
+	mgl := "<mistergamedescription>\n\t<rbf>_Console/SNES</rbf>\n\t<file delay=\"2\" type=\"f\" index=\"0\""
+	require.NoError(t, os.WriteFile(mglPath, []byte(mgl), 0o600))
+	coreFile := filepath.Join(dir, "CORENAME")
+
+	tr := &Tracker{
+		pl:             pl,
+		cfg:            &config.Instance{},
+		coreNameFile:   coreFile,
+		ActiveCore:     misterconfig.MenuCore,
+		readActiveGame: func() (string, error) { return mglPath, nil },
+		activeMedia:    func() *models.ActiveMedia { return nil },
+		setActiveMedia: func(*models.ActiveMedia) {},
+		setActiveGame:  func(string) error { return nil },
+	}
+
+	for _, core := range []string{"SNES", "Genesis"} {
+		require.NoError(t, os.WriteFile(coreFile, []byte(core), 0o600))
+		tr.LoadCore()
+	}
+
+	output := logs.String()
+	assert.NotContains(t, output, `"level":"error"`)
+	assert.Equal(t, 1, strings.Count(output, "active game mgl file is malformed"),
+		"the same broken file is warned about once")
+	assert.Contains(t, output, "active game mgl file is still malformed")
+}
+
+// MiSTer Main writes cores_recent.cfg through a temp file. Reading the temp
+// file as a game recents file would write a raw core or MGL path into
+// ACTIVEGAME.
+func TestTrackerIgnoresRecentTempFile(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(misterconfig.CoreConfigFolder, "cores_recent.cfg.tmp")
+	assert.False(t, trackerRecentFileChanged(tmpFile))
+
+	tr := &Tracker{}
+	load, settle := tr.trackerFileLoad(tmpFile)
+	assert.Nil(t, load)
+	assert.False(t, settle)
+
+	dir := t.TempDir()
+	recentFile := filepath.Join(dir, "cores_recent.cfg.tmp")
+	writeRecentEntry(t, recentFile, dir, "SNES_20240101.rbf")
+	path, err := recentGamePath(recentFile, nil)
+	require.NoError(t, err)
+	assert.Empty(t, path)
+}
+
+// A recents file can point at a malformed third-party MGL, or be replaced
+// before it is read; neither is a Core fault.
+func TestTrackerRecentFileLoadFailuresAreNotErrors(t *testing.T) {
+	// Serial: captures the package-global logger.
+	var buf bytes.Buffer
+	original := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = original })
+
+	dir := t.TempDir()
+	badMGL := filepath.Join(dir, "bad.mgl")
+	require.NoError(t, os.WriteFile(badMGL, []byte("<mistergamedescription>\n<rbf>_Console/NES</rbf>\n"), 0o600))
+	recents := filepath.Join(dir, "cores_recent.cfg")
+	writeRecentEntry(t, recents, dir, "bad.mgl")
+
+	tr := &Tracker{}
+	tr.loadRecentReporting(recents)
+	assert.Contains(t, buf.String(), "recent mgl file is malformed")
+
+	buf.Reset()
+	tr.loadRecentReporting(filepath.Join(dir, "gone", "cores_recent.cfg"))
+	assert.Contains(t, buf.String(), "recent file was replaced before it could be read")
+	assert.NotContains(t, buf.String(), `"level":"error"`)
+
+	buf.Reset()
+	tr.logMalformedMGL(filepath.Join(dir, "missing.mgl"), mgls.ErrMalformedMGL)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
 }

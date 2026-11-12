@@ -77,6 +77,8 @@ type StageMediaPathParams struct {
 	SystemID     string
 	MediaType    slugs.MediaType
 	ProvidedName string
+	// LinkTarget is the path of the media this file is a symlink alias of.
+	LinkTarget   string
 	PrefixPolicy browseprefix.Policy
 	NoExt        bool
 }
@@ -120,10 +122,83 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
 		Source:        source,
 	}
+	if params.LinkTarget != "" {
+		staged.LinkTarget = pathutil.CanonicalMediaPath(params.LinkTarget)
+	}
 	if err := params.DB.StageScannedMedia(&staged); err != nil {
 		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)
 	}
 	return nil
+}
+
+// FallbackMediaIdentity builds the identity the indexer would give a played
+// file that is not in the index, such as a cartridge dumped by the Operator
+// bridge, so its play history can still be matched to a title. The title,
+// slug and filename tags come from the same derivation StageMediaPath uses,
+// so a later plain folder walk of that file yields the same fingerprint. A
+// later index that supplies scanner inputs this path cannot know (a
+// directory prefix policy, a scanner-provided name, NoExt) can differ, and
+// the server reconciles the two observations. Only absolute
+// filesystem paths qualify: virtual paths and bare names such as arcade set
+// names are not files the indexer would have parsed.
+func FallbackMediaIdentity(cfg *config.Instance, systemID, path string) (database.MediaIdentity, bool) {
+	if !filepath.IsAbs(path) {
+		return database.MediaIdentity{}, false
+	}
+	system, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return database.MediaIdentity{}, false
+	}
+	mediaType := system.GetMediaType()
+	pf := GetPathFragments(&PathFragmentParams{
+		Config:    cfg,
+		Path:      path,
+		SystemID:  system.ID,
+		MediaType: mediaType,
+	})
+	if pf.Title == "" || pf.Slug == "" {
+		return database.MediaIdentity{}, false
+	}
+	staged := stagedTagsFromFragments(&pf, cfg)
+	tagInfos := make([]database.TagInfo, 0, len(staged))
+	for i := range staged {
+		tagInfos = append(tagInfos, database.TagInfo{Type: staged[i].Type, Tag: staged[i].Value})
+	}
+	identity, err := database.BuildMediaIdentity(mediaType, system.ID, pf.Title, pf.Slug, tagInfos)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("fallback media identity cannot be constructed")
+		return database.MediaIdentity{}, false
+	}
+	return identity, true
+}
+
+// MediaDBSettled reports whether the media database is idle: not corrupt or
+// awaiting rebuild, no indexing under way or owed, and no optimization (which
+// includes the disambiguation backfill) under way or owed. Until then a
+// library file may simply not be indexed yet, so a fallback identity must not
+// stand in for its row. Status read failures count as unsettled.
+func MediaDBSettled(mediaDB database.MediaDBI) bool {
+	if mediaDB.IsMarkedCorrupt() {
+		return false
+	}
+	indexingStatus, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to check media database indexing status")
+		return false
+	}
+	switch indexingStatus {
+	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending, mediadb.IndexingStatusCorrupt:
+		return false
+	}
+	optimizationStatus, err := mediaDB.GetOptimizationStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to check media database optimization status")
+		return false
+	}
+	if optimizationStatus == mediadb.IndexingStatusRunning || optimizationStatus == mediadb.IndexingStatusPending {
+		return false
+	}
+	return true
 }
 
 // maxSourceGroupLength bounds a scanner-supplied source group, which comes from

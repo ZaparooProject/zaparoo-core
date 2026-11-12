@@ -36,6 +36,7 @@ type processRelation struct {
 type nativeAPI interface {
 	allowProcessForeground(pid uint32)
 	findProcessWindow(pid uint32) (uintptr, bool)
+	findProcessWindowOfClass(pid uint32, classes []string) (uintptr, bool)
 	activateWindow(hwnd uintptr) bool
 }
 

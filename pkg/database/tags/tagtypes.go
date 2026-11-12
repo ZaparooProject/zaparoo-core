@@ -83,9 +83,11 @@ func IsUserOwnedType(t TagType) bool {
 // reconciled by media scanning. User intent, scraped metadata, properties, and
 // scraper bookkeeping are excluded from scanner-derived identity snapshots.
 func IsScannerOwnedType(t TagType) bool {
-	if t == TagTypeUser || t == TagTypeProperty || t == TagTypeRating ||
-		t == TagTypeGenre {
+	switch t {
+	case TagTypeUser, TagTypeProperty, TagTypeRating, TagTypeGenre,
+		TagTypeMameParent:
 		return false
+	default:
 	}
 
 	tagType := string(t)

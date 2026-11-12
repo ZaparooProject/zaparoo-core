@@ -75,6 +75,24 @@ var knownExecutables = map[EmulatorClass][]string{ //nolint:gochecknoglobals // 
 	ClassProPinball:    {"ProPinball*", "Pro Pinball*"},
 }
 
+// playerWindowClasses lists the window class each pinball program plays a
+// table in, for the programs that open another window first. VPX shows its
+// editor while the table loads, many seconds before the player appears.
+var playerWindowClasses = map[EmulatorClass][]string{ //nolint:gochecknoglobals // Static window class table.
+	ClassVisualPinball: {"VPPlayer"},
+}
+
+// playerWindowsFor returns the player window classes of the program running as
+// exe, or nil when any window of it means the table is up.
+func playerWindowsFor(exe string) []string {
+	for class, classes := range playerWindowClasses {
+		if MatchesExecutable(exe, knownExecutables[class]) {
+			return classes
+		}
+	}
+	return nil
+}
+
 // prefixMarker ends a candidate that matches every image starting with it.
 const prefixMarker = "*"
 

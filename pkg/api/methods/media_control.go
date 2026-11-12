@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"errors"
 	"fmt"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -28,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -82,6 +84,13 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		controlArgs[string(gozapscript.KeySlot)] = slot
 	}
 
+	// A stop control ends the media from Core's side, so it is recorded here
+	// once for every launcher instead of inside each launcher's control.
+	cancelStop := func() {}
+	if params.Action == platforms.ControlStop && slot == mediaslot.Primary {
+		cancelStop = env.State.RecordMediaStop(models.MediaStopReasonStopped)
+	}
+
 	switch {
 	case control.Func != nil:
 		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: controlArgs})
@@ -99,6 +108,10 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		err = fmt.Errorf("control %q has no implementation", params.Action)
 	}
 	if err != nil {
+		cancelStop()
+		if errors.Is(err, platforms.ErrInvalidControlArg) {
+			return nil, models.ClientErrf("control action %q failed: %w", params.Action, err)
+		}
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
 	// Media state is cleared by the launcher's own stop control, so the ZapScript
@@ -108,6 +121,40 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		env.State.SetBackgroundMedia(nil)
 		env.State.SetBackgroundPlaylist(nil)
 	}
+	if slot == mediaslot.Background {
+		syncBackgroundPlaylistPlayback(&env, params.Action)
+	}
 
 	return NoContent{}, nil
+}
+
+// syncBackgroundPlaylistPlayback keeps the background playlist's playing
+// state in step with a pause or resume of its track, so clients reading the
+// playlist see what the slot is doing. The change goes through the playlist
+// queue, the only writer of the playlists.
+func syncBackgroundPlaylistPlayback(env *requests.RequestEnv, action string) {
+	open := env.State.GetBackgroundPlaylist()
+	if open == nil {
+		return
+	}
+	var playing bool
+	switch action {
+	case platforms.ControlPause:
+		playing = false
+	case platforms.ControlResume:
+		playing = true
+	case platforms.ControlTogglePause:
+		if env.PlaybackManager == nil {
+			return
+		}
+		playing = !env.PlaybackManager.State(mediaslot.Background).Paused
+	default:
+		return
+	}
+	// Only the intent travels: the worker applies it to the playlist as it
+	// is by then, so it cannot write an old index or loop setting back.
+	update := playlists.IntentUpdate(mediaslot.Background, playing)
+	if err := env.State.RequestPlaylistUpdate(env.Context, update); err != nil {
+		log.Warn().Err(err).Str("action", action).Msg("failed to update background playlist playback")
+	}
 }

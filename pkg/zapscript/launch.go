@@ -26,17 +26,25 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -63,12 +71,25 @@ func applyMediaLauncherOverrideWithReplace(
 	systemID string,
 	replaceCurrent bool,
 ) string {
+	launcherID, _ := mediaLauncherOverride(pl, env, mediaDBID, systemID, replaceCurrent)
+	return launcherID
+}
+
+// mediaLauncherOverride applies the media's launcher override and reports
+// whether it set one.
+func mediaLauncherOverride(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	mediaDBID int64,
+	systemID string,
+	replaceCurrent bool,
+) (string, bool) {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if (current != "" && !replaceCurrent) || mediaDBID == 0 {
-		return current
+		return current, false
 	}
 	if env.Database == nil || env.Database.MediaDB == nil {
-		return ""
+		return "", false
 	}
 
 	ctx, cancel := mediaDBLookupContext(env)
@@ -76,7 +97,7 @@ func applyMediaLauncherOverrideWithReplace(
 	props, err := env.Database.MediaDB.GetMediaPropertyMetadata(ctx, mediaDBID)
 	if err != nil {
 		log.Warn().Err(err).Int64("mediaDBID", mediaDBID).Msg("failed to read media launcher override")
-		return ""
+		return "", false
 	}
 	for _, prop := range props {
 		if prop.TypeTag != launcherOverridePropertyTypeTag() {
@@ -84,7 +105,7 @@ func applyMediaLauncherOverrideWithReplace(
 		}
 		launcherRef := strings.TrimSpace(prop.Text)
 		if launcherRef == "" {
-			return ""
+			return "", false
 		}
 		launcherID, found := resolveLauncherRefForSystem(pl, env, launcherRef, systemID)
 		if !found {
@@ -93,7 +114,7 @@ func applyMediaLauncherOverrideWithReplace(
 				Str("launcher", launcherRef).
 				Int64("mediaDBID", mediaDBID).
 				Msg("media launcher override not found")
-			return ""
+			return "", false
 		}
 		log.Info().
 			Str("system", systemID).
@@ -101,9 +122,9 @@ func applyMediaLauncherOverrideWithReplace(
 			Int64("mediaDBID", mediaDBID).
 			Msg("using media launcher override")
 		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
-		return launcherID
+		return launcherID, true
 	}
-	return ""
+	return "", false
 }
 
 func applyMediaLauncherOverrideForPath(
@@ -112,12 +133,24 @@ func applyMediaLauncherOverrideForPath(
 	path string,
 	replaceCurrent bool,
 ) string {
+	launcherID, _ := mediaLauncherOverrideForPath(pl, env, path, replaceCurrent)
+	return launcherID
+}
+
+// mediaLauncherOverrideForPath applies the launcher override of the media
+// indexed at path and reports whether it set one.
+func mediaLauncherOverrideForPath(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	replaceCurrent bool,
+) (string, bool) {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if current != "" && !replaceCurrent {
-		return current
+		return current, false
 	}
 	if env.Database == nil || env.Database.MediaDB == nil {
-		return current
+		return current, false
 	}
 	launcher, found := inferLauncherForPath(pl, env, path)
 	if !found {
@@ -127,11 +160,14 @@ func applyMediaLauncherOverrideForPath(
 		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
 	}
 
+	// The index stores forward slashes, and a launch path carries the host's
+	// separators.
+	path = pathutil.CanonicalMediaPath(path)
 	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
 	if found && launcher.SystemID != "" {
 		if mediaDBID, ok := findMediaInSystem(ctx, env, launcher.SystemID, path); ok {
-			return applyMediaLauncherOverrideWithReplace(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
+			return mediaLauncherOverride(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
 		}
 	}
 	// The launcher inferred from the path can belong to another system than
@@ -139,12 +175,74 @@ func applyMediaLauncherOverrideForPath(
 	// Look the path up across systems, and use it only when one row has it.
 	row, ok := findUniqueMediaByPath(ctx, env, path)
 	if !ok {
-		return current
+		return current, false
 	}
-	return applyMediaLauncherOverrideWithReplace(pl, env, row.DBID, row.SystemID, replaceCurrent)
+	return mediaLauncherOverride(pl, env, row.DBID, row.SystemID, replaceCurrent)
 }
 
 // findMediaInSystem returns the DBID of the media row for path in systemID.
+// indexedPathSpelling returns path the way the index spells it when the two
+// differ only in case. A case-insensitive filesystem opens a file under any
+// spelling, and a launch that carried the typed one on would start the right
+// file while recording a path no indexed media has: no media ID, no artwork,
+// and a history entry that names nothing. systemID narrows the lookup and may
+// be empty, in which case it is taken from the launcher that claims the path;
+// a path no system claims is left alone, since comparing it would mean
+// reading every path in the library.
+func indexedPathSpelling(pl platforms.Platform, env *platforms.CmdEnv, systemID, path string) string {
+	if env.Database == nil || env.Database.MediaDB == nil || helpers.ReURI.MatchString(path) {
+		return path
+	}
+	if systemID == "" {
+		launcher, found := inferLauncherForPath(pl, env, path)
+		if !found || launcher.SystemID == "" {
+			return path
+		}
+		systemID = launcher.SystemID
+	}
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
+	if err != nil {
+		return path
+	}
+	canonical := pathutil.CanonicalMediaPath(path)
+	if media, findErr := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, canonical); findErr != nil ||
+		media != nil {
+		return path
+	}
+	spelled, found, err := env.Database.MediaDB.FindMediaPathIgnoringCase(ctx, system.DBID, canonical)
+	if err != nil || !found {
+		return path
+	}
+	log.Debug().Str("requested", path).Str("indexed", spelled).Msg("launch path follows the indexed spelling")
+	return filepath.FromSlash(spelled)
+}
+
+// virtualIDPath matches a virtual path that names its media by ID alone, such
+// as steam://620, the form a tag is usually written in.
+var virtualIDPath = regexp.MustCompile(`^[a-z][a-z0-9+.-]*://[^/?#]+/?$`)
+
+// indexedVirtualPath returns the indexed path of the media a bare-ID virtual
+// path names. The index stores such media as scheme://id/name, so a launch
+// that carried the bare form on would start the right thing while recording
+// a path no indexed media has. Web links are not media paths and are left
+// alone, as is an ID the index holds no single entry for.
+func indexedVirtualPath(env *platforms.CmdEnv, path string) string {
+	if env.Database == nil || env.Database.MediaDB == nil || !virtualIDPath.MatchString(path) ||
+		strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	indexed, found, err := env.Database.MediaDB.FindMediaPathByPrefix(ctx, strings.TrimSuffix(path, "/")+"/")
+	if err != nil || !found {
+		return path
+	}
+	log.Debug().Str("requested", path).Str("indexed", indexed).Msg("launch path follows the indexed virtual path")
+	return indexed
+}
+
 func findMediaInSystem(ctx context.Context, env *platforms.CmdEnv, systemID, path string) (int64, bool) {
 	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
 	if err != nil {
@@ -210,6 +308,39 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 	}
 
 	return applyGlobalLauncherPreference(pl, env, systemID)
+}
+
+// dropLauncherForOtherScheme clears a launcher picked for a system's files, by
+// a default or the global preference, when the path is a link that a different
+// launcher owns: preferring LaunchBox for PC must not send a steam:// link to
+// LaunchBox, which cannot start it. The link's own launcher is then found from
+// the path. A launcher named in the script or in the media's own override is
+// never dropped.
+func dropLauncherForOtherScheme(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	chosen := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+	if chosen == "" || !strings.Contains(path, "://") {
+		return
+	}
+	lp := strings.ToLower(path)
+	owned := false
+	launchers := env.Launchers.Get(pl, env.Cfg)
+	for i := range launchers {
+		for _, scheme := range launchers[i].Schemes {
+			if !strings.HasPrefix(lp, scheme+":") {
+				continue
+			}
+			if strings.EqualFold(launchers[i].ID, chosen) {
+				return
+			}
+			owned = true
+		}
+	}
+	if !owned {
+		return
+	}
+	log.Info().Str("launcher", chosen).Str("path", path).
+		Msg("preferred launcher cannot start this link, using the link's own launcher")
+	env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
 }
 
 func applyGlobalLauncherPreference(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
@@ -403,7 +534,9 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// For menu, use ReturnToMenu() instead of LaunchSystem.
 	// This ensures proper handling across all platforms (stops active launcher and returns to main menu).
 	if strings.EqualFold(systemID, platforms.SystemMenu) {
+		cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 		if err := pl.ReturnToMenu(); err != nil {
+			cancelStop()
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to return to menu: %w", err)
@@ -477,16 +610,35 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
+	// With a rotation this is not a launch but a playlist of one random
+	// launch that repeats; each item runs this same command without it.
+	if rotation := (rotationArgs{
+		advance: args.Advance, idle: args.Idle, countdown: args.Countdown,
+	}); rotation.any() {
+		return playRandomRotation(pl, env, &rotation)
+	}
+
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 	launch := getLaunchClosure(pl, env, explicitLauncher)
 	tagFilters := args.Tags
+
+	coll, isCollection, collErr := resolveCollection(pl, env, query)
+	if collErr != nil {
+		return platforms.CmdResult{}, collErr
+	}
+	if isCollection {
+		if len(tagFilters) > 0 {
+			return platforms.CmdResult{}, fmt.Errorf("%w: tags do not apply to a collection", ErrInvalidArguments)
+		}
+		return randomFromCollection(env, coll, launch)
+	}
 
 	gamesdb := env.Database.MediaDB
 	ctx, cancel := randomMediaDBLookupContext(env)
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
-		allSystems := systemdefs.AllSystems()
+		allSystems := systemdefs.AllImplicitSystems()
 		systemIDs := make([]string, len(allSystems))
 		for i, sys := range allSystems {
 			systemIDs[i] = sys.ID
@@ -609,7 +761,7 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
+			systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -854,7 +1006,26 @@ func HasResolvedLaunchTarget(name string) bool {
 
 var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
 
+// ErrMediaLaunchSkipped, returned by AcquireMediaLaunch, calls the launch off
+// as a successful no-op, the way a launch that resolves to nothing new is.
+var ErrMediaLaunchSkipped = errMediaLaunchSkipped
+
+// ErrInvalidLaunchFormat is returned for launch text that is not a path, URI,
+// title or <system>/<path> value, such as a bare word or garbled token text.
+var ErrInvalidLaunchFormat error = invalidLaunchFormatError{}
+
+// invalidLaunchFormatError keeps the message clients have always shown while
+// classing it as invalid arguments.
+type invalidLaunchFormatError struct{}
+
+func (invalidLaunchFormatError) Error() string { return "invalid launch format" }
+
+func (invalidLaunchFormatError) Unwrap() error { return ErrInvalidArguments }
+
 type launchTarget struct {
+	// audioStream is an http(s) URL already probed as audio, played by
+	// native audio with the probe's connection.
+	audioStream           *radio.Probe
 	path                  string
 	systemID              string
 	mediaID               int64
@@ -868,16 +1039,43 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
-		if !explicitLauncher {
+		if isAudioPlaylistTarget(pl, env, &target) {
+			return &audioPlaylistLaunchError{path: target.path}
+		}
+		backgroundSlot := false
+		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {
+			backgroundSlot = true
+		}
+		switch {
+		case explicitLauncher:
+		case target.audioStream != nil:
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, platforms.NativeAudioLauncherID)
+		case backgroundSlot:
+			// The background slot only plays native audio, so a system
+			// default, a preference or a launcher found for the path, such as
+			// an Audio core that only runs in the primary slot, would only
+			// fail the launch.
+			useNativeAudioForBackground(pl, env, target.path)
+		case launchables.IsURI(target.path):
+			// Only the launchable's own launcher can start a zaparoo:// URI,
+			// so a launcher chosen for the system's files (a default, the
+			// global preference, or one launch.title applied before it knew
+			// the path) would only fail it.
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+		default:
+			overridden := false
 			if target.mediaID != 0 && target.systemID != "" {
-				applyMediaLauncherOverrideWithReplace(pl, env, target.mediaID, target.systemID, true)
+				_, overridden = mediaLauncherOverride(pl, env, target.mediaID, target.systemID, true)
 			} else if target.resolveMediaByPath {
-				applyMediaLauncherOverrideForPath(pl, env, target.path, true)
+				_, overridden = mediaLauncherOverrideForPath(pl, env, target.path, true)
 			}
 			if target.systemID != "" {
 				applySystemDefaultLauncher(pl, env, target.systemID)
 			} else {
 				applySystemDefaultLauncherForPath(pl, env, target.path)
+			}
+			if !overridden {
+				dropLauncherForOtherScheme(pl, env, target.path)
 			}
 		}
 
@@ -903,12 +1101,14 @@ func getLaunchClosure(
 		}
 
 		var opts *platforms.LaunchOptions
-		if action != "" || setName != "" || setNameSameDir != "" || normalizedSlot != mediaslot.Primary {
+		if action != "" || setName != "" || setNameSameDir != "" || normalizedSlot != mediaslot.Primary ||
+			target.audioStream != nil {
 			opts = &platforms.LaunchOptions{
 				Action:         action,
 				SetName:        setName,
 				SetNameSameDir: setNameSameDir,
 				Slot:           normalizedSlot,
+				AudioStream:    target.audioStream,
 			}
 		}
 
@@ -1007,13 +1207,40 @@ func getLaunchClosure(
 			}
 		}
 		defer launchAccess.Release()
+		if env.Source == tokens.SourcePlaylist && normalizedSlot == mediaslot.Primary {
+			if opts == nil {
+				opts = &platforms.LaunchOptions{}
+			}
+			opts.PlaylistItem = true
+		}
 		if launchAccess.SetActiveMedia != nil {
 			if opts == nil {
 				opts = &platforms.LaunchOptions{}
 			}
 			opts.ActiveMediaPublisher = launchAccess.SetActiveMedia
+			opts.RecordMediaStop = launchAccess.RecordMediaStop
+			if normalizedSlot == mediaslot.Primary {
+				opts.MediaFinished = launchAccess.MediaFinished
+				opts.MediaExited = launchAccess.MediaExited
+			}
 		}
 		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
+	}
+}
+
+// useNativeAudioForBackground picks the native audio launcher for a
+// background slot launch of a file it can play.
+func useNativeAudioForBackground(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	native := findLauncher(pl, env, platforms.NativeAudioLauncherID)
+	if native == nil {
+		return
+	}
+	lower := strings.ToLower(path)
+	for _, ext := range native.Extensions {
+		if strings.HasSuffix(lower, strings.ToLower(ext)) {
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, native.ID)
+			return
+		}
 	}
 }
 
@@ -1101,18 +1328,32 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// zip or virtual list by the archive itself, and resolves case the way a
 	// relative lookup does.
 	if filepath.IsAbs(path) {
-		found, findErr := findFile(fs, pl, env.Cfg, path, env.PathRoot)
+		found, findErr := findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot)
 		if findErr != nil {
 			return platforms.CmdResult{}, findErr
 		}
+		found = indexedPathSpelling(pl, &env, requestedSystemID, found)
 		log.Debug().Msgf("launching absolute path: %s", found)
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, launch(requestedPathTarget(found))
 	}
 
+	// A plain http(s) URL is asked what it serves: an audio stream plays
+	// through native audio, anything else launches as it always has.
+	if !explicitLauncher && audio.IsStreamURL(path) {
+		if probe := probeAudioStream(env.LauncherCtx, path); probe != nil {
+			log.Info().Str("url", path).Msg("launching audio stream")
+			err := launch(launchTarget{path: path, systemID: systemdefs.SystemAudio, audioStream: probe})
+			// A launch that did not take the connection, or failed, leaves it open.
+			probe.Close()
+			return platforms.CmdResult{MediaChanged: true}, err
+		}
+	}
+
 	// match for uri style launch syntax
 	if helpers.ReURI.MatchString(path) {
+		path = indexedVirtualPath(&env, path)
 		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1123,7 +1364,8 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(fs, pl, env.Cfg, path, env.PathRoot); findErr == nil {
+	if p, findErr = findFile(fs, pl, env.Cfg, env.Launchers, path, env.PathRoot); findErr == nil {
+		p = indexedPathSpelling(pl, &env, requestedSystemID, p)
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1136,10 +1378,11 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// title format so a path with no extension, or one inside a zip, is not
 	// mistaken for a title. A directory is left to the title check, where a
 	// game's own folder name has always resolved.
-	if systemPart, lookupPath, ok := strings.Cut(path, "/"); ok && lookupPath != "" {
+	if systemPart, lookupPath, ok := cutSystemPath(path); ok && lookupPath != "" {
 		if system, lookupErr := systemdefs.LookupSystem(systemPart); lookupErr == nil {
 			fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath)
 			if found && !isDirectory(fs, fp) {
+				fp = indexedPathSpelling(pl, &env, foundSystemID, fp)
 				log.Debug().Msgf("launching found system path: %s", fp)
 				return platforms.CmdResult{
 					MediaChanged: true,
@@ -1156,12 +1399,10 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	// TODO: create central function for parsing the <system>/<path> format
 	// attempt to parse the <system>/<path> format
-	ps := strings.SplitN(path, "/", 2)
-	if len(ps) < 2 {
-		return platforms.CmdResult{}, fmt.Errorf("invalid launch format: %s", path)
+	systemID, lookupPath, ok := cutSystemPath(path)
+	if !ok {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrInvalidLaunchFormat, path)
 	}
-
-	systemID, lookupPath := ps[0], ps[1]
 
 	system, err := systemdefs.LookupSystem(systemID)
 	if err != nil {
@@ -1170,7 +1411,8 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
-	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
+	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found && !isDirectory(fs, fp) {
+		fp = indexedPathSpelling(pl, &env, foundSystemID, fp)
 		log.Debug().Msgf("launching found system path: %s", fp)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -1197,7 +1439,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		if err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search for exact path '%s': %w", lookupPath, err)
 		} else if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
+			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", lookupPath, titles.ErrNoMatch)
 		}
 
 		log.Info().Msgf("found result: %s", res[0].Path)
@@ -1251,14 +1493,32 @@ func findSystemFile(
 
 	for i, f := range folders {
 		systemPath := filepath.Join(f, lookupPath)
+		// The format names a file below the launcher folder. A path that
+		// climbs out of it with ".." is some other file.
+		if !helpers.PathHasPrefix(systemPath, f) {
+			log.Debug().Msgf("system path leaves its launcher folder: %s", systemPath)
+			continue
+		}
 		log.Debug().Msgf("checking system path: %s", systemPath)
-		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
+		fp, findErr := findFile(fs, pl, env.Cfg, env.Launchers, systemPath, env.PathRoot)
 		if findErr == nil {
 			return fp, folderSystemIDs[i], true
 		}
 		log.Debug().Err(findErr).Msgf("error finding system file: %s", lookupPath)
 	}
 	return "", "", false
+}
+
+// cutSystemPath splits the <system>/<path> format at its first separator. The
+// host's own separator counts as well as a forward slash, so a path typed with
+// backslashes on Windows names the same file. Elsewhere a backslash is a
+// filename character and only a forward slash splits.
+func cutSystemPath(path string) (systemPart, rest string, ok bool) {
+	i := strings.IndexAny(path, "/"+string(filepath.Separator))
+	if i < 0 {
+		return "", "", false
+	}
+	return path[:i], path[i+1:], true
 }
 
 // isDirectory reports whether path is an existing directory. A path that
@@ -1297,7 +1557,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if !strings.Contains(query, "/") {
 		// search all systems
 		searchFilters := database.SearchFilters{
-			Systems: systemdefs.AllSystems(),
+			Systems: systemdefs.AllImplicitSystems(),
 			Query:   query,
 			Tags:    tagFilters,
 			Limit:   1,
@@ -1310,7 +1570,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 
 		if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
+			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", query, titles.ErrNoMatch)
 		}
 
 		target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
@@ -1331,7 +1591,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
+		systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {
@@ -1357,7 +1617,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	if len(res) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
+		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s: %w", searchQuery, titles.ErrNoMatch)
 	}
 
 	target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
@@ -1427,7 +1687,7 @@ func cmdLaunchLastWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEn
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(fs, pl, env.Cfg, entry.MediaPath, env.PathRoot)
+	path, err := findFile(fs, pl, env.Cfg, env.Launchers, entry.MediaPath, env.PathRoot)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

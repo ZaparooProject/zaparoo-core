@@ -140,6 +140,48 @@ func TestPathToMGLDef(t *testing.T) {
 	}
 }
 
+// The N64 core mounts 64DD disk images through its third file slot
+// ("F3,NDDndd,Load 64DD Disk"); cartridges stay on the first.
+func TestPathToMGLDefN64DDDisk(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Nintendo64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := catalog.PathToMGLDef(core, "Game Name.NDD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.Method != "f" || disk.Index != 3 {
+		t.Fatalf("ndd params: want f/3, got %#v", disk)
+	}
+	cart, err := catalog.PathToMGLDef(core, "Game Name.z64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cart.Method != "f" || cart.Index != 1 {
+		t.Fatalf("z64 params: want f/1, got %#v", cart)
+	}
+}
+
+// The Apple-II core mounts WOZ images in its first floppy drive (S0).
+func TestAppleIIWOZUsesFirstDrive(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("AppleII")
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := catalog.PathToMGLDef(core, "Game.WOZ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params == nil || params.Method != "s" || params.Index != 0 {
+		t.Fatalf("unexpected params: %#v", params)
+	}
+}
+
 // A slot with no mgl block is how the catalog says "this extension launches
 // directly", and that has to stay distinguishable from an extension no slot
 // claims: reporting Arcade's .mra as unmatched would fail every arcade launch.
@@ -312,6 +354,18 @@ func TestAddedCoreSlots(t *testing.T) {
 		{"PC110", "disk.vhd", "s", 2},
 		{"Raster", "film.mpg", "s", 0},
 		{"Phosphor", "song.flac", "s", 0},
+		{"ZX81", "game.p", "f", 0},
+		{"ZX81", "game.o", "f", 0},
+		{"Aquarius", "tape.caq", "f", 0},
+		{"TRS80", "disk.dsk", "s", 1},
+		{"TRS80", "disk.jv1", "s", 1},
+		{"Vector06C", "game.rom", "f", 0},
+		{"BK0011M", "game.bin", "f", 0},
+		{"Oric", "tape.tap", "f", 1},
+		{"Oric", "snap.sna", "f", 4},
+		{"PC88", "tape.cmt", "s", 4},
+		{"AcornElectron", "tape.uef", "f", 2},
+		{"ZXSpectrum", "tape.pzx", "f", 2},
 	}
 
 	for i := range tests {
@@ -331,5 +385,17 @@ func TestAddedCoreSlots(t *testing.T) {
 				t.Fatalf("want %s/%d, got %s/%d", tt.method, tt.index, params.Method, params.Index)
 			}
 		})
+	}
+}
+
+func TestAquariusCartridgeHasNoSlot(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Aquarius")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.PathToMGLDef(core, "cart.bin"); err == nil {
+		t.Fatal("both Aquarius file entries are unnumbered, so MGL can only reach the tape")
 	}
 }

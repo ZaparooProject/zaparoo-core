@@ -22,6 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -71,6 +72,7 @@ var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"GenericVideo":             {},
 	"ScummVM":                  {},
 	"KitrinxNeoGeoPocketColor": {},
+	scriptsLauncherID:          {},
 }
 
 // misterDefaultScanExcludes names files MiSTer Main auto-loads or auto-mounts
@@ -87,6 +89,21 @@ var misterDefaultScanExcludes = []string{
 	"blank.zip/blank.vhd",
 	"empty_hdd.zip/boot.vhd",
 	"sid_data.bin",
+}
+
+// misterNoArchiveExtensions are the files MiSTer Main loads through load_core,
+// which reads them from disk and cannot reach inside a zip.
+var misterNoArchiveExtensions = []string{".mgl", ".mra", ".rbf"}
+
+// arcadeScanFolders are the folders indexed as Arcade media, as declared by
+// the catalog. _Utility holds MRAs for test and streaming tools such as
+// MiSTercade and Groovy setups.
+func arcadeScanFolders() []string {
+	definition, err := catalog.Get(systemdefs.SystemArcade)
+	if err != nil || len(definition.Folders) == 0 {
+		return []string{"_Arcade"}
+	}
+	return definition.Folders
 }
 
 // arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
@@ -221,6 +238,13 @@ func launchAmiga(pl platforms.Platform) func(*config.Instance, string, *platform
 func launch(
 	pl platforms.Platform, coreID string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchWithOptions(pl, coreID, nil)
+}
+
+// launchWithOptions is launch for media that needs OSD options set on the core.
+func launchWithOptions(
+	pl platforms.Platform, coreID string, options []mgls.Setting,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		// Close console if needed - FPGA cores take over display
 		if err := pl.ConsoleManager().Close(); err != nil {
@@ -255,7 +279,7 @@ func launch(
 			s = &sn
 		}
 
-		err = mgls.LaunchGame(cfg, s, path)
+		err = mgls.LaunchGameWithOptions(cfg, s, path, options)
 		if err != nil {
 			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -287,8 +311,23 @@ func launchArcade(
 				mra, err := mgls.ReadMRA(path)
 				if err != nil {
 					log.Warn().Err(err).Str("path", path).Msg("failed to parse MRA for setname caching")
-				} else if mra.SetName != "" {
-					arcadePl.SetArcadeCardLaunch(mra.SetName)
+				} else {
+					if mra.SetName != "" {
+						arcadePl.SetArcadeCardLaunch(mra.SetName)
+					}
+					rbf := strings.TrimSpace(mra.Rbf)
+					resolved, resolveErr := resolveArcadeMRAPath(path, rbf, misterconfig.RootDirs(cfg))
+					if resolveErr != nil {
+						return nil, resolveErr
+					}
+					if resolved != path {
+						log.Info().Str("from", path).Str("to", resolved).
+							Msg("arcade core missing beside MRA, using copy with core")
+						path = resolved
+						if opts != nil {
+							opts.LaunchedPath = resolved
+						}
+					}
 				}
 			}
 		}
@@ -450,25 +489,6 @@ func launchDB9Core(
 	rbfName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return launchAltCore(launcherID, systemID, "_Console/"+rbfName+"_<date>_<hash>_DB9")
-}
-
-func launchAltCoreWithSetName(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-	setName string,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, true)
-}
-
-func launchAltCoreWithSetNameSameDir(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-	setName string,
-	sameDir bool,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, sameDir)
 }
 
 func retroAchievementsSetName(launcherID string) (string, bool) {
@@ -642,23 +662,22 @@ func launchRetroAchievementsCore(
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	setName, ok := retroAchievementsSetName(launcherID)
-	if !ok {
-		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
-	}
-	return launchAltCoreWithSetName(launcherID, systemID, rbfPath, setName)
+	return launchAltCoreWithDefinition(retroAchievementsCore(launcherID, systemID, rbfPath))
 }
 
-func launchRetroAchievementsCoreNoSameDir(
-	launcherID string,
-	systemID string,
-	rbfPath string,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+// retroAchievementsCore keeps the RA core's settings and saves under its own
+// set name. same_dir is required even for systems sharing another core's RBF:
+// without it Main's home folder becomes games/<set name>, which does not
+// exist, and the relative MGL file path cannot be resolved through it.
+func retroAchievementsCore(launcherID, systemID, rbfPath string) *cores.Core {
 	setName, ok := retroAchievementsSetName(launcherID)
 	if !ok {
 		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
 	}
-	return launchAltCoreWithSetNameSameDir(launcherID, systemID, rbfPath, setName, false)
+	return &cores.Core{
+		ID: systemID, LauncherID: launcherID, RBF: rbfPath,
+		SetName: setName, SetNameSameDir: true,
+	}
 }
 
 func configureAltCoreWithDefaultSetName(
@@ -747,43 +766,10 @@ func launchAltCoreWithDefinition(
 	}
 }
 
-//nolint:unused // keeping as reference for future implementation
-func launchGroovyCore() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	// Merge into mrext?
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-		sn := cores.Core{
-			ID:  "Groovy",
-			RBF: "_Utility/Groovy",
-			Slots: []cores.Slot{
-				{
-					Label: "GMC",
-					Exts:  []string{".gmc"},
-					Mgl: &cores.MGLParams{
-						Delay:  2,
-						Method: "f",
-						Index:  1,
-					},
-				},
-			},
-		}
-
-		log.Debug().Msgf("launching Groovy core: %v", sn)
-
-		err := mgls.LaunchGame(cfg, &sn, path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to launch game: %w", err)
-		}
-
-		err = activegame.SetActiveGame(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to set active game: %w", err)
-		}
-		return nil, nil
-	}
-}
-
 func logMGLLaunchError(err error) {
-	if errors.Is(err, zapscript.ErrFileNotFound) {
+	// A missing file, or one MiSTer cannot load from where it is, is the
+	// user's media rather than a launcher fault.
+	if zapscript.IsExpectedRunError(err) {
 		log.Warn().Err(err).Msg("error launching mgl")
 	} else {
 		log.Error().Err(err).Msg("error launching mgl")
@@ -1036,13 +1022,21 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
 
+		var finished func()
+		if opts != nil {
+			finished = opts.MediaFinished
+		}
+
 		cmd := buildFvpCommand(launcherCtx, path)
 
 		// Build cleanup function that will be called on completion/crash
 		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Start process and manage lifecycle
-		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
+		return runTrackedProcess(pl, cmd, restoreFunc, "fvp", trackedExit{
+			launcherID:    tracker.VideoLauncherID,
+			mediaFinished: finished,
+		})
 	}
 }
 
@@ -1141,7 +1135,9 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 		}
 
 		// Start process and manage lifecycle (wraps with nice/setsid)
-		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm")
+		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm", trackedExit{
+			launcherID: tracker.ScummVMLauncherID,
+		})
 	}
 }
 
@@ -1157,7 +1153,7 @@ func scummVMKill(keyboardPress func(string) error) func(*config.Instance) error 
 // createScummVMLauncher creates a Launcher definition for ScummVM games.
 func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
-		ID:                 "ScummVM",
+		ID:                 tracker.ScummVMLauncherID,
 		SystemID:           systemdefs.SystemScummVM,
 		Schemes:            []string{shared.SchemeScummVM},
 		Test:               shared.SchemeIDTest(shared.SchemeScummVM),
@@ -1174,7 +1170,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 // createVideoLauncher creates a Launcher definition for fvp video playback.
 func createVideoLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
-		ID:         "GenericVideo",
+		ID:         tracker.VideoLauncherID,
 		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi", ".mov", ".webm"},
@@ -1214,6 +1210,13 @@ func applyDefaultScanExcludes(launchers []platforms.Launcher) []platforms.Launch
 			continue
 		}
 		launcher.ScanExcludes = append(launcher.ScanExcludes, misterDefaultScanExcludes...)
+	}
+	return launchers
+}
+
+func applyNoArchiveExtensions(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launchers[i].NoArchiveExtensions = misterNoArchiveExtensions
 	}
 	return launchers
 }
@@ -1445,7 +1448,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAFDS",
 			SystemID: systemdefs.SystemFDS,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAFDS", systemdefs.SystemFDS, "_RA_Cores/Cores/NES",
 			),
 		},
@@ -1490,7 +1493,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGameboyColor",
 			SystemID: systemdefs.SystemGameboyColor,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAGameboyColor", systemdefs.SystemGameboyColor, "_RA_Cores/Cores/Gameboy",
 			),
 		},
@@ -1516,7 +1519,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGameGear",
 			SystemID: systemdefs.SystemGameGear,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RAGameGear", systemdefs.SystemGameGear, "_RA_Cores/Cores/SMS",
 			),
 		},
@@ -1747,7 +1750,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RANeoGeoCD",
 			SystemID: systemdefs.SystemNeoGeoCD,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RANeoGeoCD", systemdefs.SystemNeoGeoCD, "_RA_Cores/Cores/NeoGeo",
 			),
 		},
@@ -1810,7 +1813,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemNintendo64,
 			SystemID:   systemdefs.SystemNintendo64,
 			Folders:    []string{"N64"},
-			Extensions: []string{".n64", ".z64", ".v64"},
+			Extensions: []string{".n64", ".z64", ".v64", ".ndd"},
 			Launch:     launch(pl, systemdefs.SystemNintendo64),
 		},
 		{
@@ -1966,7 +1969,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RASuperGameboy",
 			SystemID: systemdefs.SystemSuperGameboy,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RASuperGameboy", systemdefs.SystemSuperGameboy, "_RA_Cores/Cores/Gameboy",
 			),
 		},
@@ -2106,7 +2109,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RATurboGrafx16CD",
 			SystemID: systemdefs.SystemTurboGrafx16CD,
-			Launch: launchRetroAchievementsCoreNoSameDir(
+			Launch: launchRetroAchievementsCore(
 				"RATurboGrafx16CD", systemdefs.SystemTurboGrafx16CD, "_RA_Cores/Cores/TurboGrafx16",
 			),
 		},
@@ -2344,7 +2347,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemAppleII,
 			SystemID:   systemdefs.SystemAppleII,
 			Folders:    []string{"Apple-II"},
-			Extensions: []string{".dsk", ".do", ".po", ".nib", ".hdv"},
+			Extensions: []string{".dsk", ".do", ".po", ".nib", ".woz", ".hdv"},
 			Launch:     launch(pl, systemdefs.SystemAppleII),
 		},
 		{
@@ -2927,7 +2930,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:                       systemdefs.SystemArcade,
 			SystemID:                 systemdefs.SystemArcade,
-			Folders:                  []string{"_Arcade"},
+			Folders:                  arcadeScanFolders(),
 			Extensions:               []string{".mra", ".mgl"},
 			ScanDirectoryExcludes:    arcadeOrganizerScanDirectoryExcludes,
 			ScanSkipInternalSymlinks: true,
@@ -3042,7 +3045,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:         "Generic",
 			Extensions: []string{".mgl", ".rbf", ".mra"},
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			Launch: launchReadiness.noteMGLGames(func(
+				_ *config.Instance, path string, _ *platforms.LaunchOptions,
+			) (*os.Process, error) {
 				err := mgls.LaunchBasicFile(path)
 				if err != nil {
 					return nil, fmt.Errorf("failed to launch generic file: %w", err)
@@ -3053,7 +3058,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 					return nil, fmt.Errorf("failed to set active game: %w", err)
 				}
 				return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
-			},
+			}),
 		},
 	}
 
@@ -3063,6 +3068,6 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 	all = append(all, unstable...)
 
 	return prioritizeNGPCCore(nil, applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
-		applyAltCoreLauncherGroups(all),
+		applyAltCoreLauncherGroups(withCoreReadiness(pl, withLoadPlans(pl, withCoreControls(pl, all)))),
 	))))
 }

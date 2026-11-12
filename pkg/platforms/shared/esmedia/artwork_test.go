@@ -20,6 +20,7 @@
 package esmedia
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -422,4 +423,114 @@ func TestContainerArtworkFallbackNames_IgnoresFilesAtTheRoot(t *testing.T) {
 	assert.Empty(t, ContainerArtworkFallbackNames("", root))
 	assert.Empty(t, ContainerArtworkFallbackNames(
 		filepath.Join(filepath.Dir(root), "Other", "Game.chd"), root))
+}
+
+func TestFindFileIn_ListsEachDirectoryOnceAndKeepsTheFilesystemsAnswer(t *testing.T) {
+	t.Parallel()
+	base := afero.NewMemMapFs()
+	media := filepath.Join("roms", "media")
+	boxart := filepath.Join(media, "boxart")
+	require.NoError(t, base.MkdirAll(filepath.Join(boxart, "RPGs"), 0o750))
+	require.NoError(t, afero.WriteFile(base, filepath.Join(boxart, "Mario.png"), []byte("x"), 0o600))
+	require.NoError(t, afero.WriteFile(base, filepath.Join(boxart, "RPGs", "Zelda.jpg"), []byte("x"), 0o600))
+	fs := &countingFs{Fs: base}
+	names := NewDirNames(fs)
+	dirs := map[string]string{"boxart": boxart}
+	candidates := []string{"boxart", "covers"}
+
+	found := FindFileIn(fs, names, []string{"Mario.jpg", "Mario.png"}, candidates, dirs)
+	require.NotNil(t, found)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(boxart, "Mario.png")), found.Path)
+	assert.Equal(t, 1, fs.stats, "only the name the listing holds is confirmed")
+
+	// A hundred misses in a listed directory cost no stat at all.
+	fs.stats = 0
+	for range 100 {
+		assert.Nil(t, FindFileIn(fs, names, []string{"Missing.png", "Missing.jpg"}, candidates, dirs))
+	}
+	assert.Zero(t, fs.stats)
+	assert.Equal(t, 1, fs.lists)
+
+	// A mirrored subdirectory is listed on first use, and one that does not
+	// exist rules everything in it out.
+	nested := FindFileIn(fs, names, []string{filepath.Join("RPGs", "Zelda.jpg")}, candidates, dirs)
+	require.NotNil(t, nested)
+	assert.Nil(t, FindFileIn(fs, names, []string{filepath.Join("Absent", "Zelda.jpg")}, candidates, dirs))
+	assert.Equal(t, 3, fs.lists)
+
+	// A name that differs only in case is left for the filesystem to decide.
+	fs.stats = 0
+	assert.Nil(t, FindFileIn(fs, names, []string{"mario.png"}, candidates, dirs))
+	assert.Equal(t, 1, fs.stats)
+
+	// Without a cache the search is the plain one.
+	plain := FindFileFS(fs, []string{"Mario.png"}, candidates, dirs)
+	require.NotNil(t, plain)
+	assert.Equal(t, found.Path, plain.Path)
+}
+
+// countingFs counts the stats and directory listings a search makes.
+type countingFs struct {
+	afero.Fs
+	stats int
+	lists int
+}
+
+func (c *countingFs) Stat(name string) (os.FileInfo, error) {
+	c.stats++
+	return c.Fs.Stat(name) //nolint:wrapcheck // test passthrough
+}
+
+func (c *countingFs) Open(name string) (afero.File, error) {
+	c.lists++
+	return c.Fs.Open(name) //nolint:wrapcheck // test passthrough
+}
+
+// People create media folders in whatever case their tools or habits give
+// them, and on a case-sensitive card "Boxart" is not "boxart".
+func TestStatMediaDirsFS_MatchesFolderNamesIgnoringCase(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("roms", "n64")
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "Boxart"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "SCREENSHOTS"), 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "media", "Boxart", "Game.png"), []byte("x"), 0o600))
+
+	dirs := StatMediaDirsFS(fs, root)
+
+	assert.Equal(t, filepath.Join(root, "media", "Boxart"), dirs["boxart"], "the path keeps the on-disk spelling")
+	assert.Equal(t, filepath.Join(root, "media", "SCREENSHOTS"), dirs["screenshots"])
+	file := FindFileFS(fs, []string{"Game.png"}, ArtworkDirCandidates[string(tags.TagPropertyImageBoxart)], dirs)
+	require.NotNil(t, file)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "media", "Boxart", "Game.png")), file.Path)
+}
+
+func TestStatMediaDirsFS_PrefersTheLowercaseFolderWhenCasesCollide(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("roms", "n64")
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "Boxart"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "boxart"), 0o750))
+
+	dirs := StatMediaDirsFS(fs, root)
+
+	assert.Equal(t, filepath.Join(root, "media", "boxart"), dirs["boxart"])
+}
+
+// The folder names libretro and common scraper tools use for the same three
+// pictures are read as well.
+func TestArtworkDirCandidates_AcceptsLibretroAndCommonFolderNames(t *testing.T) {
+	t.Parallel()
+
+	for prop, names := range map[tags.TagValue][]string{
+		tags.TagPropertyImageBoxart:     {"named_boxarts", "boxarts", "box"},
+		tags.TagPropertyImageScreenshot: {"named_snaps", "snaps", "snap"},
+		tags.TagPropertyImageTitleshot:  {"named_titles", "titles", "title"},
+	} {
+		for _, name := range names {
+			assert.Contains(t, ArtworkDirCandidates[string(prop)], name, "%s for %s", name, prop)
+		}
+	}
 }

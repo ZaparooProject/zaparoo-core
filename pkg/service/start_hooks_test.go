@@ -135,7 +135,7 @@ on_ready = "**input.keyboard:{f2}"
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runConfiguredServiceHooks(svc)
+		runConfiguredServiceHooksOnce(svc)
 	}()
 
 	select {
@@ -197,7 +197,7 @@ on_ready = "**input.keyboard:{f3}"
 		PlaylistQueue: make(chan *playlists.Playlist, 1),
 	}
 
-	runConfiguredServiceHooks(svc)
+	runConfiguredServiceHooksOnce(svc)
 
 	require.Equal(t, 1, bootChecks)
 	select {
@@ -244,9 +244,16 @@ on_boot = "**input.keyboard:{f2}"
 		PlaylistQueue: make(chan *playlists.Playlist, 1),
 	}
 
-	runConfiguredServiceHooks(svc)
-	runConfiguredServiceHooks(svc)
+	runConfiguredServiceHooksOnce(svc)
+	runConfiguredServiceHooksOnce(svc)
 
 	mockPlatform.AssertExpectations(t)
 	mockUserDB.AssertExpectations(t)
+}
+
+// runConfiguredServiceHooksOnce asks about the boot once and runs the hooks
+// with the answer, the way service startup does.
+func runConfiguredServiceHooksOnce(svc *ServiceContext) {
+	firstBootStart, err := isFirstServiceStartForBoot(svc.Platform)
+	runConfiguredServiceHooks(svc, firstBootStart, err)
 }

@@ -21,11 +21,16 @@ package audio
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
 	"github.com/stretchr/testify/assert"
@@ -33,12 +38,14 @@ import (
 )
 
 func newTestSource() *streamingSource {
-	return &streamingSource{
-		ring:        make([][2]float64, 100),
-		volume:      1.0,
-		totalFrames: int64(targetSampleRate), // 1 second
-		wakeCh:      make(chan struct{}, 1),
+	s := &streamingSource{
+		ring:          make([][2]float64, 100),
+		appliedVolume: 1.0,
+		totalFrames:   int64(targetSampleRate), // 1 second
+		wakeCh:        make(chan struct{}, 1),
 	}
+	s.setVolume(1.0)
+	return s
 }
 
 func TestBoundedFrameCount(t *testing.T) {
@@ -268,9 +275,17 @@ func TestStreamingSource_UnderrunEpisodes(t *testing.T) {
 	s := newTestSource()
 	buf := make([][2]float64, 4)
 
+	// Nothing has been published yet: waiting for the first frames is not
+	// an underrun.
 	written, drained := s.mixAdd(buf, len(buf))
 	assert.Zero(t, written)
 	assert.False(t, drained)
+	assert.Zero(t, s.underruns.Load())
+
+	s.ring[0] = [2]float64{0.25, 0.25}
+	s.writePos.Store(1)
+	s.mixAdd(buf, 1)
+	s.mixAdd(buf, len(buf))
 	assert.Equal(t, uint64(1), s.underruns.Load())
 
 	// Repeated empty callbacks belong to the same underrun episode.
@@ -279,8 +294,8 @@ func TestStreamingSource_UnderrunEpisodes(t *testing.T) {
 
 	// Consuming newly published audio ends the episode; another empty callback
 	// starts a new one.
-	s.ring[0] = [2]float64{0.25, 0.25}
-	s.writePos.Store(1)
+	s.ring[1] = [2]float64{0.25, 0.25}
+	s.writePos.Store(2)
 	s.mixAdd(buf, 1)
 	s.mixAdd(buf, len(buf))
 	assert.Equal(t, uint64(2), s.underruns.Load())
@@ -291,14 +306,14 @@ func TestNewStreamingSource_UnsupportedExtension(t *testing.T) {
 	// The file must exist — the extension check happens after os.Open succeeds.
 	path := filepath.Join(t.TempDir(), "audio.xyz")
 	require.NoError(t, os.WriteFile(path, []byte("fake"), 0o600))
-	_, err := newStreamingSource(path, 1.0, resampleQuality)
+	_, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported audio format")
 }
 
 func TestNewStreamingSource_FileNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0, resampleQuality)
+	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0, resampleQuality, decodeOptions{})
 	require.Error(t, err)
 }
 
@@ -308,14 +323,14 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
 
-	s, err := newStreamingSource(path, 0.75, resampleQuality)
+	s, err := newStreamingSource(path, 0.75, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())
 	}()
 
 	assert.Equal(t, path, s.path)
-	assert.InDelta(t, 0.75, s.volume, 1e-9)
+	assert.InDelta(t, 0.75, s.volume(), 1e-9)
 	assert.Equal(t, 44100, s.sourceRate)
 	assert.Len(t, s.ring, ringBufferFrames)
 	assert.Len(t, s.chunk, decodeChunkFrames)
@@ -329,7 +344,7 @@ func TestNewStreamingSource_TargetRateUsesDecoderDirectly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(0, targetSampleRate), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())
@@ -384,7 +399,7 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 			sampleCount := tc.sourceRate / 10
 			require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(sampleCount, tc.sourceRate), 0o600))
 
-			s, err := newStreamingSource(path, 1.0, tc.quality)
+			s, err := newStreamingSource(path, 1.0, tc.quality, decodeOptions{})
 			require.NoError(t, err)
 			s.startPrefetch()
 			stopped := false
@@ -441,7 +456,7 @@ func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamples(6*44100), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	s.tickInterval = time.Hour
 	s.startPrefetch()
@@ -458,7 +473,7 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, wavWithSamples(10*44100), 0o600))
 
-	s, err := newStreamingSource(path, 1.0, lowPowerResampleQuality)
+	s, err := newStreamingSource(path, 1.0, lowPowerResampleQuality, decodeOptions{})
 	require.NoError(t, err)
 	s.startPrefetch()
 	t.Cleanup(s.stopAndDeregister)
@@ -530,13 +545,13 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 	require.NoError(t, m.Play("", firstPath, PlaybackOptions{}))
 	first := m.primary
 	require.NotNil(t, first)
-	assert.InDelta(t, 1.0, first.volume, 1e-9, "zero volume option defaults to unity gain")
+	assert.InDelta(t, 0.0, first.volume(), 1e-9, "zero volume is silent")
 
 	require.NoError(t, m.Play(mediaslot.Primary, secondPath, PlaybackOptions{Volume: 0.25}))
 	second := m.primary
 	require.NotNil(t, second)
 	assert.NotSame(t, first, second)
-	assert.InDelta(t, 0.25, second.volume, 1e-9)
+	assert.InDelta(t, 0.25, second.volume(), 1e-9)
 	assert.True(t, first.stopped.Load(), "replaced source must be stopped")
 
 	testDevice.devMu.Lock()
@@ -550,6 +565,79 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 	second.stopAndDeregister()
 }
 
+func TestLongformPlaybackManager_LateDrainOfReplacedSourceIsNotNatural(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.wav")
+	secondPath := filepath.Join(dir, "second.wav")
+	require.NoError(t, os.WriteFile(firstPath, validWAVHeader(), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	var reports []bool
+	m.SetDrainCallback(mediaslot.Primary, func(natural bool) { reports = append(reports, natural) })
+
+	require.NoError(t, m.Play(mediaslot.Primary, firstPath, PlaybackOptions{Volume: 1}))
+	first := m.primary
+	require.NoError(t, m.Play(mediaslot.Primary, secondPath, PlaybackOptions{Volume: 1}))
+	second := m.primary
+	require.NotNil(t, second)
+
+	// The first source reached EOF on the device goroutine before the
+	// replacement stopped it, so it drains late without the stopped flag set.
+	first.stopped.Store(false)
+	first.onDrained()
+	assert.Equal(t, []bool{false}, reports, "replaced source must not drain as natural")
+	assert.Same(t, second, m.primary, "late drain must not clear the replacement")
+
+	second.onDrained()
+	assert.Equal(t, []bool{false, true}, reports, "current source drains as natural")
+	assert.Nil(t, m.primary)
+
+	// A stopped source is never natural either, even without the stopped flag.
+	require.NoError(t, m.Play(mediaslot.Primary, firstPath, PlaybackOptions{Volume: 1}))
+	third := m.primary
+	require.NoError(t, m.Stop(mediaslot.Primary))
+	third.stopped.Store(false)
+	third.onDrained()
+	assert.Equal(t, []bool{false, true, false}, reports)
+	second.stopAndDeregister()
+}
+
+func TestLongformPlaybackManager_DecodeFailureIsReportedOnceForTheCurrentTrack(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	path := filepath.Join(t.TempDir(), "a.wav")
+	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	failures := 0
+	m.SetDecodeFailureCallback(mediaslot.Primary, func() { failures++ })
+
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	src := m.primary
+	src.decodeFailed.Store(true)
+	src.onDrained()
+	assert.Equal(t, 1, failures, "the current track failing to decode is reported")
+
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	stale := m.primary
+	require.NoError(t, m.Play(mediaslot.Primary, path, PlaybackOptions{Volume: 1}))
+	stale.decodeFailed.Store(true)
+	stale.onDrained()
+	assert.Equal(t, 1, failures, "a replaced track failing is not the slot's failure")
+	m.primary.stopAndDeregister()
+}
+
 // TestLongformPlaybackManager_InvalidSlot verifies every mutating method returns
 // an error when given a slot name that is neither primary nor background.
 func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
@@ -557,7 +645,7 @@ func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
 	m := NewLongformPlaybackManager(false)
 
 	require.Error(t,
-		m.Play("badslot", filepath.Join("Music", "track.mp3"), PlaybackOptions{}),
+		m.Play("badslot", filepath.Join("Music", "track.mp3"), PlaybackOptions{Volume: 1}),
 		"Play should error on invalid slot",
 	)
 	require.Error(t, m.Stop("badslot"), "Stop should error on invalid slot")
@@ -693,4 +781,345 @@ func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	bcb(true)
 	assert.True(t, primaryCalled)
 	assert.True(t, backgroundCalled)
+}
+
+func TestStreamingSource_StartAtPositionsBeforePlayback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(2*targetSampleRate, targetSampleRate), 0o600))
+
+	s, err := newStreamingSource(path, 1.0, resampleQuality, decodeOptions{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.decoder.Close())
+	}()
+
+	s.startAt(time.Second, 2*time.Second)
+	assert.Equal(t, time.Second, s.state().Position)
+	assert.Equal(t, int64(targetSampleRate), s.seekSrcFrame.Load())
+	assert.True(t, s.seekPending.Load())
+}
+
+func TestStreamingSource_StartAtOutsideTrackStartsFromBeginning(t *testing.T) {
+	t.Parallel()
+
+	for _, offset := range []time.Duration{-time.Second, 0, 2 * time.Second, time.Hour} {
+		s := newTestSource()
+		s.totalFrames = 2 * targetSampleRate
+		s.startAt(offset, 0)
+		assert.Equal(t, int64(0), s.played.Load(), offset)
+		assert.False(t, s.seekPending.Load(), offset)
+	}
+}
+
+func TestStreamingSource_StartAtSkipsTrackOfAnotherLength(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	s.totalFrames = 120 * targetSampleRate
+	s.startAt(time.Minute, 90*time.Second)
+	assert.Equal(t, int64(0), s.played.Load())
+	assert.False(t, s.seekPending.Load())
+
+	s.startAt(time.Minute, 120*time.Second+500*time.Millisecond)
+	assert.Equal(t, int64(60*targetSampleRate), s.played.Load())
+}
+
+func fillTestRing(s *streamingSource, frames uint64, value float64) {
+	for i := range frames {
+		s.ring[i] = [2]float64{value, value}
+	}
+	s.writePos.Store(frames)
+}
+
+func TestStreamingSource_ZeroVolumeIsSilent(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+	s.appliedVolume = 0
+	s.setVolume(0)
+	fillTestRing(s, 10, 0.5)
+
+	buf := make([][2]float64, 10)
+	n, _ := s.mixAdd(buf, 10)
+	require.Equal(t, 10, n)
+	for i := range n {
+		assert.Zero(t, buf[i][0])
+		assert.Zero(t, buf[i][1])
+	}
+}
+
+func TestStreamingSource_SetVolumeRampsAcrossOneBuffer(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+	fillTestRing(s, 20, 1.0)
+
+	s.setVolume(0.5)
+	buf := make([][2]float64, 10)
+	n, _ := s.mixAdd(buf, 10)
+	require.Equal(t, 10, n)
+	// The gain moves from 1.0 to 0.5 across the buffer and ends on the target.
+	assert.Less(t, buf[0][0], 1.0)
+	assert.Greater(t, buf[0][0], 0.5)
+	for i := 1; i < n; i++ {
+		assert.LessOrEqual(t, buf[i][0], buf[i-1][0], "ramp must not step up")
+	}
+	assert.InDelta(t, 0.5, buf[n-1][0], 1e-9)
+
+	// The next buffer plays at the new gain throughout.
+	buf2 := make([][2]float64, 10)
+	n2, _ := s.mixAdd(buf2, 10)
+	require.Equal(t, 10, n2)
+	for i := range n2 {
+		assert.InDelta(t, 0.5, buf2[i][0], 1e-9)
+	}
+}
+
+func TestStreamingSource_SetVolumeClamps(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+	s.setVolume(5)
+	assert.InDelta(t, maxPlaybackVolume, s.volume(), 1e-9)
+	s.setVolume(-1)
+	assert.Zero(t, s.volume())
+}
+
+func TestLongformPlaybackManager_SetVolume(t *testing.T) {
+	t.Parallel()
+	m := NewLongformPlaybackManager(false)
+	require.NoError(t, m.SetVolume(mediaslot.Background, 0.3), "empty slot is a no-op")
+	require.Error(t, m.SetVolume("badslot", 0.3))
+
+	s := newTestSource()
+	m.mu.Lock()
+	m.background = s
+	m.mu.Unlock()
+
+	require.NoError(t, m.SetVolume("bg", 0.3))
+	assert.InDelta(t, 0.3, s.volume(), 1e-9)
+	assert.InDelta(t, 1.0, newTestSource().volume(), 1e-9)
+}
+
+func TestLongformPlaybackManager_PlayLoadsTrackMeta(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	path := filepath.Join(t.TempDir(), "song.wav")
+	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	m.SetTrackMetaLimit(1234)
+	gotLimit := make(chan int64, 1)
+	m.readMeta = func(p string, maxBytes int64) (*trackmeta.Meta, error) {
+		assert.Equal(t, path, p)
+		gotLimit <- maxBytes
+		return &trackmeta.Meta{Title: "Song", HasArt: true}, nil
+	}
+
+	require.NoError(t, m.Play(mediaslot.Background, path, PlaybackOptions{Volume: 1}))
+	assert.Equal(t, int64(1234), <-gotLimit)
+	assert.Eventually(t, func() bool {
+		meta := m.State(mediaslot.Background).Meta
+		return meta != nil && meta.Title == "Song" && meta.HasArt
+	}, time.Second, time.Millisecond)
+
+	src := m.background
+	require.NoError(t, m.Stop(mediaslot.Background))
+	require.NotNil(t, src)
+}
+
+// changeRecorder collects the slots a change callback reports.
+func changeRecorder(m *LongformPlaybackManager) <-chan string {
+	changes := make(chan string, 16)
+	m.SetChangeCallback(func(slot string) { changes <- slot })
+	return changes
+}
+
+func drainChanges(changes <-chan string) []string {
+	var got []string
+	for {
+		select {
+		case slot := <-changes:
+			got = append(got, slot)
+		default:
+			return got
+		}
+	}
+}
+
+func TestLongformPlaybackManager_ChangeCallbackOnPauseResumeSeek(t *testing.T) {
+	t.Parallel()
+	m := NewLongformPlaybackManager(false)
+	changes := changeRecorder(m)
+	s := newTestSource()
+	m.mu.Lock()
+	m.background = s
+	m.mu.Unlock()
+
+	require.NoError(t, m.Pause("bg"))
+	assert.Equal(t, []string{mediaslot.Background}, drainChanges(changes), "pause reports the normalized slot")
+
+	require.NoError(t, m.Pause(mediaslot.Background))
+	assert.Empty(t, drainChanges(changes), "pausing a paused track changes nothing")
+
+	require.NoError(t, m.Resume(mediaslot.Background))
+	assert.Equal(t, []string{mediaslot.Background}, drainChanges(changes))
+
+	require.NoError(t, m.Resume(mediaslot.Background))
+	assert.Empty(t, drainChanges(changes), "resuming a playing track changes nothing")
+
+	require.NoError(t, m.TogglePause(mediaslot.Background))
+	assert.Equal(t, []string{mediaslot.Background}, drainChanges(changes))
+
+	require.NoError(t, m.Seek(mediaslot.Background, time.Second))
+	assert.Equal(t, []string{mediaslot.Background}, drainChanges(changes))
+
+	require.NoError(t, m.SetVolume(mediaslot.Background, 0.5))
+	require.NoError(t, m.Stop(mediaslot.Background))
+	assert.Empty(t, drainChanges(changes), "volume and stop are not playback changes")
+
+	require.NoError(t, m.Pause(mediaslot.Primary))
+	assert.Empty(t, drainChanges(changes), "an empty slot has nothing to change")
+}
+
+func TestLongformPlaybackManager_ChangeCallbackOnPlayAndTags(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := newSharedDevice()
+	testDevice.opening = true
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.wav")
+	secondPath := filepath.Join(dir, "second.wav")
+	require.NoError(t, os.WriteFile(firstPath, validWAVHeader(), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager(false)
+	changes := changeRecorder(m)
+	release := map[string]chan struct{}{
+		firstPath:  make(chan struct{}),
+		secondPath: make(chan struct{}),
+	}
+	m.readMeta = func(p string, _ int64) (*trackmeta.Meta, error) {
+		<-release[p]
+		return &trackmeta.Meta{Title: filepath.Base(p)}, nil
+	}
+
+	require.NoError(t, m.Play(mediaslot.Primary, firstPath, PlaybackOptions{Volume: 1}))
+	assert.Equal(t, mediaslot.Primary, <-changes, "a started track is reported once it is live")
+
+	close(release[firstPath])
+	assert.Equal(t, mediaslot.Primary, <-changes, "tags finishing are reported")
+	assert.Equal(t, "first.wav", m.State(mediaslot.Primary).Meta.Title)
+
+	// Tags that finish after their track was replaced change nothing a client
+	// can see: only the replacement's start and its own tags are reported.
+	first := m.primary
+	require.NoError(t, m.Play(mediaslot.Primary, secondPath, PlaybackOptions{Volume: 1}))
+	assert.Equal(t, mediaslot.Primary, <-changes)
+	m.loadMeta(mediaslot.Primary, first)
+	assert.Empty(t, drainChanges(changes), "a replaced track's tags are not reported")
+
+	close(release[secondPath])
+	assert.Equal(t, mediaslot.Primary, <-changes)
+	assert.Empty(t, drainChanges(changes))
+
+	require.NoError(t, m.Stop(mediaslot.Primary))
+}
+
+// failingDecoder is a decoder whose stream breaks off with an error.
+type failingDecoder struct{ err error }
+
+func (*failingDecoder) Stream([][2]float64) (int, bool) { return 0, false }
+func (d *failingDecoder) Err() error                    { return d.err }
+func (*failingDecoder) Len() int                        { return -1 }
+func (*failingDecoder) Position() int                   { return 0 }
+func (*failingDecoder) Seek(int) error                  { return nil }
+func (*failingDecoder) Close() error                    { return nil }
+
+func TestStreamingSource_DecodeFailureDrainsAsStop(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		err     error
+		name    string
+		natural bool
+	}{
+		{name: "end of stream", err: nil, natural: true},
+		{name: "decode failure", err: errors.New("decode failed"), natural: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newTestSource()
+			s.decoder = &failingDecoder{err: tt.err}
+			s.streamer = s.decoder
+			s.chunk = make([][2]float64, 16)
+			s.tickInterval = time.Millisecond
+			got := make(chan bool, 1)
+			s.onDrain = func(natural bool) { got <- natural }
+			s.startPrefetch()
+			require.Eventually(t, s.eof.Load, time.Second, time.Millisecond)
+
+			buf := make([][2]float64, 8)
+			_, drained := s.mixAdd(buf, len(buf))
+			require.True(t, drained)
+			s.onDrained()
+			assert.Equal(t, tt.natural, <-got)
+			<-s.doneCh
+		})
+	}
+}
+
+func TestLongformPlaybackManager_MetaReadsAreBoundedAndNewestWins(t *testing.T) {
+	m := NewLongformPlaybackManager(false)
+	release := make(chan struct{})
+	var running, peak atomic.Int32
+	var mu syncutil.Mutex
+	var read []string
+	m.readMeta = func(p string, _ int64) (*trackmeta.Meta, error) {
+		n := running.Add(1)
+		for {
+			old := peak.Load()
+			if n <= old || peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		mu.Lock()
+		read = append(read, p)
+		mu.Unlock()
+		<-release
+		running.Add(-1)
+		return &trackmeta.Meta{Title: p}, nil
+	}
+
+	// Many tracks replace one another in the same slot while reads are stuck.
+	var last *streamingSource
+	for i := range 50 {
+		src := &streamingSource{path: fmt.Sprintf("track-%d", i)}
+		m.mu.Lock()
+		m.setSourceLocked(mediaslot.Background, src)
+		m.mu.Unlock()
+		m.queueMeta(mediaslot.Background, src) // must not block
+		last = src
+	}
+	require.Eventually(t, func() bool { return running.Load() >= 1 }, time.Second, time.Millisecond)
+	close(release)
+	require.Eventually(t, func() bool {
+		m.metaMu.Lock()
+		defer m.metaMu.Unlock()
+		return m.metaReaders == 0 && len(m.metaPending) == 0
+	}, time.Second, time.Millisecond)
+
+	assert.LessOrEqual(t, int(peak.Load()), maxMetaReaders)
+	mu.Lock()
+	assert.Less(t, len(read), 10, "requests for replaced tracks are dropped, not read")
+	assert.Contains(t, read, "track-49")
+	mu.Unlock()
+	require.NotNil(t, last.meta.Load())
+	assert.Equal(t, "track-49", last.meta.Load().Title)
 }

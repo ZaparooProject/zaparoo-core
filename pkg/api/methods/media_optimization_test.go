@@ -476,6 +476,28 @@ func TestGenerateMediaDB_NotifiesPreparingBeforeOptimizationPreflightFailure(t *
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestNotifyMediaIndexingStopped_CarriesLibraryCounts(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("HasAnyMedia").Return(true, nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(321, nil)
+	mockMediaDB.On("GetMissingMediaCount").Return(4, nil)
+	ns := make(chan models.Notification, 1)
+
+	notifyMediaIndexingStopped(ns, mockMediaDB)
+
+	n := <-ns
+	require.Equal(t, models.NotificationMediaIndexing, n.Method)
+	var payload models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(n.Params, &payload))
+	assert.True(t, payload.Exists)
+	assert.False(t, payload.Indexing)
+	require.NotNil(t, payload.TotalMedia)
+	assert.Equal(t, 321, *payload.TotalMedia)
+	require.NotNil(t, payload.MissingMedia)
+	assert.Equal(t, 4, *payload.MissingMedia)
+}
+
 // Helper function to create string pointer
 func stringPtr(s string) *string {
 	return &s

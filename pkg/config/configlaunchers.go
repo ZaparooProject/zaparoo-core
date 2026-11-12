@@ -122,6 +122,12 @@ func (c *Instance) LauncherPreference() []string {
 	return append([]string(nil), c.vals.Launchers.Preference...)
 }
 
+func (c *Instance) SetLauncherPreference(preference []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Launchers.Preference = append([]string(nil), preference...)
+}
+
 func (c *Instance) DefaultMediaDir() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -168,7 +174,10 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 
 	result := LaunchersDefault{Launcher: launcherID}
 
-	log.Debug().
+	// Every launcher is resolved on every launch, hundreds on some platforms, so
+	// the per-call lines stay at trace: at debug they rotated the log within
+	// seconds and took what was being diagnosed with them.
+	log.Trace().
 		Str("launcherID", launcherID).
 		Strs("groups", groups).
 		Int("defaultsCount", len(c.vals.Launchers.Default)).
@@ -201,7 +210,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		return strings.EqualFold(entryLauncher, launcherID)
 	})
 
-	log.Debug().
+	log.Trace().
 		Str("launcherID", launcherID).
 		Str("resolvedServerURL", result.ServerURL).
 		Str("resolvedAction", result.Action).
@@ -300,6 +309,12 @@ func validateLauncherDefaults(defaults []LaunchersDefault) error {
 // unknown TOML fields. I/O and other decoding failures must not match it.
 var ErrCustomLauncherUnknownFields = errors.New("failed to parse any custom launcher files")
 
+// ErrCustomLauncherInvalid means every candidate file was rejected for its
+// content, with at least one TOML syntax or value-type error among them rather
+// than only unknown fields. Like ErrCustomLauncherUnknownFields it is the
+// user's file, not an I/O or internal failure.
+var ErrCustomLauncherInvalid = errors.New("failed to parse any custom launcher files")
+
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -348,6 +363,10 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 
 	filesCount := 0
 	unknownFieldFiles := 0
+	invalidFiles := 0
+	// firstProblem locates the first rejected file for the caller: file name,
+	// key and position only, never the file's values.
+	firstProblem := ""
 	rawLaunchers := make([]LaunchersCustom, 0)
 	for _, launcherPath := range launcherFiles {
 		log.Debug().Msgf("loading custom launcher: %s", launcherPath)
@@ -362,7 +381,9 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 		if decodeErr := decoder.Decode(&newVals); decodeErr != nil {
 			var unknown *toml.StrictMissingError
-			if errors.As(decodeErr, &unknown) {
+			var invalid *toml.DecodeError
+			switch {
+			case errors.As(decodeErr, &unknown):
 				unknownFieldFiles++
 				// Key/position only: String() includes source text and private values.
 				fields := make([]string, 0, min(len(unknown.Errors), 16))
@@ -374,7 +395,21 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 				log.Warn().Str("file", launcherPath).Strs("unknownFields", fields).
 					Int("unknownFieldCount", len(unknown.Errors)).
 					Msg("custom launcher file skipped: unknown configuration fields")
-			} else {
+				if firstProblem == "" && len(fields) > 0 {
+					firstProblem = fmt.Sprintf("%s: unknown field %s", filepath.Base(launcherPath), fields[0])
+				}
+			case errors.As(decodeErr, &invalid):
+				invalidFiles++
+				// Error() and position only: String() includes source text.
+				row, column := invalid.Position()
+				log.Warn().Err(decodeErr).Str("file", launcherPath).
+					Int("line", row).Int("column", column).
+					Msg("custom launcher file skipped: invalid TOML or value")
+				if firstProblem == "" {
+					firstProblem = fmt.Sprintf("%s: line %d, column %d: %s",
+						filepath.Base(launcherPath), row, column, decodeErr.Error())
+				}
+			default:
 				log.Error().Err(decodeErr).Str("file", launcherPath).Msg("error parsing custom launcher")
 			}
 			continue
@@ -392,7 +427,10 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 
 	if len(launcherFiles) > 0 && filesCount == 0 {
 		if unknownFieldFiles == len(launcherFiles) {
-			return ErrCustomLauncherUnknownFields
+			return fmt.Errorf("%w: %s", ErrCustomLauncherUnknownFields, firstProblem)
+		}
+		if unknownFieldFiles+invalidFiles == len(launcherFiles) {
+			return fmt.Errorf("%w: %s", ErrCustomLauncherInvalid, firstProblem)
 		}
 		return errors.New("failed to parse any custom launcher files")
 	}

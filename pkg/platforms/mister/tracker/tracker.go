@@ -38,6 +38,13 @@ const (
 	misterUSBRootCount     = 4
 )
 
+// platformWithCoreLoadStops is an optional interface for platforms that stop a
+// core a stop was meant for when it comes up after the stop.
+type platformWithCoreLoadStops interface {
+	platforms.Platform
+	StopCoreLoadedAfterStop(core string) bool
+}
+
 // platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
 type platformWithArcadeCache interface {
 	platforms.Platform
@@ -68,6 +75,7 @@ type Tracker struct {
 	readActiveGame   func() (string, error)
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
+	malformedMGLs    map[malformedMGLKey]struct{}
 	setActiveGame    func(string) error
 	coreNameFile     string
 	selection        selectionFiles
@@ -81,32 +89,95 @@ type Tracker struct {
 	mu               syncutil.Mutex
 }
 
+// malformedMGLKey identifies one version of an MGL file that failed to decode.
+type malformedMGLKey struct {
+	modTime time.Time
+	path    string
+	size    int64
+}
+
+// maxMalformedMGLs bounds the memo of reported malformed MGLs. Resetting it
+// when full costs at most one repeated warning per file.
+const maxMalformedMGLs = 32
+
+// logMalformedMGL reports an MGL that does not decode. MGLs come from MiSTer
+// and third-party scripts (SAM writes a temp MGL it may leave truncated), and
+// ACTIVEGAME keeps pointing at one across every core change, so the same file
+// is only worth a warning once. Callers hold tr.mu.
+func (tr *Tracker) logMalformedMGL(path string, err error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		log.Warn().Err(err).Str("path", path).Msg("active game mgl file is malformed")
+		return
+	}
+	key := malformedMGLKey{path: path, size: info.Size(), modTime: info.ModTime()}
+	if _, seen := tr.malformedMGLs[key]; seen {
+		log.Debug().Err(err).Str("path", path).Msg("active game mgl file is still malformed")
+		return
+	}
+	if tr.malformedMGLs == nil || len(tr.malformedMGLs) >= maxMalformedMGLs {
+		tr.malformedMGLs = make(map[malformedMGLKey]struct{})
+	}
+	tr.malformedMGLs[key] = struct{}{}
+	log.Warn().Err(err).Str("path", path).Msg("active game mgl file is malformed")
+}
+
+// coreNameAliases maps the CORENAME a stock core reports to its system ID, for
+// the cores whose name is neither the system ID nor the catalog setname.
+func coreNameAliases() map[string]string {
+	return map[string]string{
+		"Spectrum": "ZXSpectrum",
+		"TRS-80":   "TRS80",
+		"VECTOR06": "Vector06C",
+		"PC8801":   "PC88",
+	}
+}
+
 func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping {
 	nameMap := make([]NameMapping, 0)
+	launchers := pl.Launchers(cfg)
+
+	// A catalog core ID is not always a system ID: MacQuadra800 and Z486 are
+	// cores of the MacOS and DOS systems. Their launcher, which shares the
+	// core's ID, names the system.
+	launcherSystems := make(map[string]string, len(launchers))
+	for i := range launchers {
+		if launchers[i].SystemID != "" {
+			launcherSystems[launchers[i].ID] = launchers[i].SystemID
+		}
+	}
 
 	for key := range cores.Systems {
 		system := cores.Systems[key]
-		switch {
-		case system.SetName != "":
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.SetName,
-				System:   system.ID,
-				Name:     system.ID,
-			})
-		default:
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.ID,
-				System:   system.ID,
-				Name:     system.ID,
-			})
+		systemID := system.ID
+		if _, err := systemdefs.LookupSystem(systemID); err != nil {
+			var ok bool
+			if systemID, ok = launcherSystems[system.ID]; !ok {
+				continue
+			}
 		}
+		coreName := system.ID
+		if system.SetName != "" {
+			coreName = system.SetName
+		}
+		nameMap = append(nameMap, NameMapping{
+			CoreName: coreName,
+			System:   systemID,
+			Name:     systemID,
+		})
+	}
+
+	// Some cores name themselves differently from their system, for example the
+	// Spectrum core reports Spectrum. Without these a launch is retired as
+	// belonging to a different core as soon as the core loads.
+	for coreName, systemID := range coreNameAliases() {
+		nameMap = append(nameMap, NameMapping{CoreName: coreName, System: systemID, Name: systemID})
 	}
 
 	// Installed alternate cores can report a different CORENAME from their
 	// system ID (for example RA_SNES for SNES). Include launcher runtime data
 	// so tracker validation does not discard authoritative media from them.
 	if runtimeProvider, ok := pl.(platforms.LauncherRuntimeProvider); ok {
-		launchers := pl.Launchers(cfg)
 		for i := range launchers {
 			launcher := &launchers[i]
 			if launcher.SystemID == "" {
@@ -346,6 +417,10 @@ func (tr *Tracker) LoadCore() {
 	tr.ActiveCore = coreName
 	log.Info().Str("old_core", oldCore).Str("new_core", coreName).Msg("core changed")
 
+	if stopper, ok := tr.pl.(platformWithCoreLoadStops); ok && stopper.StopCoreLoadedAfterStop(coreName) {
+		return
+	}
+
 	if coreName == misterconfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")
 		tr.stopGame()
@@ -399,12 +474,12 @@ func (tr *Tracker) LoadCore() {
 			return
 		}
 
-		tr.setActiveMedia(models.NewActiveMedia(
+		tr.setActiveMedia(trackedMedia(
 			tr.ActiveSystem,
 			tr.ActiveSystemName,
 			activeGamePath,
 			tr.ActiveGameName,
-			"", // LauncherID unknown when tracking MiSTer core changes
+			tr.arcadeLauncher(),
 		))
 		return
 	}
@@ -537,13 +612,36 @@ func (tr *Tracker) arcadeMediaPublished(path string) bool {
 }
 
 func (tr *Tracker) stopGame() {
+	tr.resetGameState()
+	tr.setActiveMedia(nil)
+}
+
+func (tr *Tracker) resetGameState() {
 	tr.ActiveGameID = ""
 	tr.ActiveGamePath = ""
 	tr.ActiveGameName = ""
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
+}
 
-	tr.setActiveMedia(nil)
+// Launcher IDs of the console launchers whose media is a Linux process Core
+// owns. They never write ACTIVEGAME, so an empty ACTIVEGAME says nothing about
+// them; the process exit and Core's own stop are what end their media.
+const (
+	VideoLauncherID   = "GenericVideo"
+	ScummVMLauncherID = "ScummVM"
+)
+
+func isProcessTrackedMedia(media *models.ActiveMedia) bool {
+	return media != nil && (media.LauncherID == VideoLauncherID || media.LauncherID == ScummVMLauncherID)
+}
+
+// notDescribedByActiveGame reports whether media is something ACTIVEGAME never
+// names: a console launcher's process, or native audio, which Core plays in its
+// own process. An empty ACTIVEGAME says nothing about either; their own end and
+// Core's stop are what clear them.
+func notDescribedByActiveGame(media *models.ActiveMedia) bool {
+	return isProcessTrackedMedia(media) || (media != nil && media.LauncherID == platforms.NativeAudioLauncherID)
 }
 
 // Load the current running game and set it as active.
@@ -556,6 +654,31 @@ func (tr *Tracker) loadGame() {
 // loadGameLocked resolves the current ACTIVEGAME value to a game and publishes
 // it as the active media, skipping the publish when it names the game already
 // active. Callers hold tr.mu.
+// trackedMedia builds the ActiveMedia for a game the tracker saw start outside
+// a Zaparoo launch. The launcher that would run it is recorded so its controls
+// apply to games started from the MiSTer menu too.
+func trackedMedia(systemID, systemName, path, name string, launcher *platforms.Launcher) *models.ActiveMedia {
+	launcherID := ""
+	if launcher != nil {
+		launcherID = launcher.ID
+	}
+	media := models.NewActiveMedia(systemID, systemName, path, name, launcherID)
+	media.LauncherControls = platforms.ControlNames(launcher)
+	return media
+}
+
+// arcadeLauncher returns the launcher for the Arcade core, or nil when the
+// platform does not list one.
+func (tr *Tracker) arcadeLauncher() *platforms.Launcher {
+	launchers := tr.pl.Launchers(tr.cfg)
+	for i := range launchers {
+		if launchers[i].ID == ArcadeSystem {
+			return &launchers[i]
+		}
+	}
+	return nil
+}
+
 func (tr *Tracker) loadGameLocked() {
 	activeGame, err := tr.activeGame()
 	switch {
@@ -564,6 +687,15 @@ func (tr *Tracker) loadGameLocked() {
 		tr.stopGame()
 		return
 	case activeGame == "":
+		// The empty signal is often the one Core wrote itself when it stopped
+		// the previous media, noticed only after a console launcher or native
+		// audio published its own. Such media is not described by ACTIVEGAME,
+		// so leave it.
+		if tr.activeMedia != nil && notDescribedByActiveGame(tr.activeMedia()) {
+			log.Debug().Msg("active game is empty, keeping media it does not describe")
+			tr.resetGameState()
+			return
+		}
 		log.Debug().Msg("active game is empty, stopping game")
 		tr.stopGame()
 		return
@@ -582,9 +714,12 @@ func (tr *Tracker) loadGameLocked() {
 		if mglErr != nil {
 			// A missing MGL (e.g. AmigaVision virtual paths, or a cleaned-up temp
 			// MGL) just means we can't track that game; not a fault worth Sentry.
-			if errors.Is(mglErr, os.ErrNotExist) {
+			switch {
+			case errors.Is(mglErr, os.ErrNotExist):
 				log.Warn().Err(mglErr).Str("path", path).Msg("active game mgl file not found")
-			} else {
+			case errors.Is(mglErr, mgls.ErrMalformedMGL):
+				tr.logMalformedMGL(path, mglErr)
+			default:
 				log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
 			}
 		} else {
@@ -642,7 +777,7 @@ func (tr *Tracker) loadGameLocked() {
 
 	// Try to get clean display name from database first, fallback to filename parsing
 	pathInfo := helpers.GetPathInfo(path)
-	name := tags.ParseTitleFromFilename(pathInfo.Name, false)
+	name := tags.ParseTitleFromFilenameForMedia(pathInfo.Name, false, system.GetMediaType())
 	if tr.db != nil && tr.db.MediaDB != nil {
 		systems := []systemdefs.System{{ID: system.ID}}
 		ctx, cancel := tr.mediaLookupContext()
@@ -666,13 +801,7 @@ func (tr *Tracker) loadGameLocked() {
 		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
-		tr.setActiveMedia(models.NewActiveMedia(
-			system.ID,
-			meta.Name,
-			path,
-			name,
-			"", // LauncherID unknown when tracking MiSTer core changes
-		))
+		tr.setActiveMedia(trackedMedia(system.ID, meta.Name, path, name, &launcher))
 	}
 }
 
@@ -771,7 +900,7 @@ func resolveMGLRelativePath(mglPath, coreName string, exists func(string) bool) 
 
 // recentGamePath reads the newest launchable path from a MiSTer recent file.
 func recentGamePath(filename string, storageSelection []byte) (string, error) {
-	if !strings.Contains(filename, "_recent") {
+	if !strings.Contains(filename, "_recent") || !strings.EqualFold(filepath.Ext(filename), ".cfg") {
 		return "", nil
 	}
 
@@ -1114,8 +1243,30 @@ func trackerFileChanged(op fsnotify.Op) bool {
 }
 
 func trackerRecentFileChanged(filename string) bool {
+	// Main writes cores_recent.cfg through a .tmp file and renames it, so the
+	// extension check keeps the half-written temp file from being read as a
+	// game recents file.
+	base := filepath.Base(filename)
 	return filepath.Dir(filename) == filepath.Clean(misterconfig.CoreConfigFolder) &&
-		strings.Contains(filepath.Base(filename), "_recent")
+		strings.Contains(base, "_recent") &&
+		strings.EqualFold(filepath.Ext(base), ".cfg")
+}
+
+// loadRecentReporting loads a recents file and logs a failure below Error
+// when it is the file being replaced or a third-party MGL it names.
+func (tr *Tracker) loadRecentReporting(name string) {
+	recentErr := tr.loadRecent(name)
+	if recentErr == nil {
+		return
+	}
+	switch {
+	case errors.Is(recentErr, os.ErrNotExist):
+		log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+	case errors.Is(recentErr, mgls.ErrMalformedMGL):
+		log.Warn().Err(recentErr).Str("file", name).Msg("recent mgl file is malformed")
+	default:
+		log.Error().Msgf("error loading recent file: %s", recentErr)
+	}
 }
 
 func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
@@ -1149,14 +1300,7 @@ func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
 		// MiSTer truncates and rewrites binary recent files. Let the write
 		// settle before reading the first complete record.
 		return func() {
-			recentErr := tr.loadRecent(name)
-			if recentErr != nil {
-				if errors.Is(recentErr, os.ErrNotExist) {
-					log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-				} else {
-					log.Error().Msgf("error loading recent file: %s", recentErr)
-				}
-			}
+			tr.loadRecentReporting(name)
 		}, true
 	}
 	return nil, false

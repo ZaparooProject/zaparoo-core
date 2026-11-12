@@ -193,3 +193,44 @@ func TestWindowsIntegration_StopReleasesTrackedProcesses(t *testing.T) {
 	assert.False(t, pi.trackProcessIfActive(440, 1, 100, &os.Process{Pid: 100}),
 		"nothing may be tracked after shutdown")
 }
+
+// A run Core declined to publish, because a stop was meant for it, is stopped
+// once its process is found, whichever of the two happens first.
+func TestWindowsIntegration_DeclinedRunIsStoppedOnceTracked(t *testing.T) {
+	t.Parallel()
+
+	for _, declinedFirst := range []bool{true, false} {
+		pi, _ := newFakeWindowsIntegration(t)
+		stops := 0
+		pi.SetStopGame(func() { stops++ })
+		pi.claimLaunch(440, 1)
+
+		if declinedFirst {
+			pi.declineRun(440, 1)
+			assert.Zero(t, stops, "nothing to stop before the process is found")
+			pi.stopIfDeclined(440, 1)
+		} else {
+			pi.stopIfDeclined(440, 1)
+			pi.declineRun(440, 1)
+		}
+		assert.Equal(t, 1, stops, "declined first: %v", declinedFirst)
+	}
+}
+
+// A run that was published normally is never stopped by the tracker, and a
+// declined run that has been replaced leaves the new run alone.
+func TestWindowsIntegration_OnlyDeclinedCurrentRunIsStopped(t *testing.T) {
+	t.Parallel()
+	pi, _ := newFakeWindowsIntegration(t)
+	stops := 0
+	pi.SetStopGame(func() { stops++ })
+
+	pi.claimLaunch(440, 1)
+	pi.stopIfDeclined(440, 1)
+	assert.Zero(t, stops)
+
+	pi.claimLaunch(440, 2)
+	pi.declineRun(440, 1)
+	pi.stopIfDeclined(440, 2)
+	assert.Zero(t, stops)
+}

@@ -162,6 +162,19 @@ func TestDirectoryProperties_SurviveBrowseCacheRebuild(t *testing.T) {
 	assert.Equal(t, "folder.png", props[0].Text)
 }
 
+func TestGetDirectoryProperties_NonDirectoryPathHasNone(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, path := range []string{"", "https://radio.example/stream.mp3", "steam://123"} {
+		props, err := mediaDB.GetDirectoryProperties(ctx, 1, path)
+		require.NoError(t, err, path)
+		assert.Empty(t, props, path)
+	}
+}
+
 func TestReplaceDirectoryProperties_IsolatesSamePathBySystem(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

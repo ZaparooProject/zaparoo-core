@@ -18,7 +18,7 @@ AArch64 package (`com.retroarch.aarch64`). It was reviewed on 2026-09-19 against
   `RetroActivityFuture` target.
 
 The index contained 236 artifacts. The catalog includes 169 applicable emulator
-cores as 260 core/system profiles across 92 canonical systems. The `cores` map
+cores as 260 core/system profiles across 93 canonical systems. The `cores` map
 records each one's exact downloaded filename once (not once per profile row -
 verified 1:1 per core, never per system) because most Android cores use
 `_libretro_android.so`, while exceptions such as Azahar use `_libretro.so`.

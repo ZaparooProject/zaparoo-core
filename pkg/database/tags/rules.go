@@ -88,7 +88,7 @@ var (
 // RulesVersion changes whenever a rule in this file changes what it accepts.
 // MediaDB folds it into its vocabulary stamp, so an upgrade that narrows a rule
 // prunes stored values the new rule refuses. Bump it with any such change.
-const RulesVersion = 1
+const RulesVersion = 2
 
 // maxFreeTextTagLen bounds a free-text value in bytes.
 const maxFreeTextTagLen = 128
@@ -254,7 +254,9 @@ func ruleAccepts(tagType TagType, rule TagRule, v string) bool {
 }
 
 // isFreeTextValue accepts the shape NormalizeCompanyName produces: words of
-// lower-case letters and digits joined by single dashes, bounded in length.
+// letters and digits joined by single dashes, bounded in length. A letter must
+// already be lower-cased, so capitals with no lower-case form (such as U+03D2)
+// are accepted.
 func isFreeTextValue(v string) bool {
 	if len(v) > maxFreeTextTagLen || !utf8.ValidString(v) {
 		return false
@@ -264,7 +266,7 @@ func isFreeTextValue(v string) bool {
 			return false
 		}
 		for _, r := range word {
-			if unicode.IsUpper(r) || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)) {
+			if unicode.ToLower(r) != r || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)) {
 				return false
 			}
 		}

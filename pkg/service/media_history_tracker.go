@@ -26,7 +26,11 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -51,11 +55,15 @@ func historyMediaName(active *models.ActiveMedia) string {
 	if active.Path == "" {
 		return ""
 	}
-	return tags.ParseTitleFromFilename(helpers.GetPathName(active.Path), false)
+	mediaType := slugs.MediaTypeGame
+	if system, err := systemdefs.GetSystem(active.SystemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+	return tags.ParseTitleFromFilenameForMedia(helpers.GetPathName(active.Path), false, mediaType)
 }
 
 const (
-	mediaHistoryUpdateInterval = 15 * time.Second
+	mediaHistoryUpdateInterval = time.Minute
 	activePlaySyncInterval     = 5 * time.Minute
 	mediaIdentityLookupTimeout = 2 * time.Second
 )
@@ -74,6 +82,7 @@ type mediaHistoryTracker struct {
 	currentMediaStartTimeMono time.Time
 	lastPlaySyncRequestAt     time.Time
 	st                        *state.State
+	cfg                       *config.Instance
 	db                        *database.Database
 	requestPlaySync           func()
 	currentHistoryDBID        int64
@@ -215,7 +224,8 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 
 				closeErr := t.db.UserDB.CloseMediaHistory(dbid, endTime, playTime)
 				if closeErr != nil {
-					log.Error().Err(closeErr).Int64("dbid", dbid).Msg("failed to close media history entry")
+					log.WithLevel(database.StorageFailureLevel(closeErr)).Err(closeErr).Int64("dbid", dbid).
+						Msg("failed to close media history entry")
 					t.mu.Lock()
 					if t.closingHistoryDBID == dbid {
 						t.closingHistoryDBID = 0
@@ -291,12 +301,15 @@ func lookupMediaIdentityWithRetry(
 }
 
 // lookupMediaIdentity snapshots scanner-derived identity for launched media.
-// A launch outside the index has no snapshot; transient failures retry within
-// a small bound without blocking notifications.
+// A file launched from outside the index gets the identity the indexer would
+// give it, but only while MediaDB is settled: mid-index, a library game may
+// just not be indexed yet, so it is left for the sweep to resolve from its
+// indexed row. Transient failures retry within a small bound without
+// blocking notifications.
 func (t *mediaHistoryTracker) lookupMediaIdentity(
 	ctx context.Context, systemID, path string,
 ) (database.MediaIdentity, bool, error) {
-	return lookupMediaIdentityWithRetry(
+	identity, found, err := lookupMediaIdentityWithRetry(
 		ctx,
 		t.db.MediaDB,
 		systemID,
@@ -305,6 +318,14 @@ func (t *mediaHistoryTracker) lookupMediaIdentity(
 		mediaIdentityRetryDelays,
 		database.LookupMediaIdentity,
 	)
+	if err != nil || found || t.db.MediaDB == nil {
+		return identity, found, err
+	}
+	identity, found = mediascanner.FallbackMediaIdentity(t.cfg, systemID, path)
+	if !found || !mediascanner.MediaDBSettled(t.db.MediaDB) {
+		return database.MediaIdentity{}, false, nil
+	}
+	return identity, true, nil
 }
 
 // snapshotMediaHistoryIdentity enriches a persisted entry without blocking notifications.
@@ -358,7 +379,11 @@ func (t *mediaHistoryTracker) requestActivePlaySyncIfDue(dbid int64, now time.Ti
 	requestPlaySync()
 }
 
-// updatePlayTime periodically updates the current entry, limiting crash-loss to 15 seconds.
+// updatePlayTime periodically updates the current entry, limiting the play
+// time lost to a crash or power-off to one interval. MiSTer sessions usually
+// end by switching the console off, so this bounds how far they undercount;
+// limits enforcement does not depend on it because it tracks the running
+// session in memory.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 	ticker := t.clock.NewTicker(mediaHistoryUpdateInterval)
 	defer ticker.Stop()

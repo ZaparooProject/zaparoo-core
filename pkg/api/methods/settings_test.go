@@ -26,17 +26,20 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -691,6 +694,7 @@ func TestHandleSettings_UpdateCheckRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 			mockPlatform.On("ID").Return("test-platform").Maybe()
 			mockPlatform.On("ManagedByPackageManager").Return(tt.packaged).Maybe()
 
@@ -1511,6 +1515,144 @@ func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownLauncher(t *testing.T
 	assert.Empty(t, got[0].BeforeExit)
 }
 
+func launcherPreferenceEnv(
+	t *testing.T,
+	cfg *config.Instance,
+	params *models.UpdateSettingsParams,
+) requests.RequestEnv {
+	t.Helper()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis", Groups: []string{"libretro"}},
+		{ID: "snes9x", SystemID: "SNES"},
+	})
+
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	return requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+		IsLocal:       true,
+	}
+}
+
+func TestHandleSettings_LauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{})
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.NotNil(t, resp.LauncherPreference)
+	assert.Empty(t, resp.LauncherPreference)
+
+	cfg.SetLauncherPreference([]string{"snes9x", "libretro", "Native"})
+	result, err = HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"snes9x", "libretro", "Native"}, resp.LauncherPreference)
+}
+
+func TestHandleSettingsUpdate_LauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := config.NewConfig(dir, config.Values{})
+	require.NoError(t, err)
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{
+		LauncherPreference: &[]string{"SNES9X", "libretro", "retroarch"},
+	})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"SNES9X", "libretro", "retroarch"}, cfg.LauncherPreference())
+
+	reloaded, err := config.NewConfig(dir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"SNES9X", "libretro", "retroarch"}, reloaded.LauncherPreference())
+}
+
+func TestHandleSettingsUpdate_LauncherPreference_RejectsUnknownAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	for name, list := range map[string][]string{
+		"unknown": {"snes9x", "doesnotexist"},
+		"empty":   {"snes9x", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+			cfg.SetLauncherPreference([]string{"retroarch"})
+			require.NoError(t, cfg.Save())
+
+			env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{LauncherPreference: &list})
+			_, err = HandleSettingsUpdate(env)
+			require.Error(t, err)
+			assert.Equal(t, []string{"retroarch"}, cfg.LauncherPreference())
+		})
+	}
+}
+
+// A client that reads the list, reorders it and sends it back must not be
+// refused for an entry the config already held, even one this platform lacks.
+func TestHandleSettingsUpdate_LauncherPreference_KeepsStoredUnknownEntry(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetLauncherPreference([]string{"RetroDECK", "snes9x"})
+	require.NoError(t, cfg.Save())
+
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{
+		LauncherPreference: &[]string{"snes9x", "retrodeck"},
+	})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"snes9x", "retrodeck"}, cfg.LauncherPreference())
+}
+
+func TestHandleSettingsUpdate_LauncherPreference_ClearAndOmit(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetLauncherPreference([]string{"snes9x"})
+	require.NoError(t, cfg.Save())
+
+	omit := true
+	env := launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{DebugLogging: &omit})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"snes9x"}, cfg.LauncherPreference())
+
+	env = launcherPreferenceEnv(t, cfg, &models.UpdateSettingsParams{LauncherPreference: &[]string{}})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.LauncherPreference())
+}
+
 // TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem verifies the
 // validate:"required,system" tag rejects payloads with an unknown system.
 func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem(t *testing.T) {
@@ -1628,6 +1770,7 @@ func TestHandleSettings_OnlineBaseURLGatedToLocal(t *testing.T) {
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
@@ -1665,6 +1808,8 @@ func TestHandleSettings_ReportsCustomOnlineServer(t *testing.T) {
 	require.NoError(t, cfg.SetOnlineBaseURL("https://custom.example.com"))
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	// A local client is also told the image folder, which lives under DataDir.
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
 
@@ -1681,6 +1826,7 @@ func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
@@ -1992,6 +2138,7 @@ func TestHandleSettings_ReaderConnectionScanModeRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
@@ -2184,11 +2331,38 @@ func TestHandleSettingsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
 		IsLocal:  true,
 	})
 	require.Error(t, err)
+	// A hand-edited file with a syntax error is the user's to fix: it goes
+	// back to them with the parse position and stays out of error reports.
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.ErrorIs(t, err, config.ErrInvalidConfigFile)
 
 	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
 	require.NoError(t, err)
 	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
 	assert.False(t, cfg.ErrorReporting(), "a refused update must not change the running config")
+}
+
+func TestHandleSettingsReload_UnparseableConfigIsClientError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, config.CfgFile), []byte("[audio\n"), 0o600))
+
+	_, err = HandleSettingsReload(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		IsLocal:  true,
+	})
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.ErrorIs(t, err, config.ErrInvalidConfigFile)
 }
 
 func TestHandlePlaytimeLimitsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
@@ -2348,4 +2522,304 @@ func TestHandlePlaytimeLimitsUpdate_WaitsForSettingsUpdate(t *testing.T) {
 	assert.Equal(t, volume, cfg.AudioVolume())
 	assert.Equal(t, retention, cfg.PlaytimeRetention())
 	player.AssertExpectations(t)
+}
+
+func musicSettingsEnv(t *testing.T, cfg *config.Instance, params *models.UpdateSettingsParams) requests.RequestEnv {
+	t.Helper()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
+	env := requests.RequestEnv{
+		Context:         context.Background(),
+		Platform:        mockPlatform,
+		Config:          cfg,
+		State:           appState,
+		Player:          mockPlayer,
+		PlaybackManager: newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{}),
+		IsLocal:         true,
+	}
+	if params != nil {
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+		env.Params = paramsJSON
+	}
+	return env
+}
+
+func TestHandleSettings_MusicDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetAudioVolume(70)
+	env := musicSettingsEnv(t, cfg, nil)
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Equal(t, 70, resp.AudioMusicVolume, "an unset music volume reports the volume it follows")
+	assert.True(t, resp.AudioMusicAutoplay, "music comes back with the device by default")
+	assert.True(t, resp.AudioMusicPauseOnLaunch)
+
+	encoded, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"audioMusicVolume":70`)
+	assert.Contains(t, string(encoded), `"audioMusicAutoplay":true`)
+	assert.Contains(t, string(encoded), `"audioMusicPauseOnLaunch":true`)
+}
+
+func TestHandleSettingsUpdate_MusicSettings(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+
+	vol := 140
+	autoplay := true
+	pause := false
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{
+		AudioMusicVolume: &vol, AudioMusicAutoplay: &autoplay, AudioMusicPauseOnLaunch: &pause,
+	})
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, 140, cfg.AudioMusicVolume())
+	assert.Equal(t, 100, cfg.AudioVolume(), "the feedback volume is separate")
+	assert.True(t, cfg.AudioMusicAutoplay())
+	assert.False(t, cfg.AudioPauseOnLaunch())
+
+	mgr, ok := env.PlaybackManager.(*stubPlaybackManager)
+	require.True(t, ok)
+	assert.InDelta(t, 1.4, mgr.volumes[mediaslot.Primary], 1e-9, "the new volume is heard at once")
+	assert.InDelta(t, 1.4, mgr.volumes[mediaslot.Background], 1e-9)
+
+	reloaded, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, 140, reloaded.AudioMusicVolume(), "the settings are saved")
+	assert.True(t, reloaded.AudioMusicAutoplay())
+	assert.False(t, reloaded.AudioPauseOnLaunch())
+}
+
+func TestHandleSettingsUpdate_AudioVolumeMovesUnsetMusicVolume(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	vol := 30
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioVolume: &vol})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	mgr, ok := env.PlaybackManager.(*stubPlaybackManager)
+	require.True(t, ok)
+	assert.InDelta(t, 0.3, mgr.volumes[mediaslot.Background], 1e-9,
+		"music follows audioVolume while it has no volume of its own")
+}
+
+func TestHandleSettingsUpdate_MusicVolumeZeroIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	vol := 0
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMusicVolume: &vol})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cfg.AudioMusicVolume())
+	mgr, ok := env.PlaybackManager.(*stubPlaybackManager)
+	require.True(t, ok)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		gain, recorded := mgr.volumes[slot]
+		assert.True(t, recorded, "zero gain is recorded for %s", slot)
+		assert.InDelta(t, 0.0, gain, 1e-9)
+	}
+
+	tooLoud := 201
+	env = musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMusicVolume: &tooLoud})
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+}
+
+func TestHandleSettingsReload_AppliesMusicVolume(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	cfg.SetAudioMusicVolume(60)
+	require.NoError(t, cfg.Save())
+
+	dataDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dataDir, config.MappingsDir), 0o750))
+	env := musicSettingsEnv(t, cfg, nil)
+	mockPlatform, ok := env.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+
+	_, err = HandleSettingsReload(env)
+	require.NoError(t, err)
+
+	mgr, ok := env.PlaybackManager.(*stubPlaybackManager)
+	require.True(t, ok)
+	assert.InDelta(t, 0.6, mgr.volumes[mediaslot.Primary], 1e-9)
+	assert.InDelta(t, 0.6, mgr.volumes[mediaslot.Background], 1e-9)
+}
+
+func TestHandleSettingsUpdate_PauseOnLaunchAppliedAfterSystemDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	pauseOnLaunch := false
+	cfg.SetSystemDefaults([]config.SystemsDefault{{System: "Audio", PauseOnLaunch: &pauseOnLaunch}})
+	require.NoError(t, cfg.Save())
+
+	pause := true
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{
+		AudioMusicPauseOnLaunch: &pause,
+		SystemDefaults:          &[]models.SystemDefault{{System: "Audio"}},
+	})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioPauseOnLaunch(), "the explicit setting wins over the carried one")
+}
+
+func TestHandleSettingsUpdate_SystemDefaultsWithoutAudioKeepPauseOnLaunch(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	pauseOnLaunch := false
+	cfg.SetSystemDefaults([]config.SystemsDefault{
+		{System: "Audio", PauseOnLaunch: &pauseOnLaunch},
+		{System: "SNES", Launcher: "snes9x"},
+	})
+	require.NoError(t, cfg.Save())
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "snes9x", SystemID: "SNES"}})
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{{System: "SNES", Launcher: "snes9x"}},
+	})
+	env.LauncherCache = cache
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.False(t, cfg.AudioPauseOnLaunch(), "leaving Audio out of the list keeps its pause_on_launch")
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 2)
+	assert.Equal(t, "SNES", got[0].System)
+	assert.Equal(t, "Audio", got[1].System)
+	assert.Empty(t, got[1].Launcher)
+}
+
+func TestHandleSettingsUpdate_MidiSoundFont(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+
+	font := "gm.sf2"
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Equal(t, "gm.sf2", cfg.MidiSoundFont())
+
+	reloaded, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, "gm.sf2", reloaded.MidiSoundFont(), "the setting is saved")
+
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Equal(t, "gm.sf2", resp.AudioMidiSoundFont)
+
+	cleared := ""
+	env = musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &cleared})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.MidiSoundFont(), "an empty path goes back to FM")
+}
+
+// saveFailFS fails the rename that commits a config save once failSaves is
+// set, so a save fails the same way on every OS. A read-only folder does not
+// stop a write on Windows.
+type saveFailFS struct {
+	afero.Fs
+	failSaves atomic.Bool
+}
+
+//nolint:wrapcheck // Fault injector preserves filesystem errors unchanged.
+func (fs *saveFailFS) Rename(from, to string) error {
+	if fs.failSaves.Load() {
+		return syscall.ENOSPC
+	}
+	return fs.Fs.Rename(from, to)
+}
+
+// newSaveFailConfig returns a config on disk whose saves fail once the
+// returned filesystem's failSaves is set.
+func newSaveFailConfig(t *testing.T) (*config.Instance, *saveFailFS) {
+	t.Helper()
+	fs := &saveFailFS{Fs: afero.NewOsFs()}
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, fs)
+	require.NoError(t, err)
+	return cfg, fs
+}
+
+// A save that fails leaves the SoundFont MIDI files play through as it was.
+func TestHandleSettingsUpdate_MidiSoundFontKeptWhenSaveFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, fs := newSaveFailConfig(t)
+	cfg.SetMidiSoundFont("old.sf2")
+	require.NoError(t, cfg.Save())
+	fs.failSaves.Store(true)
+
+	font := "new.sf2"
+	_, err := HandleSettingsUpdate(musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioMidiSoundFont: &font}))
+	require.ErrorContains(t, err, "failed to save config")
+	assert.Equal(t, "old.sf2", cfg.MidiSoundFont())
+}
+
+func TestHandleSettingsUpdate_AudioNormalize(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	require.True(t, cfg.AudioNormalize(), "normalization is on by default")
+
+	off := false
+	env := musicSettingsEnv(t, cfg, &models.UpdateSettingsParams{AudioNormalize: &off})
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.False(t, cfg.AudioNormalize())
+
+	reloaded, err := config.NewConfig(configDir, config.Values{})
+	require.NoError(t, err)
+	assert.False(t, reloaded.AudioNormalize(), "the setting is saved")
+
+	if pl, ok := env.Platform.(*mocks.MockPlatform); ok {
+		pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true}).Maybe()
+	}
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.False(t, resp.AudioNormalize)
 }

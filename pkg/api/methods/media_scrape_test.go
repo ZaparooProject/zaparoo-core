@@ -249,6 +249,9 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	// Linked rows take the run's results once it finishes, across every
+	// system the run covered.
+	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil), (*database.ScrapeScope)(nil)).Return(nil).Once()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
@@ -316,6 +319,138 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	assert.True(t, status.Done)
 
 	mockDB.AssertExpectations(t)
+}
+
+// A run whose linked games could not be updated has not finished: it ends
+// failed with a reason and keeps its operation instead of reporting success.
+func TestHandleMediaScrape_LinkSyncFailureFailsRun(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusFailed,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	backgroundOperationDone := make(chan struct{})
+	mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		close(backgroundOperationDone)
+	}).Return().Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil), (*database.ScrapeScope)(nil)).
+		Return(errors.New("database is locked")).Once()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	_, err := HandleMediaScrape(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	})
+	require.NoError(t, err)
+
+	var final models.ScrapingStatusResponse
+	timeout := time.After(2 * time.Second)
+	for !final.Done {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			require.NoError(t, json.Unmarshal(n.Params, &final))
+		case <-timeout:
+			t.Fatal("timed out waiting for the terminal media.scraping notification")
+		}
+	}
+	assert.Equal(t, scrapeStateFailed, final.State)
+	assert.Equal(t, "failed to update linked games", final.Error)
+	assert.False(t, final.Scraping)
+
+	select {
+	case <-backgroundOperationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scrape did not release the database")
+	}
+	mockDB.AssertNotCalled(t, "ClearScrapingOperation")
+	mockDB.AssertExpectations(t)
+}
+
+// TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount verifies the
+// terminal notification reports the refreshed stored count rather than the
+// value read before the refresh.
+func TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+		ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+	}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
+	mockDB.On("RefreshScrapedMediaCounts", assertmock.Anything).Return(nil)
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "test-scraper").Return(9, true, nil)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": doneUpdatePlatformScraper("test-scraper", "Test Scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	_, err := HandleMediaScrape(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	})
+	require.NoError(t, err)
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var payload models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &payload))
+			if !payload.Done {
+				continue
+			}
+			assert.Equal(t, 9, payload.TotalScraped)
+			require.Eventually(t, func() bool {
+				return !IsScrapingRunning()
+			}, 2*time.Second, 10*time.Millisecond)
+			return
+		case <-timeout:
+			t.Fatal("timed out waiting for the terminal media.scraping notification")
+		}
+	}
 }
 
 // TestHandleMediaScrape_PublishesDoneAfterTagRefresh covers clients that
@@ -517,7 +652,7 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 // TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that terminal
 // scrape handling invalidates systems whose committed image properties changed.
 // Both completion paths are covered: an explicit Done update and channel close.
-func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
+func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance and the
 	// process-wide thumb cache pointer.
 	tests := []struct {
@@ -540,15 +675,16 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 
 			fs := afero.NewMemMapFs()
 			oldCache := &mediaThumbCache{
-				fs:            fs,
-				dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-				resolvedTypes: make(map[string]resolvedThumb),
+				fs:       fs,
+				dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+				resolved: make(map[string]resolvedThumb),
 			}
 			mediaID := int64(1)
-			setMediaThumbCacheForTest(
-				t, oldCache, mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
-				[]byte("png-data"), "image/png",
-			)
+			ref := mediaRefParam{MediaID: &mediaID}
+			path := setMediaThumbCacheForTest(t, oldCache, "f:1:1:/boxart.png", 100, []byte("png-data"), "image/png")
+			oldCache.setResolvedThumb(ref, nil, 100, resolvedThumb{
+				system: "SNES", typeTag: "property:image-boxart", path: path, contentType: "image/png",
+			})
 			mediaThumbCachePointer.Store(oldCache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
@@ -607,16 +743,11 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 				return !IsScrapingRunning()
 			}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
 
-			newCache := mediaThumbCachePointer.Load()
-			require.NotNil(t, newCache)
-			assert.Equal(t, oldCache.dir, newCache.dir,
-				"wipe keeps the deterministic version dir in place")
-			assert.Equal(t, mediaThumbCacheVersionDir(), filepath.Base(newCache.dir),
-				"live cache stays in the versioned thumbs/v<N> directory")
-			_, _, found := newCache.get(
-				mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
-			)
-			assert.False(t, found, "scrape completion should wipe cached thumbnails")
+			assert.Same(t, oldCache, mediaThumbCachePointer.Load())
+			_, memoOK := oldCache.getResolvedThumb(ref, nil, 100)
+			assert.False(t, memoOK, "scrape completion makes changed covers resolve their source again")
+			_, _, found := oldCache.get("f:1:1:/boxart.png", 100)
+			assert.True(t, found, "cached thumbnails are named by source and survive the scrape")
 		})
 	}
 }
@@ -624,19 +755,20 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 func TestInvalidateChangedScrapeThumbnails_NoChangesPreservesCache(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs: fs, dir: filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	path := setMediaThumbCacheForTest(t, cache, "f:1:1:/boxart.png", 256, []byte("cached"), "image/webp")
+	cache.setResolvedThumb(ref, nil, 256, resolvedThumb{system: "SNES", path: path, contentType: "image/webp"})
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
 	invalidateChangedScrapeThumbnails(testhelpers.NewMockMediaDBI())
 
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
-	assert.True(t, found, "metadata-only scrape must keep existing thumbnails")
+	_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+	assert.True(t, memoOK, "metadata-only scrape must keep resolved thumbnails")
 }
 
 func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
@@ -737,12 +869,13 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs: fs, dir: filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	path := setMediaThumbCacheForTest(t, cache, "f:1:1:/boxart.png", 256, []byte("cached"), "image/webp")
+	cache.setResolvedThumb(ref, nil, 256, resolvedThumb{system: "SNES", path: path, contentType: "image/webp"})
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
@@ -786,8 +919,8 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
-	assert.False(t, found, "failed scrape must invalidate artwork changed before failure")
+	_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+	assert.False(t, memoOK, "failed scrape must re-resolve artwork changed before failure")
 
 	var sawFailure bool
 	for {
@@ -828,6 +961,106 @@ func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
 	assert.False(t, status.Scraping)
 	assert.False(t, status.Done)
 	assert.Equal(t, 7, status.TotalScraped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaScrapeStatus_IdleUsesStoredCountWithoutQuery(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "").Return(9, true, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, 9, status.TotalScraped)
+	mockDB.AssertNotCalled(t, "GetTotalScrapedMediaCount", assertmock.Anything)
+}
+
+func TestHandleMediaScrapeStatus_QueryTimeoutFallsBackToStoredCount(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		Scraping:  true,
+	})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, context.DeadlineExceeded)
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "test-scraper").Return(12, true, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, 12, status.TotalScraped, "a timed-out count must not report zero")
+}
+
+func TestWithMediaCounts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("settled status gets the library size", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetTotalMediaCount").Return(1234, nil)
+		mockDB.On("GetMissingMediaCount").Return(5, nil)
+
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, mockDB)
+		require.NotNil(t, resp.TotalMedia)
+		require.NotNil(t, resp.MissingMedia)
+		assert.Equal(t, 1234, *resp.TotalMedia)
+		assert.Equal(t, 5, *resp.MissingMedia)
+	})
+
+	t.Run("indexing status is left alone", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true, Indexing: true}, mockDB)
+		assert.Nil(t, resp.TotalMedia)
+		mockDB.AssertNotCalled(t, "GetTotalMediaCount")
+	})
+
+	t.Run("no database leaves counts unset", func(t *testing.T) {
+		t.Parallel()
+		missing := WithMediaCounts(&models.IndexingStatusResponse{Exists: false}, testhelpers.NewMockMediaDBI())
+		assert.Nil(t, missing.TotalMedia)
+		assert.Nil(t, WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, nil).TotalMedia)
+	})
+
+	t.Run("count errors leave the field unset", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetTotalMediaCount").Return(0, errors.New("boom"))
+		mockDB.On("GetMissingMediaCount").Return(0, errors.New("boom"))
+		resp := WithMediaCounts(&models.IndexingStatusResponse{Exists: true}, mockDB)
+		assert.Nil(t, resp.TotalMedia)
+		assert.Nil(t, resp.MissingMedia)
+	})
+}
+
+func TestFallbackScrapedMediaCount_ReadsStoredCountAfterContextExpired(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetStoredScrapedMediaCount", assertmock.MatchedBy(func(ctx context.Context) bool {
+		return ctx.Err() == nil
+	}), "test-scraper").Return(8, true, nil)
+
+	count := fallbackScrapedMediaCount(expired, &database.Database{MediaDB: mockDB}, "test-scraper")
+	assert.Equal(t, 8, count, "the stored read must not inherit the expired caller context")
 	mockDB.AssertExpectations(t)
 }
 
@@ -1376,6 +1609,44 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	assert.Equal(t, "cancelled", status.State)
 }
 
+func TestScrapeQueueSortsWaitingJobsWithNewOnes(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	// An earlier index left a catalog job waiting; this one adds the device's
+	// own arcade source, which must fill first.
+	waiting := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "gamedatabase", RunID: "waiting", FillMissing: true, Systems: []string{"Arcade"},
+		Pending: []database.ScrapeJob{
+			{ScraperID: "mister-docs", RunID: "docs", FillMissing: true, Systems: []string{"Arcade"}},
+		},
+	}
+	db.On("GetScrapingOperation").Return(waiting, true, nil).Once()
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		var ok bool
+		stored, ok = args.Get(0).(database.ScrapingOperation)
+		require.True(t, ok)
+	}).Return(nil).Once()
+	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+
+	scrapers := map[string]platforms.Scraper{
+		"mister-arcade": {ID: "mister-arcade", AutoScrapeOrder: scraper.AutoOrderDevice},
+		"gamedatabase":  {ID: "gamedatabase", AutoScrapeOrder: scraper.AutoOrderCatalog},
+		"mister-docs":   {ID: "mister-docs", AutoScrapeOrder: scraper.AutoOrderDocuments},
+	}
+	arcade := database.ScrapeJob{ScraperID: "mister-arcade", FillMissing: true, Systems: []string{"Arcade"}}
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{arcade}, scrapers))
+
+	require.Equal(t, "mister-arcade", stored.ScraperID)
+	require.NotEmpty(t, stored.RunID)
+	require.Len(t, stored.Pending, 2)
+	require.Equal(t, "gamedatabase", stored.Pending[0].ScraperID)
+	require.Equal(t, "waiting", stored.Pending[0].RunID, "the waiting job keeps its run and its markers")
+	require.Equal(t, "mister-docs", stored.Pending[1].ScraperID)
+}
+
 func TestScrapeQueuePreservesAndDeduplicatesPendingWork(t *testing.T) {
 	ClearScrapingStatus()
 	t.Cleanup(ClearScrapingStatus)
@@ -1393,7 +1664,7 @@ func TestScrapeQueuePreservesAndDeduplicatesPendingWork(t *testing.T) {
 	}).Return(nil).Once()
 	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
 	job := database.ScrapeJob{ScraperID: "local", FillMissing: true, Systems: []string{"Pinball"}}
-	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{job, job}))
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{job, job}, nil))
 	require.Equal(t, old.ScraperID, stored.ScraperID)
 	require.Equal(t, old.RunID, stored.RunID)
 	require.True(t, stored.Force)
@@ -1495,9 +1766,12 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	op := database.ScrapingOperation{
 		Version: 1, ScraperID: "first", RunID: "one", FillMissing: true,
 		Systems: []string{"Pinball"}, Pending: []database.ScrapeJob{
-			{ScraperID: "second", RunID: "two", FillMissing: true, Systems: []string{"Pinball"}},
+			{ScraperID: "second", RunID: "two", FillMissing: true, Systems: []string{"Arcade"}},
 		},
 	}
+	// Each job's linked rows are synced for that job's own systems.
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Pinball"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
+	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Arcade"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
 	db.On("GetScrapingOperation").Return(op, true, nil).Once()
 	db.On("GetScrapingStatus").Return(mediadb.IndexingStatusPending, nil).Once()
 	require.NoError(t, ResumeMediaScrape(&env, op))
@@ -2313,7 +2587,7 @@ func TestScrapeQueueKeepsScopeAcrossTheQueue(t *testing.T) {
 	// A post-index fill-missing job for the same scraper and system must not be
 	// deduplicated against the scoped one: they are different requests.
 	wide := database.ScrapeJob{ScraperID: "manual", FillMissing: true, Systems: []string{"SNES"}}
-	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}))
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}, nil))
 	require.Equal(t, scope, stored.Scope, "the running scope must survive being folded into the queue")
 	require.Len(t, stored.Pending, 1, "a whole-system job is not a duplicate of a scoped one")
 	require.Nil(t, stored.Pending[0].Scope)
@@ -2343,4 +2617,30 @@ func TestScrapeQueueAdvancePromotesJobScope(t *testing.T) {
 	require.Equal(t, scope, next.Scope, "a queued scope must survive promotion")
 	require.Equal(t, scope, stored.Scope, "and must be persisted with it")
 	db.AssertExpectations(t)
+}
+
+// A scraper stopped by a cancel reports the context's own error as it ends.
+// That is the cancel arriving, not the run failing.
+func TestScrapingStatusFromUpdate_CancelIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	update := scraper.ScrapeUpdate{Done: true, FatalErr: context.Canceled, Processed: 3, Total: 9}
+
+	status := scrapingStatusFromUpdate(cancelled, "media-folder", false, &update, false, false)
+	assert.Equal(t, scrapeStateCancelled, status.State)
+	assert.Empty(t, status.Error)
+
+	// The same run ending on an error of its own is still a failure.
+	failed := scraper.ScrapeUpdate{Done: true, FatalErr: errors.New("disk gone")}
+	status = scrapingStatusFromUpdate(context.Background(), "media-folder", false, &failed, false, false)
+	assert.Equal(t, scrapeStateFailed, status.State)
+	assert.Equal(t, "disk gone", status.Error)
+
+	// A cancelled run is stored as cancelled whatever error it ended on, and
+	// is reported the same way.
+	both := scraper.ScrapeUpdate{Done: true, FatalErr: errors.New("disk gone")}
+	status = scrapingStatusFromUpdate(cancelled, "media-folder", false, &both, false, false)
+	assert.Equal(t, scrapeStateCancelled, status.State)
+	assert.Empty(t, status.Error)
 }

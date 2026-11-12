@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
@@ -115,6 +116,20 @@ func resolveRelativeMediaPath(
 		matches = append(matches, media)
 	}
 
+	if len(matches) == 0 {
+		for _, candidate := range indexedRelativeMediaPathCandidates(env, system.SystemID, remainder) {
+			media, err := env.Database.MediaDB.FindMediaBySystemAndPath(env.Context, system.DBID, candidate)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve relative media path: %w", err)
+			}
+			if media == nil || seenMedia[media.DBID] {
+				continue
+			}
+			seenMedia[media.DBID] = true
+			matches = append(matches, media)
+		}
+	}
+
 	switch len(matches) {
 	case 0:
 		return nil, nil //nolint:nilnil // no relative candidate matched
@@ -171,5 +186,54 @@ func relativeMediaPathCandidates(env *requests.RequestEnv, systemID, remainder s
 		}
 	}
 
+	return candidates
+}
+
+// indexedRelativeMediaPathCandidates returns the paths remainder may have under
+// the folders the index holds for a system, where such a folder is one of the
+// system's launcher folders under another spelling. A scan matches a launcher
+// folder to a directory whatever its case and indexes the directory's own
+// name, so on a case-sensitive filesystem relativeMediaPathCandidates can name
+// a folder the index spells differently. Callers try these only after the
+// literal candidates miss.
+func indexedRelativeMediaPathCandidates(env *requests.RequestEnv, systemID, remainder string) []string {
+	if env.Platform == nil || env.Database == nil || env.Database.MediaDB == nil {
+		return nil
+	}
+	system, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return nil
+	}
+	literal := relativeMediaPathCandidates(env, systemID, "")
+	if len(literal) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(literal))
+	spelled := make(map[string]struct{}, len(literal))
+	for _, folder := range literal {
+		wanted[helpers.NormalizePathForComparison(folder)] = struct{}{}
+		spelled[folder] = struct{}{}
+	}
+
+	rootDirs := env.Platform.RootDirs(env.Config)
+	indexed, ready, err := env.Database.MediaDB.BrowseSystemRootCandidates(
+		env.Context,
+		database.BrowseSystemRootCandidatesOptions{Roots: rootDirs, Systems: []systemdefs.System{*system}},
+	)
+	if err != nil || !ready {
+		return nil
+	}
+	var candidates []string
+	for _, root := range rootDirs {
+		for _, name := range indexed.Children[root] {
+			folder := filepath.ToSlash(filepath.Clean(filepath.Join(root, name)))
+			if _, same := spelled[folder]; same {
+				continue
+			}
+			if _, ok := wanted[helpers.NormalizePathForComparison(folder)]; ok {
+				candidates = append(candidates, filepath.ToSlash(filepath.Clean(filepath.Join(folder, remainder))))
+			}
+		}
+	}
 	return candidates
 }

@@ -22,13 +22,13 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -177,7 +177,7 @@ func TestRunWritesSortedArcadeCatalog(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "mame.xml")
 	require.NoError(t, os.WriteFile(in, []byte(testMachineList), 0o600))
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	require.NoError(t, run(in, out))
 
@@ -193,7 +193,7 @@ func readCatalog(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path) //nolint:gosec // test fixture path
 	require.NoError(t, err)
-	zr, err := gzip.NewReader(bytes.NewReader(data))
+	zr, err := zstdembed.NewReader(bytes.NewReader(data))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = zr.Close() })
 	contents, err := io.ReadAll(zr)
@@ -204,7 +204,7 @@ func readCatalog(t *testing.T, path string) []string {
 func TestRunReportsAnUnreadableInput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	err := run(filepath.Join(dir, "missing.xml"), out)
 
@@ -218,7 +218,7 @@ func TestRunReportsUnparsableXML(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "mame.xml")
 	require.NoError(t, os.WriteFile(in, []byte("<mame><machine name=\"x\">"), 0o600))
-	out := filepath.Join(dir, "names.tsv.gz")
+	out := filepath.Join(dir, "names.tsv.zst")
 
 	err := run(in, out)
 

@@ -185,6 +185,35 @@ func TestFindScummVMBinary(t *testing.T) {
 	assert.Contains(t, binary, "scummvm")
 }
 
+// MiSTer, 2026-10-26: a scummvm.ini beside scummvm270 sorted first, exFAT
+// reported it executable, and Core ran the ini as a shell script.
+func TestFindScummVMBinaryInSkipsFilesWithExtensions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"scummvm.ini", "scummvm.log", "scummvm270"} {
+		// exFAT marks every file executable.
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755)) //nolint:gosec // see above
+	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "scummvm-data"), 0o750))
+
+	binary, err := findScummVMBinaryIn(dir)
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "scummvm270"), binary)
+}
+
+func TestFindScummVMBinaryInWithoutBinary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scummvm.ini"), []byte("x"), 0o755)) //nolint:gosec // as above
+
+	_, err := findScummVMBinaryIn(dir)
+
+	require.Error(t, err)
+}
+
 func TestScanScummVMGames(t *testing.T) {
 	t.Parallel()
 

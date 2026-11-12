@@ -94,6 +94,9 @@ type SettingsService interface {
 	// GetBackupStatus fetches local/remote backup status.
 	GetBackupStatus(ctx context.Context) (*models.BackupStatusResponse, error)
 
+	// GetOnlineStatus fetches the online account link and its features.
+	GetOnlineStatus(ctx context.Context) (*models.OnlineStatusResponse, error)
+
 	// RunRemoteBackup uploads a backup to the configured remote provider.
 	RunRemoteBackup(ctx context.Context) (*RemoteBackupRun, error)
 
@@ -298,6 +301,20 @@ func (s *DefaultSettingsService) GetBackupStatus(ctx context.Context) (*models.B
 	var status models.BackupStatusResponse
 	if err := json.Unmarshal([]byte(resp), &status); err != nil {
 		return nil, fmt.Errorf("failed to parse backup status: %w", err)
+	}
+	return &status, nil
+}
+
+// GetOnlineStatus fetches the online account link, the device's name on it
+// and the account features.
+func (s *DefaultSettingsService) GetOnlineStatus(ctx context.Context) (*models.OnlineStatusResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodOnlineStatus, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get online status: %w", err)
+	}
+	var status models.OnlineStatusResponse
+	if err := json.Unmarshal([]byte(resp), &status); err != nil {
+		return nil, fmt.Errorf("failed to parse online status: %w", err)
 	}
 	return &status, nil
 }

@@ -23,8 +23,10 @@ const (
 )
 
 type windowSearchState struct {
-	pids  map[uint32]struct{}
-	found uintptr
+	pids map[uint32]struct{}
+	// classes, when set, limits the search to windows of these classes.
+	classes map[string]struct{}
+	found   uintptr
 }
 
 type windowsAPI struct{}
@@ -35,6 +37,7 @@ var (
 	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
 	procBringWindowToTop         = user32.NewProc("BringWindowToTop")
 	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetClassName             = user32.NewProc("GetClassNameW")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	procGetWindow                = user32.NewProc("GetWindow")
 	procGetWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
@@ -58,10 +61,29 @@ func (windowsAPI) allowProcessForeground(pid uint32) {
 }
 
 func (windowsAPI) findProcessWindow(pid uint32) (uintptr, bool) {
-	if hwnd, found := findWindowForPIDs(map[uint32]struct{}{pid: {}}); found {
+	if hwnd, found := findWindowForPIDs(map[uint32]struct{}{pid: {}}, nil); found {
 		return hwnd, true
 	}
-	return findWindowForPIDs(processTreePIDs(pid))
+	return findWindowForPIDs(processTreePIDs(pid), nil)
+}
+
+func (windowsAPI) findProcessWindowOfClass(pid uint32, classes []string) (uintptr, bool) {
+	wanted := make(map[string]struct{}, len(classes))
+	for _, class := range classes {
+		wanted[class] = struct{}{}
+	}
+	return findWindowForPIDs(processTreePIDs(pid), wanted)
+}
+
+// windowClass returns the class name of hwnd.
+func windowClass(hwnd uintptr) string {
+	var buf [256]uint16
+	//nolint:gosec // Win32 API writes the class name into the caller's buffer.
+	n, _, _ := procGetClassName.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buf[:n])
 }
 
 func enumWindow(hwnd, lparam uintptr) uintptr {
@@ -80,13 +102,18 @@ func enumWindow(hwnd, lparam uintptr) uintptr {
 	if _, ok := state.pids[windowPID]; !ok {
 		return 1
 	}
+	if len(state.classes) > 0 {
+		if _, ok := state.classes[windowClass(hwnd)]; !ok {
+			return 1
+		}
+	}
 
 	state.found = hwnd
 	return 0
 }
 
-func findWindowForPIDs(pids map[uint32]struct{}) (uintptr, bool) {
-	state := windowSearchState{pids: pids}
+func findWindowForPIDs(pids map[uint32]struct{}, classes map[string]struct{}) (uintptr, bool) {
+	state := windowSearchState{pids: pids, classes: classes}
 	//nolint:gosec // EnumWindows synchronously reads and updates state through lParam.
 	_, _, _ = procEnumWindows.Call(enumWindowsCallback, uintptr(unsafe.Pointer(&state)))
 	runtime.KeepAlive(&state)

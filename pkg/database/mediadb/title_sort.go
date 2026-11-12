@@ -140,7 +140,11 @@ func nextBrowseTitleToken(title string, at int) (browseTitleToken, bool) {
 	return browseTitleToken{}, false
 }
 
-func compareBrowseDirectoryNames(left, right string) int {
+// CompareBrowseDirectoryNames orders names the way media.browse orders
+// indexed directories: natural, case-insensitive title order with bracketed
+// metadata ignored, then the raw name as a tiebreaker. Callers that list
+// directories themselves use it so their order matches the indexed browse.
+func CompareBrowseDirectoryNames(left, right string) int {
 	leftTitle := stripBrowseDirectoryMetadata(left)
 	rightTitle := stripBrowseDirectoryMetadata(right)
 	if order := compareBrowseTitles(leftTitle, rightTitle); order != 0 {

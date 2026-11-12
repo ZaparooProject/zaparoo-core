@@ -20,10 +20,12 @@
 package tokens_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCommandPolicyZeroValueIsUnrestricted pins the default. Every channel
@@ -111,4 +113,29 @@ func TestCommandPolicyDisjointIntersectForbidsEverything(t *testing.T) {
 	assert.False(t, policy.Allows("stop"))
 	assert.False(t, policy.Allows("execute"))
 	assert.Empty(t, policy.Names())
+}
+
+func TestCommandPolicyJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	nothing := tokens.NewCommandPolicy("launch").Intersect(tokens.NewCommandPolicy("input.keyboard"))
+	require.False(t, nothing.Unrestricted())
+
+	for name, policy := range map[string]tokens.CommandPolicy{
+		"unrestricted": {},
+		"bounded":      tokens.NewCommandPolicy("launch", "Playlist.Play"),
+		"permits none": nothing,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data, err := json.Marshal(policy)
+			require.NoError(t, err)
+			var restored tokens.CommandPolicy
+			require.NoError(t, json.Unmarshal(data, &restored))
+			assert.Equal(t, policy.Unrestricted(), restored.Unrestricted())
+			assert.Equal(t, policy.Names(), restored.Names())
+			assert.Equal(t, policy.Allows("launch"), restored.Allows("launch"))
+			assert.Equal(t, policy.Allows("execute"), restored.Allows("execute"))
+		})
+	}
 }

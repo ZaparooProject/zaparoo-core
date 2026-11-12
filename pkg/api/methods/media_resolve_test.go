@@ -288,3 +288,46 @@ func TestResolveMediaBySystemAndPath_MalformedRelativePathSkipsFallback(t *testi
 	mockDB.AssertExpectations(t)
 	pl.AssertNotCalled(t, "RootDirs", mock.Anything)
 }
+
+// The index holds a system folder under the name it has on disk, which a
+// case-sensitive filesystem lets differ from the launcher's name for it.
+func TestResolveMediaBySystemAndPath_RelativeFallbackFollowsIndexedFolderCase(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
+	rootDir := filepath.Join(string(filepath.Separator), "roms")
+	mediaPath := filepath.Join(rootDir, "NES", "mario.nes")
+	media := database.Media{DBID: 20, Path: mediaPath}
+	row := &database.MediaFullRow{
+		Media:  media,
+		Title:  database.MediaTitle{DBID: 30, Name: "Mario"},
+		System: system,
+	}
+	launcherCache := makeResolveLauncherCache([]platforms.Launcher{
+		{ID: "nes", SystemID: "NES", Folders: []string{"nes"}},
+	})
+
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, filepath.Join("NES", "mario.nes")).
+		Return((*database.Media)(nil), nil)
+	pl.On("RootDirs", cfg).Return([]string{rootDir})
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID,
+		filepath.ToSlash(filepath.Join(rootDir, "nes", "mario.nes"))).Return((*database.Media)(nil), nil)
+	mockDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{
+			Children: map[string][]string{rootDir: {"NES", "SNES"}},
+			HasMedia: map[string]bool{rootDir: true},
+		}, true, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, filepath.ToSlash(mediaPath)).Return(&media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, media.DBID).Return(row, nil)
+
+	env := makeResolveMediaEnv(mockDB, pl, launcherCache, cfg)
+	result, err := resolveMediaBySystemAndPath(&env, "NES", filepath.Join("NES", "mario.nes"))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, mediaPath, result.Path)
+	mockDB.AssertExpectations(t)
+}

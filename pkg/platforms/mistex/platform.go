@@ -13,6 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
@@ -30,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
@@ -69,6 +71,7 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
@@ -404,8 +407,9 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	// classification, so every descriptor it indexes is an Arcade row.
 	arcade := mister.NewArcadeScraper(p, []string{systemdefs.SystemArcade})
 	thumbnails := libretrothumbs.NewPlatformScraper()
+	catalog := gamedatabase.NewPlatformScraper(gamedatabase.SetNameCache(mister.NewArcadeSetNameCache(p)))
 	return map[string]platforms.Scraper{
-		gamelist.ID: gamelist, media.ID: media, arcade.ID: arcade, thumbnails.ID: thumbnails,
+		gamelist.ID: gamelist, media.ID: media, arcade.ID: arcade, thumbnails.ID: thumbnails, catalog.ID: catalog,
 	}
 }
 

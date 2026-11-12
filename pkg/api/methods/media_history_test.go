@@ -94,9 +94,11 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
+	rootDir := browseTestAbsPath("mock", "roms")
+	// Registered before the basic mock so it wins over its "/mock/roms".
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{rootDir})
 	mockPlatform.SetupBasicMock()
 	now := time.Now()
-	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
 	mediaPath := filepath.Join(rootDir, "NES", "smb.nes")
 	missingPath := filepath.Join(rootDir, "NES", "missing.nes")
 	relPath := filepath.ToSlash(filepath.Join("NES", "smb.nes"))
@@ -133,6 +135,10 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 		pathutil.CanonicalMediaPath(missingPath),
 	}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
+	// The missing file is matched by title and no indexed title has it.
+	mockMediaDB.On("GetOptimizationStatus").Return("completed", nil)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "NES", "missing", mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil).Once()
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),

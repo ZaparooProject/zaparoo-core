@@ -57,6 +57,9 @@ func TestLookupArcadeBoardResolvesSourceSpellings(t *testing.T) {
 		// A canonical value is found by its own spelling.
 		{raw: "capcom:cps", want: TagArcadeBoardCapcomCPS},
 		{raw: "Irem M72", want: TagArcadeBoardIremM72},
+		// A vendor alone is the vendor's unspecified board.
+		{raw: "Stern", want: TagArcadeBoardStern},
+		{raw: "Konami", want: TagArcadeBoardKonami},
 	} {
 		got, ok := LookupArcadeBoard(tc.raw)
 		if assert.True(t, ok, "%q should resolve", tc.raw) {
@@ -69,8 +72,8 @@ func TestLookupArcadeBoardRefusesWhatNamesNoOneBoard(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{
 		"", "Konami Unique", "Taito Licensed", "Atari 6502", "Capcom CPS-0",
-		// A vendor stripped of "hardware" is not a board.
-		"Tecmo", "Tehkan", "Stern",
+		// A vendor with no canonical value of its own is not a board.
+		"Tecmo", "Tehkan",
 		// "System 1" is a Sega, Namco and Atari board alike.
 		"System 1",
 	} {

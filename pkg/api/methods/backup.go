@@ -71,6 +71,11 @@ func backupMethodError(action string, err error) error {
 	if errors.As(err, &busy) {
 		return models.ClientErrf("backup is busy with %s", busy.Kind)
 	}
+	// A name the client sent that is malformed, or names a backup that has
+	// since been deleted, is the client's request, not a backup failure.
+	if errors.Is(err, backupsvc.ErrInvalidBackupName) || errors.Is(err, backupsvc.ErrBackupNotFound) {
+		return models.ClientErrf("failed to %s: %w", action, err)
+	}
 	return fmt.Errorf("failed to %s: %w", action, err)
 }
 
@@ -176,6 +181,23 @@ func HandleBackupStatus(env requests.RequestEnv) (any, error) {
 		mgr.RefreshRemoteAvailabilityIfStaleAsync()
 	}
 	return mgr.Status(), nil
+}
+
+// HandleOnlineStatus returns the online account link state and the account
+// features the Online service last reported. It answers from stored state;
+// like settings.backup.status, local and admin requests may start a
+// background refresh when the last check is stale.
+//
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleOnlineStatus(env requests.RequestEnv) (any, error) {
+	if err := requireBackupRuntime(&env); err != nil {
+		return nil, err
+	}
+	mgr := newBackupManager(&env)
+	if isLocalOrAdmin(&env) {
+		mgr.RefreshRemoteAvailabilityIfStaleAsync()
+	}
+	return mgr.OnlineStatus(), nil
 }
 
 //nolint:gocritic // API dispatch requires RequestEnv by value.

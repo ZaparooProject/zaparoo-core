@@ -95,6 +95,112 @@ func TestScrapeJobsForSourcesQueuesEveryArcadeSystemIndexed(t *testing.T) {
 	assert.False(t, jobs[0].Force)
 }
 
+func TestScrapeJobsForSourcesQueuesEverySystemForAnAllLaunchersScraper(t *testing.T) {
+	t.Parallel()
+	scrapers := arcadeScrapers()
+	docs := platforms.Scraper{
+		ID: "mister-docs", Name: "mister-docs", SupportedSystemIDs: []string{},
+		SupportsFillMissing: true, AutoScrapeAllLaunchers: true, Scrape: fakeScrape,
+	}
+	scrapers[docs.ID] = docs
+	assert.True(t, scrapeSourcesAllLaunchers(scrapers))
+	assert.False(t, scrapeSourcesAllLaunchers(arcadeScrapers()))
+
+	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 2600},
+		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, Files: 900},
+		{LauncherID: "custom", SystemID: systemdefs.SystemGenesis, Files: 0},
+	})
+
+	require.Len(t, jobs, 2)
+	assert.Equal(t, "mister-arcade", jobs[0].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade}, jobs[0].Systems)
+	assert.Equal(t, "mister-docs", jobs[1].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade, systemdefs.SystemSNES}, jobs[1].Systems)
+	assert.True(t, jobs[1].FillMissing)
+}
+
+// Files of a launcher that cannot run here are still the library's: a scraper
+// keyed on the files fills them in, and one bound to launchers does not.
+func TestScrapeJobsForSourcesUnavailableLauncherOnlyForAllLaunchersScrapers(t *testing.T) {
+	t.Parallel()
+	scrapers := arcadeScrapers()
+	gdb := platforms.Scraper{
+		ID: "gamedatabase", Name: "gamedatabase",
+		SupportsFillMissing: true, AutoScrapeAllLaunchers: true, Scrape: fakeScrape,
+	}
+	scrapers[gdb.ID] = gdb
+
+	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 20, Unavailable: true},
+		{LauncherID: "RetroArchNES", SystemID: systemdefs.SystemNES, Files: 42000, Unavailable: true},
+	})
+
+	require.Len(t, jobs, 1, "the arcade scraper reads launcher data an unavailable launcher lacks")
+	assert.Equal(t, "gamedatabase", jobs[0].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade, systemdefs.SystemNES}, jobs[0].Systems)
+}
+
+// orderedScraper is an all-launchers index scraper at a given place in the
+// queue.
+func orderedScraper(id string, order int) platforms.Scraper {
+	return platforms.Scraper{
+		ID: id, Name: id, SupportsFillMissing: true, AutoScrapeAllLaunchers: true,
+		AutoScrapeOrder: order, Scrape: fakeScrape,
+	}
+}
+
+func misterScrapers() map[string]platforms.Scraper {
+	scrapers := map[string]platforms.Scraper{}
+	for _, s := range []platforms.Scraper{
+		orderedScraper("mister-docs", scraper.AutoOrderDocuments),
+		orderedScraper("gamedatabase", scraper.AutoOrderCatalog),
+		orderedScraper("mister-arcade", scraper.AutoOrderDevice),
+		orderedScraper("another-device-source", scraper.AutoOrderDevice),
+	} {
+		scrapers[s.ID] = s
+	}
+	return scrapers
+}
+
+func jobIDs(jobs []database.ScrapeJob) []string {
+	ids := make([]string, 0, len(jobs))
+	for i := range jobs {
+		ids = append(ids, jobs[i].ScraperID)
+	}
+	return ids
+}
+
+func TestScrapeJobsForSourcesRunInScraperOrderThenByID(t *testing.T) {
+	t.Parallel()
+	jobs := scrapeJobsForSources(misterScrapers(), []mediascanner.IndexedSource{
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 10},
+	})
+	assert.Equal(t, []string{"another-device-source", "mister-arcade", "gamedatabase", "mister-docs"}, jobIDs(jobs),
+		"index jobs only fill what is missing, so the order decides which source keeps a shared field")
+}
+
+func TestSortScrapeQueueKeepsRequestedJobsFirstAndOrdersIndexJobs(t *testing.T) {
+	t.Parallel()
+	fill := func(id string) database.ScrapeJob { return database.ScrapeJob{ScraperID: id, FillMissing: true} }
+	queue := []database.ScrapeJob{
+		fill("gamedatabase"),
+		{ScraperID: "mister-docs", Force: true},
+		fill("mister-docs"),
+		{ScraperID: "gamelist.xml"},
+		fill("retired-scraper"),
+		fill("mister-arcade"),
+	}
+	sortScrapeQueue(queue, misterScrapers())
+
+	assert.Equal(t,
+		[]string{"mister-docs", "gamelist.xml", "retired-scraper", "mister-arcade", "gamedatabase", "mister-docs"},
+		jobIDs(queue))
+	assert.True(t, queue[0].Force, "jobs a user asked for keep their order ahead of index jobs")
+	assert.False(t, queue[1].FillMissing)
+	assert.True(t, queue[5].FillMissing)
+}
+
 func TestScrapeJobsForSourcesIgnoresEmptyContributions(t *testing.T) {
 	t.Parallel()
 	// A launcher that matched nothing has no rows to enrich, and an

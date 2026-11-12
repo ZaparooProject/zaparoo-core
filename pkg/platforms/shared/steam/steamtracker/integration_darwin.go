@@ -44,8 +44,10 @@ type DarwinPlatformIntegration struct {
 	// held across every ownership check and the state change it authorises,
 	// so a callback for a run that has since been replaced can neither
 	// publish its media nor install its process.
-	active launchKey
-	mu     syncutil.Mutex
+	stopGame func()
+	stops    trackedStop
+	active   launchKey
+	mu       syncutil.Mutex
 }
 
 // NewDarwinPlatformIntegration creates a new platform integration for macOS.
@@ -115,7 +117,12 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	}
 
 	gameName, found := steam.FindAppNameByAppID(appID)
-	if !found {
+	// A named app is reported under the path the library scan indexes it
+	// by. An app with no manifest is not in the index under any path.
+	mediaPath := fmt.Sprintf("steam://%d", appID)
+	if found {
+		mediaPath = steam.MediaPath(appID, gameName)
+	} else {
 		gameName = steam.FormatGameName(appID, "")
 	}
 
@@ -132,12 +139,14 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	activeMedia := models.NewActiveMedia(
 		systemdefs.SystemPC,
 		systemMeta.Name,
-		fmt.Sprintf("steam://%d", appID),
+		mediaPath,
 		gameName,
 		"Steam",
 	)
 	if !pi.publishActiveMediaIfActive(appID, pid, activeMedia) {
 		log.Debug().Int("appID", appID).Int("pid", pid).Msg("discarding stale Steam game start")
+	} else if publishDeclined(pi.activeMedia()) {
+		pi.declineRun(appID, pid)
 	}
 }
 
@@ -175,6 +184,7 @@ func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID 
 		if err == nil && proc != nil {
 			if pi.trackProcessIfActive(appID, lifecycleID, proc) {
 				log.Debug().Int("pid", pid).Int("attempt", i+1).Msg("found game process")
+				pi.stopIfDeclined(appID, lifecycleID)
 			} else {
 				log.Debug().Int("appID", appID).Int("pid", pid).
 					Msg("discarding stale game process match")
@@ -224,4 +234,42 @@ func (pi *DarwinPlatformIntegration) onGameStop(appID, pid int) {
 	}
 	log.Info().Int("appID", appID).Int("pid", pid).Msg("detected Steam game exit")
 	pi.setActiveMedia(nil)
+}
+
+// SetStopGame sets how a game Core declined to publish is stopped once its
+// process has been found.
+func (pi *DarwinPlatformIntegration) SetStopGame(stop func()) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	pi.stopGame = stop
+}
+
+// declineRun records that Core declined to publish the run because a stop was
+// meant for it, and stops the run's game now if its process is already
+// tracked.
+func (pi *DarwinPlatformIntegration) declineRun(appID, lifecycleID int) {
+	run := launchKey{appID: appID, lifecycleID: lifecycleID}
+	pi.mu.Lock()
+	if pi.active != run {
+		pi.mu.Unlock()
+		return
+	}
+	now := pi.stops.declined(run)
+	stop := pi.stopGame
+	pi.mu.Unlock()
+	if now {
+		runStopGame(stop, appID)
+	}
+}
+
+// stopIfDeclined stops the run's game once its process is tracked, when Core
+// declined to publish the run.
+func (pi *DarwinPlatformIntegration) stopIfDeclined(appID, lifecycleID int) {
+	pi.mu.Lock()
+	now := pi.stops.found(launchKey{appID: appID, lifecycleID: lifecycleID})
+	stop := pi.stopGame
+	pi.mu.Unlock()
+	if now {
+		runStopGame(stop, appID)
+	}
 }

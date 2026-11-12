@@ -123,6 +123,24 @@ func TestAllSystemsFunction(t *testing.T) {
 	}
 }
 
+func TestAllImplicitSystemsLeavesOutExplicitOnly(t *testing.T) {
+	t.Parallel()
+
+	implicit := make(map[string]bool)
+	for _, system := range AllImplicitSystems() {
+		implicit[system.ID] = true
+	}
+
+	for _, system := range AllSystems() {
+		assert.Equal(t, !system.ExplicitOnly, implicit[system.ID],
+			"system %s has ExplicitOnly=%t", system.ID, system.ExplicitOnly)
+	}
+	assert.False(t, implicit[SystemScript])
+	assert.False(t, implicit[SystemApplication])
+	assert.True(t, implicit[SystemNES])
+	assert.True(t, implicit[SystemVideo])
+}
+
 // TestAllSystemsHaveMetadataJSON tests that every system has an associated metadata JSON file
 func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 	t.Parallel()
@@ -809,6 +827,7 @@ func TestMediaTypeSystems(t *testing.T) {
 		{SystemVideo, MediaTypeVideo},
 		{SystemAudio, MediaTypeAudio},
 		{SystemApplication, MediaTypeApplication},
+		{SystemScript, MediaTypeApplication},
 		{SystemMovie, MediaTypeMovie},
 		{SystemTVEpisode, MediaTypeTVShow},
 		{SystemTVSeason, MediaTypeTVShow},
@@ -1021,4 +1040,24 @@ func TestSystemsWithFallbacks(t *testing.T) {
 
 		assert.Equal(t, []string{SystemAmigaCD32, SystemAmiga}, ids)
 	})
+}
+
+// Doom is its own system, tied to DOS in both directions so media filed under
+// either one still finds the other's launchers.
+func TestDoomSystemFallsBackToDOSAndBack(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"Doom", "doom", "PrBoom", "gzdoom"} {
+		system, err := LookupSystem(name)
+		require.NoError(t, err, name)
+		assert.Equal(t, SystemDoom, system.ID, name)
+	}
+
+	doom, err := GetSystem(SystemDoom)
+	require.NoError(t, err)
+	assert.Equal(t, []string{SystemDOS}, doom.Fallbacks)
+
+	dos, err := GetSystem(SystemDOS)
+	require.NoError(t, err)
+	assert.Contains(t, dos.Fallbacks, SystemDoom)
 }

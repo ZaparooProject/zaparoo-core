@@ -298,6 +298,60 @@ func TestScrapeFillMissingResumesOnlyUnfinishedRows(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetScrapedMediaIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestScrapeFillMissingSkipsAnUnchangedLibrary(t *testing.T) {
+	t.Parallel()
+	inst := writeFixture(t)
+	var stored string
+	revision := int64(2)
+	newDB := func() *testhelpers.MockMediaDBI {
+		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB.On("GetTitlesBySystemID", systemdefs.SystemPinball).Return([]database.TitleWithSystem{
+			{DBID: 1, SystemID: systemdefs.SystemPinball, SystemDBID: 7},
+		}, nil)
+		mediaDB.On("GetMediaBySystemID", systemdefs.SystemPinball).Return([]database.MediaWithFullPath{
+			pinballMedia(100, 1, pinup.TablePath(10, "Table")),
+		}, nil)
+		mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run", int64(7)).
+			Return(map[int64]struct{}{}, nil)
+		// Each run gets a fresh mock, so these answer with the values current
+		// when it starts.
+		mediaDB.On("LibraryRevision", mock.Anything, systemdefs.SystemPinball).Return(revision, nil)
+		mediaDB.On("GetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemPinball).
+			Return(stored, nil)
+		mediaDB.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemPinball, mock.Anything).
+			Run(func(args mock.Arguments) { stored = args.String(3) }).Return(nil)
+		return mediaDB
+	}
+	run := func(opts scraper.ScrapeOptions) int {
+		t.Helper()
+		mediaDB := newDB()
+		writes := captureWrites(t, mediaDB)
+		ch := make(chan scraper.ScrapeUpdate, 16)
+		require.NoError(t, NewPlatformScraper(fixtureLocate(&inst)).Scrape(
+			t.Context(), nil, nil, afero.NewOsFs(), &database.Database{MediaDB: mediaDB}, opts, nil, ch,
+		))
+		drain(t, ch)
+		return len(*writes)
+	}
+	fill := scraper.ScrapeOptions{FillMissing: true, RunID: "run"}
+
+	require.Equal(t, 1, run(fill), "the first run does the work")
+	require.NotEmpty(t, stored)
+	require.Zero(t, run(fill), "nothing moved, so nothing is read or written")
+
+	// A new image in one of Popper's screen folders is a new source.
+	wheel := filepath.Join(inst.MediaDir, "Visual Pinball X", "Wheel")
+	require.NoError(t, os.MkdirAll(wheel, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(wheel, "Brand New Table.png"), []byte("x"), 0o600))
+	require.Equal(t, 1, run(fill))
+	require.Zero(t, run(fill))
+
+	// So is an index that changed the pinball rows, and a manual run never skips.
+	revision++
+	require.Equal(t, 1, run(fill))
+	require.Equal(t, 1, run(scraper.ScrapeOptions{RunID: "run", Force: true}))
+}
+
 func TestScrapeSkipsOtherSystems(t *testing.T) {
 	t.Parallel()
 	inst := writeFixture(t)

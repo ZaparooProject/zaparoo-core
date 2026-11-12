@@ -2154,7 +2154,7 @@ func acceptedTags(parsed []CanonicalTag) []CanonicalTag {
 //   - Audio codecs: AAC, AC3, DTS, DD5.1, TrueHD, Atmos
 //   - HDR formats: HDR, HDR10, DV (Dolby Vision)
 //   - Scene status: PROPER, REPACK, INTERNAL, LIMITED
-//   - Release groups: -GROUP suffix (uppercase alphanumeric)
+//   - Release groups: -GROUP suffix (uppercase alphanumeric), when releaseGroups
 //
 // Examples:
 //   - "The.Dark.Knight.2008.1080p.BluRay.x264-GROUP" → "The.Dark.Knight.2008"
@@ -2180,10 +2180,23 @@ var sceneMarkerBytes = [][]byte{
 	[]byte("PROPER"), []byte("proper"), []byte("REPACK"), []byte("repack"),
 }
 
+// stripsReleaseGroups reports whether a media type's filenames follow scene
+// release naming, where a trailing "-GROUP" names the release group. Game
+// filenames do not: an all-caps title such as "F-ZERO" or "SUPER MARIO
+// ALL-STARS", typical of a cartridge header, ends in the same shape.
+func stripsReleaseGroups(mediaType slugs.MediaType) bool {
+	switch mediaType {
+	case slugs.MediaTypeMovie, slugs.MediaTypeTVShow, slugs.MediaTypeVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // hasSceneMarkers does a cheap byte scan for substrings that indicate scene
 // release artifacts may be present. Returns false for typical ROM filenames,
 // allowing stripSceneArtifacts to skip 7 regex evaluations.
-func hasSceneMarkers(s string) bool {
+func hasSceneMarkers(s string, releaseGroups bool) bool {
 	sb := []byte(s)
 	for _, marker := range sceneMarkerBytes {
 		if bytes.Contains(sb, marker) {
@@ -2191,7 +2204,7 @@ func hasSceneMarkers(s string) bool {
 		}
 	}
 	// Check for release group suffix: -GROUP at end of string
-	if n := len(s); n > 3 && s[n-1] >= 'A' && s[n-1] <= 'Z' {
+	if n := len(s); releaseGroups && n > 3 && s[n-1] >= 'A' && s[n-1] <= 'Z' {
 		for i := n - 2; i >= 0; i-- {
 			if s[i] == '-' {
 				return true
@@ -2204,9 +2217,9 @@ func hasSceneMarkers(s string) bool {
 	return false
 }
 
-func stripSceneArtifacts(input string) string {
+func stripSceneArtifacts(input string, releaseGroups bool) string {
 	// Fast path: skip 7 regex evaluations if no scene markers present
-	if !hasSceneMarkers(input) {
+	if !hasSceneMarkers(input, releaseGroups) {
 		return input
 	}
 
@@ -2231,7 +2244,9 @@ func stripSceneArtifacts(input string) string {
 	result = reSceneStatus.ReplaceAllString(result, " ")
 
 	// Remove release group suffix (at end of string)
-	result = reReleaseGroup.ReplaceAllString(result, "")
+	if releaseGroups {
+		result = reReleaseGroup.ReplaceAllString(result, "")
+	}
 
 	return result
 }
@@ -2330,8 +2345,11 @@ func filterBracketGroups(s string, keepStructural bool) string {
 //   - "Street Fighter II: The World Warrior" → "Street Fighter II: The World Warrior"
 //   - "1. Game Title (USA)" → "Game Title" (if stripLeadingNumbers is true)
 //   - "1942 (USA)" → "1942" (if stripLeadingNumbers is false)
-//   - "The.Dark.Knight.2008.1080p.BluRay.x264-GROUP" → "The Dark Knight 2008"
+//   - "The.Dark.Knight.2008.1080p.BluRay.x264" → "The Dark Knight 2008"
 //   - "TV.Show.S01E01.1080p.WEB-DL" → "TV Show S01E01"
+//
+// Titles are parsed as games, so a trailing "-GROUP" is kept; use
+// ParseTitleFromFilenameForMedia to strip scene release groups from video.
 //
 // Note: This uses shared normalization functions from the slugs package to eliminate
 // code duplication. However, it only applies transformations appropriate for display
@@ -2385,12 +2403,14 @@ func parseFilenameTitle(
 
 	// Step 2: Strip release group BEFORE separator normalization
 	// Release groups are typically "-GROUP" at the end, and the hyphen will be converted to a space
-	// So we need to remove it early before that conversion happens
+	// So we need to remove it early before that conversion happens. Only
+	// scene-named media has them; see stripsReleaseGroups.
 	// reReleaseGroup is anchored at end-of-string and needs a '-', so a title
 	// with no hyphen at all cannot match. ReplaceAllString allocates a new
 	// string even on no match, and this runs twice per file, so skip the engine
 	// for the common hyphen-free case.
-	if strings.IndexByte(title, '-') >= 0 {
+	releaseGroups := stripsReleaseGroups(mediaType)
+	if releaseGroups && strings.IndexByte(title, '-') >= 0 {
 		title = reReleaseGroup.ReplaceAllString(title, "")
 	}
 
@@ -2421,11 +2441,11 @@ func parseFilenameTitle(
 		afterYear := title[yearIdx+len(extractedYearForStripping):]
 
 		// Only strip artifacts from AFTER the year to protect the title
-		cleanedAfterYear := stripSceneArtifacts(afterYear)
+		cleanedAfterYear := stripSceneArtifacts(afterYear, releaseGroups)
 		title = beforeYear + extractedYearForStripping + cleanedAfterYear
 	} else {
 		// No year found - apply stripping to entire title (safer for non-media files)
-		title = stripSceneArtifacts(title)
+		title = stripSceneArtifacts(title, releaseGroups)
 	}
 
 	// Step 5: Strip S##E## patterns (TV show episode markers) from titles

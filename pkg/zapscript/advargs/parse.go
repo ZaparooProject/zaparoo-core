@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
@@ -51,6 +52,7 @@ func NewParser() *Parser {
 	// Register custom validators - these won't error since tags are valid
 	_ = v.RegisterValidationCtx("launcher", validateLauncher)
 	_ = v.RegisterValidation("system", validateSystem)
+	_ = v.RegisterValidation("duration", validateDuration)
 
 	return &Parser{validate: v}
 }
@@ -128,6 +130,8 @@ func formatValidationError(fe validator.FieldError) string {
 		return fmt.Sprintf("system %q not found", fe.Value())
 	case "oneof":
 		return fmt.Sprintf("%s must be one of: %s", field, fe.Param())
+	case "duration":
+		return fmt.Sprintf("%s %q is not a duration with a unit, such as 5m or 30s", field, fe.Value())
 	default:
 		return fmt.Sprintf("%s failed %s validation", field, fe.Tag())
 	}
@@ -191,4 +195,15 @@ func validateSystem(fl validator.FieldLevel) bool {
 
 	_, err := systemdefs.LookupSystem(systemID)
 	return err == nil
+}
+
+// validateDuration accepts a Go duration such as 5m or 1h30m, or a bare 0.
+func validateDuration(fl validator.FieldLevel) bool {
+	val := fl.Field().String()
+	if val == "" {
+		return true // omitempty handles empty case
+	}
+
+	d, err := time.ParseDuration(val)
+	return err == nil && d >= 0
 }

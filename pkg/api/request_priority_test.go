@@ -48,6 +48,8 @@ func TestRequestTimeoutForAPIMethod(t *testing.T) {
 		{"media asset", models.MethodMediaAsset, config.APIRequestTimeout},
 		{"unknown", "custom.method", config.APIRequestTimeout},
 		{"empty", "", config.APIRequestTimeout},
+		{"reader write", models.MethodReadersWrite, config.ReaderWriteRequestTimeout},
+		{"reader write case insensitive", "READERS.WRITE", config.ReaderWriteRequestTimeout},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +58,14 @@ func TestRequestTimeoutForAPIMethod(t *testing.T) {
 			assert.Equal(t, tt.want, requestTimeoutForAPIMethod(tt.method))
 		})
 	}
+}
+
+// A write nobody taps has to end with the reader's "no tag" result. When both
+// waits were 30 seconds the request deadline won by a millisecond, so every
+// such write reached the client and Sentry as an API timeout.
+func TestReaderWriteRequestOutlastsTagWait(t *testing.T) {
+	t.Parallel()
+	assert.Greater(t, requestTimeoutForAPIMethod(models.MethodReadersWrite), config.ReaderWriteWait+5*time.Second)
 }
 
 func TestRequestContextForBackupHasNoDeadlineAndPreservesCancellation(t *testing.T) {
@@ -85,13 +95,25 @@ func TestClassifyAPIMethod(t *testing.T) {
 		{"run script", models.MethodRunScript, apiPriorityRun},
 		{"high stop", models.MethodStop, apiPriorityHigh},
 		{"high media control", models.MethodMediaControl, apiPriorityHigh},
+		{"high playlists update", models.MethodPlaylistsUpdate, apiPriorityHigh},
 		{"input keyboard", models.MethodInputKeyboard, apiPriorityInput},
 		{"input gamepad", models.MethodInputGamepad, apiPriorityInput},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
+		{"low media active image", models.MethodMediaActiveImage, apiPriorityLow},
 		{"low media asset", models.MethodMediaAsset, apiPriorityLow},
 		{"low update apply", models.MethodUpdateApply, apiPriorityLow},
 		{"update check stays normal", models.MethodUpdateCheck, apiPriorityNormal},
+		{"high device reboot", models.MethodDevicePowerReboot, apiPriorityHigh},
+		{"high device shutdown", models.MethodDevicePowerShutdown, apiPriorityHigh},
+		{"high device suspend", models.MethodDevicePowerSuspend, apiPriorityHigh},
+		{"device status stays normal", models.MethodDeviceStatus, apiPriorityNormal},
+		{"bluetooth pair stays normal", models.MethodDeviceBluetoothPair, apiPriorityNormal},
+		{"bluetooth scan start stays normal", models.MethodDeviceBluetoothScanStart, apiPriorityNormal},
+		{"bluetooth scan stop stays normal", models.MethodDeviceBluetoothScanStop, apiPriorityNormal},
+		{"bluetooth forget stays normal", models.MethodDeviceBluetoothForget, apiPriorityNormal},
+		{"bluetooth devices stays normal", models.MethodDeviceBluetoothDevices, apiPriorityNormal},
+		{"online status stays normal", models.MethodOnlineStatus, apiPriorityNormal},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
 		{"low generate prefix", "media.generate.extra", apiPriorityLow},
 		{"unknown normal", "custom.method", apiPriorityNormal},
@@ -112,6 +134,19 @@ func TestMediaAssetMethodWiringAndLegacyPolicy(t *testing.T) {
 	_, ok := NewMethodMap().GetMethod(models.MethodMediaAsset)
 	assert.True(t, ok)
 	assert.True(t, legacyAllowedMethods[models.MethodMediaAsset])
+}
+
+func TestMusicMethodsWiringAndLegacyPolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{models.MethodPlaylistsUpdate, models.MethodMediaActiveImage} {
+		_, ok := NewMethodMap().GetMethod(method)
+		assert.True(t, ok, method)
+		assert.False(t, legacyAllowedMethods[method], "%s is new, so legacy clients cannot reach it", method)
+	}
+	assert.Equal(t, wsGlobalImageSlots, globalSlotPoolForAPIMethod(models.MethodMediaActiveImage),
+		"active art shares the image concurrency gate")
+	assert.Nil(t, globalSlotPoolForAPIMethod(models.MethodPlaylistsUpdate))
 }
 
 func TestMethodFromAPIRequestPayload(t *testing.T) {
@@ -173,6 +208,9 @@ func TestIsImageAPIMethod(t *testing.T) {
 	}{
 		{"image exact", models.MethodMediaImage, true},
 		{"image case insensitive", "MEDIA.IMAGE", true},
+		{"active image exact", models.MethodMediaActiveImage, true},
+		{"active image case insensitive", "MEDIA.ACTIVE.IMAGE", true},
+		{"active media false", models.MethodMediaActive, false},
 		{"other method", models.MethodMediaMeta, false},
 		{"empty", "", false},
 	}
@@ -222,6 +260,8 @@ func TestIsMediaDBFreeInstantMethod(t *testing.T) {
 		{"stop exact", models.MethodStop, true},
 		{"media control exact", models.MethodMediaControl, true},
 		{"media control case insensitive", "MEDIA.CONTROL", true},
+		{"playlists update exact", models.MethodPlaylistsUpdate, true},
+		{"playlists update case insensitive", "PLAYLISTS.UPDATE", true},
 		{"run script false", models.MethodRunScript, false},
 		{"tags update false", models.MethodMediaTagsUpdate, false},
 		{"image false", models.MethodMediaImage, false},

@@ -951,6 +951,9 @@ func TestRandomGameWithQuery_RefreshesStaleCachedStatsOnce(t *testing.T) {
 	mediaDB.sql.Store(db)
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT mt.MediaDBID FROM MediaTags`).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`SELECT Value FROM DBConfig WHERE Name = \?`).
+		WithArgs(DBConfigHiddenDirectories).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = \?`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"Count", "MinDBID", "MaxDBID"}).AddRow(1, 999, 999))

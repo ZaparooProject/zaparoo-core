@@ -796,6 +796,87 @@ func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+func TestRefreshScrapedMediaCounts_StoresPerScraperAndDistinctTotal(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.False(t, ok, "nothing is stored before the first refresh")
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+
+	total, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 2, total, "total counts each media once across scrapers")
+
+	test, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "test")
+	require.NoError(t, err)
+	assert.Equal(t, 2, test)
+
+	other, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "other")
+	require.NoError(t, err)
+	assert.Equal(t, 1, other)
+
+	unknown, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "unknown")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 0, unknown)
+}
+
+func TestRefreshScrapedMediaCounts_SingleScraperAndNone(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+	total, ok, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 0, total)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+	total, _, err = mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+}
+
+func TestRefreshScrapedMediaCounts_FollowsMediaDeletion(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.RefreshScrapedMediaCounts(ctx))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM MediaTags WHERE MediaDBID = 1")
+	require.NoError(t, err)
+	stale, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, stale, "stored value only changes on refresh")
+
+	require.NoError(t, mediaDB.UpdateLastGenerated())
+	fresh, _, err := mediaDB.GetStoredScrapedMediaCount(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, fresh, "finishing an index refreshes the stored count")
+}
+
 func TestGetScrapedMediaIDs(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -1191,6 +1272,50 @@ func TestApplyScrapeResults_TracksOnlyChangedImageProperties(t *testing.T) {
 	systems, all = mediaDB.ConsumeScrapeImageChanges()
 	assert.Equal(t, []string{"NES"}, systems)
 	assert.False(t, all)
+}
+
+// A scrape that changes a row's artwork drops its cover record, so its old
+// placeholder colour is not served; an unchanged write keeps it.
+func TestApplyScrapeResults_DropsCoverRecordOfChangedImages(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	target := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			MediaProps: []database.MediaProperty{{
+				TypeTag: "property:image-boxart",
+				Text:    filepath.ToSlash(filepath.Join("media", "boxart", "mario.png")),
+			}},
+		},
+	}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	color := uint32(0x123456)
+	recorded := func() bool {
+		_, found, err := mediaDB.GetMediaCoverThumb(ctx, 1)
+		require.NoError(t, err)
+		return found
+	}
+
+	require.NoError(t, mediaDB.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:x", &color))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	assert.True(t, recorded(), "an identical write keeps the record")
+
+	target.Write.MediaProps[0].Text = filepath.ToSlash(filepath.Join("media", "boxart", "mario-v2.png"))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	assert.False(t, recorded(), "a changed media image drops the record")
+
+	require.NoError(t, mediaDB.PutMediaCoverThumb(ctx, 1, "property:image-boxart", "f:1:2:x", &color))
+	target.Write.MediaProps = nil
+	target.Write.TitleProps = []database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.ToSlash(filepath.Join("media", "titles", "mario.png")),
+	}}
+	require.NoError(t, mediaDB.ApplyScrapeResult(ctx, 1, 1, target.Write))
+	assert.False(t, recorded(), "a changed title image drops the records of the title's media")
 }
 
 func TestApplyScrapeResults_ReplacesChangedExclusiveTitleTags(t *testing.T) {
@@ -2444,6 +2569,58 @@ func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *te
 	assert.True(t, aliases[0].MultiDisc)
 }
 
+func TestResolveSingletonContainerAliases_PreferredPathPicksThatDisc(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	discDir := aliasTestDir(parent, "DiscSet")
+	disc1Path := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 1).chd"))
+	disc2Path := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 2).chd"))
+	cueDir := aliasTestDir(parent, "CueSet")
+	cuePath := filepath.ToSlash(filepath.Join(parent, "CueSet", "Other.cue"))
+	binPath := filepath.ToSlash(filepath.Join(parent, "CueSet", "Other.bin"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game', 'Game'),
+			(2, 2, 'other', 'Other');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?),
+			(3, 2, 2, ?, ?),
+			(4, 2, 2, ?, ?);
+	`, disc1Path, discDir, disc2Path, discDir, cuePath, cueDir, binPath, cueDir)
+	require.NoError(t, err)
+
+	resolve := func(candidates ...database.SingletonAliasCandidate) map[string]database.SingletonContainerAlias {
+		aliases, resolveErr := mediaDB.ResolveSingletonContainerAliases(ctx, 2, candidates)
+		require.NoError(t, resolveErr)
+		byDir := make(map[string]database.SingletonContainerAlias, len(aliases))
+		for i := range aliases {
+			byDir[aliases[i].ChildDir] = aliases[i]
+		}
+		return byDir
+	}
+
+	aliases := resolve(
+		database.SingletonAliasCandidate{ChildDir: discDir, FileCount: 2, PreferredPath: disc2Path},
+		// A cue sheet stands in for its directory whatever was played.
+		database.SingletonAliasCandidate{ChildDir: cueDir, FileCount: 2, PreferredPath: binPath},
+	)
+	require.Len(t, aliases, 2)
+	assert.Equal(t, disc2Path, aliases[discDir].Row.Path)
+	assert.True(t, aliases[discDir].MultiDisc)
+	assert.Equal(t, cuePath, aliases[cueDir].Row.Path)
+	assert.False(t, aliases[cueDir].MultiDisc)
+
+	// A path that is not one of the discs leaves the first disc chosen.
+	stale := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 3).chd"))
+	aliases = resolve(database.SingletonAliasCandidate{ChildDir: discDir, FileCount: 2, PreferredPath: stale})
+	assert.Equal(t, disc1Path, aliases[discDir].Row.Path)
+}
+
 func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupAliasTestDB(t)
@@ -3358,4 +3535,40 @@ func TestScrapeWriteStoresNumericTagsPadded(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{"input:buttons:0002", "input:joystick:0004", "players:0002"}, stored,
 		"numeric tag values must be stored padded, and only padded")
+}
+
+// A write with no sentinel keeps what it found without marking the record
+// done, on every write path, so a scraper that got only part of a record can
+// have it retried.
+func TestApplyScrapeWriteWithoutSentinelStoresDataButNoMarker(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"single", "batch", "fill-single", "fill-batch"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupScraperTestDB(t)
+			defer cleanup()
+			write := &database.ScrapeWrite{
+				FillMissing: mode == "fill-single" || mode == "fill-batch",
+				MediaProps:  []database.MediaProperty{{TypeTag: "property:image-boxart", Text: "box.png"}},
+			}
+			if mode == "single" || mode == "fill-single" {
+				require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, write))
+			} else {
+				require.NoError(t, db.ApplyScrapeResults(t.Context(), []database.ScrapeWriteTarget{
+					{MediaDBID: 1, MediaTitleDBID: 1, Write: write},
+				}))
+			}
+
+			var image string
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaProperties WHERE MediaDBID=1 AND TypeTagDBID=2").Scan(&image))
+			require.Equal(t, "box.png", image)
+			var scraperTags int
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(), `
+				SELECT COUNT(*) FROM MediaTags mt JOIN Tags t ON mt.TagDBID=t.DBID
+				JOIN TagTypes tt ON t.TypeDBID=tt.DBID WHERE mt.MediaDBID=1 AND tt.Type LIKE 'scraper.%'`,
+			).Scan(&scraperTags))
+			require.Zero(t, scraperTags, "no done marker is written")
+		})
+	}
 }

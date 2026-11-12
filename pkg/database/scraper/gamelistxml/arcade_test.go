@@ -86,6 +86,8 @@ func TestScrapeLoop_ArcadeSetNameBundle(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, done.Matched)
+	assert.Equal(t, done.Processed, done.Total, "a finished run reports its total, not zero")
+	assert.Positive(t, done.Total)
 	mdb.AssertExpectations(t)
 }
 

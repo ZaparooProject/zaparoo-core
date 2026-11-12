@@ -22,6 +22,9 @@ package platforms_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,8 +32,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -441,6 +446,43 @@ func TestDoLaunch_ExternalLifecycleDefersActiveMedia(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_NoActiveMediaLauncherPublishesNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, noActiveMedia := range []bool{true, false} {
+		t.Run(fmt.Sprintf("NoActiveMedia=%t", noActiveMedia), func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+			launchCalled := false
+			launcher := &platforms.Launcher{
+				ID:            "Scripts",
+				SystemID:      systemdefs.SystemScript,
+				NoActiveMedia: noActiveMedia,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					launchCalled = true
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			var activeMedia *models.ActiveMedia
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+				Launcher:       launcher,
+				Path:           "/media/fat/Scripts/update_all.sh",
+			}
+
+			require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "update_all" }))
+			assert.True(t, launchCalled)
+			assert.Equal(t, noActiveMedia, activeMedia == nil)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
 	t.Parallel()
 
@@ -474,6 +516,64 @@ func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
 	assert.Equal(t, "SNES", published.SystemID)
 	assert.False(t, externalCalled)
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_RecordsReplacedBeforePreemptingStop(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		action       string
+		runningInst  string
+		wantRecorded bool
+	}{
+		{name: "preemption", wantRecorded: true},
+		{name: "details leaves media alone", action: "details"},
+		{name: "reused instance is not stopped", runningInst: "kodi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var events []string
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Run(func(mock.Arguments) {
+				events = append(events, "stop")
+			}).Return(nil).Maybe()
+			launcher := &platforms.Launcher{
+				ID:                  "test-launcher",
+				SystemID:            "SNES",
+				Lifecycle:           platforms.LifecycleFireAndForget,
+				SupportsDetails:     true,
+				UsesRunningInstance: tt.runningInst,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				Path:           "game.sfc",
+				Options: &platforms.LaunchOptions{
+					Action: tt.action,
+					RecordMediaStop: func(reason string) func() {
+						events = append(events, "record:"+reason)
+						return func() { events = append(events, "cancel") }
+					},
+				},
+			}
+
+			require.NoError(t, platforms.DoLaunch(params, func(string) string { return "Game" }))
+			if tt.wantRecorded {
+				assert.Equal(t, []string{"record:" + models.MediaStopReasonReplaced, "stop"}, events)
+			} else {
+				assert.Empty(t, events)
+			}
+		})
+	}
 }
 
 // A details request opens an information page and starts nothing, so it must
@@ -1087,4 +1187,147 @@ func TestDoLaunch_DetailsRefusedWhenLauncherCannotShowThem(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot show details")
 	assert.False(t, launched, "the media must not be launched for a details request")
 	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
+}
+
+func TestDoLaunch_FailedPreemptionWithdrawsReplacedNote(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		stopErr error
+		name    string
+		wantErr bool
+	}{
+		{name: "confirmed stop failure aborts", stopErr: platforms.ErrStopFailed, wantErr: true},
+		{name: "nothing to stop", stopErr: errors.New("no launcher")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var events []string
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(tt.stopErr).Once()
+			launcher := &platforms.Launcher{
+				ID:        "test-launcher",
+				SystemID:  "SNES",
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				Path:           "game.sfc",
+				Options: &platforms.LaunchOptions{
+					RecordMediaStop: func(reason string) func() {
+						events = append(events, "record:"+reason)
+						return func() { events = append(events, "cancel") }
+					},
+				},
+			}
+
+			err := platforms.DoLaunch(params, func(string) string { return "Game" })
+			if tt.wantErr {
+				require.ErrorIs(t, err, platforms.ErrStopFailed)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{"record:" + models.MediaStopReasonReplaced, "cancel"}, events)
+		})
+	}
+}
+
+// MiSTer, 2026-10-26: an MRA on a USB drive with no core beside it was run from
+// the SD card's copy, but the USB path was published, so history and resume
+// named a file that was not what ran. A launcher that started another file
+// says so, and that file is published.
+func TestDoLaunch_PublishesThePathTheLauncherRan(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	requested := "/media/usb0/_Arcade/1942 (Revision B).mra"
+	ran := "/media/fat/_Arcade/1942 (Revision B).mra"
+	launcher := &platforms.Launcher{
+		ID:       "Arcade",
+		SystemID: systemdefs.SystemArcade,
+		Launch: func(_ *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			opts.LaunchedPath = ran
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           requested,
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, filepath.Base))
+	require.NotNil(t, activeMedia)
+	assert.Equal(t, ran, activeMedia.Path)
+}
+
+// A stream is named by the station name its server sent, and a URL with no
+// path to name it by is named by its host.
+func TestDoLaunch_NamesStreams(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("icy-name", "Pink Noise Radio")
+		_, _ = w.Write(make([]byte, 64))
+	}))
+	t.Cleanup(srv.Close)
+	probe, err := radio.ProbeURL(context.Background(), nil, srv.URL+"/stream.mp3")
+	require.NoError(t, err)
+	t.Cleanup(probe.Close)
+
+	tests := []struct {
+		probe *radio.Probe
+		name  string
+		path  string
+		want  string
+	}{
+		{name: "station name", path: srv.URL + "/stream.mp3", probe: probe, want: "Pink Noise Radio"},
+		{name: "host", path: "http://uk1.example.com:8004/", want: "uk1.example.com"},
+		{name: "chiptune track", path: filepath.Join(t.TempDir(), "smb3.nsf", "5"), want: "smb3 - 5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+			launcher := &platforms.Launcher{
+				ID:        "native-audio",
+				SystemID:  systemdefs.SystemAudio,
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+			var published *models.ActiveMedia
+			params := &platforms.LaunchParams{
+				Platform: mockPlatform,
+				Config:   &config.Instance{},
+				Launcher: launcher,
+				Path:     tt.path,
+				Options: &platforms.LaunchOptions{
+					AudioStream:          tt.probe,
+					ActiveMediaPublisher: func(media *models.ActiveMedia) { published = media },
+				},
+			}
+			require.NoError(t, platforms.DoLaunch(params, func(string) string { return "" }))
+			require.NotNil(t, published)
+			assert.Equal(t, tt.want, published.Name)
+		})
+	}
 }

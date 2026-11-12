@@ -17,25 +17,26 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Command scummvmnames builds pkg/database/scummvmnames/names.tsv.gz from
+// Command scummvmnames builds pkg/database/scummvmnames/names.tsv.zst from
 // the game list a ScummVM release prints with `scummvm --list-games`. Each
 // line keeps the engine, the game ID and ScummVM's full title for it.
 //
 // Usage:
 //
 //	SDL_VIDEODRIVER=dummy scummvm --list-games > games.txt
-//	go run ./scripts/scummvmnames 2.9.1 games.txt pkg/database/scummvmnames/names.tsv.gz
+//	go run ./scripts/scummvmnames 2.9.1 games.txt pkg/database/scummvmnames/names.tsv.zst
 package main
 
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 )
 
 type game struct {
@@ -92,22 +93,15 @@ func run(version, input, output string) error {
 	})
 	games = slices.CompactFunc(games, func(a, b game) bool { return a.id == b.id && a.engine == b.engine })
 	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return fmt.Errorf("gzip: %w", err)
-	}
-	if _, err := fmt.Fprintf(zw, "# ScummVM %s\n", version); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
+	_, _ = fmt.Fprintf(&buf, "# ScummVM %s\n", version)
 	for _, g := range games {
-		if _, err := fmt.Fprintf(zw, "%s\t%s\t%s\n", g.id, g.engine, g.title); err != nil {
-			return fmt.Errorf("write: %w", err)
-		}
+		_, _ = fmt.Fprintf(&buf, "%s\t%s\t%s\n", g.id, g.engine, g.title)
 	}
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("gzip: %w", err)
+	packed, err := zstdembed.Compress(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("compress: %w", err)
 	}
-	if err := os.WriteFile(output, buf.Bytes(), 0o644); err != nil { //nolint:gosec // checked-in data file
+	if err := os.WriteFile(output, packed, 0o644); err != nil { //nolint:gosec // checked-in data file
 		return fmt.Errorf("write %s: %w", output, err)
 	}
 	_, _ = fmt.Printf("%d games from ScummVM %s\n", len(games), version)
@@ -116,7 +110,7 @@ func run(version, input, output string) error {
 
 func main() {
 	if len(os.Args) != 4 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: scummvmnames VERSION GAMES.txt OUTPUT.tsv.gz")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: scummvmnames VERSION GAMES.txt OUTPUT.tsv.zst")
 		os.Exit(2)
 	}
 	if err := run(os.Args[1], os.Args[2], os.Args[3]); err != nil {

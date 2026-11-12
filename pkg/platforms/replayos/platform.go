@@ -28,12 +28,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
@@ -82,11 +84,14 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 	stopTracker    func() error
 	activeMedia    func() *models.ActiveMedia
-	activeStorage  string
-	pendingROMPath string
-	lastKnownCore  string
-	procPath       string
-	storagePaths   []string
+	// runningGameFile asks RePlayOS which game it is running; nil asks net
+	// control.
+	runningGameFile func(context.Context) (string, bool)
+	activeStorage   string
+	pendingROMPath  string
+	lastKnownCore   string
+	procPath        string
+	storagePaths    []string
 	shared.InputManager
 	trackerMu        syncutil.RWMutex
 	keyboardRealMode bool
@@ -291,14 +296,40 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0, len(SystemMap)+1)
+	netCtl := newNetControl()
+	waitForGame := netCtl.waitForGame(clockwork.NewRealClock())
 
-	for folder, info := range SystemMap {
+	// RePlayOS renamed some system folders, so one launcher can own both the
+	// old and the new name. Launchers are looked up by ID, so each ID is one
+	// launcher holding every folder and extension mapped to it.
+	folders := make([]string, 0, len(SystemMap))
+	for folder := range SystemMap {
+		folders = append(folders, folder)
+	}
+	sort.Strings(folders)
+	byID := map[string]int{}
+	for _, folder := range folders {
+		info := SystemMap[folder]
+		id := info.GetLauncherID()
+		if at, seen := byID[id]; seen {
+			launchers[at].Folders = append(launchers[at].Folders, folder)
+			for _, ext := range info.Extensions {
+				if !slices.Contains(launchers[at].Extensions, ext) {
+					launchers[at].Extensions = append(launchers[at].Extensions, ext)
+				}
+			}
+			continue
+		}
+		byID[id] = len(launchers)
 		launchers = append(launchers, platforms.Launcher{
-			ID:         info.GetLauncherID(),
-			SystemID:   info.SystemID,
-			Extensions: info.Extensions,
-			Folders:    []string{folder},
-			Launch:     p.launchGame,
+			ID:           id,
+			SystemID:     info.SystemID,
+			Extensions:   slices.Clone(info.Extensions),
+			Folders:      []string{folder},
+			Launch:       p.launchGame,
+			Controls:     p.controls(),
+			WaitForReady: waitForGame,
+			GameRunning:  netCtl.gameRunning,
 		})
 	}
 
@@ -329,7 +360,10 @@ func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+	}
 }
 
 // launchGame spawns a background goroutine that deletes the autostart file

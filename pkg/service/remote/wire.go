@@ -71,6 +71,8 @@ type wireSearchParams struct {
 	Cursor      *string   `json:"cursor"`
 	Tags        *[]string `json:"tags" validate:"omitempty,dive,min=1"`
 	Letter      *string   `json:"letter" validate:"omitempty,letter"`
+	GroupBy     *string   `json:"group_by" validate:"omitempty,oneof=title"`
+	TitleID     *int64    `json:"title_id" validate:"omitempty,gt=0"`
 }
 
 func translateSearchParams(raw json.RawMessage) (json.RawMessage, error) {
@@ -86,6 +88,8 @@ func translateSearchParams(raw json.RawMessage) (json.RawMessage, error) {
 		Cursor:      params.Cursor,
 		Tags:        params.Tags,
 		Letter:      params.Letter,
+		GroupBy:     params.GroupBy,
+		TitleID:     params.TitleID,
 	})
 }
 
@@ -341,6 +345,7 @@ func encodePagination(pagination *models.PaginationInfo) *wirePagination {
 
 type wireSearchResult struct {
 	RelPath            *string    `json:"relative_path,omitempty"`
+	VersionCount       *int       `json:"version_count,omitempty"`
 	System             wireSystem `json:"system"`
 	Name               string     `json:"name"`
 	Path               string     `json:"path"`
@@ -348,6 +353,7 @@ type wireSearchResult struct {
 	Tags               []wireTag  `json:"tags"`
 	DisambiguatingTags []wireTag  `json:"disambiguating_tags,omitempty"`
 	MediaID            int64      `json:"media_id,omitempty"`
+	TitleID            int64      `json:"title_id,omitempty"`
 	HasCover           bool       `json:"has_cover"`
 }
 
@@ -375,7 +381,9 @@ func encodeSearchResults(response any) (any, error) {
 				ZapScript:          result.ZapScript,
 				Tags:               encodeTags(result.Tags),
 				DisambiguatingTags: encodeTags(result.DisambiguatingTags),
+				VersionCount:       result.VersionCount,
 				MediaID:            result.MediaID,
+				TitleID:            result.TitleID,
 				HasCover:           result.HasCover,
 			})
 		}

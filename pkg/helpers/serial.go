@@ -62,6 +62,8 @@ var ignoreDevices = []serialDevice{
 	{Vid: "16d0", Pid: "123d"}, // GB Operator
 	{Vid: "16d0", Pid: "123e"}, // SN Operator
 	{Vid: "16d0", Pid: "134d"}, // 64 Operator
+	// Greaseweazle floppy controller
+	{Vid: "1209", Pid: "4d69"},
 }
 
 func ignoreSerialDevice(path string) bool {
@@ -86,7 +88,9 @@ func ignoreSerialDevice(path string) bool {
 	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {
-		log.Error().Err(err).Msg("udevadm failed")
+		// udevadm exits non-zero for a device it does not know and is killed
+		// by the timeout on a slow system; both just skip the ignore list.
+		log.Warn().Err(err).Str("path", path).Msg("udevadm failed")
 		return false
 	}
 

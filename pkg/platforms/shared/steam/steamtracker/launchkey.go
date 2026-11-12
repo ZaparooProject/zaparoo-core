@@ -23,6 +23,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package steamtracker
 
+import "github.com/rs/zerolog/log"
+
 // launchKey identifies one run of a game: the AppID plus the lifecycle ID the
 // tracker assigned when it saw the game start. A relaunch of the same game
 // gets a fresh lifecycle ID, which is what lets a delayed stop for the earlier
@@ -32,4 +34,42 @@ package steamtracker
 type launchKey struct {
 	appID       int
 	lifecycleID int
+}
+
+// trackedStop holds a run that Core declined to publish until its process is
+// found, so the game can be stopped once there is something to stop.
+type trackedStop struct {
+	// pending is the run waiting for its process; tracked is the run whose
+	// process was last found.
+	pending launchKey
+	tracked launchKey
+}
+
+// declined records that run must be stopped, and reports whether its process
+// is already tracked and can be stopped now.
+func (s *trackedStop) declined(run launchKey) bool {
+	if s.tracked == run {
+		return true
+	}
+	s.pending = run
+	return false
+}
+
+// found records that run's process is tracked, and reports whether the run
+// was declined and must be stopped now.
+func (s *trackedStop) found(run launchKey) bool {
+	s.tracked = run
+	if s.pending != run {
+		return false
+	}
+	s.pending = launchKey{}
+	return true
+}
+
+func runStopGame(stop func(), appID int) {
+	if stop == nil {
+		return
+	}
+	log.Info().Int("appID", appID).Msg("Steam game started after a stop meant for it, stopping it")
+	stop()
 }

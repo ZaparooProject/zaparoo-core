@@ -35,12 +35,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/pinuppopper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -55,7 +57,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows/windowfocus"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/acr122pcsc"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
@@ -67,6 +69,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/adrg/xdg"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -88,6 +91,10 @@ type Platform struct {
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
 	windowFocusCancel       context.CancelFunc
+	windowFocus             windowfocus.Tracker
+	readyClock              clockwork.Clock
+	windowCheck             func(pid int) bool
+	retroBatWatchCancel     context.CancelFunc
 	launchBoxActiveID       string
 	launchBoxActiveAppPath  string
 	lastLauncher            platforms.Launcher
@@ -127,11 +134,11 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
-		acr122pcsc.NewAcr122Pcsc(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
@@ -192,6 +199,11 @@ func (p *Platform) StartPost(
 		setActiveMedia,
 		func() string { return steamClient.FindSteamDir(cfg) },
 	)
+	p.steamTracker.SetStopGame(func() {
+		if err := p.StopActiveLauncher(platforms.StopForMenu); err != nil {
+			log.Warn().Err(err).Msg("failed to stop a Steam game a stop was meant for")
+		}
+	})
 	if err := p.steamTracker.Start(); err != nil {
 		log.Warn().Err(err).Msg("steam game tracker failed to start")
 	}
@@ -201,6 +213,12 @@ func (p *Platform) StartPost(
 
 func (p *Platform) Stop() error {
 	p.CloseDevices()
+	p.processMu.Lock()
+	if p.retroBatWatchCancel != nil {
+		p.retroBatWatchCancel()
+		p.retroBatWatchCancel = nil
+	}
+	p.processMu.Unlock()
 
 	if p.launcherManager != nil {
 		p.launcherManager.NewContext()
@@ -272,6 +290,7 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 
 	p.trackedProcess = proc
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	focuser := p.windowFocuser
 	if proc == nil || focuser == nil {
 		p.processMu.Unlock()
@@ -286,15 +305,64 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 		}
 	}
 	focusCtx, p.windowFocusCancel = context.WithCancel(focusCtx)
+	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
+	pending := p.windowFocus.Track(focusCtx, focuser, pid)
 	p.processMu.Unlock()
 
 	log.Debug().Msgf("set tracked process: %v", proc)
-	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
 	go func() {
-		if err := focuser.Focus(focusCtx, pid); err != nil && !errors.Is(err, context.Canceled) {
+		if err := pending.Err(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Debug().Err(err).Int("pid", proc.Pid).Msg("launched process window was not focused")
 		}
 	}()
+}
+
+// waitForTrackedWindow is the readiness probe for launchers whose media is
+// published before the game process exists: it waits for the process to be
+// tracked and then for its window to take focus.
+func (p *Platform) waitForTrackedWindow(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) error {
+	if p.windowFocuser == nil {
+		// No process is ever tracked without a focuser, so waiting for one
+		// would only run out the timeout.
+		return fmt.Errorf("%w: no window focuser", platforms.ErrReadinessUnavailable)
+	}
+	if err := p.windowFocus.Wait(ctx, p.clockForReadiness(), true); err != nil {
+		return fmt.Errorf("wait for tracked process window: %w", err)
+	}
+	return nil
+}
+
+// WaitForMediaReady is the platform fallback for launchers with no probe of
+// their own: a process Core tracks is ready once its window takes focus, and
+// media with no tracked process is ready as soon as it is published.
+func (p *Platform) WaitForMediaReady(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) error {
+	if err := p.windowFocus.Wait(ctx, p.clockForReadiness(), false); err != nil {
+		return fmt.Errorf("wait for tracked process window: %w", err)
+	}
+	return nil
+}
+
+// clockForReadiness is the clock the readiness probes wait on.
+func (p *Platform) clockForReadiness() clockwork.Clock {
+	if p.readyClock != nil {
+		return p.readyClock
+	}
+	return clockwork.NewRealClock()
+}
+
+// processHasWindow reports whether pid owns a visible window.
+func (p *Platform) processHasWindow(pid int) bool {
+	if p.windowCheck != nil {
+		return p.windowCheck(pid)
+	}
+	manager, ok := p.windowFocuser.(*windowfocus.Manager)
+	return ok && pid > 0 && manager.HasWindow(uint32(pid)) //nolint:gosec // Windows process IDs are 32-bit values
+}
+
+func (p *Platform) processHasWindowOfClass(pid int, classes []string) bool {
+	manager, ok := p.windowFocuser.(*windowfocus.Manager)
+	// Windows process IDs are 32-bit values.
+	return ok && pid > 0 && manager.HasWindowOfClass(uint32(pid), classes) //nolint:gosec // see above
 }
 
 func isProcessFinishedError(err error) bool {
@@ -309,6 +377,7 @@ func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
 	if p.trackedProcess == proc {
 		p.trackedProcess = nil
 		p.completedTrackedProcess = proc
+		p.windowFocus.Forget()
 	}
 	p.processMu.Unlock()
 
@@ -353,6 +422,7 @@ func (p *Platform) ClearTrackedProcessPID(pid int) bool {
 
 	p.trackedProcess = nil
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	return true
 }
 
@@ -433,6 +503,7 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	defer p.processMu.Unlock()
 	if p.trackedProcess == proc {
 		p.trackedProcess = nil
+		p.windowFocus.Forget()
 	}
 }
 
@@ -517,6 +588,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	proc := p.trackedProcess
 	lastLauncher := p.lastLauncher
 	p.completedTrackedProcess = nil
+	p.windowFocus.Forget()
 	if p.windowFocusCancel != nil {
 		p.windowFocusCancel()
 		p.windowFocusCancel = nil
@@ -601,10 +673,16 @@ func (p *Platform) LaunchMedia(
 			log.Warn().Err(runningErr).Msg("RetroBat ES API unavailable, assuming no game is running")
 		} else if running {
 			log.Info().Msg("exiting current RetroBat media")
+			cancelStop := opts.RecordStop(models.MediaStopReasonReplaced)
 			if stopErr := p.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+				cancelStop()
 				return fmt.Errorf("failed to stop active RetroBat launcher: %w", stopErr)
 			}
-			time.Sleep(retroBatLaunchSettleDelay)
+			// This launch's own stop replaced the launcher context, so take
+			// the context after it: only a later stop may cancel the wait.
+			if settleErr := p.waitLaunchSettle(retroBatLaunchSettleDelay); settleErr != nil {
+				return fmt.Errorf("launch media: stopped while replacing running media: %w", settleErr)
+			}
 		}
 	}
 
@@ -622,8 +700,50 @@ func (p *Platform) LaunchMedia(
 	}
 
 	p.setLastLauncher(launcher)
+	p.watchRetroBatMedia(launcher, path)
 
 	return nil
+}
+
+// waitLaunchSettle waits d, returning early with an error when a stop cancels
+// the launcher context meanwhile, so a stop that finds nothing to act on still
+// prevents the pending launch from starting.
+func (p *Platform) waitLaunchSettle(d time.Duration) error {
+	ctx := context.Background()
+	if p.launcherManager != nil {
+		ctx = p.launcherManager.GetContext()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle interrupted: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+// watchRetroBatMedia follows a RetroBat game that was just published as the
+// active media, so media is cleared when the game ends.
+func (p *Platform) watchRetroBatMedia(launcher *platforms.Launcher, path string) {
+	if !isRetroBatLauncher(launcher) || p.activeMedia == nil {
+		return
+	}
+	media := p.activeMedia()
+	if media == nil || media.LauncherID != launcher.ID || media.Path != path {
+		return
+	}
+	if p.setActiveMedia == nil {
+		return
+	}
+	cancel := startRetroBatMediaWatch(clockwork.NewRealClock(), p.activeMedia, p.setActiveMedia, media)
+	p.processMu.Lock()
+	previous := p.retroBatWatchCancel
+	p.retroBatWatchCancel = cancel
+	p.processMu.Unlock()
+	if previous != nil {
+		previous()
+	}
 }
 
 func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
@@ -636,6 +756,23 @@ func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 
 func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
+}
+
+// steamLauncher is the Steam launcher with its readiness probe. Steam's media
+// is published when Steam reports the game running, before the game process
+// exists, so the probe waits for the process and then its window.
+func (p *Platform) steamLauncher() platforms.Launcher {
+	l := newWindowsSteamLauncher()
+	l.WaitForReady = p.waitForTrackedWindow
+	return l
+}
+
+// launchBoxLauncher is the LaunchBox launcher with its readiness probe. The
+// plugin reports a game started before the game's window exists.
+func (p *Platform) launchBoxLauncher() platforms.Launcher {
+	l := p.NewLaunchBoxLauncher()
+	l.WaitForReady = p.waitForTrackedWindow
+	return l
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
@@ -651,12 +788,15 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		newWindowsSteamLauncher(),
+		p.steamLauncher(),
 		platforms.Launcher{
-			ID:       "Flashpoint",
-			SystemID: systemdefs.SystemPC,
-			Schemes:  []string{shared.SchemeFlashpoint},
-			Test:     shared.SchemeIDTest(shared.SchemeFlashpoint),
+			ID:           "Flashpoint",
+			SystemID:     systemdefs.SystemPC,
+			Schemes:      []string{shared.SchemeFlashpoint},
+			Test:         shared.SchemeIDTest(shared.SchemeFlashpoint),
+			WaitForReady: p.waitForFlashpointGame,
+			ReadyTimeout: flashpointReadyTimeoutFor,
+			Kill:         killFlashpointGame,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				// Handle native Flashpoint URL format: flashpoint://run/123
 				// Normalize to standard virtual path format: flashpoint://123
@@ -669,16 +809,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return nil, fmt.Errorf("failed to extract Flashpoint game ID from path: %w", err)
 				}
 
-				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
-				cmd := exec.CommandContext(context.Background(),
-					helpers.ComSpec(), "/c",
-					"start",
-					"flashpoint://run/"+id,
-				)
-				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				err = cmd.Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start flashpoint: %w", err)
+				if err := p.launchFlashpointGame(id); err != nil {
+					return nil, err
 				}
 				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},
@@ -695,7 +827,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					path,
 				)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				err := cmd.Start()
+				err := command.StartAndReap(cmd)
 				if err != nil {
 					return nil, fmt.Errorf("failed to open URL in browser: %w", err)
 				}
@@ -742,11 +874,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Script launches don't return a process handle
 			},
 		},
-		p.NewLaunchBoxLauncher(),
+		p.launchBoxLauncher(),
 		pinup.NewLauncher(p.popperIntegration()),
 	)
 
-	launchers = append(launchers, getRetroBatLaunchers()...)
+	launchers = append(launchers, p.retroBatLaunchers()...)
 
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
@@ -775,7 +907,10 @@ func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	scrapers := map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	scrapers := map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+	}
 	integration := p.popperIntegration()
 	if integration.Available(cfg) == nil {
 		popper := pinuppopper.NewPlatformScraper(integration.Locate)

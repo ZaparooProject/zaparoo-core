@@ -73,7 +73,11 @@ func newMediaUserReconciler(db *database.Database) *mediaUserReconciler {
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read the media user data reconcile marker; reconciling")
 	}
-	r.pending = found || err != nil
+	_, interrupted, flagErr := db.UserDB.GetDeviceState(database.DeviceStateKeyMediaUserFlagWrite)
+	if flagErr != nil {
+		log.Warn().Err(flagErr).Msg("failed to read the media user flag write marker; reconciling")
+	}
+	r.pending = found || err != nil || interrupted || flagErr != nil
 	return r
 }
 

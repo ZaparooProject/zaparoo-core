@@ -1601,7 +1601,11 @@ func sqlSearchMediaByLargeTitleDBIDSet(
 	return results, nil
 }
 
-func scopedCandidateStreamQuery(systemCount int) string {
+func scopedCandidateStreamQuery(systemCount int, tagClauses []string) string {
+	var tagConditions strings.Builder
+	for _, clause := range tagClauses {
+		_, _ = tagConditions.WriteString(" AND " + clause)
+	}
 	return `
 		SELECT
 			MediaTitles.Name,
@@ -1614,7 +1618,7 @@ func scopedCandidateStreamQuery(systemCount int) string {
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE Media.DBID BETWEEN ? AND ?
 			AND Media.SystemDBID IN (` + prepareVariadic("?", ",", systemCount) + `)
-			AND Media.IsMissing = 0
+			AND Media.IsMissing = 0` + tagConditions.String() + `
 		ORDER BY Media.DBID`
 }
 
@@ -1623,13 +1627,15 @@ func scopedCandidateStreamQuery(systemCount int) string {
 // after indexing, so dense candidate sets fill a page without binding thousands
 // of title IDs or sorting the full scoped result. A sparse window returns
 // errSearchCandidateSetTooSparse so callers preserve correctness through the
-// grouped SQL fallback.
+// grouped SQL fallback. tags are row predicates only, such as the visibility
+// filters discovery adds.
 func sqlSearchMediaByLargeTitleDBIDSetInSystems(
 	ctx context.Context,
 	db sqlQueryable,
 	titleDBIDs []int64,
 	systemIDsByDBID map[int64]string,
 	bounds mediaDBIDBounds,
+	tags []zapscript.TagFilter,
 	cursor *int64,
 	limit int,
 ) ([]database.SearchResultWithCursor, error) {
@@ -1662,13 +1668,15 @@ func sqlSearchMediaByLargeTitleDBIDSetInSystems(
 	// NOT INDEXED forces the integer primary-key range scan. Without it,
 	// SQLite may choose a SystemDBID/path index and build a temporary B-tree
 	// for ORDER BY Media.DBID, recreating the grouped search bottleneck.
-	args := make([]any, 0, len(systemDBIDs)+2)
+	tagClauses, tagArgs := buildCandidateTagFilterSQL(tags)
+	args := make([]any, 0, len(systemDBIDs)+2+len(tagArgs))
 	args = append(args, scanStart, scanEnd)
 	for _, systemDBID := range systemDBIDs {
 		args = append(args, systemDBID)
 	}
+	args = append(args, tagArgs...)
 	queryStarted := time.Now()
-	rows, err := db.QueryContext(ctx, scopedCandidateStreamQuery(len(systemDBIDs)), args...)
+	rows, err := db.QueryContext(ctx, scopedCandidateStreamQuery(len(systemDBIDs), tagClauses), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query scoped media candidate stream: %w", err)
 	}

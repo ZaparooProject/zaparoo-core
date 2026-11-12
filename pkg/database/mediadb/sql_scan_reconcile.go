@@ -58,8 +58,8 @@ type canonicalTagRow struct {
 // links that the scanner owns and that are absent from the staged desired set.
 // Non-scanner types (user tags, cover/scrape properties, scraper-exclusive
 // metadata, scraper run markers) are never treated as stale — deleting them
-// here would silently wipe scraped data on every re-index. Must stay in sync
-// with sqlGetNonScannerTagDBIDs.
+// here would silently wipe scraped data on every re-index. Neither is a link
+// a scraper wrote under a type the scanner also writes (MediaTags.Scraped).
 const (
 	scanFlagMissingBatchSize = 5000
 	// A row here writes to roughly nine Media indexes (vs. scanFlagMissingBatchSize's
@@ -95,6 +95,7 @@ const (
 	JOIN Tags t ON t.DBID = mt.TagDBID
 	JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 	WHERE m.SystemDBID = ?
+	  AND mt.Scraped = 0
 	  AND tt.Type NOT IN (?, ?, ?, ?)
 	  AND tt.Type NOT LIKE ?
 	  AND tt.Type NOT LIKE ?
@@ -161,6 +162,10 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory')),
 			SourceGroup TEXT NOT NULL DEFAULT ''
 		) WITHOUT ROWID`,
+		`CREATE TABLE IF NOT EXISTS ScanStageLinks (
+			Path       TEXT PRIMARY KEY,
+			TargetPath TEXT NOT NULL
+		) WITHOUT ROWID`,
 		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
 		) WITHOUT ROWID`,
@@ -177,7 +182,8 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 // system (clearing any rows a crashed run left behind) and after its reconcile.
 func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
 	for _, table := range []string{
-		"ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage", "ScanTouchedTitles",
+		"ScanStageLinks", "ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage",
+		"ScanTouchedTitles",
 	} {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
@@ -962,6 +968,91 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			"DELETE FROM MediaTags WHERE (MediaDBID, TagDBID) IN (SELECT mt.MediaDBID, mt.TagDBID"+
 				scanStaleLinkFilter+")",
 			scanNonScannerTypeArgs(systemDBID)...)
+		if err != nil {
+			return stats, err
+		}
+	}
+
+	// Every step on links is skipped for a system with no staged link and no
+	// stored one, which is every system on an install that never opted into
+	// scan_duplicates.
+	checkLinksStart := clock.Now()
+	var hasStagedLinks, hasLinks bool
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM ScanStageLinks),
+		       EXISTS (SELECT 1 FROM MediaLinks l JOIN Media a ON a.DBID = l.MediaDBID WHERE a.SystemDBID = ?)`,
+		systemDBID).Scan(&hasStagedLinks, &hasLinks)
+	recordStep("check media links", clock.Since(checkLinksStart))
+	if err != nil {
+		return stats, fmt.Errorf("check media links: %w", err)
+	}
+	if hasStagedLinks {
+		// A staged symlink alias of media in the same system points at its
+		// target's row. Runs after the upsert, so it does not matter whether
+		// the walk reached the alias or its target first. A target that is
+		// itself a link is refused, so a link always ends at real media. That
+		// covers a stored link the walk did not reach: an incomplete scan
+		// leaves it in place, and linking to it would build a chain. A stored
+		// link that was walked but not staged is unlinked below.
+		if _, err = execStep("upsert media links", `
+			INSERT INTO MediaLinks (MediaDBID, TargetMediaDBID)
+			SELECT a.DBID, t.DBID
+			FROM ScanStageLinks sl
+			JOIN Media a ON a.SystemDBID = ? AND a.Path = sl.Path
+			JOIN Media t ON t.SystemDBID = ? AND t.Path = sl.TargetPath AND t.IsMissing = 0
+			WHERE t.DBID <> a.DBID
+			  AND NOT EXISTS (SELECT 1 FROM ScanStageLinks s2 WHERE s2.Path = t.Path)
+			  AND (NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = t.DBID)
+			       OR EXISTS (SELECT 1 FROM ScanStage st WHERE st.Path = t.Path))
+			ON CONFLICT(MediaDBID) DO UPDATE SET TargetMediaDBID = excluded.TargetMediaDBID
+			WHERE MediaLinks.TargetMediaDBID IS NOT excluded.TargetMediaDBID`,
+			systemDBID, systemDBID); err != nil {
+			return stats, err
+		}
+		hasLinks = true
+	}
+	// A walked row that is no longer a valid link to its stored target loses
+	// the data copied from that target, then the link itself. That covers a
+	// file that became real media, a link repointed at a target the upsert
+	// refused, a target that went missing, and a target that has itself become
+	// a link, by the same rules the upsert applies. Only walked rows are
+	// judged, so an incomplete scan never unlinks media it did not reach.
+	if hasLinks {
+		unlinkedRows := `
+			SELECT l.MediaDBID FROM MediaLinks l
+			JOIN Media a ON a.DBID = l.MediaDBID
+			JOIN ScanStage s ON s.Path = a.Path
+			WHERE a.SystemDBID = ?
+			  AND NOT EXISTS (
+				SELECT 1 FROM ScanStageLinks sl
+				JOIN Media t ON t.SystemDBID = a.SystemDBID AND t.Path = sl.TargetPath
+					AND t.IsMissing = 0
+				WHERE sl.Path = a.Path AND t.DBID = l.TargetMediaDBID
+				  AND NOT EXISTS (SELECT 1 FROM ScanStageLinks s2 WHERE s2.Path = t.Path)
+				  AND (NOT EXISTS (SELECT 1 FROM MediaLinks ml WHERE ml.MediaDBID = t.DBID)
+				       OR EXISTS (SELECT 1 FROM ScanStage st WHERE st.Path = t.Path))
+			  )`
+		// Losing the copied tags can change what disambiguates those titles.
+		if _, err = execStep("capture unlinked titles", `
+			INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
+			SELECT a.MediaTitleDBID FROM Media a WHERE a.DBID IN (`+unlinkedRows+`)`, systemDBID); err != nil {
+			return stats, err
+		}
+		unlinkStart := clock.Now()
+		err = sqlPurgeLinkCopies(ctx, db, unlinkedRows, systemDBID)
+		recordStep("purge unlinked media", clock.Since(unlinkStart))
+		if err != nil {
+			return stats, err
+		}
+		if stats.MediaLinksDeleted, err = execStep("delete stale media links",
+			`DELETE FROM MediaLinks WHERE MediaDBID IN (`+unlinkedRows+`)`, systemDBID); err != nil {
+			return stats, err
+		}
+		// New and changed links take their target's scraped data now rather
+		// than at the next scrape.
+		syncStart := clock.Now()
+		_, err = sqlSyncMediaLinks(ctx, db, []int64{systemDBID}, nil, true)
+		recordStep("sync linked media", clock.Since(syncStart))
 		if err != nil {
 			return stats, err
 		}

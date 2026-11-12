@@ -25,11 +25,66 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// A transaction that reads before it writes must not fail because another
+// connection wrote in between. Under a deferred BEGIN the write that lands
+// first leaves the transaction's snapshot stale, and SQLite refuses its write
+// with SQLITE_BUSY straight away, without waiting on the busy timeout. The
+// production connection begins immediately, so the other writer waits instead.
+func TestReadThenWriteTransactionWaitsForConcurrentWriter(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	conn := db.sql.Load()
+	ctx := t.Context()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	var count int
+	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM History").Scan(&count))
+
+	// The open transaction already holds the write lock, as BEGIN IMMEDIATE
+	// takes it up front. A second connection that does not wait must be
+	// refused at once; under a deferred BEGIN it would write first and leave
+	// this transaction's snapshot stale.
+	probe, err := sql.Open("sqlite3", db.GetDBPath()+"?_busy_timeout=0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, probe.Close()) })
+	_, err = probe.ExecContext(ctx,
+		"INSERT INTO DeviceState (Key, Value, UpdatedAt) VALUES ('probe', '1', 0)")
+	require.ErrorContains(t, err, "database is locked")
+
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO DeviceState (Key, Value, UpdatedAt) VALUES ('read_then_write', '1', 0)")
+	require.NoError(t, err, "read-then-write transaction lost its write to a concurrent writer")
+	require.NoError(t, tx.Commit())
+}
+
+// Reading a deck must not queue on the write lock: a read-only request
+// waited out the whole busy timeout behind any writer, and could not be
+// cancelled while it did.
+func TestGetDeckDoesNotWaitOnWriteLock(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	writer, err := db.sql.Load().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = writer.Rollback() }()
+
+	started := time.Now()
+	_, err = db.GetDeck("missing-deck")
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
+	assert.Less(t, time.Since(started), time.Second)
+}
 
 func TestOpenSQLConnectionDoesNotPublish(t *testing.T) {
 	t.Parallel()

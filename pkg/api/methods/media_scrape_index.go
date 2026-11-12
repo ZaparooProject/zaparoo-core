@@ -20,9 +20,11 @@
 package methods
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -42,6 +44,17 @@ func scrapeSourceLaunchers(scrapers map[string]platforms.Scraper) []string {
 	return slices.Compact(ids)
 }
 
+// scrapeSourcesAllLaunchers reports whether an opted-in scraper wants the
+// contributions of every launcher rather than a list of them.
+func scrapeSourcesAllLaunchers(scrapers map[string]platforms.Scraper) bool {
+	for _, s := range scrapers {
+		if s.SupportsFillMissing && s.Scrape != nil && s.AutoScrapeAllLaunchers {
+			return true
+		}
+	}
+	return false
+}
+
 func scrapeJobsForSources(
 	scrapers map[string]platforms.Scraper, sources []mediascanner.IndexedSource,
 ) []database.ScrapeJob {
@@ -52,7 +65,13 @@ func scrapeJobsForSources(
 		}
 		var systems []string
 		for _, source := range sources {
-			if source.Files <= 0 || !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID) {
+			if source.Files <= 0 {
+				continue
+			}
+			// A scraper bound to launchers reads what those launchers keep,
+			// which an unavailable launcher does not have.
+			if !s.AutoScrapeAllLaunchers &&
+				(source.Unavailable || !slices.Contains(s.AutoScrapeLaunchers, source.LauncherID)) {
 				continue
 			}
 			if len(s.SupportedSystemIDs) > 0 && !slices.Contains(s.SupportedSystemIDs, source.SystemID) {
@@ -66,16 +85,31 @@ func scrapeJobsForSources(
 			jobs = append(jobs, database.ScrapeJob{ScraperID: id, Systems: systems, FillMissing: true})
 		}
 	}
-	slices.SortFunc(jobs, func(a, b database.ScrapeJob) int {
-		if a.ScraperID < b.ScraperID {
+	sortScrapeQueue(jobs, scrapers)
+	return jobs
+}
+
+// sortScrapeQueue puts queued jobs in the order they should run. Jobs a user
+// asked for keep their order and go first. Index jobs follow by each
+// scraper's AutoScrapeOrder, then ID: they only fill what is missing, so the
+// order decides which source keeps a field two of them offer. The order is
+// read from the live scraper map, never stored with the job, so a job queued
+// by an older build sorts by today's rules.
+func sortScrapeQueue(jobs []database.ScrapeJob, scrapers map[string]platforms.Scraper) {
+	slices.SortStableFunc(jobs, func(a, b database.ScrapeJob) int {
+		switch {
+		case !a.FillMissing && !b.FillMissing:
+			return 0
+		case !a.FillMissing:
 			return -1
-		}
-		if a.ScraperID > b.ScraperID {
+		case !b.FillMissing:
 			return 1
 		}
-		return 0
+		return cmp.Or(
+			cmp.Compare(scrapers[a.ScraperID].AutoScrapeOrder, scrapers[b.ScraperID].AutoScrapeOrder),
+			strings.Compare(a.ScraperID, b.ScraperID),
+		)
 	})
-	return jobs
 }
 
 func sameScrapeJob(a, b *database.ScrapeJob) bool {
@@ -104,7 +138,13 @@ func sameScrapeScope(a, b *database.ScrapeScope) bool {
 
 // enqueueScrapeJobs runs while indexing owns the media write lease. It only
 // stores ordinary jobs; the existing service watcher runs them after optimization.
-func enqueueScrapeJobs(db database.MediaDBI, jobs []database.ScrapeJob) error {
+// Jobs already waiting are sorted together with the new ones, so a job left
+// from an earlier index does not run ahead of a scraper that should precede
+// it. That includes a job interrupted part-way: its run markers let it resume
+// from wherever it lands in the queue.
+func enqueueScrapeJobs(
+	db database.MediaDBI, jobs []database.ScrapeJob, scrapers map[string]platforms.Scraper,
+) error {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -144,6 +184,7 @@ func enqueueScrapeJobs(db database.MediaDBI, jobs []database.ScrapeJob) error {
 			queued = append(queued, job)
 		}
 	}
+	sortScrapeQueue(queued, scrapers)
 	first := queued[0]
 	op = database.ScrapingOperation{
 		Version: 1, Status: mediadb.IndexingStatusPending,

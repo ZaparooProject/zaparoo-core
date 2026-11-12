@@ -29,9 +29,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// UIChoiceMedia names the local game a picker choice stands for, so a client
+// can show the choice as that game.
+type UIChoiceMedia struct {
+	System string `json:"system"`
+	Path   string `json:"path"`
+	Name   string `json:"name"`
+}
+
 type UIChoice struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	Media *UIChoiceMedia `json:"media,omitempty"`
+	ID    string         `json:"id"`
+	Label string         `json:"label"`
+	// Current marks the choice standing for what is open now, such as the
+	// playing item of a playlist. Host widgets mark it; API clients get the
+	// initial selection from selectedChoiceId instead.
+	Current bool `json:"-"`
 }
 
 type UIEvent struct {
@@ -59,24 +72,34 @@ type UIStateResponse struct {
 }
 
 type SearchResultMedia struct {
-	RelPath   *string `json:"relativePath,omitempty"`
-	System    System  `json:"system"`
-	Name      string  `json:"name"`
-	Path      string  `json:"path"`
-	ZapScript string  `json:"zapScript"`
+	RelPath *string `json:"relativePath,omitempty"`
+	// VersionCount is set by a search grouped by title: how many versions of
+	// the title matched, across the whole search rather than this page.
+	VersionCount *int   `json:"versionCount,omitempty"`
+	System       System `json:"system"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	ZapScript    string `json:"zapScript"`
 	// CoverColor is the cover thumbnail's average colour as "#rrggbb", for a
 	// placeholder while the image loads. Omitted until a thumbnail was built.
 	CoverColor         string             `json:"coverColor,omitempty"`
 	Tags               []database.TagInfo `json:"tags"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
-	HasCover           bool               `json:"hasCover"`
+	// TitleID identifies the media's title for a titleId search, which lists
+	// its versions. Valid until the next media index.
+	TitleID  int64 `json:"titleId,omitempty"`
+	HasCover bool  `json:"hasCover"`
 }
 
 type PaginationInfo struct {
-	NextCursor  *string `json:"nextCursor,omitempty"`
-	HasNextPage bool    `json:"hasNextPage"`
-	PageSize    int     `json:"pageSize"`
+	NextCursor *string `json:"nextCursor,omitempty"`
+	// Offset and AnchorIndex are media.browse only: the absolute position of
+	// the page's first row and of the requested anchor.
+	Offset      *int `json:"offset,omitempty"`
+	AnchorIndex *int `json:"anchorIndex,omitempty"`
+	HasNextPage bool `json:"hasNextPage"`
+	PageSize    int  `json:"pageSize"`
 }
 
 type SearchResults struct {
@@ -107,8 +130,8 @@ type BrowseEntry struct {
 	MediaID            int64              `json:"mediaId,omitempty"`
 	HasCover           bool               `json:"hasCover"`
 	// MultiDisc marks a directory entry that stands for several disc images
-	// of one game. Its launch fields point at the first disc; the others are
-	// listed by browsing the entry's path.
+	// of one game. Its launch fields point at the disc last played from it, or
+	// the first disc; the others are listed by browsing the entry's path.
 	MultiDisc bool `json:"multiDisc,omitempty"`
 }
 
@@ -124,6 +147,12 @@ type BrowseResults struct {
 	TotalDirs  int           `json:"totalDirs"`
 }
 
+// Entry types a media.browse.index response can describe.
+const (
+	BrowseIndexEntryTypeMedia     = "media"
+	BrowseIndexEntryTypeDirectory = "directory"
+)
+
 // BrowseIndexGroup is one first-character section of a browse list. Key is the
 // stable bucket identifier and Label is what to display (equal for the Latin
 // scheme; separated so a future locale scheme can show a glyph differing from
@@ -133,6 +162,11 @@ type BrowseResults struct {
 // as opaque. Offset is the 0-based position of the bucket's first item among
 // the scope's media files (excluding any leading directories), for clients that
 // jump to a position in the full list rather than reload from the cursor.
+//
+// When BrowseIndexResults.EntryType is "directory" the groups describe the
+// scope's directory entries instead: Count is a number of directories and
+// Offset is the position among the directory entries media.browse lists, so
+// no leading-directory count is added to it.
 type BrowseIndexGroup struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
@@ -146,8 +180,14 @@ type BrowseIndexGroup struct {
 // applies to the scope (non-alphabetical sort, or a root listing); Groups is
 // then empty. Groups is authoritative and already ordered for the active sort;
 // clients render it as-is without assuming any alphabet.
+//
+// EntryType says what the groups count: "media" for the scope's media files,
+// or "directory" when the scope has no media files of its own and the groups
+// were computed over its directory entries. A Core that predates the field
+// omits it, which a client reads as "media".
 type BrowseIndexResults struct {
 	Scheme     string             `json:"scheme"`
+	EntryType  string             `json:"entryType"`
 	Groups     []BrowseIndexGroup `json:"groups"`
 	TotalFiles int                `json:"totalFiles"`
 }
@@ -159,18 +199,26 @@ type SettingsResponse struct {
 	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
+	MediaImageDir             *string            `json:"mediaImageDir,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
+	AudioMidiSoundFont        string             `json:"audioMidiSoundFont"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
+	LauncherPreference        []string           `json:"launcherPreference"`
 	AudioVolume               int                `json:"audioVolume"`
+	AudioMusicVolume          int                `json:"audioMusicVolume"`
+	MediaThumbCacheMaxMB      int                `json:"mediaThumbCacheMaxMb"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
+	AudioMusicAutoplay        bool               `json:"audioMusicAutoplay"`
+	AudioNormalize            bool               `json:"audioNormalize"`
+	AudioMusicPauseOnLaunch   bool               `json:"audioMusicPauseOnLaunch"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
 	Encryption                bool               `json:"encryption"`
@@ -600,10 +648,13 @@ const (
 )
 
 type ActiveMedia struct {
-	Started          time.Time          `json:"started"`
-	RelPath          *string            `json:"relativePath,omitempty"`
-	PositionMs       *int64             `json:"positionMs,omitempty"`
-	DurationMs       *int64             `json:"durationMs,omitempty"`
+	Started    time.Time `json:"started"`
+	RelPath    *string   `json:"relativePath,omitempty"`
+	PositionMs *int64    `json:"positionMs,omitempty"`
+	DurationMs *int64    `json:"durationMs,omitempty"`
+	// Track is what the tags of an audio track played in-process say about
+	// it, omitted when it has none or they have not been read yet.
+	Track            *TrackInfo         `json:"track,omitempty"`
 	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
 	LauncherID       string             `json:"launcherId"`
 	SystemID         string             `json:"systemId"`
@@ -613,6 +664,23 @@ type ActiveMedia struct {
 	Slot             string             `json:"slot,omitempty"`
 	LauncherControls []string           `json:"launcherControls,omitempty"`
 	MediaID          int64              `json:"mediaId,omitempty"`
+}
+
+// TrackInfo is the tag metadata of an audio track. Fields the track does not
+// have are omitted.
+type TrackInfo struct {
+	Title       string `json:"title,omitempty"`
+	Artist      string `json:"artist,omitempty"`
+	Album       string `json:"album,omitempty"`
+	AlbumArtist string `json:"albumArtist,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Year        int    `json:"year,omitempty"`
+	TrackNumber int    `json:"trackNumber,omitempty"`
+	TrackTotal  int    `json:"trackTotal,omitempty"`
+	DiscNumber  int    `json:"discNumber,omitempty"`
+	DiscTotal   int    `json:"discTotal,omitempty"`
+	// HasArt reports cover art that media.active.image can return.
+	HasArt bool `json:"hasArt,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.
@@ -710,15 +778,33 @@ type PlaylistItemInfo struct {
 // and it inherited that. Either way, commands in its items that drive input
 // or run programs will not run. It is read-only.
 type PlaylistState struct {
-	ID      string             `json:"id"`
-	Name    string             `json:"name"`
-	Slot    string             `json:"slot"`
-	Repeat  string             `json:"repeat"`
-	Items   []PlaylistItemInfo `json:"items"`
-	Index   int                `json:"index"`
-	Total   int                `json:"total"`
-	Playing bool               `json:"playing"`
-	Unsafe  bool               `json:"unsafe"`
+	// AdvanceMs, IdleMs and CountdownMs are the playlist's rotation settings in
+	// milliseconds, omitted when unset. A countdown of 0 is set: it switches
+	// with no notice.
+	AdvanceMs   *int64             `json:"advanceMs,omitempty"`
+	IdleMs      *int64             `json:"idleMs,omitempty"`
+	CountdownMs *int64             `json:"countdownMs,omitempty"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Slot        string             `json:"slot"`
+	Repeat      string             `json:"repeat"`
+	Items       []PlaylistItemInfo `json:"items"`
+	Index       int                `json:"index"`
+	Total       int                `json:"total"`
+	Playing     bool               `json:"playing"`
+	Unsafe      bool               `json:"unsafe"`
+	// Shuffle reports that the items are in a random order. Items lists them
+	// in the order they play.
+	Shuffle bool `json:"shuffle"`
+	// Armed reports an idle playlist that is loaded and waiting for the
+	// device to go idle before it starts.
+	Armed bool `json:"armed,omitempty"`
+}
+
+// PlaylistsChangedParams is the payload of the playlists.changed
+// notification: every open playlist, in every slot, empty when none is open.
+type PlaylistsChangedParams struct {
+	Playlists []PlaylistState `json:"playlists"`
 }
 
 type MediaResponse struct {
@@ -974,11 +1060,13 @@ type ProfilesDataNotification struct {
 // DeckItemMedia is the local file a deck's game item is linked to on this
 // device, and whether that file is currently indexed.
 type DeckItemMedia struct {
-	System    string   `json:"system"`
-	Path      string   `json:"path"`
-	Name      string   `json:"name"`
-	Tags      []string `json:"tags,omitempty"`
-	Available bool     `json:"available"`
+	System string   `json:"system"`
+	Path   string   `json:"path"`
+	Name   string   `json:"name"`
+	Tags   []string `json:"tags,omitempty"`
+	// UserTags is the linked file's user utility tags, [] when none is set.
+	UserTags  []database.TagInfo `json:"userTags"`
+	Available bool               `json:"available"`
 }
 
 // DeckItemResponse is one member of a deck.
@@ -992,6 +1080,8 @@ type DeckItemResponse struct {
 	Scripts   []DeckCardScriptInput `json:"scripts,omitempty"`
 	ID        int64                 `json:"id"`
 	Position  int                   `json:"position"`
+	// HasImage reports card art decks.image can serve for a card item.
+	HasImage bool `json:"hasImage"`
 }
 
 // DeckResponse is a deck. Items is present, as [] for an empty deck, on
@@ -1001,12 +1091,20 @@ type DeckResponse struct {
 	DeckID      string             `json:"deckId"`
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
+	SourceURL   string             `json:"sourceUrl,omitempty"`
+	OwnedBy     string             `json:"ownedBy,omitempty"`
 	Items       []DeckItemResponse `json:"items,omitzero"`
-	CreatedAt   int64              `json:"createdAt"`
-	UpdatedAt   int64              `json:"updatedAt"`
-	ItemCount   int                `json:"itemCount"`
-	Owned       bool               `json:"owned"`
-	Locked      bool               `json:"locked"`
+	// ContainsItemIDs lists the items linked to the game the decks list was
+	// asked about, and is omitted when it was asked about none.
+	ContainsItemIDs []int64 `json:"containsItemIds,omitzero"`
+	CreatedAt       int64   `json:"createdAt"`
+	UpdatedAt       int64   `json:"updatedAt"`
+	ItemCount       int     `json:"itemCount"`
+	Owned           bool    `json:"owned"`
+	Locked          bool    `json:"locked"`
+	Saved           bool    `json:"saved"`
+	// HasImage reports a cover decks.image can serve.
+	HasImage bool `json:"hasImage"`
 }
 
 // DecksResponse is the response for the decks RPC method.
@@ -1022,6 +1120,14 @@ const (
 	DecksChangedRefreshed = "refreshed"
 )
 
+// MediaTagsChangedNotification is the payload for the media.tags.changed
+// notification: an item's full set of user utility tags after a change.
+type MediaTagsChangedNotification struct {
+	System string             `json:"system"`
+	Path   string             `json:"path"`
+	Tags   []database.TagInfo `json:"tags"`
+}
+
 // DecksChangedNotification is the payload for the decks.changed
 // notification.
 type DecksChangedNotification struct {
@@ -1035,6 +1141,22 @@ type SettingsAuthClaimResponse struct {
 
 type SettingsAuthStatusResponse struct {
 	Linked bool `json:"linked"`
+}
+
+// OnlineFeatureCloudBackup is the account feature that allows remote
+// backups. Core reads it to decide whether remote backups are available.
+const OnlineFeatureCloudBackup = "cloud_backup"
+
+// OnlineStatusResponse reports the online account link, the name and link
+// time the Online service knows this device by, and the account features it
+// last listed. Features is never null; FeaturesCheckedAt is null until a
+// check succeeds after linking.
+type OnlineStatusResponse struct {
+	FeaturesCheckedAt *string  `json:"featuresCheckedAt"`
+	DeviceName        *string  `json:"deviceName,omitempty"`
+	LinkedAt          *string  `json:"linkedAt,omitempty"`
+	Features          []string `json:"features"`
+	Linked            bool     `json:"linked"`
 }
 
 // SettingsAuthUnlinkResponse lists the domains whose credentials were

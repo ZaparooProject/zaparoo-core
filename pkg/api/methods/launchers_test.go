@@ -23,13 +23,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -98,14 +101,21 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 	mockPlatform.AssertCalled(t, "Launchers", mock.AnythingOfType("*config.Instance"))
 }
 
-func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
+func TestHandleLaunchersRefresh_InvalidFilesAreClientErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, document string
-		clientError    bool
+		name, document, position string
+		clientError              bool
 	}{
-		{name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'", clientError: true},
-		{name: "syntax error", document: "broken {{{", clientError: false},
+		{
+			name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'",
+			position: "bad.toml: unknown field launchers.custom.excute (line 2, column 1)", clientError: true,
+		},
+		{name: "syntax error", document: "broken {{{", position: "bad.toml: line 1, column", clientError: true},
+		{
+			name: "wrong value type", document: "[[launchers.custom]]\nid = 5",
+			position: "bad.toml: line 2, column", clientError: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -121,7 +131,9 @@ func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
 			pl := mocks.NewMockPlatform()
 			pl.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
 			_, err = HandleLaunchersRefresh(requests.RequestEnv{Context: t.Context(), Config: cfg, Platform: pl})
-			require.EqualError(t, err, "error loading custom launchers")
+			require.ErrorContains(t, err, "error loading custom launchers: ")
+			assert.Contains(t, err.Error(), tc.position, "the client is told where the file is wrong")
+			assert.NotContains(t, err.Error(), "private value")
 			var clientErr *models.ClientError
 			assert.Equal(t, tc.clientError, errors.As(err, &clientErr))
 			pl.AssertNotCalled(t, "Launchers", mock.Anything)
@@ -567,4 +579,45 @@ func TestHandleLaunchers_RuntimeDetail(t *testing.T) {
 		assert.Empty(t, resp.Launchers[0].Backend)
 		assert.Nil(t, resp.Launchers[0].MisterCore)
 	})
+}
+
+// TestHandleLaunchers_OmitsLaunchableLaunchers pins that the generated
+// launchers behind virtual systems and media are not offered as launcher
+// choices. Each only runs its own zaparoo:// URI, so listing MiSTer's Paprium
+// launcher as a Genesis override option was meaningless (#1683).
+func TestHandleLaunchers_OmitsLaunchableLaunchers(t *testing.T) {
+	t.Parallel()
+
+	paprium := launchables.VirtualMedia{
+		ID:       launchables.MisterGenesisPaprium,
+		Name:     "Paprium",
+		SystemID: systemdefs.SystemGenesis,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+	virtualLaunchers := launchables.LaunchersFor(nil, []launchables.VirtualMedia{paprium})
+	require.Len(t, virtualLaunchers, 1)
+	require.Equal(t, systemdefs.SystemGenesis, virtualLaunchers[0].SystemID)
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice(append([]platforms.Launcher{
+		{ID: "Genesis", SystemID: systemdefs.SystemGenesis},
+	}, virtualLaunchers...))
+
+	for _, params := range []string{``, `{"systems":["Genesis"]}`} {
+		env := requests.RequestEnv{
+			Context:       context.Background(),
+			LauncherCache: cache,
+		}
+		if params != "" {
+			env.Params = []byte(params)
+		}
+		result, err := HandleLaunchers(env)
+		require.NoError(t, err)
+		resp, ok := result.(models.LaunchersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Launchers, 1, "params %q", params)
+		assert.Equal(t, "Genesis", resp.Launchers[0].ID)
+	}
 }

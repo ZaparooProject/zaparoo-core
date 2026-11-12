@@ -147,3 +147,34 @@ func TestSearchSkipsSystemFilterOnlyForSelectingTags(t *testing.T) {
 	assert.False(t, none.skipSystemFilter,
 		"an untagged search keeps the filter, which is the behaviour this protects")
 }
+
+// TestGroupedSearchNameSortRidesTitleNameIndex is the grouped counterpart of
+// TestSearchNameSortRidesTitleNameIndex: a grouped page selects titles
+// directly, so a name sort must walk mediatitles_name_sort_idx and probe each
+// title's media, not sort every matching title.
+func TestGroupedSearchNameSortRidesTitleNameIndex(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	seedFlatFolderLibrary(t, mediaDB)
+
+	scope := &titleGroupScope{
+		systems:       []systemdefs.System{{ID: "MiSTer:Arcade"}},
+		variantGroups: [][]string{{"a"}},
+		rawWords:      []string{"a"},
+	}
+	pages := map[string]*database.SearchCursor{
+		"first page":  nil,
+		"cursor page": {Sort: "name-asc", SortValue: "Browse Game 03000", LastID: 3000},
+	}
+	for name, cursor := range pages {
+		query, args, err := titleGroupKeysQuery(scope, &database.SearchFilters{
+			Sort: "name-asc", SortCursor: cursor, Limit: 25,
+		})
+		require.NoError(t, err)
+		plan := explainPlan(t, mediaDB, query, args...)
+		t.Logf("grouped name-sort %s plan:\n%s", name, plan)
+		assertNameSortReadsIndexOrder(t, plan)
+	}
+}

@@ -66,6 +66,67 @@ func TestDiscControls(t *testing.T) {
 	}
 }
 
+func TestPauseResumeControls(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name, action, status string
+		wantToggle           bool
+	}{
+		{"pause while playing", platforms.ControlPause, "GET_STATUS PLAYING snes,game", true},
+		{"pause while paused", platforms.ControlPause, "GET_STATUS PAUSED snes,game", false},
+		{"resume while paused", platforms.ControlResume, "GET_STATUS PAUSED snes,game", true},
+		{"resume while playing", platforms.ControlResume, "GET_STATUS PLAYING snes,game", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = listener.Close() })
+			require.NoError(t, listener.SetDeadline(time.Now().Add(5*time.Second)))
+			done := make(chan error, 1)
+			go func() {
+				control := Controls(listener.LocalAddr().String())[tt.action]
+				done <- control.Func(t.Context(), nil, platforms.ControlParams{})
+			}()
+			buf := make([]byte, 128)
+			n, peer, err := listener.ReadFromUDP(buf)
+			require.NoError(t, err)
+			assert.Equal(t, "GET_STATUS", string(buf[:n]))
+			_, err = listener.WriteToUDP([]byte(tt.status), peer)
+			require.NoError(t, err)
+			require.NoError(t, <-done)
+
+			require.NoError(t, listener.SetReadDeadline(time.Now().Add(50*time.Millisecond)))
+			n, _, err = listener.ReadFromUDP(buf)
+			if tt.wantToggle {
+				require.NoError(t, err)
+				assert.Equal(t, commandTogglePause, string(buf[:n]))
+			} else {
+				require.Error(t, err, "no command expected when the state already matches")
+			}
+		})
+	}
+}
+
+func TestPauseControlUnavailable(t *testing.T) {
+	t.Parallel()
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	require.NoError(t, listener.SetDeadline(time.Now().Add(5*time.Second)))
+	done := make(chan error, 1)
+	go func() {
+		control := Controls(listener.LocalAddr().String())[platforms.ControlPause]
+		done <- control.Func(t.Context(), nil, platforms.ControlParams{})
+	}()
+	buf := make([]byte, 128)
+	_, peer, err := listener.ReadFromUDP(buf)
+	require.NoError(t, err)
+	_, err = listener.WriteToUDP([]byte("GET_STATUS CONTENTLESS"), peer)
+	require.NoError(t, err)
+	require.Error(t, <-done)
+}
+
 func TestDiscControlsUnavailable(t *testing.T) {
 	t.Parallel()
 	for _, status := range []string{"GET_STATUS CONTENTLESS", "GET_STATUS ERROR", "garbage", "cancel", "timeout"} {
@@ -129,7 +190,7 @@ func TestControlsSendUDPCommands(t *testing.T) {
 		platforms.ControlRewind:      commandRewind,
 	}
 	controls := Controls(listener.LocalAddr().String())
-	require.Len(t, controls, len(commands)+3)
+	require.Len(t, controls, len(commands)+5)
 
 	for action, want := range commands {
 		control := controls[action]

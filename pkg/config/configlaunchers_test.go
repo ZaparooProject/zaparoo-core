@@ -1001,6 +1001,19 @@ preference = ["Native", "RetroDECK"]
 	assert.Equal(t, []string{"Native", "RetroDECK"}, cfg.LauncherPreference())
 }
 
+func TestSetLauncherPreference(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	input := []string{"Native", "RetroDECK"}
+	cfg.SetLauncherPreference(input)
+	input[0] = "changed"
+	assert.Equal(t, []string{"Native", "RetroDECK"}, cfg.LauncherPreference())
+
+	cfg.SetLauncherPreference(nil)
+	assert.Empty(t, cfg.LauncherPreference())
+}
+
 func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
 	t.Parallel()
 

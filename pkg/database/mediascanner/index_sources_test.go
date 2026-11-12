@@ -39,7 +39,9 @@ import (
 
 func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 	// The production indexer currently uses the global launcher cache.
-	for _, mode := range []string{"success", "empty", "failed", "filtered", "cancelled", "unavailable"} {
+	for _, mode := range []string{
+		"success", "all", "empty", "failed", "filtered", "cancelled", "unavailable", "all-unavailable",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "game.nes"), []byte("fixture"), 0o600))
@@ -69,7 +71,7 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 					return []platforms.ScanResult{{Path: "catalog://1/game", Name: "Catalog Game"}}, nil
 				},
 			}
-			if mode == "unavailable" {
+			if mode == "unavailable" || mode == "all-unavailable" {
 				custom.Availability = func(*config.Instance) error { return errors.New("not installed") }
 			}
 			launchers := []platforms.Launcher{local, custom}
@@ -98,9 +100,16 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			defer func() { helpers.GlobalLauncherCache = previous; testLauncherCacheMutex.Unlock() }()
 			var sources []IndexedSource
 			called := false
+			// "all" names no launcher and still hears from every one.
+			launcherIDs := []string{"filesystem", "catalog"}
+			allLaunchers := mode == "all" || mode == "all-unavailable"
+			if allLaunchers {
+				launcherIDs = nil
+			}
 			_, err = NewNamesIndexWithSources(ctx, pl, cfg, []systemdefs.System{{ID: systemdefs.SystemNES}},
 				db, func(IndexStatus) {}, nil, &IndexSourceOptions{
-					LauncherIDs: []string{"filesystem", "catalog"},
+					LauncherIDs:  launcherIDs,
+					AllLaunchers: allLaunchers,
 					Completed: func(result []IndexedSource) {
 						called = true
 						status, statusErr := db.MediaDB.GetIndexingStatus()
@@ -117,8 +126,16 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, called)
 			want := []IndexedSource{{LauncherID: "filesystem", SystemID: systemdefs.SystemNES, Files: 1}}
-			if mode == "success" {
+			if mode == "success" || mode == "all" {
 				want = append(want, IndexedSource{LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1})
+			}
+			// Desktop, 2026-10-26: GameDataBase skipped NES, Genesis and Game Boy
+			// after an index because no emulator for them was installed. A scraper
+			// for every launcher hears about them, marked.
+			if mode == "all-unavailable" {
+				want = append(want, IndexedSource{
+					LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1, Unavailable: true,
+				})
 			}
 			require.ElementsMatch(t, want, sources)
 		})

@@ -219,7 +219,8 @@ func (s *StartupServer) SetFailed(headline, detail, logPath string) {
 		Detail:   detail,
 		LogPath:  logPath,
 	})
-	log.Error().Str("headline", headline).Str("detail", detail).Msg("service entered failed state")
+	// The caller has already logged the failure at the level it deserves.
+	log.Debug().Str("headline", headline).Str("detail", detail).Msg("service entered failed state")
 }
 
 // SwapHandler installs the full API router and marks the service ready. It is

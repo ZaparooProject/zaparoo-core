@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -344,4 +346,90 @@ func TestMediaDB_Recreate_DeleteWhenNoBackup(t *testing.T) {
 	require.NoError(t, mediaDB.sql.Load().QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM Media").Scan(&count))
 	assert.Equal(t, 0, count)
+}
+
+// Readers that do not take the recovery gate must never see the replacement
+// database before its schema exists: they would fail with "no such table"
+// instead of the clean "database is closed" of the handle being replaced.
+func TestMediaDB_RecreatePublishesOnlyAllocatedDatabase(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertSystemWithMedia(t, mediaDB, "NES", "Some Game", filepath.Join("roms", "nes", "game.nes"))
+
+	var readErrs []error
+	mediaDB.beforeAllocate = func() error {
+		_, err := mediaDB.GetIndexingStatus()
+		readErrs = append(readErrs, err)
+		_, err = mediaDB.SystemMediaCounts(context.Background(), nil, false)
+		readErrs = append(readErrs, err)
+		return nil
+	}
+	require.NoError(t, mediaDB.Recreate(false))
+
+	require.Len(t, readErrs, 2)
+	for _, err := range readErrs {
+		if err != nil {
+			assert.NotContains(t, err.Error(), "no such table")
+			assert.NotContains(t, err.Error(), "no such index")
+		}
+	}
+	status, err := mediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusPending, status)
+}
+
+func TestMediaDB_RecreateFailedAllocationKeepsPreviousHandle(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	previous := mediaDB.sql.Load()
+
+	allocateErr := errors.New("allocation failed")
+	mediaDB.beforeAllocate = func() error { return allocateErr }
+	err := mediaDB.Recreate(false)
+	require.ErrorIs(t, err, allocateErr)
+	assert.Same(t, previous, mediaDB.sql.Load(), "a failed allocation must not publish its handle")
+
+	// The next attempt builds the database and publishes it.
+	mediaDB.beforeAllocate = nil
+	require.NoError(t, mediaDB.Recreate(false))
+	assert.NotSame(t, previous, mediaDB.sql.Load())
+	_, err = mediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+}
+
+// A step can report SQLITE_CORRUPT about something other than the database
+// file, as a WAL checkpoint did on a library whose integrity check passed.
+// That must fail the step, not throw the library away for a full reindex.
+func TestMediaDB_OptimizationStepCorruptionOnHealthyDBKeepsDatabase(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertSystemWithMedia(t, mediaDB, "NES", "Some Game", filepath.Join("roms", "nes", "game.nes"))
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusCompleted))
+
+	mediaDB.recordOptimizationStepFailure("wal_checkpoint", 2,
+		fmt.Errorf("checkpoint: %w", sqlite3.Error{Code: sqlite3.ErrCorrupt}))
+
+	assert.False(t, mediaDB.IsMarkedCorrupt(), "a healthy database must not be marked corrupt")
+	indexing, err := mediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusCompleted, indexing)
+	optimization, err := mediaDB.GetOptimizationStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusFailed, optimization)
+}
+
+func TestMediaDB_OptimizationStepCorruptionOnDamagedDBMarksCorrupt(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	for i := range 400 {
+		name := fmt.Sprintf("Game %04d", i)
+		insertSystemWithMedia(t, mediaDB, "NES", name, filepath.Join("roms", "nes", name+".nes"))
+	}
+	zeroHighPages(t, mediaDB)
+	require.NoError(t, mediaDB.Open())
+	require.NoError(t, mediaDB.ClearCorruptMarker())
+
+	mediaDB.recordOptimizationStepFailure("pragma_optimize", 3, sqlite3.Error{Code: sqlite3.ErrCorrupt})
+
+	assert.True(t, mediaDB.IsMarkedCorrupt())
 }

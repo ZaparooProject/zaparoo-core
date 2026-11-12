@@ -29,6 +29,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1111,18 +1112,25 @@ func releasedPortReportsFree(t *testing.T, addr string) bool {
 func TestWaitForAPIPortReleaseHonoursItsTimeout(t *testing.T) {
 	t.Parallel()
 
-	// A port nothing listens on and nothing routes to: dials hang rather than
-	// being refused, which is the case that used to overrun the deadline.
 	cfg, err := testhelpers.NewTestConfigWithListenAndPort(
 		testhelpers.NewOSFS(),
 		t.TempDir(),
-		"192.0.2.1", // TEST-NET-1, reserved and unroutable
+		"127.0.0.1",
 		9,
 	)
 	require.NoError(t, err)
 
+	// A probe that gets no answer: it uses up all the time it is given and then
+	// reports the port held, which is the case that used to overrun the
+	// deadline. A real dial only hangs like this on a host with a route to
+	// send it down, so the hang is supplied here.
+	unanswered := func(_ string, probeTimeout time.Duration) bool {
+		time.Sleep(probeTimeout)
+		return true
+	}
+
 	start := time.Now()
-	err = waitForAPIPortRelease(cfg, 100*time.Millisecond, 10*time.Millisecond)
+	err = waitForPortRelease(cfg, 100*time.Millisecond, 10*time.Millisecond, unanswered)
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "an address that never answers is not a released port")
@@ -1592,6 +1600,64 @@ func TestStart_CapturesServiceStderr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "=== service start ",
 		"each start should be stamped so repeated crashes stay distinguishable")
+}
+
+func TestOpenServiceStderr_RotatesOversizedCapture(t *testing.T) {
+	t.Parallel()
+
+	logDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir})
+	svc := &Service{pl: pl}
+	current := filepath.Join(logDir, config.StderrFile)
+	previous := filepath.Join(logDir, config.StderrPreviousFile)
+
+	small := []byte("panic: small\n")
+	require.NoError(t, os.WriteFile(current, small, 0o600))
+	f, err := svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.NoFileExists(t, previous, "a small capture keeps appending")
+
+	big := bytes.Repeat([]byte("x"), maxServiceStderrSize+1)
+	require.NoError(t, os.WriteFile(current, big, 0o600))
+	require.NoError(t, os.WriteFile(previous, []byte("older"), 0o600))
+	f, err = svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	rotated, err := os.ReadFile(previous) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Equal(t, big, rotated, "the oversized capture replaces the previous generation")
+	fresh, err := os.ReadFile(current) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Less(t, len(fresh), 100)
+	assert.Contains(t, string(fresh), "=== service start ")
+}
+
+// A rotation that cannot happen must not cost the capture or its contents.
+func TestOpenServiceStderr_KeepsAppendingWhenRotationFails(t *testing.T) {
+	t.Parallel()
+
+	logDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir})
+	svc := &Service{pl: pl}
+	current := filepath.Join(logDir, config.StderrFile)
+	// A non-empty directory in the way makes the rename fail.
+	blocker := filepath.Join(logDir, config.StderrPreviousFile)
+	require.NoError(t, os.MkdirAll(filepath.Join(blocker, "keep"), 0o750))
+
+	big := bytes.Repeat([]byte("x"), maxServiceStderrSize+1)
+	require.NoError(t, os.WriteFile(current, big, 0o600))
+	f, err := svc.openServiceStderr()
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	got, err := os.ReadFile(current) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(got, big), "the existing capture must be kept")
+	assert.Contains(t, string(got[len(big):]), "=== service start ")
 }
 
 func TestOpenServiceStderr_RefusesEmptyLogDir(t *testing.T) {

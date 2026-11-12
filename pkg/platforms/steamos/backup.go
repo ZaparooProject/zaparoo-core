@@ -305,6 +305,7 @@ func resolvedBackupPathFromExistingAncestor(candidate string) (resolved, existin
 	current := filepath.Clean(candidate)
 	var suffix []string
 	for {
+		//nolint:gosec // G703: Inspect ancestors read-only; callers validate the resolved backup root.
 		_, err := os.Lstat(current)
 		if err == nil {
 			root, resolveErr := filepath.EvalSymlinks(current)
@@ -347,6 +348,7 @@ func hasAncestorResolvingSymlink(candidate string) bool {
 			continue
 		}
 		current = filepath.Join(current, part)
+		//nolint:gosec // G703: Inspect each ancestor read-only to reject symlinks resolving to an ancestor.
 		info, statErr := os.Lstat(current)
 		if errors.Is(statErr, os.ErrNotExist) {
 			return false

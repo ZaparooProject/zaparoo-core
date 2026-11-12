@@ -68,3 +68,10 @@ func TestLooksLikeID(t *testing.T) {
 		require.Equal(t, want, LooksLikeID(name), name)
 	}
 }
+
+func BenchmarkLoad(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		load()
+	}
+}

@@ -94,6 +94,7 @@ func (db *MediaDB) UpdateMediaTagsBatch(ctx context.Context, updates []database.
 	if !cacheChanged {
 		return nil
 	}
+	db.browseListings.Clear()
 
 	// SQL cache rows were updated transactionally. Drop process and persisted
 	// snapshots so no pre-mutation aggregate survives this generation.
@@ -393,6 +394,7 @@ func (db *MediaDB) SetMediaTagMembership(
 	if err != nil || !changed {
 		return changed, err
 	}
+	db.browseListings.Clear()
 	db.inMemoryTagCache.Store(nil)
 	clearUtilityTagCache()
 	if persistErr := db.PersistTagCache(); persistErr != nil {

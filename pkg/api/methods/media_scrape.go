@@ -96,6 +96,14 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	return true
 }
 
+// isRunningScraper reports whether the named scraper is running. A cancelled
+// run counts until its goroutine has wound down, since it may still be writing.
+func (s *scrapingStatus) isRunningScraper(scraperID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.running && s.scraperID == scraperID
+}
+
 func (s *scrapingStatus) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -253,15 +261,53 @@ func populateScrapedMediaCountExact(
 	db *database.Database,
 	status *models.ScrapingStatusResponse,
 ) {
-	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
+	scraperID := status.ScraperID
+	count, ok := queryScrapedMediaCount(ctx, db, scraperID)
 	if !ok {
-		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
-			status.TotalScraped = cached
-		}
+		status.TotalScraped = fallbackScrapedMediaCount(ctx, db, scraperID)
 		return
 	}
 	status.TotalScraped = count
-	scrapingStatusInstance.updateCountCache(status.ScraperID, count, time.Now())
+	scrapingStatusInstance.updateCountCache(scraperID, count, time.Now())
+}
+
+// storedScrapedMediaCount reads the persisted count, which is one row and so
+// is not subject to the live count query's timeout.
+func storedScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) (int, bool) {
+	if db == nil || db.MediaDB == nil {
+		return 0, false
+	}
+	count, ok, err := db.MediaDB.GetStoredScrapedMediaCount(ctx, scraperID)
+	if err != nil {
+		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to read stored scraped media count")
+		return 0, false
+	}
+	return count, ok
+}
+
+// fallbackScrapedMediaCount is the best known count when the live query could
+// not run: the in-memory cache, then the persisted count.
+func fallbackScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) int {
+	if cached, ok := scrapingStatusInstance.getAnyCountCache(scraperID); ok {
+		return cached
+	}
+	// The live query that sent us here may have spent the caller's deadline, so
+	// the stored read gets its own bound instead of an already-expired context.
+	//nolint:gosec // cancel is deferred below.
+	storedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scrapeTotalScrapedStatusTimeout)
+	defer cancel()
+	count, _ := storedScrapedMediaCount(storedCtx, db, scraperID)
+	return count
+}
+
+// refreshStoredScrapedCounts recomputes the persisted counts and reports
+// whether it succeeded, so callers only trust the stored value after a refresh.
+func refreshStoredScrapedCounts(ctx context.Context, mediaDB database.MediaDBI) bool {
+	if err := mediaDB.RefreshScrapedMediaCounts(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to refresh stored scraped media counts")
+		return false
+	}
+	return true
 }
 
 func populateScrapedMediaCountCached(
@@ -269,32 +315,37 @@ func populateScrapedMediaCountCached(
 	db *database.Database,
 	status *models.ScrapingStatusResponse,
 ) {
+	scraperID := status.ScraperID
+	// Nothing is being written while idle, so the persisted count is current.
+	if !status.Scraping {
+		if stored, ok := storedScrapedMediaCount(ctx, db, scraperID); ok {
+			status.TotalScraped = stored
+			return
+		}
+	}
+
 	now := time.Now()
-	if cached, ok := scrapingStatusInstance.getFreshCountCache(status.ScraperID, now); ok {
+	if cached, ok := scrapingStatusInstance.getFreshCountCache(scraperID, now); ok {
 		status.TotalScraped = cached
 		return
 	}
-	if scrapingStatusInstance.countRefreshBackedOff(status.ScraperID, now) {
-		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
-			status.TotalScraped = cached
-		}
+	if scrapingStatusInstance.countRefreshBackedOff(scraperID, now) {
+		status.TotalScraped = fallbackScrapedMediaCount(ctx, db, scraperID)
 		return
 	}
 
-	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
+	count, ok := queryScrapedMediaCount(ctx, db, scraperID)
 	queryDone := time.Now()
 	if !ok {
-		scrapingStatusInstance.updateCountFailure(status.ScraperID, queryDone)
-		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
-			status.TotalScraped = cached
-		}
+		scrapingStatusInstance.updateCountFailure(scraperID, queryDone)
+		status.TotalScraped = fallbackScrapedMediaCount(ctx, db, scraperID)
 		return
 	}
-	if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK && count < cached {
+	if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(scraperID); cachedOK && count < cached {
 		count = cached
 	}
 	status.TotalScraped = count
-	scrapingStatusInstance.updateCountCache(status.ScraperID, count, queryDone)
+	scrapingStatusInstance.updateCountCache(scraperID, count, queryDone)
 }
 
 func scrapeCountStatusContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -308,10 +359,10 @@ func scrapeCountStatusContext(parent context.Context) (context.Context, context.
 func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	systems, all := mediaDB.ConsumeScrapeImageChanges()
 	if all {
-		WipeMediaThumbCache(mediaDB)
+		InvalidateMediaThumbMemo()
 		return
 	}
-	WipeMediaThumbCacheSystems(mediaDB, systems)
+	InvalidateMediaThumbMemoSystems(systems)
 }
 
 // refreshScrapedTags makes tags written by a scrape visible to media.tags.
@@ -384,12 +435,20 @@ func ptrIfNotEmpty(v string) *string {
 	return &v
 }
 
+// scrapeCancelled reports whether a run's last update ends a cancelled run.
+// A scraper stopped mid-run hands back an error as it ends, usually the
+// context's own, which is the cancel arriving and not a failure. The stored
+// status of the run is decided the same way.
+func scrapeCancelled(scrapeCtx context.Context, update *scraper.ScrapeUpdate) bool {
+	return update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil
+}
+
 func scrapeState(scrapeCtx context.Context, update *scraper.ScrapeUpdate, paused bool) string {
 	switch {
+	case scrapeCancelled(scrapeCtx, update):
+		return scrapeStateCancelled
 	case update.FatalErr != nil:
 		return scrapeStateFailed
-	case update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil:
-		return scrapeStateCancelled
 	case update.Done:
 		return scrapeStateCompleted
 	case paused:
@@ -425,7 +484,7 @@ func scrapingStatusFromUpdate(
 		CurrentStep:        ptrIfPositive(update.CurrentStep),
 		CurrentStepDisplay: ptrIfNotEmpty(display),
 	}
-	if update.FatalErr != nil {
+	if update.FatalErr != nil && !scrapeCancelled(scrapeCtx, update) {
 		status.Error = update.FatalErr.Error()
 	}
 	if update.SystemID != "" {
@@ -773,7 +832,7 @@ func startMediaScrapeOperation(
 				if update.FatalErr != nil {
 					finalStatus = mediadb.IndexingStatusFailed
 				}
-				if update.Done && scrapeCtx.Err() != nil {
+				if scrapeCancelled(scrapeCtx, &update) {
 					finalStatus = mediadb.IndexingStatusCancelled
 				}
 				if update.Done {
@@ -798,6 +857,39 @@ func startMediaScrapeOperation(
 				}
 			}
 			sourceErrs.report(env.State.Inbox())
+			// Scrapers write only to a linked row's target. Copying onto the
+			// links runs before the counts and caches below are refreshed, so
+			// they include it.
+			if syncErr := db.MediaDB.SyncLinkedMedia(
+				env.State.GetContext(), params.Systems, operation.Scope,
+			); syncErr != nil {
+				log.Warn().Err(syncErr).Str("scraper", scraperID).Msg("failed to sync linked media after scrape")
+				// The links still show what they had before, so the run did not
+				// finish. Failing it keeps the operation and its run markers, and
+				// the user sees why.
+				if finalStatus == mediadb.IndexingStatusCompleted {
+					finalStatus = mediadb.IndexingStatusFailed
+					failed := scrapingStatusInstance.getLatest()
+					if terminal != nil {
+						failed = *terminal
+					}
+					failed.ScraperID = scraperID
+					failed.Force = params.Force
+					failed.Scraping = false
+					failed.Paused = false
+					failed.Done = true
+					failed.State = scrapeStateFailed
+					failed.Error = "failed to update linked games"
+					terminal = &failed
+				}
+			}
+			if refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB) && terminal != nil {
+				// The terminal count was read before this refresh and may have come
+				// from a stale fallback; the refreshed value is the settled one.
+				if stored, ok := storedScrapedMediaCount(env.State.GetContext(), db, terminal.ScraperID); ok {
+					terminal.TotalScraped = stored
+				}
+			}
 			// Scrape writes commit incrementally, so changed artwork must be
 			// invalidated on every terminal outcome, including failure/cancellation.
 			mediaImageNoImages.clear()
@@ -844,7 +936,9 @@ func startMediaScrapeOperation(
 			if checkpointScrapingWAL(db.MediaDB, scraperID) {
 				// Wake the corruption-recovery watcher, which only observes media-indexing
 				// notifications. Scraping status is already terminal here, so recovery won't defer.
-				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{Exists: true, Indexing: false})
+				notifications.MediaIndexing(ns, WithMediaCounts(
+					&models.IndexingStatusResponse{Exists: true, Indexing: false}, db.MediaDB,
+				))
 				return
 			}
 			log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")
@@ -867,6 +961,10 @@ func startMediaScrapeOperation(
 			operation = next
 			scraperID, runID = operation.ScraperID, operation.RunID
 			params.Force = operation.Force
+			params.Systems = operation.Systems
+			if operation.Scope != nil {
+				params.Systems = []string{operation.Scope.SystemID}
+			}
 			ch = startQueuedScraper(scrapeCtx, env, &operation)
 		}
 	}()

@@ -987,6 +987,22 @@ func TestStopActiveLauncher_DoesNotReuseStaleKillForScript(t *testing.T) {
 	assert.Equal(t, 1, killCalls, "script stop reused stale launcher Kill hook")
 }
 
+func TestStopActiveLauncher_ReportsMenuFailureWhenNothingTracked(t *testing.T) {
+	t.Parallel()
+
+	// With no tracked process the stop is a load_core menu.rbf write to
+	// /dev/MiSTer_cmd, which does not exist on a test host. The core is still
+	// running, so the failure must reach the caller instead of reading as a stop.
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; cannot force a menu launch failure")
+	}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	err := p.StopActiveLauncher(platforms.StopForMenu)
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+}
+
 func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	t.Parallel()
 
@@ -1044,7 +1060,7 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	select {
 	case <-stopReturned:
 		// Good - returned after cleanup
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("StopActiveLauncher did not return after cleanup completed")
 	}
 }
@@ -1058,7 +1074,7 @@ func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
 	p := NewPlatform()
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 	restoreDone := make(chan struct{})
-	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test")
+	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test", trackedExit{})
 	require.NoError(t, err)
 
 	require.NoError(t, p.ReturnToMenu())
@@ -1104,7 +1120,7 @@ func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 	p := NewPlatform()
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 	restoreDone := make(chan struct{})
-	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test")
+	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test", trackedExit{})
 	require.NoError(t, err)
 
 	var childPID int

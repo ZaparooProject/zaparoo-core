@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -80,6 +81,41 @@ func TestHandleMedia_ReportsFolderScanProgress(t *testing.T) {
 
 // A stalled scan tells the user once, naming the system and folder and how to
 // exclude it. It is deduplicated by category, so a repeat replaces it.
+// A completed run tells clients indexing stopped, then keeps holding
+// indexing until optimization takes over. A status read in that gap must
+// not report indexing again, or clients see the run finish twice.
+func TestHandleMedia_FinishedRunReportsNotIndexing(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
+	testState, _ := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	statusInstance.set(indexingStatusVals{indexing: true, totalSteps: 2, currentStep: 2})
+	statusInstance.setCancelFunc(func() {})
+	statusInstance.markFinished()
+	t.Cleanup(ClearIndexingStatus)
+
+	result, err := HandleMedia(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: &helpers.MockUserDBI{}},
+		State:    testState,
+	})
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok)
+	assert.False(t, response.Database.Indexing)
+
+	assert.True(t, statusInstance.isRunning(), "the run keeps indexing until the handoff")
+	assert.False(t, statusInstance.cancel(), "a finished run has nothing to cancel")
+	assert.True(t, statusInstance.isRunning())
+
+	require.False(t, statusInstance.startIfNotRunning())
+	statusInstance.clear()
+	require.True(t, statusInstance.startIfNotRunning())
+	assert.False(t, statusInstance.get().finished, "a new run starts unfinished")
+}
+
 func TestReportStalledScan_AddsInboxMessage(t *testing.T) {
 	// Not parallel: sets the package inbox.
 	userDB := helpers.NewMockUserDBI()
@@ -150,4 +186,35 @@ func TestHandleGenerateMedia_KeepsSkipListWhileIndexing(t *testing.T) {
 	_, err := HandleGenerateMedia(env)
 	require.Error(t, err)
 	mockMediaDB.AssertNotCalled(t, "SetIndexingSkippedSystems", mock.Anything)
+}
+
+// A request refused because another operation owns the media database is
+// refused before it writes anything: the write would wait on that operation's
+// lock, and the list belongs to whichever index runs next.
+func TestHandleGenerateMedia_RefusedDuringOptimizationWritesNothing(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	ClearIndexingStatus()
+	t.Cleanup(ClearIndexingStatus)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	require.NoError(t, db.MediaDB.SetIndexingSkippedSystems([]string{"NES"}))
+	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+	require.NoError(t, err)
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	_, err = HandleGenerateMedia(requests.RequestEnv{
+		Context: context.Background(), Params: []byte(`{"systems":["NES"]}`),
+		Database: db, Platform: mockPlatform, State: appState,
+		Config: &config.Instance{}, ClientID: "127.0.0.1:12345",
+	})
+	require.Error(t, err)
+	assert.Equal(t, models.ErrorCategoryBusy, errorCategory(t, err))
+	skipped, err := db.MediaDB.GetIndexingSkippedSystems()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NES"}, skipped)
 }

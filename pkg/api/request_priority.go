@@ -56,10 +56,8 @@ func (p apiRequestPriority) String() string {
 }
 
 func requestTimeoutForAPIMethod(method string) time.Duration {
-	if models.MethodHasUnboundedRuntime(method) {
-		return 0
-	}
-	return config.APIRequestTimeout
+	timeout, _ := config.APIRequestTimeoutFor(method)
+	return timeout
 }
 
 func requestContextForAPIMethod(
@@ -99,15 +97,24 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodReadersWriteCancel,
 		models.MethodMediaActiveUpdate,
 		models.MethodMediaControl,
+		models.MethodPlaylistsUpdate,
 		models.MethodMappingsNew,
 		models.MethodMappingsDelete,
 		models.MethodMappingsUpdate,
 		models.MethodMappingsReload,
 		models.MethodDecksNew,
 		models.MethodDecksUpdate,
-		models.MethodDecksDelete:
+		models.MethodDecksDelete,
+		models.MethodDevicePowerReboot,
+		models.MethodDevicePowerShutdown,
+		models.MethodDevicePowerSuspend:
+		// The Bluetooth methods stay on the normal lane: a radio call can
+		// take seconds, and the high lane has one worker that stop, confirm
+		// and media.control must never wait behind.
 		return apiPriorityHigh
 	case models.MethodMediaImage,
+		models.MethodDecksImage,
+		models.MethodMediaActiveImage,
 		models.MethodMediaAsset,
 		models.MethodMediaGenerate,
 		models.MethodMediaGenerateCancel,
@@ -144,7 +151,9 @@ func methodFromAPIRequestPayload(msg []byte) string {
 }
 
 func isImageAPIMethod(method string) bool {
-	return strings.EqualFold(method, models.MethodMediaImage)
+	return strings.EqualFold(method, models.MethodMediaImage) ||
+		strings.EqualFold(method, models.MethodDecksImage) ||
+		strings.EqualFold(method, models.MethodMediaActiveImage)
 }
 
 func isAssetAPIMethod(method string) bool {
@@ -168,10 +177,17 @@ func isMediaDBTransactionAPIMethod(method string) bool {
 // TestIsControlAllowed_BlocksMediaDBReadingCommands in pkg/zapscript guards
 // this invariant — it fails if a future MediaDB-reading command is ever added
 // without being rejected by isControlAllowed.
+// isDeviceAPIMethod reports whether a method belongs to the device namespace,
+// none of which reads MediaDB.
+func isDeviceAPIMethod(method string) bool {
+	return strings.HasPrefix(strings.ToLower(method), "device.")
+}
+
 func isMediaDBFreeInstantMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodRun) ||
 		strings.EqualFold(method, models.MethodDecksOpen) ||
 		strings.EqualFold(method, models.MethodLaunch) ||
 		strings.EqualFold(method, models.MethodStop) ||
-		strings.EqualFold(method, models.MethodMediaControl)
+		strings.EqualFold(method, models.MethodMediaControl) ||
+		strings.EqualFold(method, models.MethodPlaylistsUpdate)
 }

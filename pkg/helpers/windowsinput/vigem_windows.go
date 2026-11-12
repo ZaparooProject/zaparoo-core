@@ -146,7 +146,70 @@ func NewGamepad() (*Gamepad, error) {
 		g.closeHandles()
 		return nil, err
 	}
+	activePads.add(g)
 	return g, nil
+}
+
+// padRegistry tracks the virtual pads this process has plugged in, so that
+// code listing the machine's controllers can leave them out.
+type padRegistry struct {
+	pads map[*Gamepad]struct{}
+	mu   syncutil.Mutex
+}
+
+//nolint:gochecknoglobals // process-wide view of the pads this process owns
+var activePads = &padRegistry{pads: map[*Gamepad]struct{}{}}
+
+func (r *padRegistry) add(g *Gamepad) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pads[g] = struct{}{}
+}
+
+func (r *padRegistry) remove(g *Gamepad) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.pads, g)
+}
+
+func (r *padRegistry) snapshot() []*Gamepad {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pads := make([]*Gamepad, 0, len(r.pads))
+	for pad := range r.pads {
+		pads = append(pads, pad)
+	}
+	return pads
+}
+
+// ActiveUserIndices returns the XInput slots held by this process's own
+// virtual pads. A pad whose slot the bus cannot report is left out.
+func ActiveUserIndices() []int {
+	var indices []int
+	for _, pad := range activePads.snapshot() {
+		if index, err := pad.UserIndex(); err == nil {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+// UserIndex returns the XInput slot the bus assigned this pad.
+func (g *Gamepad) UserIndex() (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.handle == windows.InvalidHandle {
+		return 0, errors.New("virtual gamepad is closed")
+	}
+	request := xusbGetUserIndex{
+		Size:     uint32(unsafe.Sizeof(xusbGetUserIndex{})),
+		SerialNo: g.serial,
+	}
+	if err := ioctlBuffers(g, ioctlXusbGetUserIndex, &request, request.Size, true); err != nil {
+		return 0, fmt.Errorf("read virtual gamepad slot: %w", err)
+	}
+	return int(request.UserIndex), nil
 }
 
 // ButtonDown presses a button, identified by its evdev button code.
@@ -161,6 +224,8 @@ func (g *Gamepad) ButtonUp(code int) error {
 
 // Close unplugs the pad and releases the bus handle.
 func (g *Gamepad) Close() error {
+	activePads.remove(g)
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -172,7 +237,9 @@ func (g *Gamepad) Close() error {
 		Size:     uint32(unsafe.Sizeof(vigemUnplugTarget{})),
 		SerialNo: g.serial,
 	}
+	markGamepadInjection()
 	err := ioctl(g, ioctlUnplugTarget, &unplug, unplug.Size)
+	markGamepadInjection()
 	g.closeHandles()
 	if err != nil {
 		return fmt.Errorf("unplug virtual gamepad: %w", err)
@@ -200,7 +267,9 @@ func (g *Gamepad) submit() error {
 	// The driver answers ERROR_NO_MORE_ITEMS when nothing has polled the pad
 	// yet, because it had no pending USB IN request to complete. The report is
 	// still stored and sent on the next poll, so this is not a failure.
+	markGamepadInjection()
 	err := ioctl(g, ioctlXusbSubmitReport, &report, report.Size)
+	markGamepadInjection()
 	if err != nil && !errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
 		return fmt.Errorf("submit gamepad report: %w", err)
 	}
@@ -209,6 +278,8 @@ func (g *Gamepad) submit() error {
 
 // plugIn claims the first free bus slot. The caller must not hold g.mu.
 func (g *Gamepad) plugIn() error {
+	markGamepadInjection()
+	defer markGamepadInjection()
 	var lastErr error
 	for serial := uint32(1); serial <= serialAttempts; serial++ {
 		plugin := vigemPluginTarget{
@@ -258,12 +329,19 @@ func (g *Gamepad) closeHandles() {
 // vigemRequest is one of the driver's request structures. Each begins with its
 // own size, which is what the caller passes to ioctl.
 type vigemRequest interface {
-	vigemCheckVersion | vigemPluginTarget | vigemWaitDeviceReady | vigemUnplugTarget | xusbSubmitReport
+	vigemCheckVersion | vigemPluginTarget | vigemWaitDeviceReady | vigemUnplugTarget | xusbSubmitReport |
+		xusbGetUserIndex
 }
 
 // ioctl issues a buffered IOCTL carrying req, waiting out a request the driver
 // pends. It is a free function because Go methods cannot be generic.
 func ioctl[T vigemRequest](g *Gamepad, code uint32, req *T, size uint32) error {
+	return ioctlBuffers(g, code, req, size, false)
+}
+
+// ioctlBuffers is ioctl with the option of having the driver write its answer
+// back into req.
+func ioctlBuffers[T vigemRequest](g *Gamepad, code uint32, req *T, size uint32, readBack bool) error {
 	if err := windows.ResetEvent(g.event); err != nil {
 		return fmt.Errorf("reset vigem event: %w", err)
 	}
@@ -271,7 +349,14 @@ func ioctl[T vigemRequest](g *Gamepad, code uint32, req *T, size uint32) error {
 	overlapped := windows.Overlapped{HEvent: g.event}
 	var returned uint32
 	in := (*byte)(unsafe.Pointer(req)) //nolint:gosec // required for Windows API
-	err := windows.DeviceIoControl(g.handle, code, in, size, nil, 0, &returned, &overlapped)
+	var (
+		out     *byte
+		outSize uint32
+	)
+	if readBack {
+		out, outSize = in, size
+	}
+	err := windows.DeviceIoControl(g.handle, code, in, size, out, outSize, &returned, &overlapped)
 	if err == nil {
 		return nil
 	}

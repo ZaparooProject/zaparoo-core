@@ -4524,6 +4524,222 @@ func TestManagerRefreshRemoteAvailabilityMarksTransientFailureUnknown(t *testing
 	assert.True(t, status.Remote.Linked)
 }
 
+func TestManagerOnlineStatusFeatures(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var failing atomic.Bool
+	features := []string{"custom_branding", "", "cloud_backup", "custom_branding"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if failing.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(t, w, remoteDeviceMeResponse{
+			ID: "device-1", Name: "test", BackupActive: true, Features: features,
+		})
+	}))
+	defer server.Close()
+
+	unlinked := env.Manager.OnlineStatus()
+	assert.False(t, unlinked.Linked)
+	assert.NotNil(t, unlinked.Features)
+	assert.Empty(t, unlinked.Features)
+	assert.Nil(t, unlinked.FeaturesCheckedAt)
+
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	linked := env.Manager.OnlineStatus()
+	assert.True(t, linked.Linked)
+	assert.Empty(t, linked.Features)
+	assert.Nil(t, linked.FeaturesCheckedAt, "no successful check since link")
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	checked := env.Manager.OnlineStatus()
+	assert.Equal(t, []string{"cloud_backup", "custom_branding"}, checked.Features,
+		"features are deduplicated, sorted and free of empty names")
+	require.NotNil(t, checked.FeaturesCheckedAt)
+	_, err = time.Parse(time.RFC3339, *checked.FeaturesCheckedAt)
+	require.NoError(t, err)
+
+	failing.Store(true)
+	_, err = env.Manager.RefreshRemoteAvailability(context.Background())
+	require.Error(t, err)
+	afterFailure := env.Manager.OnlineStatus()
+	assert.Equal(t, checked.Features, afterFailure.Features, "a failed check keeps the last features")
+	assert.Equal(t, checked.FeaturesCheckedAt, afterFailure.FeaturesCheckedAt,
+		"a failed check keeps the last checked time")
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+
+	// A run status write starts from a fresh entry and must carry them over.
+	require.NoError(t, env.Manager.writeRemoteStatus(&statusEntry{LastStatus: "running"}))
+	assert.Equal(t, afterFailure, env.Manager.OnlineStatus())
+
+	env.Manager.MarkRemoteUnlinked()
+	stored := env.Manager.readStatus().Remote
+	assert.Nil(t, stored.Features, "unlinking clears features")
+	assert.Empty(t, stored.FeaturesCheckedAt, "unlinking clears the checked time")
+	assert.False(t, env.Manager.OnlineStatus().Linked)
+
+	env.Manager.MarkRemoteLinked()
+	failing.Store(false)
+	_, err = env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, env.Manager.OnlineStatus().Features)
+	env.Manager.MarkRemoteLinked()
+	relinked := env.Manager.OnlineStatus()
+	assert.True(t, relinked.Linked)
+	assert.Empty(t, relinked.Features, "relinking clears features")
+	assert.Nil(t, relinked.FeaturesCheckedAt, "relinking clears the checked time")
+}
+
+func TestManagerOnlineStatusServerWithoutFeatures(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		availability string
+		features     []string
+	}{
+		{
+			name:         "backup_active grants cloud backup",
+			body:         `{"id":"device-1","name":"test","backup_active":true}`,
+			availability: RemoteAvailabilityAvailable,
+			features:     []string{models.OnlineFeatureCloudBackup},
+		},
+		{
+			name:         "no backup_active grants nothing",
+			body:         `{"id":"device-1","name":"test","backup_active":false}`,
+			availability: RemoteAvailabilityUnavailable,
+			features:     []string{},
+		},
+		{
+			name:         "a listed empty set wins over backup_active",
+			body:         `{"id":"device-1","name":"test","backup_active":true,"features":[]}`,
+			availability: RemoteAvailabilityUnavailable,
+			features:     []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
+
+			_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+			require.NoError(t, err)
+			status := env.Manager.OnlineStatus()
+			assert.True(t, status.Linked)
+			assert.Equal(t, tt.features, status.Features)
+			assert.NotNil(t, status.FeaturesCheckedAt, "a response without the field still counts as checked")
+			assert.Equal(t, tt.availability, env.Manager.Status().Remote.Availability)
+			require.NotNil(t, status.DeviceName)
+			assert.Equal(t, "test", *status.DeviceName)
+		})
+	}
+}
+
+// TestManagerRemoteAvailabilityDropsSupersededLink pins that a device check
+// still running when the device is relinked does not write the earlier
+// link's features over the new link's cleared status.
+func TestManagerRemoteAvailabilityDropsSupersededLink(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var baseURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Relink while the check is in flight: new credential, then the
+		// status reset the link flow performs.
+		config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+			config.RemoteAuthLookupURL(baseURL): {Bearer: "new-token"},
+		})
+		env.Manager.MarkRemoteLinked()
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"id":"d","name":"old","features":["cloud_backup","custom_branding"]}`))
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+	baseURL = server.URL
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	status := env.Manager.OnlineStatus()
+	assert.Nil(t, status.FeaturesCheckedAt)
+	assert.Empty(t, status.Features)
+	assert.Nil(t, status.DeviceName)
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+}
+
+func TestManagerRemoteAvailabilityFollowsCloudBackupFeature(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"cloud_backup listed": {
+			`{"id":"d","backup_active":false,"features":["cloud_backup"]}`, RemoteAvailabilityAvailable,
+		},
+		"cloud_backup missing": {
+			`{"id":"d","backup_active":true,"features":["custom_branding"]}`, RemoteAvailabilityUnavailable,
+		},
+		"empty list": {
+			`{"id":"d","backup_active":true,"features":[]}`, RemoteAvailabilityUnavailable,
+		},
+		"no list, backup_active true":  {`{"id":"d","backup_active":true}`, RemoteAvailabilityAvailable},
+		"no list, backup_active false": {`{"id":"d","backup_active":false}`, RemoteAvailabilityUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tc.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
+
+			got, err := env.Manager.RefreshRemoteAvailability(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, env.Manager.Status().Remote.Availability)
+		})
+	}
+}
+
+func TestManagerOnlineStatusDeviceIdentity(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	linkedAt := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "Living Room", LinkedAt: linkedAt})
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	before := env.Manager.OnlineStatus()
+	assert.Nil(t, before.DeviceName, "no name before the first check")
+	assert.Nil(t, before.LinkedAt)
+
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	status := env.Manager.OnlineStatus()
+	require.NotNil(t, status.DeviceName)
+	assert.Equal(t, "Living Room", *status.DeviceName)
+	require.NotNil(t, status.LinkedAt)
+	assert.Equal(t, env.Manager.Status().Remote.LinkedAt, status.LinkedAt,
+		"matches the backup status")
+
+	env.Manager.MarkRemoteUnlinked()
+	unlinked := env.Manager.OnlineStatus()
+	assert.Nil(t, unlinked.DeviceName)
+	assert.Nil(t, unlinked.LinkedAt)
+}
+
 func TestRemoteAvailabilityNeedsRefreshUsesStateSpecificTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
@@ -5291,4 +5507,107 @@ func TestRemoteQuotaMessageDistinguishesFullFromTooLarge(t *testing.T) {
 	assert.Equal(t, "Online backup did not fit", fitTitle)
 	assert.Contains(t, fitBody, "4.0 MB")
 	assert.NotContains(t, fitBody, "is full")
+}
+
+// A backup name from a client that is malformed, or that names a backup since
+// deleted, is the client's request rather than a backup failure, so the API
+// can answer it without reporting an error.
+func TestResolveBackupPathClassifiesClientNames(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+
+	_, err := env.Manager.resolveBackupPath("zzz-f8-probe-does-not-exist")
+	require.ErrorIs(t, err, ErrInvalidBackupName)
+
+	_, err = env.Manager.resolveBackupPath("../backup-x.zip")
+	require.ErrorIs(t, err, ErrInvalidBackupName)
+
+	_, err = env.Manager.resolveBackupPath("backup-20260101-000000-000000000-manual.zip")
+	require.ErrorIs(t, err, ErrBackupNotFound)
+}
+
+// A remote run cut short by shutdown is not a failure the user needs to hear
+// about; the next scheduled run picks it up.
+func TestNotifyRemoteFailureSkipsCancellation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cancelled stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+		env.Manager.notifyRemoteFailure(fmt.Errorf("upload snapshot: %w", context.Canceled))
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+
+	t.Run("other failure adds the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryBackupRemoteFailed
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryBackupRemoteFailed,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+		env.Manager.notifyRemoteFailure(errors.New("upload snapshot: connection reset"))
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+}
+
+// A run cancelled part-way, as when the caller goes away or the service shuts
+// down, posted "Remote backup failed" although nothing failed and the next run
+// retries it.
+func TestManagerRunRemoteCancelledMidRunIsNotAFailure(t *testing.T) {
+	for _, stage := range []string{"me", "check", "backups", "pack"} {
+		t.Run(stage, func(t *testing.T) {
+			env := newBackupTestEnv(t, platformids.Mister)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// The server only notices the client going away once the body
+			// has been read.
+			hold := func(r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				cancel()
+				<-r.Context().Done()
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+					if stage == "me" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "test", BackupActive: true})
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+					var req remoteCheckRequest
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					if stage == "check" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+					if stage == "backups" {
+						hold(r)
+						return
+					}
+					writeJSON(t, w, remoteListResponse{StorageUsedBytes: 0, StorageQuotaBytes: 1 << 40})
+				default:
+					hold(r)
+				}
+			}))
+			defer server.Close()
+			configureRemoteTestAuth(t, env.Manager, server.URL)
+			env.Manager.WithInbox(inboxservice.NewService(env.UserDB, make(chan models.Notification, 1)))
+
+			_, err := env.Manager.RunRemote(ctx, RemoteBackupTypeManual)
+			require.ErrorIs(t, err, context.Canceled)
+			env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+		})
+	}
 }

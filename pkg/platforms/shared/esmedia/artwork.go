@@ -21,6 +21,7 @@
 package esmedia
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,11 +49,12 @@ var ArtworkDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage): {"image", "images", "miximages", "custom"},
 	string(tags.TagPropertyImageBoxart): {
 		"boxart", "boxart2d", "box2d", "boxart2dfront", "box2dfront", "cover", "covers",
+		"boxarts", "box", "named_boxarts",
 	},
 	string(tags.TagPropertyImageBoxart3D):   {"boxart3d", "3dbox", "3dboxes"},
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback", "backcover", "backcovers"},
-	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
+	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots", "snap", "snaps", "named_snaps"},
 	string(tags.TagPropertyImageThumbnail): {
 		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
 	},
@@ -61,6 +63,7 @@ var ArtworkDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageFanart):  {"fanart", "fanarts"},
 	string(tags.TagPropertyImageTitleshot): {
 		"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle",
+		"title", "titles", "named_titles",
 	},
 	string(tags.TagPropertyImageMap): {"map", "maps"},
 }
@@ -77,12 +80,17 @@ func DirectoryArtworkDirCandidates(propValue string) []string {
 	return append([]string{"folders", "folder"}, candidates...)
 }
 
-// StatMediaDirs reads <rootPath>/media and returns subdirectory name to path.
+// StatMediaDirs reads <rootPath>/media and returns lowercased subdirectory
+// name to path.
 func StatMediaDirs(rootPath string) map[string]string {
 	return StatMediaDirsFS(afero.NewOsFs(), rootPath)
 }
 
-// StatMediaDirsFS reads <rootPath>/media using fs and returns subdirectory name to path.
+// StatMediaDirsFS reads <rootPath>/media using fs and returns subdirectory
+// name to path. Names are lowercased so they match ArtworkDirCandidates
+// whatever case the folder was created in; the path keeps the on-disk
+// spelling. When two folders differ only by case, the one already lowercase
+// wins, otherwise the first listed does.
 func StatMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	mediaRoot := filepath.Join(rootPath, "media")
 	entries, err := afero.ReadDir(fs, mediaRoot)
@@ -91,9 +99,14 @@ func StatMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	}
 	dirs := make(map[string]string, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
-			dirs[e.Name()] = filepath.Join(mediaRoot, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		key := strings.ToLower(e.Name())
+		if _, taken := dirs[key]; taken && e.Name() != key {
+			continue
+		}
+		dirs[key] = filepath.Join(mediaRoot, e.Name())
 	}
 	return dirs
 }
@@ -228,9 +241,73 @@ func FallbackArtworkNames(stem string) []string {
 	return names
 }
 
+// DirNames remembers which names each directory holds, from one listing per
+// directory, so a search for many candidate filenames does not stat each one.
+// It only ever rules a name out: a name the listing has, in any letter case,
+// is still confirmed with a stat, which keeps the answer the filesystem's own
+// on case-sensitive and case-insensitive storage alike. The zero value is not
+// usable; a nil *DirNames rules nothing out.
+type DirNames struct {
+	fs   afero.Fs
+	dirs map[string]map[string]struct{}
+}
+
+// NewDirNames returns an empty cache over fs. It is not safe for concurrent
+// use, and holds every name it has listed until it is dropped.
+func NewDirNames(fs afero.Fs) *DirNames {
+	return &DirNames{fs: fs, dirs: make(map[string]map[string]struct{})}
+}
+
+// MayContain reports whether dir can hold an entry called name. It is false
+// only when dir was listed, or does not exist, and has no such entry.
+func (d *DirNames) MayContain(dir, name string) bool {
+	if d == nil {
+		return true
+	}
+	names, listed := d.dirs[dir]
+	if !listed {
+		names = d.list(dir)
+		d.dirs[dir] = names
+	}
+	if names == nil {
+		// The listing failed for a reason other than the directory being
+		// absent, so nothing is known about it.
+		return true
+	}
+	_, ok := names[strings.ToLower(name)]
+	return ok
+}
+
+func (d *DirNames) list(dir string) map[string]struct{} {
+	entries, err := afero.ReadDir(d.fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]struct{}{}
+		}
+		return nil
+	}
+	names := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		names[strings.ToLower(entry.Name())] = struct{}{}
+	}
+	return names
+}
+
 // FindFileFS searches candidate directories for fallbackNames in order.
 func FindFileFS(
 	fs afero.Fs,
+	fallbackNames []string,
+	candidates []string,
+	availableDirs map[string]string,
+) *File {
+	return FindFileIn(fs, nil, fallbackNames, candidates, availableDirs)
+}
+
+// FindFileIn is FindFileFS with a directory name cache, for a caller that
+// searches the same directories for many files. names may be nil.
+func FindFileIn(
+	fs afero.Fs,
+	names *DirNames,
 	fallbackNames []string,
 	candidates []string,
 	availableDirs map[string]string,
@@ -250,6 +327,9 @@ func FindFileFS(
 				continue
 			}
 			candidate := filepath.Join(dirPath, name)
+			if !names.MayContain(filepath.Dir(candidate), filepath.Base(candidate)) {
+				continue
+			}
 			if exists, err := afero.Exists(fs, candidate); err == nil && exists {
 				return &File{Path: filepath.ToSlash(candidate), ContentType: MimeFromExt(candidate)}
 			}

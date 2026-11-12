@@ -1,3 +1,9 @@
+# Zaparoo Core
+
+[![Lint and Test](https://github.com/ZaparooProject/zaparoo-core/actions/workflows/lint-and-test.yml/badge.svg)](https://github.com/ZaparooProject/zaparoo-core/actions/workflows/lint-and-test.yml)
+[![codecov](https://codecov.io/gh/ZaparooProject/zaparoo-core/graph/badge.svg)](https://codecov.io/gh/ZaparooProject/zaparoo-core)
+[![License](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 This is the development repository for Zaparoo Core.
 
 Visit [Zaparoo.org](https://zaparoo.org/) for more information about the Zaparoo project or the [Downloads](https://zaparoo.org/downloads/#zaparoo-core) page to download Zaparoo Core for your platform.
@@ -76,13 +82,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/mrchrisster">
-                    <img src="https://avatars.githubusercontent.com/u/60834906?v=4" width="100;" alt="mrchrisster"/>
-                    <br />
-                    <sub><b>Christoph Helms</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/spark2k06">
                     <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
                     <br />
@@ -90,54 +89,61 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/AndreaBogazzi">
-                    <img src="https://avatars.githubusercontent.com/u/44466913?v=4" width="100;" alt="AndreaBogazzi"/>
+                <a href="https://github.com/mrchrisster">
+                    <img src="https://avatars.githubusercontent.com/u/60834906?v=4" width="100;" alt="mrchrisster"/>
                     <br />
-                    <sub><b>Andrea Bogazzi @ Shutterstock</b></sub>
+                    <sub><b>Christoph Helms</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/staydata">
+                    <img src="https://avatars.githubusercontent.com/u/130571429?v=4" width="100;" alt="staydata"/>
+                    <br />
+                    <sub><b>staydata</b></sub>
                 </a>
             </td>
 		</tr>
 		<tr>
             <td align="center">
-                <a href="https://github.com/philips">
-                    <img src="https://avatars.githubusercontent.com/u/33544?v=4" width="100;" alt="philips"/>
+                <a href="https://github.com/protogem2">
+                    <img src="https://avatars.githubusercontent.com/u/62781710?v=4" width="100;" alt="protogem2"/>
                     <br />
-                    <sub><b>Brandon Philips</b></sub>
+                    <sub><b>protogem</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/Emashzed">
-                    <img src="https://avatars.githubusercontent.com/u/994075?v=4" width="100;" alt="Emashzed"/>
+                <a href="https://github.com/manfredi90">
+                    <img src="https://avatars.githubusercontent.com/u/74819946?v=4" width="100;" alt="manfredi90"/>
                     <br />
-                    <sub><b>Emashzed</b></sub>
+                    <sub><b>manfredi90</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/fayep">
-                    <img src="https://avatars.githubusercontent.com/u/565311?v=4" width="100;" alt="fayep"/>
+                <a href="https://github.com/jmf866">
+                    <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>
                     <br />
-                    <sub><b>fayep</b></sub>
+                    <sub><b>jmf866</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/gmcnaught">
-                    <img src="https://avatars.githubusercontent.com/u/1371263?v=4" width="100;" alt="gmcnaught"/>
+                <a href="https://github.com/kragent66-glitch">
+                    <img src="https://avatars.githubusercontent.com/u/314170412?v=4" width="100;" alt="kragent66-glitch"/>
                     <br />
-                    <sub><b>Grant McNaught</b></sub>
+                    <sub><b>Utkarsh Bhangale</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/Spice-King">
-                    <img src="https://avatars.githubusercontent.com/u/590498?v=4" width="100;" alt="Spice-King"/>
+                <a href="https://github.com/turnercore">
+                    <img src="https://avatars.githubusercontent.com/u/85597948?v=4" width="100;" alt="turnercore"/>
                     <br />
-                    <sub><b>Kyle Filz</b></sub>
+                    <sub><b>Turner Monroe</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/mogorman">
-                    <img src="https://avatars.githubusercontent.com/u/64710?v=4" width="100;" alt="mogorman"/>
+                <a href="https://github.com/treyturner">
+                    <img src="https://avatars.githubusercontent.com/u/1878152?v=4" width="100;" alt="treyturner"/>
                     <br />
-                    <sub><b>Matthew O'Gorman</b></sub>
+                    <sub><b>Trey Turner</b></sub>
                 </a>
             </td>
 		</tr>
@@ -150,38 +156,54 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/treyturner">
-                    <img src="https://avatars.githubusercontent.com/u/1878152?v=4" width="100;" alt="treyturner"/>
+                <a href="https://github.com/mogorman">
+                    <img src="https://avatars.githubusercontent.com/u/64710?v=4" width="100;" alt="mogorman"/>
                     <br />
-                    <sub><b>Trey Turner</b></sub>
+                    <sub><b>Matthew O'Gorman</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/kragent66-glitch">
-                    <img src="https://avatars.githubusercontent.com/u/314170412?v=4" width="100;" alt="kragent66-glitch"/>
+                <a href="https://github.com/Spice-King">
+                    <img src="https://avatars.githubusercontent.com/u/590498?v=4" width="100;" alt="Spice-King"/>
                     <br />
-                    <sub><b>Utkarsh Bhangale</b></sub>
+                    <sub><b>Kyle Filz</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/jmf866">
-                    <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>
+                <a href="https://github.com/gmcnaught">
+                    <img src="https://avatars.githubusercontent.com/u/1371263?v=4" width="100;" alt="gmcnaught"/>
                     <br />
-                    <sub><b>jmf866</b></sub>
+                    <sub><b>Grant McNaught</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/protogem2">
-                    <img src="https://avatars.githubusercontent.com/u/62781710?v=4" width="100;" alt="protogem2"/>
+                <a href="https://github.com/fayep">
+                    <img src="https://avatars.githubusercontent.com/u/565311?v=4" width="100;" alt="fayep"/>
                     <br />
-                    <sub><b>protogem</b></sub>
+                    <sub><b>fayep</b></sub>
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/staydata">
-                    <img src="https://avatars.githubusercontent.com/u/130571429?v=4" width="100;" alt="staydata"/>
+                <a href="https://github.com/Emashzed">
+                    <img src="https://avatars.githubusercontent.com/u/994075?v=4" width="100;" alt="Emashzed"/>
                     <br />
-                    <sub><b>staydata</b></sub>
+                    <sub><b>Emashzed</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
+                <a href="https://github.com/philips">
+                    <img src="https://avatars.githubusercontent.com/u/33544?v=4" width="100;" alt="philips"/>
+                    <br />
+                    <sub><b>Brandon Philips</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/AndreaBogazzi">
+                    <img src="https://avatars.githubusercontent.com/u/44466913?v=4" width="100;" alt="AndreaBogazzi"/>
+                    <br />
+                    <sub><b>Andrea Bogazzi @ Shutterstock</b></sub>
                 </a>
             </td>
 		</tr>

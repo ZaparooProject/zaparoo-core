@@ -20,6 +20,8 @@
 package tokens
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -103,4 +105,43 @@ func (p CommandPolicy) Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// commandPolicyJSON is the stored form of a policy. Bounded is kept apart
+// from Names because a bound that permits nothing has no names, and reading
+// it back as unrestricted would widen it.
+type commandPolicyJSON struct {
+	Names   []string `json:"names,omitempty"`
+	Bounded bool     `json:"bounded"`
+}
+
+// MarshalJSON stores the policy so a restored one bounds exactly the same
+// commands.
+func (p CommandPolicy) MarshalJSON() ([]byte, error) {
+	data, err := json.Marshal(commandPolicyJSON{Bounded: !p.Unrestricted(), Names: p.Names()})
+	if err != nil {
+		return nil, fmt.Errorf("encode command policy: %w", err)
+	}
+	return data, nil
+}
+
+// UnmarshalJSON restores a policy stored by MarshalJSON.
+func (p *CommandPolicy) UnmarshalJSON(data []byte) error {
+	var stored commandPolicyJSON
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return fmt.Errorf("decode command policy: %w", err)
+	}
+	if !stored.Bounded {
+		*p = CommandPolicy{}
+		return nil
+	}
+	allowed := make(map[string]bool, len(stored.Names))
+	for _, name := range stored.Names {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized != "" {
+			allowed[normalized] = true
+		}
+	}
+	*p = CommandPolicy{allowed: allowed}
+	return nil
 }

@@ -58,6 +58,7 @@ func TestRefreshOpenDeckPlaylist_QueuesRefreshForTheOpenDeck(t *testing.T) {
 	active.DeckID = "0123456789ab"
 	active.Index = 0
 	active.Playing = true
+	active.Loop = true
 	svc.State.SetActivePlaylist(active)
 
 	notification := decksChangedNotification(t, "0123456789AB", models.DecksChangedRefreshed)
@@ -69,6 +70,7 @@ func TestRefreshOpenDeckPlaylist_QueuesRefreshForTheOpenDeck(t *testing.T) {
 		assert.Equal(t, "deck://0123456789ab", queued.ID)
 		assert.Equal(t, "Weekend Plus", queued.Name)
 		assert.Len(t, queued.Items, 2)
+		assert.False(t, queued.Loop, "a refresh never carries the repeat, so it cannot undo a change to it")
 	default:
 		t.Fatal("expected a refresh to be queued for the open deck")
 	}

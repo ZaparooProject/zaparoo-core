@@ -45,16 +45,38 @@ var nestedRBFDirectories = []string{
 	filepath.Join("_Other", "_BennuGD"),
 }
 
-func stripOfficialDateSuffix(name string) string {
+// officialDateSuffix returns the YYYYMMDD build date of an official release
+// RBF name such as "PSX_20241010".
+func officialDateSuffix(name string) (string, bool) {
 	if len(name) < 10 || name[len(name)-9] != '_' {
+		return "", false
+	}
+	date := name[len(name)-8:]
+	if !isNDigits(date, 8) {
+		return "", false
+	}
+	return date, true
+}
+
+func stripOfficialDateSuffix(name string) string {
+	if _, ok := officialDateSuffix(name); !ok {
 		return name
 	}
-	for _, r := range name[len(name)-8:] {
-		if r < '0' || r > '9' {
-			return name
-		}
-	}
 	return name[:len(name)-9]
+}
+
+// MglExactName is MglName with the RBF's full filename stem, such as
+// "_Console/PSX_20241010". Main loads the alphabetically last RBF whose name
+// starts with an MGL's <rbf> value followed by "." or "_", so the date-stripped
+// MglName can resolve to a different build in the same folder, such as an
+// unstable nightly.
+func (r RBFInfo) MglExactName() string {
+	stem := strings.TrimSuffix(r.Filename, filepath.Ext(r.Filename))
+	dir := filepath.Dir(r.MglName)
+	if dir == "." {
+		return stem
+	}
+	return filepath.Join(dir, stem)
 }
 
 func ParseRBFPath(path string) RBFInfo {

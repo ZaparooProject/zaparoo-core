@@ -297,3 +297,94 @@ func TestPropertyIDPreserved(t *testing.T) {
 		}
 	})
 }
+
+func itemCounts(items []PlaylistItem) map[PlaylistItem]int {
+	counts := make(map[PlaylistItem]int, len(items))
+	for _, item := range items {
+		counts[item]++
+	}
+	return counts
+}
+
+func sameMultiset(a, b []PlaylistItem) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ca, cb := itemCounts(a), itemCounts(b)
+	if len(ca) != len(cb) {
+		return false
+	}
+	for item, n := range ca {
+		if cb[item] != n {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPropertySetShufflePreservesItemsAndCurrent verifies that turning
+// shuffle on and then off never adds, drops or changes an item, and keeps
+// the item that was current current throughout.
+func TestPropertySetShufflePreservesItemsAndCurrent(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		p := nonEmptyPlaylistGen().Draw(t, "playlist")
+		current := p.Current()
+		before := append([]PlaylistItem(nil), p.Items...)
+
+		on := SetShuffle(&p, true)
+		if !sameMultiset(before, on.Items) {
+			t.Fatalf("shuffle on changed the items: %v -> %v", before, on.Items)
+		}
+		if on.Current() != current {
+			t.Fatalf("shuffle on changed the current item: %v -> %v", current, on.Current())
+		}
+		if on.Index != 0 {
+			t.Fatalf("shuffle on left the current item at %d, not first", on.Index)
+		}
+		if !on.Shuffled {
+			t.Fatal("shuffle on did not mark the playlist shuffled")
+		}
+
+		moved := Goto(*on, rapid.IntRange(0, len(on.Items)-1).Draw(t, "goto"))
+		movedCurrent := moved.Current()
+		off := SetShuffle(moved, false)
+		if off.Shuffled || off.Original != nil {
+			t.Fatal("shuffle off left the playlist shuffled")
+		}
+		for i := range before {
+			if off.Items[i] != before[i] {
+				t.Fatalf("shuffle off did not restore the load order: %v -> %v", before, off.Items)
+			}
+		}
+		if off.Current() != movedCurrent {
+			t.Fatalf("shuffle off changed the current item: %v -> %v", movedCurrent, off.Current())
+		}
+	})
+}
+
+// TestPropertySnapshotKeepsLoadOrder verifies that a shuffled playlist's
+// load order survives a snapshot round trip.
+func TestPropertySnapshotKeepsLoadOrder(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		p := nonEmptyPlaylistGen().Draw(t, "playlist")
+		shuffled := SetShuffle(&p, true)
+		data, err := EncodeSnapshot(shuffled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored, err := DecodeSnapshot(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(restored.Original) != len(shuffled.Original) {
+			t.Fatalf("load order lost: %d of %d items", len(restored.Original), len(shuffled.Original))
+		}
+		for i := range shuffled.Original {
+			if restored.Original[i] != shuffled.Original[i] {
+				t.Fatalf("load order changed at %d", i)
+			}
+		}
+	})
+}

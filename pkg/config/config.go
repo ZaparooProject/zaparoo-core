@@ -127,13 +127,17 @@ type Updates struct {
 }
 
 type Audio struct {
-	SuccessSound *string `toml:"success_sound,omitempty"`
-	FailSound    *string `toml:"fail_sound,omitempty"`
-	LimitSound   *string `toml:"limit_sound,omitempty"`
-	PendingSound *string `toml:"pending_sound,omitempty"`
-	ReadySound   *string `toml:"ready_sound,omitempty"`
-	Volume       *int    `toml:"volume,omitempty"`
-	ScanFeedback bool    `toml:"scan_feedback"`
+	SuccessSound  *string `toml:"success_sound,omitempty"`
+	FailSound     *string `toml:"fail_sound,omitempty"`
+	LimitSound    *string `toml:"limit_sound,omitempty"`
+	PendingSound  *string `toml:"pending_sound,omitempty"`
+	ReadySound    *string `toml:"ready_sound,omitempty"`
+	Volume        *int    `toml:"volume,omitempty"`
+	MusicVolume   *int    `toml:"music_volume,omitempty"`
+	MusicAutoplay *bool   `toml:"music_autoplay,omitempty"`
+	MidiSoundFont *string `toml:"midi_soundfont,omitempty"`
+	Normalize     *bool   `toml:"normalize,omitempty"`
+	ScanFeedback  bool    `toml:"scan_feedback"`
 }
 
 type ZapScript struct {
@@ -317,6 +321,10 @@ func constructConfig(configDir string, defaults Values, fs afero.Fs, allowEnviro
 	return &cfg, nil
 }
 
+// ErrInvalidConfigFile is a config.toml that exists but does not parse, such
+// as a hand edit with a TOML syntax error. The file is the user's to fix.
+var ErrInvalidConfigFile = errors.New("invalid config file")
+
 func (c *Instance) Load() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -347,7 +355,7 @@ func (c *Instance) Load() error {
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
 		c.loaded = oldLoaded
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidConfigFile, err)
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -667,6 +675,107 @@ func (c *Instance) SetAudioVolume(v int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.Volume = &v
+}
+
+// AudioMusicVolume returns the volume level (0-200) of music and other
+// long-form audio played in-process. When it is unset, music follows
+// AudioVolume. Clamped to [0, 200].
+func (c *Instance) AudioMusicVolume() int {
+	c.mu.RLock()
+	set := c.vals.Audio.MusicVolume
+	c.mu.RUnlock()
+	if set == nil {
+		return c.AudioVolume()
+	}
+	return max(0, min(200, *set))
+}
+
+// AudioMusicVolumeSet reports whether the music volume has its own value
+// rather than following AudioVolume.
+func (c *Instance) AudioMusicVolumeSet() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.MusicVolume != nil
+}
+
+// SetAudioMusicVolume sets the music volume level (0-200).
+func (c *Instance) SetAudioMusicVolume(v int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.MusicVolume = &v
+}
+
+// AudioMusicAutoplay reports whether the background playlist that was open
+// when Core last stopped starts playing on the first start of each boot.
+// Defaults to true: with nothing remembered there is nothing to start, and
+// music someone left playing comes back with the device.
+func (c *Instance) AudioMusicAutoplay() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.MusicAutoplay == nil || *c.vals.Audio.MusicAutoplay
+}
+
+// SetAudioMusicAutoplay sets whether the restored background playlist starts
+// playing on the first start of each boot.
+func (c *Instance) SetAudioMusicAutoplay(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.MusicAutoplay = &enabled
+}
+
+// AudioNormalize reports whether long-form playback is levelled to a
+// common loudness. Defaults to true.
+func (c *Instance) AudioNormalize() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Audio.Normalize == nil || *c.vals.Audio.Normalize
+}
+
+// SetAudioNormalize sets whether long-form playback is levelled to a common
+// loudness.
+func (c *Instance) SetAudioNormalize(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.Normalize = &enabled
+}
+
+// MidiSoundFontPath returns the SoundFont MIDI files play through, or ""
+// when MIDI plays through the built-in FM synthesizer. A relative path
+// resolves under dataDir/assets.
+func (c *Instance) MidiSoundFontPath(dataDir string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.MidiSoundFont == nil || *c.vals.Audio.MidiSoundFont == "" {
+		return ""
+	}
+	path := *c.vals.Audio.MidiSoundFont
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dataDir, AssetsDir, path)
+}
+
+// MidiSoundFont returns the configured SoundFont setting as written, ""
+// when MIDI uses the built-in FM synthesizer.
+func (c *Instance) MidiSoundFont() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.MidiSoundFont == nil {
+		return ""
+	}
+	return *c.vals.Audio.MidiSoundFont
+}
+
+// SetMidiSoundFont sets the SoundFont MIDI files play through. An empty
+// path goes back to the built-in FM synthesizer.
+func (c *Instance) SetMidiSoundFont(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if path == "" {
+		c.vals.Audio.MidiSoundFont = nil
+		return
+	}
+	c.vals.Audio.MidiSoundFont = &path
 }
 
 // SuccessSoundPath resolves the success sound file path based on config and disk overrides.

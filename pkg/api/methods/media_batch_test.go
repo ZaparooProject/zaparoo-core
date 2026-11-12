@@ -105,3 +105,40 @@ func TestResolveMediaRefs_UsesSingletonFallbackForBatchPath(t *testing.T) {
 	mockDB.AssertExpectations(t)
 	platform.AssertExpectations(t)
 }
+
+// Only media.image and media.meta take a directory media ref; every other
+// method keeps rejecting a mediaId mixed with system/path.
+func TestValidateDirectoryMediaRef(t *testing.T) {
+	t.Parallel()
+
+	id := int64(7)
+	zero := int64(0)
+	combined := mediaRefParam{MediaID: &id, System: "PSX", Path: "games/Game"}
+	require.NoError(t, validateDirectoryMediaRef(combined))
+	require.Error(t, validateMediaRef(combined))
+	require.Error(t, validateDirectoryMediaRef(mediaRefParam{MediaID: &zero, System: "PSX", Path: "games/Game"}))
+	require.Error(t, validateDirectoryMediaRef(mediaRefParam{MediaID: &id, System: "PSX"}))
+	require.Error(t, validateDirectoryMediaRef(mediaRefParam{MediaID: &id, Path: "games/Game"}))
+	require.NoError(t, validateDirectoryMediaRef(mediaRefParam{MediaID: &id}))
+	require.NoError(t, validateDirectoryMediaRef(mediaRefParam{System: "PSX", Path: "games/Game"}))
+}
+
+func TestMediaInDirectoryRef(t *testing.T) {
+	t.Parallel()
+
+	id := int64(7)
+	row := &database.MediaFullRow{
+		Media:  database.Media{Path: "games/Game/Game (Disc 2).cue"},
+		System: database.System{SystemID: "PSX"},
+	}
+	ref := func(system, path string) mediaRefParam {
+		return mediaRefParam{MediaID: &id, System: system, Path: path}
+	}
+	assert.True(t, mediaInDirectoryRef(row, ref("PSX", "games/Game")))
+	assert.True(t, mediaInDirectoryRef(row, ref("PSX", "games/Game/")))
+	assert.True(t, mediaInDirectoryRef(row, ref("PSX", `games\Game`)))
+	assert.True(t, mediaInDirectoryRef(row, ref("PSX", "games/Game/Game (Disc 2).cue")))
+	assert.False(t, mediaInDirectoryRef(row, ref("SNES", "games/Game")))
+	assert.False(t, mediaInDirectoryRef(row, ref("PSX", "games")))
+	assert.False(t, mediaInDirectoryRef(row, ref("PSX", "games/Other")))
+}

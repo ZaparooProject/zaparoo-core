@@ -158,6 +158,21 @@ func TestExtractSchemeID(t *testing.T) {
 	}
 }
 
+// TestExtractSchemeID_MismatchIsTyped verifies a path for another scheme, as
+// when a launcher override names the wrong launcher for the media, is
+// identifiable so callers can treat it as the user's choice, not a fault.
+func TestExtractSchemeID_MismatchIsTyped(t *testing.T) {
+	t.Parallel()
+
+	_, err := ExtractSchemeID("steam://123/Game", "launchbox")
+	require.ErrorIs(t, err, ErrSchemeMismatch)
+	require.EqualError(t, err, "scheme mismatch: expected launchbox, got steam")
+
+	_, err = ExtractSchemeID("/regular/file/path.rom", "launchbox")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrSchemeMismatch)
+}
+
 func TestParseVirtualPathStr(t *testing.T) {
 	t.Parallel()
 

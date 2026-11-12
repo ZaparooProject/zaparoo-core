@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -42,6 +43,17 @@ import (
 
 // ExecuteTimeout is the maximum duration for execute commands.
 const ExecuteTimeout = 2 * time.Second
+
+var (
+	// ErrExecuteTimeout is returned when an execute command is killed for
+	// running past ExecuteTimeout. It deliberately does not wrap
+	// context.DeadlineExceeded: the user's command overran, the run was not
+	// cancelled.
+	ErrExecuteTimeout = errors.New("execute command timed out")
+	// ErrExecuteExitStatus is returned when an execute command runs and exits
+	// with a non-zero status: the user's program failed, not Core.
+	ErrExecuteExitStatus = errors.New("execute command exited with an error")
+)
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -70,7 +82,9 @@ func cmdStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	log.Info().Msg("stopping media")
+	cancelStop := env.RecordStop(apimodels.MediaStopReasonStopped)
 	if err := pl.ReturnToMenu(); err != nil {
+		cancelStop()
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to return to menu: %w", err)
@@ -204,10 +218,29 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")
 		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return platforms.CmdResult{}, fmt.Errorf("execute command timed out after %v", ExecuteTimeout)
-		}
-		return platforms.CmdResult{}, fmt.Errorf("failed to execute command: %w", err)
+		return platforms.CmdResult{}, executeError(ctx.Err(), err)
 	}
 	return platforms.CmdResult{}, nil
+}
+
+// executeError classifies a failed execute command from its timeout
+// context's error and the error running it.
+func executeError(ctxErr, runErr error) error {
+	var exitErr *exec.ExitError
+	exited := errors.As(runErr, &exitErr)
+	// A process that never started has no exit status, so a failure to start
+	// stays a fault even when the deadline has also passed.
+	ran := exited || runErr == nil || errors.Is(runErr, context.DeadlineExceeded)
+	if errors.Is(ctxErr, context.DeadlineExceeded) && ran {
+		if runErr == nil {
+			return fmt.Errorf("%w after %v", ErrExecuteTimeout, ExecuteTimeout)
+		}
+		// The cause is kept as text: wrapping a context error would class
+		// the timeout as a cancellation.
+		return fmt.Errorf("%w after %v: %s", ErrExecuteTimeout, ExecuteTimeout, runErr.Error())
+	}
+	if exited {
+		return fmt.Errorf("%w: %w", ErrExecuteExitStatus, runErr)
+	}
+	return fmt.Errorf("failed to execute command: %w", runErr)
 }

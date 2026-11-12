@@ -24,11 +24,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 )
 
 const (
@@ -84,7 +87,7 @@ func parseMediaRequest(raw json.RawMessage, maxItems int) (parsedMediaRequest, e
 			return parsedMediaRequest{}, models.ClientErrf("invalid params: items exceeds max of %d", maxItems)
 		}
 		for i := range params.Items {
-			if err := validateMediaRef(params.Items[i]); err != nil {
+			if err := validateDirectoryMediaRef(params.Items[i]); err != nil {
 				return parsedMediaRequest{}, models.ClientErrf("invalid params: items[%d]: %w", i, err)
 			}
 			if err := validateImageTypes(params.Items[i].ImageTypes); err != nil {
@@ -101,7 +104,7 @@ func parseMediaRequest(raw json.RawMessage, maxItems int) (parsedMediaRequest, e
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return parsedMediaRequest{}, models.ClientErrf("invalid params: %w", err)
 	}
-	if err := validateMediaRef(item); err != nil {
+	if err := validateDirectoryMediaRef(item); err != nil {
 		return parsedMediaRequest{}, models.ClientErrf("invalid params: %w", err)
 	}
 	if err := validateImageTypes(item.ImageTypes); err != nil {
@@ -131,6 +134,37 @@ func validateMediaRef(ref mediaRefParam) error {
 	return nil
 }
 
+// isDirectoryMediaRef reports a ref naming both a browse directory entry, by
+// system and path, and the media the entry launches, by mediaId. A multi-disc
+// folder's entry launches the disc last played from it, which the path alone
+// does not identify.
+func isDirectoryMediaRef(ref mediaRefParam) bool {
+	return ref.MediaID != nil && ref.System != "" && ref.Path != ""
+}
+
+// validateDirectoryMediaRef accepts what validateMediaRef does and also a
+// directory media ref, for the methods that describe a directory entry.
+func validateDirectoryMediaRef(ref mediaRefParam) error {
+	if isDirectoryMediaRef(ref) {
+		if *ref.MediaID <= 0 {
+			return validation.ErrInvalidParams
+		}
+		return nil
+	}
+	return validateMediaRef(ref)
+}
+
+// mediaInDirectoryRef reports whether row is the media a directory media ref
+// may name: the path itself, or a file directly inside it.
+func mediaInDirectoryRef(row *database.MediaFullRow, ref mediaRefParam) bool {
+	if row.System.SystemID != ref.System {
+		return false
+	}
+	rowPath := pathutil.CanonicalMediaPath(row.Path)
+	path := pathutil.CanonicalMediaPath(ref.Path)
+	return rowPath == path || container.ParentDir(rowPath) == strings.TrimSuffix(path, "/")+"/"
+}
+
 func validateImageTypes(types []string) error {
 	for _, imageType := range types {
 		if imageType == "" {
@@ -154,9 +188,12 @@ func resolveMediaRefs(env *requests.RequestEnv, refs []mediaRefParam) ([]resolve
 			continue
 		}
 
-		key := ref.System + "\x00" + ref.Path
+		// The index stores forward slashes, and Core reports a launched
+		// file's path with the host's separators.
+		path := pathutil.CanonicalMediaPath(ref.Path)
+		key := ref.System + "\x00" + path
 		if len(pathIndexes[key]) == 0 {
-			pathGroups[ref.System] = append(pathGroups[ref.System], ref.Path)
+			pathGroups[ref.System] = append(pathGroups[ref.System], path)
 		}
 		pathIndexes[key] = append(pathIndexes[key], i)
 	}
@@ -227,13 +264,18 @@ func resolveMediaRefs(env *requests.RequestEnv, refs []mediaRefParam) ([]resolve
 		return nil, fmt.Errorf("failed to get media: %w", err)
 	}
 
-	for i, id := range mediaIDs {
+	for i, ref := range refs {
 		if resolved[i].Err != nil {
 			continue
 		}
+		id := mediaIDs[i]
 		row, ok := rows[id]
 		if !ok {
 			resolved[i].Err = models.ClientErrf("media not found: mediaId %d", id)
+			continue
+		}
+		if isDirectoryMediaRef(ref) && !mediaInDirectoryRef(&row, ref) {
+			resolved[i].Err = models.ClientErrf("media not in path: mediaId %d, %s/%s", id, ref.System, ref.Path)
 			continue
 		}
 		resolved[i].Row = &row

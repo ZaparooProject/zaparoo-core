@@ -34,22 +34,33 @@ type SearchParams struct {
 	Cursor        *string   `json:"cursor,omitempty"`
 	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc added-desc"`
 	Query         *string   `json:"query"`
+	GroupBy       *string   `json:"groupBy,omitempty" validate:"omitempty,oneof=title"`
+	TitleID       *int64    `json:"titleId,omitempty" validate:"omitempty,gt=0"`
 	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 type BrowseParams struct {
-	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
-	Path          *string   `json:"path,omitempty"`
-	RootView      *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
-	MaxResults    *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
-	Cursor        *string   `json:"cursor,omitempty"`
-	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-	IncludeHidden bool      `json:"includeHidden,omitempty"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Path        *string   `json:"path,omitempty"`
+	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	// Offset starts the page at this absolute position in the listing,
+	// directories first, then files.
+	Offset *int `json:"offset,omitempty" validate:"omitempty,gte=0"`
+	// AnchorPath returns the page holding this path, starting at the largest
+	// multiple of the page size that is not after the path's position.
+	AnchorPath    *string `json:"anchorPath,omitempty" validate:"omitempty,min=1"`
+	IncludeHidden bool    `json:"includeHidden,omitempty"`
+	// Live lists Path straight from disk instead of from the media index,
+	// for folders the index does not cover.
+	Live bool `json:"live,omitempty"`
 }
 
 type SystemsParams struct {
@@ -96,6 +107,10 @@ type UIRespondParams struct {
 	ID       string           `json:"id" validate:"required"`
 	Action   UIResponseAction `json:"action" validate:"required,oneof=dismiss select confirm"`
 	ChoiceID string           `json:"choiceId,omitempty"`
+}
+
+type UIShownParams struct {
+	ID string `json:"id" validate:"required"`
 }
 
 type RunScriptParams struct {
@@ -205,13 +220,19 @@ type UpdateSettingsParams struct {
 	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	AudioMidiSoundFont      *string   `json:"audioMidiSoundFont" validate:"omitempty,max=4096"`
 	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	// dive is what makes the tags on ReaderConnection run at all: without it
 	// the validator stops at the slice and every element goes unchecked.
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty" validate:"omitempty,dive"`
 	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
+	LauncherPreference        *[]string           `json:"launcherPreference,omitempty" validate:"omitempty,dive,required"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
+	AudioMusicVolume          *int                `json:"audioMusicVolume" validate:"omitempty,gte=0,lte=200"`
+	AudioMusicAutoplay        *bool               `json:"audioMusicAutoplay"`
+	AudioNormalize            *bool               `json:"audioNormalize"`
+	AudioMusicPauseOnLaunch   *bool               `json:"audioMusicPauseOnLaunch"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
@@ -220,6 +241,10 @@ type UpdateSettingsParams struct {
 	ProfilesSwapData          *bool               `json:"profilesSwapData"`
 	UpdateCheck               *bool               `json:"updateCheck"`
 	UpdateInstall             *bool               `json:"updateInstall"`
+	// MediaImageDir is [media] image_dir; "" restores the default.
+	MediaImageDir *string `json:"mediaImageDir" validate:"omitempty,max=4096"`
+	// MediaThumbCacheMaxMB is [media] thumb_cache_max_mb; 0 restores the default.
+	MediaThumbCacheMaxMB *int `json:"mediaThumbCacheMaxMb" validate:"omitempty,gte=0,lte=1048576"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -319,6 +344,37 @@ type DeckCardScriptInput struct {
 	ZapScript string `json:"zapscript" validate:"required,max=5000"`
 }
 
+// DecksParams lists decks. System and Path name one game, both or neither;
+// when given, every deck reports which of its items are linked to it.
+type DecksParams struct {
+	System *string `json:"system" validate:"omitempty,min=1"`
+	Path   *string `json:"path" validate:"omitempty,min=1"`
+}
+
+// DecksImageParams asks for a deck's cover, or for a card item's art when
+// ItemID is set. MaxSize and Delivery work as in media.image.
+type DecksImageParams struct {
+	ItemID   *int64 `json:"itemId,omitempty"`
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	DeckID   string `json:"deckId" validate:"required,min=1"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
+}
+
+// Deck cover kinds for decks.update.
+const (
+	DeckCoverKindMedia = "media"
+	DeckCoverKindFile  = "file"
+	DeckCoverKindNone  = "none"
+)
+
+// DeckCoverInput sets or removes a deck's cover: a game's art (system and
+// path), an image file on the Core host (path), or none.
+type DeckCoverInput struct {
+	Kind   string `json:"kind" validate:"required,oneof=media file none"`
+	System string `json:"system,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
+
 type DecksGetParams struct {
 	DeckID string `json:"deckId" validate:"required,min=1"`
 }
@@ -336,6 +392,7 @@ type DecksUpdateParams struct {
 	Name          *string          `json:"name" validate:"omitempty,min=1,max=100"`
 	Description   *string          `json:"description" validate:"omitempty,max=1000"`
 	Items         *[]DeckItemInput `json:"items" validate:"omitempty,max=120,dive"`
+	Cover         *DeckCoverInput  `json:"cover"`
 	DeckID        string           `json:"deckId" validate:"required,min=1"`
 	AddItems      []DeckItemInput  `json:"addItems" validate:"omitempty,max=120,dive"`
 	RemoveItemIDs []int64          `json:"removeItemIds"`
@@ -397,8 +454,24 @@ type MediaStoppedParams struct {
 	MediaPath  string `json:"mediaPath"`
 	LauncherID string `json:"launcherId"`
 	Slot       string `json:"slot,omitempty"`
-	Elapsed    int    `json:"elapsed"`
+	// Reason says why the media stopped; see the MediaStopReason constants.
+	// Clients written before it existed ignore the field.
+	Reason  string `json:"reason,omitempty"`
+	Elapsed int    `json:"elapsed"`
 }
+
+// MediaStopReason values for MediaStoppedParams.Reason.
+const (
+	// MediaStopReasonFinished means the media reached its natural end.
+	MediaStopReasonFinished = "finished"
+	// MediaStopReasonExited means the media stopped without Core asking it
+	// to, such as a player quitting a game back to the menu.
+	MediaStopReasonExited = "exited"
+	// MediaStopReasonStopped means Core stopped the media on request.
+	MediaStopReasonStopped = "stopped"
+	// MediaStopReasonReplaced means other media took its place.
+	MediaStopReasonReplaced = "replaced"
+)
 
 type MediaHistoryParams struct {
 	Systems       *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
@@ -480,6 +553,22 @@ type MediaLookupParams struct {
 	System      string `json:"system" validate:"required,min=1"`
 }
 
+// PlaylistsUpdateParams changes the shuffle and repeat of the playlist open
+// in a slot. At least one of Shuffle and Repeat is required.
+type PlaylistsUpdateParams struct {
+	Shuffle *bool   `json:"shuffle,omitempty"`
+	Repeat  *string `json:"repeat,omitempty"`
+	Slot    string  `json:"slot,omitempty"`
+}
+
+// MediaActiveImageParams asks for the cover art of the audio track playing
+// in a slot. MaxSize and Delivery work as they do for media.image.
+type MediaActiveImageParams struct {
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	Slot     string `json:"slot,omitempty"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
+}
+
 type MediaControlParams struct {
 	Args   map[string]string `json:"args,omitempty"`
 	Action string            `json:"action" validate:"required,min=1"`
@@ -513,4 +602,16 @@ type MediaTitleParseParams struct {
 // not get past anything that would risk their data.
 type UpdateApplyParams struct {
 	Force bool `json:"force"`
+}
+
+// DeviceBluetoothScanParams starts a Bluetooth scan. Unless All is set, only
+// gamepads and joysticks are listed besides paired devices.
+type DeviceBluetoothScanParams struct {
+	TimeoutSeconds *int `json:"timeoutSeconds" validate:"omitempty,min=1,max=120"`
+	All            bool `json:"all"`
+}
+
+// DeviceBluetoothDeviceParams names one Bluetooth device by its address.
+type DeviceBluetoothDeviceParams struct {
+	ID string `json:"id" validate:"required"`
 }

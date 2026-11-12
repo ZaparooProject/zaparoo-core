@@ -173,7 +173,7 @@ func TestSerialDevicePathValidation(t *testing.T) {
 func TestSerialDeviceIgnoreList(t *testing.T) {
 	t.Parallel()
 
-	assert.Len(t, ignoreDevices, 21, "ignore list should contain expected number of devices")
+	assert.Len(t, ignoreDevices, 22, "ignore list should contain expected number of devices")
 
 	expectedDevices := []serialDevice{
 		{Vid: "16c0", Pid: "0f38"}, // Sinden Lightgun
@@ -181,6 +181,7 @@ func TestSerialDeviceIgnoreList(t *testing.T) {
 		{Vid: "16d0", Pid: "123d"}, // GB Operator
 		{Vid: "16d0", Pid: "123e"}, // SN Operator
 		{Vid: "16d0", Pid: "134d"}, // 64 Operator
+		{Vid: "1209", Pid: "4d69"}, // Greaseweazle
 	}
 	for _, device := range expectedDevices {
 		assert.Contains(t, ignoreDevices, device)

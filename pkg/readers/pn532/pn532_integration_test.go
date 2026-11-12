@@ -22,6 +22,8 @@ package pn532
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +73,7 @@ type mockPN532Device struct {
 	initErr       error
 	setTimeoutErr error
 	closeErr      error
+	onClose       func()
 	timeoutSet    time.Duration
 	initCalled    bool
 	closeCalled   bool
@@ -88,6 +91,9 @@ func (m *mockPN532Device) SetTimeout(timeout time.Duration) error {
 
 func (m *mockPN532Device) Close() error {
 	m.closeCalled = true
+	if m.onClose != nil {
+		m.onClose()
+	}
 	return m.closeErr
 }
 
@@ -1210,4 +1216,184 @@ func TestWriteWithContext_WriteNDEFError(t *testing.T) {
 	assert.True(t, mockTestTag.writeNDEFCalled)
 	assert.False(t, reader.writingTag)
 	assert.False(t, reader.tagRemovedDuringWrite)
+}
+
+// openWithMocks opens reader at path on mock hardware with session as its
+// polling session.
+func openWithMocks(
+	t *testing.T,
+	reader *Reader,
+	path string,
+	device *mockPN532Device,
+	session *mockPollingSession,
+	scanQueue chan readers.Scan,
+) {
+	t.Helper()
+	reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+		return &mockTransport{}, nil
+	}
+	reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+		return device, nil
+	}
+	reader.sessionFactory = func(_ PN532Device, _ *polling.Config) PollingSession {
+		return session
+	}
+	err := reader.Open(config.ReadersConnect{Driver: "pn532", Path: path}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+}
+
+func countLogEntries(entries []debugLogEntry, level, message string) int {
+	count := 0
+	for _, entry := range entries {
+		if entry.Level == level && entry.Message == message {
+			count++
+		}
+	}
+	return count
+}
+
+// A reader that answers Init but stops answering the session's commands is
+// reopened by the connect loop every tick and fails the same way each time.
+// Only the first failure is an error.
+func TestOpen_RepeatedSessionFailureIsReportedOnce(t *testing.T) {
+	// Not parallel: captures the global logger.
+	const path = "/dev/test-session-failure"
+	clearSessionFailure(path)
+	t.Cleanup(func() { clearSessionFailure(path) })
+	buf := captureDebugLog(t)
+
+	for range 3 {
+		reader := NewReader(&config.Instance{})
+		scanQueue := testutils.CreateTestScanChannel(t)
+		session := &mockPollingSession{
+			startFunc: func(context.Context) error {
+				return fmt.Errorf("failed to start polling session: %w", pn532.ErrNoACK)
+			},
+		}
+		openWithMocks(t, reader, path, &mockPN532Device{}, session, scanQueue)
+
+		scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+		require.True(t, scan.ReaderError)
+		require.NoError(t, reader.Close())
+	}
+
+	entries := decodeLogEntries(t, buf)
+	assert.Equal(t, 1, countLogEntries(entries, "error", "PN532 error"))
+	assert.Equal(t, 2, countLogEntries(entries, "warn", "PN532 error"))
+
+	// A tag read at the path shows the reader works again, so its next
+	// failure is reported.
+	reader := &Reader{deviceInfo: config.ReadersConnect{Path: path}, suppressScansUntilRemoval: true}
+	require.NoError(t, reader.handleTagDetected(context.Background(), &pn532.DetectedTag{UID: "01"}, nil))
+	assert.True(t, recordSessionFailure(path))
+}
+
+func TestClose_CancelsInFlightWrite(t *testing.T) {
+	t.Parallel()
+
+	var sessionWriteReturned, closedDuringWrite atomic.Bool
+	writeStarted := make(chan struct{})
+	device := &mockPN532Device{onClose: func() {
+		if !sessionWriteReturned.Load() {
+			closedDuringWrite.Store(true)
+		}
+	}}
+	session := &mockPollingSession{
+		writeToNextTagWithRetryFunc: func(
+			_ context.Context, writeCtx context.Context, _ func(context.Context, pn532.Tag) error,
+		) error {
+			close(writeStarted)
+			<-writeCtx.Done()
+			sessionWriteReturned.Store(true)
+			return writeCtx.Err()
+		},
+	}
+	reader := NewReader(&config.Instance{})
+	openWithMocks(t, reader, "/dev/test-close-write", device, session, testutils.CreateTestScanChannel(t))
+
+	results := make(chan writeResult, 1)
+	go func() {
+		token, err := reader.Write("hello")
+		results <- writeResult{token: token, err: err}
+	}()
+	select {
+	case <-writeStarted:
+	case <-time.After(writeConcurrencyTestDeadline):
+		t.Fatal("write did not start")
+	}
+
+	require.NoError(t, reader.Close())
+	assert.False(t, closedDuringWrite.Load(), "the device was closed under a running write")
+
+	select {
+	case res := <-results:
+		require.ErrorIs(t, res.err, context.Canceled)
+		assert.Nil(t, res.token)
+	case <-time.After(writeConcurrencyTestDeadline):
+		reader.CancelWrite()
+		<-results
+		t.Fatal("Close did not stop the write")
+	}
+
+	_, err := reader.Write("again")
+	require.Error(t, err, "a closed reader does not start a write")
+}
+
+// go-pn532 returns this plain error when the wait for a tag ends between
+// two polls. It means no tag was presented, which is not a fault.
+func TestWriteWithContext_TagWaitTimeoutIsNotAnError(t *testing.T) {
+	// Not parallel: captures the global logger.
+	buf := captureDebugLog(t)
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{
+		writeToNextTagWithRetryErr: errors.New("timeout waiting for tag"),
+	}
+
+	_, err := reader.WriteWithContext(context.Background(), "hello")
+
+	require.ErrorIs(t, err, readers.ErrTagNotDetected)
+	entries := decodeLogEntries(t, buf)
+	assert.Zero(t, countLogEntries(entries, "error", "PN532 error"))
+	assert.Equal(t, 1, countLogEntries(entries, "warn", "PN532 error"))
+}
+
+// The session retries the write callback, so a failed write is logged once
+// by the caller rather than once per attempt.
+func TestWriteWithContext_WriteNDEFErrorIsLoggedOnce(t *testing.T) {
+	// Not parallel: captures the global logger.
+	buf := captureDebugLog(t)
+	tag := &mockTag{uid: "test-uid", tagType: pn532.TagTypeNTAG, writeNDEFErr: errors.New("write verification failed")}
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{mockTag: tag}
+
+	_, err := reader.WriteWithContext(context.Background(), "hello")
+
+	require.Error(t, err)
+	assert.Equal(t, 1, countLogEntries(decodeLogEntries(t, buf), "error", "PN532 error"))
+}
+
+// A write cancelled while waiting to retry returns the cancellation, which
+// says nothing of the tag failure that is returned to the caller. That
+// failure must still be logged, at its own level.
+func TestWriteWithContext_LogsCallbackFailureHiddenByCancellation(t *testing.T) {
+	// Not parallel: captures the global logger.
+	buf := captureDebugLog(t)
+	writeFailure := errors.New("write verification failed")
+	tag := &mockTag{uid: "test-uid", tagType: pn532.TagTypeNTAG, writeNDEFErr: writeFailure}
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{
+		writeToNextTagWithRetryFunc: func(
+			_, writeCtx context.Context, writeFunc func(context.Context, pn532.Tag) error,
+		) error {
+			_ = writeFunc(writeCtx, tag)
+			return context.Canceled
+		},
+	}
+
+	_, err := reader.WriteWithContext(context.Background(), "hello")
+
+	require.ErrorIs(t, err, writeFailure)
+	entries := decodeLogEntries(t, buf)
+	assert.Equal(t, 1, countLogEntries(entries, "debug", "PN532 error"), "the cancellation itself")
+	assert.Equal(t, 1, countLogEntries(entries, "error", "PN532 error"), "the write failure it hid")
 }

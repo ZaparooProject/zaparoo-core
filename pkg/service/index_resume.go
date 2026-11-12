@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -573,10 +574,10 @@ func finishMediaDBRecoveryNotification(st *state.State, mediaDB database.MediaDB
 			exists = hasMedia
 		}
 	}
-	notifications.MediaIndexing(st.Notifications, &models.IndexingStatusResponse{
+	notifications.MediaIndexing(st.Notifications, methods.WithMediaCounts(&models.IndexingStatusResponse{
 		Exists:   exists,
 		Indexing: false,
-	})
+	}, mediaDB))
 }
 
 func addMediaDBRecoveryFailureInbox(st *state.State, body, category string) {
@@ -830,18 +831,18 @@ func checkAndHealBrowseCache(
 		// queryable IsOptimizing flag lets a client that connects mid-rebuild see it
 		// too via the media status query. Both cleared on completion or failure below.
 		db.MediaDB.BeginBrowseCacheRebuild()
-		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+		notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			Optimizing: true,
-		})
+		}, db.MediaDB))
 		defer func() {
 			db.MediaDB.EndBrowseCacheRebuild()
-			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: false,
-			})
+			}, db.MediaDB))
 		}()
 		if rebuildErr := db.MediaDB.PopulateBrowseCache(ctx); rebuildErr != nil {
 			log.Error().Err(rebuildErr).Msg("failed to rebuild browse cache during startup self-heal")
@@ -852,12 +853,12 @@ func checkAndHealBrowseCache(
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
-func invalidateInterruptedScrapeThumbnails(mediaDB database.MediaDBI, systems []string) {
+func invalidateInterruptedScrapeThumbnails(systems []string) {
 	if len(systems) == 0 {
-		methods.WipeMediaThumbCache(mediaDB)
+		methods.InvalidateMediaThumbMemo()
 		return
 	}
-	methods.WipeMediaThumbCacheSystems(mediaDB, systems)
+	methods.InvalidateMediaThumbMemoSystems(systems)
 }
 
 // markInterruptedScrapeTags flags the tag cache of an interrupted scrape's
@@ -901,7 +902,7 @@ func checkAndResumeScraping(
 			return
 		}
 		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
-		invalidateInterruptedScrapeThumbnails(db.MediaDB, nil)
+		invalidateInterruptedScrapeThumbnails(nil)
 		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, nil, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark incomplete scraping as failed")
@@ -926,7 +927,7 @@ func checkAndResumeScraping(
 
 	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok && len(operation.Pending) == 0 && operation.Version == 0 {
 		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
-		invalidateInterruptedScrapeThumbnails(db.MediaDB, operation.Systems)
+		invalidateInterruptedScrapeThumbnails(operation.Systems)
 		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark unavailable scraper as failed")
@@ -936,9 +937,16 @@ func checkAndResumeScraping(
 
 	// Writes commit incrementally, so artwork may have changed before the
 	// interruption even though no terminal invalidation ran.
-	invalidateInterruptedScrapeThumbnails(db.MediaDB, operation.Systems)
+	invalidateInterruptedScrapeThumbnails(operation.Systems)
 	markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, false)
-	log.Info().Str("scraper", operation.ScraperID).Msg("detected interrupted media scraping, automatically resuming")
+	// A scrape queued behind an index waits here as pending and has not run
+	// yet; only one that was running when Core stopped was interrupted.
+	if operation.Version == 1 && operation.Status == mediadb.IndexingStatusPending {
+		log.Info().Str("scraper", operation.ScraperID).Msg("starting queued media scraping")
+	} else {
+		log.Info().Str("scraper", operation.ScraperID).
+			Msg("detected interrupted media scraping, automatically resuming")
+	}
 	env := requests.RequestEnv{
 		Context:      st.GetContext(),
 		Platform:     pl,
@@ -962,8 +970,19 @@ func checkAndResumeScraping(
 		}
 		// The starter owns persistence while holding the write lease. A failed
 		// recovery attempt must not delete jobs accepted after that lease ended.
-		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")
+		log.WithLevel(scrapeResumeFailureLevel(err)).Err(err).Str("scraper", operation.ScraperID).
+			Msg("failed to start auto-resume of media scraping")
 	}
+}
+
+// scrapeResumeFailureLevel is the level to log a scrape auto-resume that did
+// not start at. A job cancelled or replaced since it was stored, or a resume
+// cut short by shutdown, left nothing to resume; neither is a failure.
+func scrapeResumeFailureLevel(err error) zerolog.Level {
+	if methods.IsScrapeJobRetired(err) || errors.Is(err, context.Canceled) {
+		return zerolog.InfoLevel
+	}
+	return database.StorageFailureLevel(err)
 }
 
 // checkAndResumeOptimization resumes an interrupted optimization, or flags the database
@@ -994,7 +1013,8 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 			case checkErr != nil:
 				log.Warn().Err(checkErr).Msg("failed to run quick_check before resuming optimization")
 			case !ok:
-				log.Error().Strs("integrity", db.MediaDB.IntegrityReport()).
+				// Warn: the rebuild this leads to reports the corruption itself.
+				log.Warn().Strs("integrity", db.MediaDB.IntegrityReport()).
 					Msg("media database failed integrity check; marking corrupt, skipping optimization resume")
 				db.MediaDB.MarkCorrupt("quick_check failed before optimization resume")
 				if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
@@ -1021,17 +1041,17 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
 		runErr := coordinator.RunBackgroundOptimizationWithLease(func(optimizing bool) {
-			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, methods.WithMediaCounts(&models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
-			})
+			}, db.MediaDB))
 		}, pauser, lease)
 		if runErr != nil {
 			if database.IsOptimizationCanceled(runErr) {
 				log.Debug().Err(runErr).Msg("optimization auto-resume canceled")
 			} else {
-				log.Error().Err(runErr).Msg("optimization auto-resume failed")
+				log.WithLevel(optimizationFailureLevel(runErr)).Err(runErr).Msg("optimization auto-resume failed")
 			}
 		}
 	} else {

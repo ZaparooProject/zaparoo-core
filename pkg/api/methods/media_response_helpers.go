@@ -22,14 +22,20 @@ package methods
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	zapscriptcmd "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -60,6 +66,64 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 	ctx, cancel := optionalDBEnrichmentContext(env.Context)
 	defer cancel()
 	return mediaIDsByPath(ctx, env.Database.MediaDB, refs)
+}
+
+// activeMediaEnrichment resolves the media ID and title zapScript for the
+// running primary media. A file played from outside the index, such as an
+// Operator cartridge dump, takes both from the indexed title it matches. If
+// the matched title's command cannot be loaded, the command built from the
+// played name is kept: it still launches the title, though the title
+// resolver may pick a different variant than the one the media ID names.
+// A failed path lookup is not a miss, so it never falls back to a slug match.
+func activeMediaEnrichment(
+	env *requests.RequestEnv, systemID, path, name string,
+) (mediaID int64, zapScript string) {
+	// A stream, or one track of a multi-track file, is not indexed, and a
+	// title command cannot find it; its location launches it again.
+	if _, _, track := audio.SplitTrackPath(path); track || audio.IsStreamURL(path) {
+		return 0, zapscriptcmd.LocationZapScript(path)
+	}
+	var zapScriptTags []database.TagInfo
+	if env.Database != nil && env.Database.MediaDB != nil {
+		tags, err := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(env.Context, systemID, path)
+		if err != nil {
+			log.Debug().Err(err).Msgf("could not get tags for %s:%s", systemID, path)
+		} else {
+			zapScriptTags = tags
+		}
+	}
+	zapScript = database.BuildTitleZapScript(systemID, name, zapScriptTags)
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return 0, zapScript
+	}
+
+	ref := mediaPathRef{SystemID: systemID, Path: path}
+	pathCtx, cancelPath := optionalDBEnrichmentContext(env.Context)
+	rows, err := resolveMediaPathIDs(pathCtx, env.Database.MediaDB, []mediaPathRef{ref})
+	cancelPath()
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve active media ID by path")
+		return 0, zapScript
+	}
+	if row := rows[ref]; row.DBID > 0 {
+		return row.DBID, zapScript
+	}
+
+	addMediaIdentityMatches(env, rows, []identityRef{{Ref: ref}})
+	match, ok := rows[ref]
+	if !ok || match.DBID <= 0 {
+		return 0, zapScript
+	}
+	ctx, cancel := optionalDBEnrichmentContext(env.Context)
+	defer cancel()
+	zapScripts := mediaTitleZapScripts(ctx, env.Database.MediaDB, []database.MediaRef{{
+		MediaDBID:      match.DBID,
+		MediaTitleDBID: match.MediaTitleDBID,
+	}})
+	if matched := zapScripts[match.DBID]; matched != "" {
+		zapScript = matched
+	}
+	return match.DBID, zapScript
 }
 
 // formatCoverColor renders a 0xRRGGBB cover colour as "#rrggbb".
@@ -125,36 +189,51 @@ func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, sl
 	default:
 		entry.PlaybackState = models.MediaPlaybackStateStopped
 	}
+	// The tags belong to the track the slot is playing, which is only the
+	// entry's track while the two paths agree.
+	if state.Meta != nil && state.Path == entry.Path {
+		entry.Track = trackInfo(state.Meta)
+	}
+	entry.LauncherControls = playableControls(entry.LauncherControls, &state)
 }
 
-// toPlaylistState converts the internal Playlist representation to the API model.
-func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
-	items := make([]models.PlaylistItemInfo, 0, len(p.Items))
-	for _, item := range p.Items {
-		items = append(items, models.PlaylistItemInfo{
-			Name:      item.Name,
-			ZapScript: item.ZapScript,
-		})
+// playableControls drops the launcher controls the playing source cannot
+// do: a live stream cannot seek, and only a source of several tracks has a
+// next or previous one.
+func playableControls(controls []string, state *audio.PlaybackState) []string {
+	if len(controls) == 0 {
+		return controls
 	}
-
-	repeat := "none"
-	switch {
-	case p.LoopOne:
-		repeat = "one"
-	case p.Loop:
-		repeat = "all"
+	kept := make([]string, 0, len(controls))
+	for _, control := range controls {
+		switch control {
+		case platforms.ControlFastForward, platforms.ControlRewind:
+			if state.Live {
+				continue
+			}
+		case platforms.ControlNext, platforms.ControlPrevious:
+			if !state.MultiTrack {
+				continue
+			}
+		}
+		kept = append(kept, control)
 	}
+	return kept
+}
 
-	return models.PlaylistState{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   items,
-		Index:   p.Index,
-		Total:   len(p.Items),
-		Playing: p.Playing,
-		Repeat:  repeat,
-		Unsafe:  p.Unsafe,
+func trackInfo(meta *trackmeta.Meta) *models.TrackInfo {
+	return &models.TrackInfo{
+		Title:       meta.Title,
+		Artist:      meta.Artist,
+		Album:       meta.Album,
+		AlbumArtist: meta.AlbumArtist,
+		Genre:       meta.Genre,
+		Year:        meta.Year,
+		TrackNumber: meta.TrackNumber,
+		TrackTotal:  meta.TrackTotal,
+		DiscNumber:  meta.DiscNumber,
+		DiscTotal:   meta.DiscTotal,
+		HasArt:      meta.HasArt,
 	}
 }
 
@@ -237,6 +316,163 @@ func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathR
 		return nil
 	}
 	return mediaIDs
+}
+
+// identityRef pairs a played path with the identity recorded for it.
+type identityRef struct {
+	Identity *database.MediaIdentity
+	Ref      mediaPathRef
+}
+
+// identityKey groups refs that share one match: the same title with the
+// same identity-role tags, which drive the variant pick.
+type identityKey struct {
+	SystemID string
+	CoreSlug string
+	Tags     string
+}
+
+func identityTagFilters(identity *database.MediaIdentity) []zapscript.TagFilter {
+	tagFilters := make([]zapscript.TagFilter, 0, len(identity.Tags))
+	for _, tag := range identity.Tags {
+		if tag.Role != database.MediaIdentityTagRoleIdentity {
+			continue
+		}
+		tagFilters = append(tagFilters, zapscript.TagFilter{
+			Type:     tag.Type,
+			Value:    tag.Value,
+			Operator: zapscript.TagOperatorAND,
+		})
+	}
+	return tagFilters
+}
+
+func newIdentityKey(systemID string, identity *database.MediaIdentity) identityKey {
+	var tags strings.Builder
+	for _, filter := range identityTagFilters(identity) {
+		_, _ = tags.WriteString(filter.Type)
+		_ = tags.WriteByte(':')
+		_, _ = tags.WriteString(filter.Value)
+		_ = tags.WriteByte(',')
+	}
+	return identityKey{SystemID: systemID, CoreSlug: identity.CoreSlug, Tags: tags.String()}
+}
+
+// resolveMediaIdentityIDs matches played files that are not in the index,
+// such as Operator cartridge dumps, to an indexed row of the same title. It
+// matches the identity's core slug exactly within the system, the same key
+// Online matches plays on, and picks one row among the title's variants with
+// the launch resolver's selection rules. Unmatched refs are left out.
+func resolveMediaIdentityIDs(
+	env *requests.RequestEnv, refs []identityRef,
+) map[mediaPathRef]database.MediaPathID {
+	resolved := make(map[mediaPathRef]database.MediaPathID)
+	if env == nil || env.Database == nil || env.Database.MediaDB == nil || env.Config == nil || len(refs) == 0 {
+		return resolved
+	}
+	ctx, cancel := optionalDBEnrichmentContext(env.Context)
+	defer cancel()
+
+	started := time.Now()
+	matches := make(map[identityKey]database.MediaPathID, len(refs))
+	for _, ref := range refs {
+		if ref.Identity == nil || ref.Identity.CoreSlug == "" || ref.Ref.SystemID == "" {
+			continue
+		}
+		key := newIdentityKey(ref.Ref.SystemID, ref.Identity)
+		match, seen := matches[key]
+		if !seen {
+			var err error
+			match, err = matchMediaIdentity(ctx, env, key, ref.Identity)
+			if err != nil {
+				log.Debug().Err(err).Str("system", key.SystemID).Str("slug", key.CoreSlug).
+					Msg("could not match media identity to an indexed title")
+				if ctx.Err() != nil {
+					break
+				}
+			}
+			matches[key] = match
+		}
+		if match.DBID > 0 {
+			resolved[ref.Ref] = match
+		}
+	}
+
+	log.Debug().
+		Int("refs", len(refs)).
+		Int("resolved", len(resolved)).
+		Dur("duration", time.Since(started)).
+		Msg("media identity enrichment timing")
+	return resolved
+}
+
+func matchMediaIdentity(
+	ctx context.Context, env *requests.RequestEnv, key identityKey, identity *database.MediaIdentity,
+) (database.MediaPathID, error) {
+	results, err := env.Database.MediaDB.SearchMediaBySlug(ctx, key.SystemID, key.CoreSlug, nil)
+	if err != nil {
+		return database.MediaPathID{}, fmt.Errorf("search media by slug: %w", err)
+	}
+	if len(results) == 0 {
+		return database.MediaPathID{}, nil
+	}
+	tagFilters := identityTagFilters(identity)
+	var launchers []platforms.Launcher
+	if env.LauncherCache != nil {
+		launchers = env.LauncherCache.GetLaunchersBySystem(key.SystemID)
+	}
+	best, _ := titles.SelectBestResult(results, tagFilters, env.Config, 1.0, launchers)
+	return database.MediaPathID{
+		SystemID:       best.SystemID,
+		Path:           best.Path,
+		DBID:           best.MediaID,
+		MediaTitleDBID: best.MediaTitleID,
+	}, nil
+}
+
+// addMediaIdentityMatches fills rows for refs the path lookup missed with
+// the indexed title their identity matches. A ref without a recorded
+// identity, such as a play whose identity snapshot has not landed yet or
+// the running media, gets the identity the indexer would give its file,
+// but only once the media database is settled: mid-index a library file
+// may just not be indexed yet.
+func addMediaIdentityMatches(
+	env *requests.RequestEnv, rows map[mediaPathRef]database.MediaPathID, refs []identityRef,
+) {
+	missed := make([]identityRef, 0, len(refs))
+	settledKnown, settled := false, false
+	for _, ref := range refs {
+		if row, ok := rows[ref.Ref]; ok && row.DBID > 0 {
+			continue
+		}
+		if ref.Identity == nil {
+			if env == nil || env.Config == nil || env.Database == nil || env.Database.MediaDB == nil {
+				continue
+			}
+			identity, ok := mediascanner.FallbackMediaIdentity(env.Config, ref.Ref.SystemID, ref.Ref.Path)
+			if !ok {
+				continue
+			}
+			if !settledKnown {
+				settledKnown = true
+				settled = mediascanner.MediaDBSettled(env.Database.MediaDB)
+			}
+			if !settled {
+				continue
+			}
+			ref.Identity = &identity
+		}
+		if ref.Identity.CoreSlug == "" {
+			continue
+		}
+		missed = append(missed, ref)
+	}
+	if len(missed) == 0 {
+		return
+	}
+	for ref, row := range resolveMediaIdentityIDs(env, missed) {
+		rows[ref] = row
+	}
 }
 
 // resolvedMediaRefs flattens resolved rows into media IDs keyed by path ref

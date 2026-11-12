@@ -1,0 +1,113 @@
+name: Go CI setup
+description: Set up Go, its module and build caches, and the native libraries the Lint and Test jobs need.
+
+inputs:
+  os:
+    description: "Runner OS from the job matrix: ubuntu, macos or windows"
+    required: true
+  save-build-cache:
+    description: >-
+      Save the Windows Go build cache when the job ends. Only the test job
+      should: the cache key is per commit, so the first job to finish wins it,
+      and a lint job's cache would leave the next test run compiling cold.
+    required: false
+    default: "false"
+
+outputs:
+  gomod-cache-hit:
+    description: Whether the module cache was restored from an exact key match
+    value: ${{ steps.restore-unix.outputs.cache-hit || steps.restore-windows.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Configure Go paths for Windows
+      if: inputs.os == 'windows'
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
+        New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
+        New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
+        Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
+        Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
+        Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
+
+    - name: Set up MSYS2 (Windows)
+      if: inputs.os == 'windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: pkgconf
+        path-type: inherit
+
+    - name: Restore Go module cache (Unix)
+      id: restore-unix
+      if: inputs.os != 'windows'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-gomod-
+
+    - name: Restore Go module cache (Windows)
+      id: restore-windows
+      if: inputs.os == 'windows'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: D:\go-mod-cache
+        key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-gomod-
+
+    # Only the module cache is persisted, so every Windows run compiled the
+    # module from scratch: cgo plus a -race test binary per package, at
+    # GOMAXPROCS 2. That put the first test result seven minutes in and left
+    # the job still linking when the timeout killed it. This cache is keyed by
+    # commit and restored by prefix, so a run starts from the nearest previous
+    # build rather than from nothing.
+    - name: Cache Go build cache (Windows)
+      if: inputs.os == 'windows' && inputs.save-build-cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: D:\go-cache
+        key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-gobuild-
+
+    - name: Restore Go build cache (Windows)
+      if: inputs.os == 'windows' && inputs.save-build-cache != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: D:\go-cache
+        key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-gobuild-
+
+    - name: Download Go modules
+      shell: bash
+      run: go mod download
+
+    # These two are the only native libraries a Linux build needs: libnfc for
+    # the clausecker/nfc binding and libpcsclite for the scard binding. They
+    # pull six packages between them, so installing them outright is as quick
+    # as restoring a cache and cannot go stale. dbus provides the dbus-daemon
+    # the Bluetooth LE integration tests run a private bus on.
+    - name: Install system dependencies (Ubuntu)
+      if: inputs.os == 'ubuntu'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y \
+          dbus \
+          libnfc-dev \
+          libpcsclite-dev

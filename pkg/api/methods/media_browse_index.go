@@ -62,14 +62,20 @@ import (
 // the opaque per-bucket cursor (never the letter filter), so CJK bucket keys
 // never have to widen the A-Z/0-9/# letter-filter vocabulary.
 //
+// Folders of folders: on CD systems each game is a directory, which
+// media.browse returns as a "directory" entry carrying the game's media id. Such
+// a folder has no direct files, so the file facet is empty. In that case, and
+// only then, the buckets are computed over the scope's directory entries and
+// the response says entryType "directory" (BrowseIndex's DirectoryFallback).
+// A scope with any direct file keeps the file facet.
+//
 // Performance notes (measured on MiSTer, ARM32): the facet is a covering-index
 // scan over one ParentDir partition plus a transient btree for the folded-bucket
 // GROUP BY, ~0.3-0.6s for ~1k-1.4k direct files. The first call into a folder
 // also pays resolveBrowseSortMode's prefix-policy path scan (shared with
-// media.browse, cached after). If genuinely large *flat* partitions appear, the
-// lever is a per-(path,systems,sort) cache tied to the media DB generation
-// (DBConfigBrowseIndexVersion), invalidated on reindex — deliberately not added
-// yet since real catalogs fold large collections into letter subdirectories.
+// media.browse, cached after). A built index is kept in the media database's
+// BrowseListingCache, keyed per listing, so only the first call pays for the
+// facet until a media change or a visibility change clears it.
 
 // HandleMediaBrowseIndex handles the media.browse.index API method. It returns
 // the ordered first-character buckets for a browse scope, each with a count and
@@ -117,14 +123,14 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) {
 	// media.browse.index never takes a cursor: every call is a fresh request,
 	// so a preferences change mid-call always gets one rerun inside Core
 	// rather than an error handed back to the client.
-	return runBrowseVisibility(&env, nil, func() (any, error) {
-		return browseMediaIndexRequest(&env, &params, tagFilters)
+	return runBrowseVisibility(&env, nil, func(revision string) (any, error) {
+		return browseMediaIndexRequest(&env, &params, tagFilters, revision)
 	})
 }
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMediaIndexRequest(
-	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter,
+	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter, revision string,
 ) (any, error) {
 	var sortOrder string
 	if params.Sort != nil {
@@ -163,43 +169,64 @@ func browseMediaIndexRequest(
 		if len(sources) == 0 {
 			return emptyBrowseIndex(), nil
 		}
+		key := browseListingKey(
+			&browseListingScope{sources: sources, merged: true},
+			sortOrder, systems, tagFilters, revision, env.ExcludeHidden,
+		)
 		started := time.Now()
-		result, indexErr := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
-			ExcludeHidden: env.ExcludeHidden,
-			Overlay:       &database.BrowseOverlay{Sources: sources},
-			Sort:          sortOrder,
-			Systems:       systems,
-			Tags:          tagFilters,
+		result, indexErr := cachedBrowseIndex(env, &key, revision, &database.BrowseIndexOptions{
+			ExcludeHidden:     env.ExcludeHidden,
+			Overlay:           &database.BrowseOverlay{Sources: sources},
+			Sort:              sortOrder,
+			Systems:           systems,
+			Tags:              tagFilters,
+			DirectoryFallback: true,
 		})
 		logBrowseTiming("root_contents_index", "", started, len(result.Buckets))
 		if indexErr != nil {
 			return nil, fmt.Errorf("error building root contents browse index: %w", indexErr)
 		}
-		return buildBrowseIndexResponse(result, &browseCursorScope{
+		return buildBrowseIndexResponse(&result, &browseCursorScope{
 			RootView: browseRootViewContents,
 			Sources:  sources,
 		})
 	}
 
-	prefix, err := resolveBrowseIndexPrefix(env, *params.Path)
+	path := *params.Path
+	if !platforms.IsSourceScheme(path) && !strings.Contains(path, "://") {
+		resolved, isRelative, resolveErr := resolveRelativeBrowsePath(env, path, systems)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if isRelative {
+			path = resolved
+		}
+	}
+	prefix, err := resolveBrowseIndexPrefix(env, path)
 	if err != nil {
 		return nil, err
 	}
 
+	key := browseListingKey(
+		&browseListingScope{prefix: prefix}, sortOrder, systems, tagFilters, revision, env.ExcludeHidden,
+	)
 	started := time.Now()
-	result, err := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
+	result, err := cachedBrowseIndex(env, &key, revision, &database.BrowseIndexOptions{
 		ExcludeHidden: env.ExcludeHidden,
 		PathPrefix:    prefix,
 		Sort:          sortOrder,
 		Systems:       systems,
 		Tags:          tagFilters,
+		// A flat virtual scheme lists no directories (browseVirtual); every
+		// other path pages directories ahead of files (browsePathPrefix).
+		DirectoryFallback: browsePathListsDirectories(path),
 	})
 	logBrowseTiming("index", prefix, started, len(result.Buckets))
 	if err != nil {
 		return nil, fmt.Errorf("error building browse index: %w", err)
 	}
 
-	return buildBrowseIndexResponse(result, nil)
+	return buildBrowseIndexResponse(&result, nil)
 }
 
 // resolveBrowseIndexPrefix validates the requested path and returns the DB path
@@ -221,11 +248,7 @@ func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, er
 		return "", models.ClientErrf("invalid path: contains disallowed components")
 	}
 
-	var rootDirs []string
-	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
-	if !isPathUnderRoots(cleaned, rootDirs) {
+	if !isPathUnderRoots(cleaned, browseRootDirs(env)) {
 		return "", models.ClientErrf("path is not within an allowed root directory")
 	}
 
@@ -271,29 +294,53 @@ func resolveSourceIndexPrefix(env *requests.RequestEnv, path string) (string, er
 	return trimmed + "/", nil
 }
 
+// browsePathListsDirectories reports whether media.browse serves path through
+// the directories-then-files listing, mirroring the dispatch in
+// browseMediaRequest: a source root path and a filesystem path do, a flat
+// virtual scheme does not.
+func browsePathListsDirectories(path string) bool {
+	return platforms.IsSourceScheme(path) || !strings.Contains(path, "://")
+}
+
 func emptyBrowseIndex() models.BrowseIndexResults {
 	return models.BrowseIndexResults{
-		Scheme: "none",
-		Groups: []models.BrowseIndexGroup{},
+		Scheme:    "none",
+		EntryType: models.BrowseIndexEntryTypeMedia,
+		Groups:    []models.BrowseIndexGroup{},
 	}
 }
 
+// browseIndexBucketCursor encodes the media.browse cursor that starts a page
+// at the bucket. A file bucket seeks the files phase by keyset. A directory
+// bucket is the dirs-phase cursor media.browse itself hands out after the
+// preceding directory, carrying the same totals, so the page it opens runs on
+// through the remaining directories exactly as a paged browse would.
+func browseIndexBucketCursor(
+	result *database.BrowseIndexResult,
+	bucket *database.BrowseIndexBucket,
+	scope *browseCursorScope,
+) (string, error) {
+	if bucket.AtStart {
+		return "", nil
+	}
+	if result.Directories {
+		return encodeDirCursor(bucket.AfterDirName, result.TotalFiles, result.TotalDirs, scope)
+	}
+	return encodeBrowseCursorWithMode(
+		bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles, scope,
+	)
+}
+
 func buildBrowseIndexResponse(
-	result database.BrowseIndexResult,
+	result *database.BrowseIndexResult,
 	scope *browseCursorScope,
 ) (any, error) {
 	groups := make([]models.BrowseIndexGroup, 0, len(result.Buckets))
 	for i := range result.Buckets {
 		bucket := &result.Buckets[i]
-		var cursor string
-		if !bucket.AtStart {
-			encoded, err := encodeBrowseCursorWithMode(
-				bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles, scope,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode browse index cursor: %w", err)
-			}
-			cursor = encoded
+		cursor, err := browseIndexBucketCursor(result, bucket, scope)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode browse index cursor: %w", err)
 		}
 		groups = append(groups, models.BrowseIndexGroup{
 			Key:    bucket.Key,
@@ -304,8 +351,13 @@ func buildBrowseIndexResponse(
 		})
 	}
 
+	entryType := models.BrowseIndexEntryTypeMedia
+	if result.Directories {
+		entryType = models.BrowseIndexEntryTypeDirectory
+	}
 	return models.BrowseIndexResults{
 		Scheme:     result.Scheme,
+		EntryType:  entryType,
 		Groups:     groups,
 		TotalFiles: result.TotalFiles,
 	}, nil

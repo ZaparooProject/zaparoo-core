@@ -33,6 +33,11 @@ const (
 	ErrorCategoryUnavailable     = "unavailable"
 	ErrorCategoryExecutionFailed = "execution_failed"
 	ErrorCategoryLaunchRepair    = "launch_repair"
+	// ErrorCategoryUnsupported means this device cannot do what was asked.
+	ErrorCategoryUnsupported = "unsupported"
+	// ErrorCategoryNotPermitted means the device could do it but its operating
+	// system refuses Core.
+	ErrorCategoryNotPermitted = "not_permitted"
 )
 
 // ErrorData is the structured payload placed in ErrorObject.Data for

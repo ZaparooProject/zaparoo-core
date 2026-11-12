@@ -1,4 +1,4 @@
-names.tsv.gz: ScummVM game IDs, engines and full titles
+names.tsv.zst: ScummVM game IDs, engines and full titles
 
 Source: the game list a ScummVM release prints with `scummvm --list-games`
 (https://www.scummvm.org), drawn from the detection tables in ScummVM's

@@ -360,6 +360,26 @@ func TestClose(t *testing.T) {
 	assert.True(t, mockDetector.stopped, "Detector should be stopped")
 }
 
+// A reader replaced in State and later closed again at shutdown used to panic
+// closing stopChan a second time.
+func TestCloseTwice(t *testing.T) {
+	t.Parallel()
+
+	reader := NewReader(&config.Instance{})
+	reader.detector = newMockMountDetector()
+	reader.stopChan = make(chan struct{})
+
+	require.NoError(t, reader.Close())
+	assert.NotPanics(t, func() {
+		require.NoError(t, reader.Close())
+	})
+}
+
+func TestCloseWithoutOpen(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, NewReader(&config.Instance{}).Close())
+}
+
 func TestProcessEvents_MountEvent(t *testing.T) {
 	// Create temp directory with zaparoo.txt
 	tempDir := t.TempDir()
@@ -1480,4 +1500,25 @@ func TestHandleUnmountEvent_NoMatchingToken(t *testing.T) {
 	case <-ctx.Done():
 		// Expected - no event
 	}
+}
+
+// A detector whose event feed closes on its own, as when its D-Bus
+// connection drops, leaves the reader blind to mounts. It has to report
+// itself disconnected so it is pruned and detected again, now that a
+// connected path-less reader is never replaced.
+func TestProcessEvents_FeedEndedReportsDisconnected(t *testing.T) {
+	reader := NewReader(&config.Instance{})
+	mockDetector := newMockMountDetector()
+	reader.detector = mockDetector
+	reader.scanChan = make(chan readers.Scan, 10)
+	reader.stopChan = make(chan struct{})
+	reader.device = config.ReadersConnect{Driver: DriverID}
+	require.True(t, reader.Connected())
+
+	reader.wg.Add(1)
+	go reader.processEvents()
+	close(mockDetector.eventsChan)
+	reader.wg.Wait()
+
+	assert.False(t, reader.Connected())
 }

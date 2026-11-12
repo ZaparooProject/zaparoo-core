@@ -83,9 +83,16 @@ func (db *MediaDB) TitleCandidates(
 	}
 	var ranked []rankedTitle
 	if err == nil {
+		// Media under a hidden folder makes a title no more eligible than
+		// media hidden one file at a time. Read once for every pass below.
+		hiddenDirs, hiddenDirArgs, hiddenErr := hiddenDirsCondition(ctx, conn, "m")
+		if hiddenErr != nil {
+			return nil, hiddenErr
+		}
 		ranker := titleRanker{
 			query: query, name: name, system: *system, limit: limit,
 			expansionSlack: slugs.AbbreviationExpansionSlack(name),
+			hiddenDirs:     hiddenDirs, hiddenDirArgs: hiddenDirArgs,
 		}
 		// Indexed exact reads avoid a system-wide cache walk and see new titles
 		// before the shared fuzzy cache refreshes. Exact results are never padded.
@@ -150,12 +157,16 @@ type rankedTitle struct {
 
 type titleRanker struct {
 	characters *candidateCharacterBound
-	top        []rankedTitle
-	system     systemdefs.System
-	name       string
-	signature  string
-	query      SlugMetadata
-	limit      int
+	// hiddenDirs is the media predicate, with hiddenDirArgs, that keeps a
+	// title's media under a hidden folder from making it eligible.
+	hiddenDirs    string
+	hiddenDirArgs []any
+	top           []rankedTitle
+	system        systemdefs.System
+	name          string
+	signature     string
+	query         SlugMetadata
+	limit         int
 	// expansionSlack allows for a slug that lost an abbreviation expansion to
 	// a typo, so the title the user meant is not pruned on length alone.
 	expansionSlack int
@@ -423,14 +434,16 @@ func (c *candidateCharacterBound) check(b string, cutoff float32) (sameLetters, 
 func (r *titleRanker) read(
 	ctx context.Context, conn *sql.Conn, systemDBID int64, condition string, args []any,
 ) error {
+	queryArgs := append([]any{systemDBID}, args...)
+	queryArgs = append(queryArgs, r.hiddenDirArgs...)
 	// Conditions contain only internal SQL and placeholder lists. Names, slugs,
-	// system IDs, and nomination IDs are always bound parameters.
+	// system IDs, nomination IDs, and folder paths are always bound parameters.
 	//nolint:gosec // Internally constructed predicates; all input is bound.
 	rows, err := conn.QueryContext(ctx, `SELECT t.DBID, t.Name, t.Slug, COALESCE(t.SecondarySlug, '')
 		FROM MediaTitles t WHERE t.SystemDBID = ? AND `+condition+`
 		AND EXISTS (SELECT 1 FROM Media m WHERE m.MediaTitleDBID = t.DBID
-			AND m.IsMissing = 0`+browseVisibilityCondition("m.DBID", true)+`)`,
-		append([]any{systemDBID}, args...)...)
+			AND m.IsMissing = 0`+browseVisibilityCondition("m.DBID", true)+r.hiddenDirs+`)`,
+		queryArgs...)
 	if err != nil {
 		return fmt.Errorf("query title candidates: %w", err)
 	}

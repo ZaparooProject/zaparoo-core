@@ -31,12 +31,14 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/sys/windows"
@@ -48,6 +50,9 @@ const (
 	retroBatKillVerifyDelay    = 500 * time.Millisecond
 	retroBatProcessKillTimeout = 5 * time.Second
 	maxWindowsProcessPath      = uint32(32768)
+	// retroBatMediaPollInterval is how often the ES API is asked whether the
+	// launched game is still running.
+	retroBatMediaPollInterval = 2 * time.Second
 )
 
 var retroBatFrontendProcesses = map[string]struct{}{
@@ -429,4 +434,165 @@ func getRetroBatLaunchers() []platforms.Launcher {
 		launchers = append(launchers, createRetroBatLauncher(folder, info))
 	}
 	return launchers
+}
+
+const (
+	// retroBatReadyPoll is how often a readiness probe asks EmulationStation
+	// and the process list.
+	retroBatReadyPoll = 250 * time.Millisecond
+	// retroBatReadySettle is how long after the emulator's window appears the
+	// game is given to start running. EmulationStation reports a game several
+	// seconds before its emulator exists, and RetroArch opens its window once
+	// it has loaded the content.
+	retroBatReadySettle = 500 * time.Millisecond
+)
+
+// retroBatLaunchers returns the RetroBat launchers with their readiness probe.
+func (p *Platform) retroBatLaunchers() []platforms.Launcher {
+	launchers := getRetroBatLaunchers()
+	for i := range launchers {
+		launchers[i].WaitForReady = p.waitForRetroBatGame
+	}
+	return launchers
+}
+
+// waitForRetroBatGame is the readiness probe for RetroBat games: EmulationStation
+// must report the launched game running and the emulator it started must have a
+// window. Neither alone is enough: ES announces the game before the emulator
+// exists, and a window left over from the previous game must not count.
+func (p *Platform) waitForRetroBatGame(ctx context.Context, cfg *config.Instance, media *models.ActiveMedia) error {
+	dir, err := retroBatFindDir(cfg)
+	if err != nil {
+		return fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+	}
+	emulatorsDir := filepath.Join(dir, "emulators")
+	clock := p.clockForReadiness()
+
+	err = platforms.PollReady(ctx, clock, retroBatReadyPoll, func(context.Context) (bool, error) {
+		game, running, apiErr := retroBatAPIRunningGame()
+		if apiErr != nil {
+			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, apiErr)
+		}
+		if !running || !sameRetroBatPath(game.Path, media.Path) {
+			return false, nil
+		}
+		procs, listErr := retroBatListProcesses()
+		if listErr != nil {
+			return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, listErr)
+		}
+		for i := range procs {
+			if isRetroBatEmulatorProcess(emulatorsDir, procs[i]) && p.processHasWindow(int(procs[i].PID)) {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("wait for RetroBat game: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("settle after the RetroBat game window: %w", ctx.Err())
+	case <-clock.After(retroBatReadySettle):
+		return nil
+	}
+}
+
+// sameRetroBatPath compares the path EmulationStation reports with the path
+// Core launched, which may differ in slash direction and case. A path that
+// differs further, such as a relative path or another root, still counts when
+// the file name is the same: the probe would otherwise wait out its timeout
+// on a game that is running.
+func sameRetroBatPath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if strings.EqualFold(filepath.ToSlash(filepath.Clean(a)), filepath.ToSlash(filepath.Clean(b))) {
+		return true
+	}
+	nameA, nameB := retroBatFileName(a), retroBatFileName(b)
+	if nameA == "" || !strings.EqualFold(nameA, nameB) {
+		return false
+	}
+	log.Debug().Str("reported", a).Str("launched", b).Msg("RetroBat game matched by file name")
+	return true
+}
+
+// retroBatFileName returns the last element of a path written with either
+// slash direction.
+func retroBatFileName(path string) string {
+	return path[strings.LastIndexAny(path, `/\`)+1:]
+}
+
+// startRetroBatMediaWatch follows media, a RetroBat game just published as the
+// active media. EmulationStation starts the game, so Core holds no process to
+// wait on and the ES API is the only signal that it ended. The poller runs only
+// while media stays the active media; the returned cancel ends it earlier.
+func startRetroBatMediaWatch(
+	clock clockwork.Clock,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	media *models.ActiveMedia,
+) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	go runRetroBatMediaWatch(ctx, clock, activeMedia, setActiveMedia, media)
+	return cancel
+}
+
+func sameRetroBatMedia(current, watched *models.ActiveMedia) bool {
+	return current != nil && watched != nil &&
+		current.LauncherID == watched.LauncherID &&
+		current.Path == watched.Path &&
+		current.Started.Equal(watched.Started)
+}
+
+// runRetroBatMediaWatch clears watched once the ES API reports no running game
+// after having reported one. An unreachable ES API says nothing about the game,
+// and a game that was never seen running is left alone, since it may simply not
+// have started yet.
+func runRetroBatMediaWatch(
+	ctx context.Context,
+	clock clockwork.Clock,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	watched *models.ActiveMedia,
+) {
+	ticker := clock.NewTicker(retroBatMediaPollInterval)
+	defer ticker.Stop()
+
+	seenRunning := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.Chan():
+		}
+
+		if !sameRetroBatMedia(activeMedia(), watched) {
+			return
+		}
+
+		_, running, err := retroBatAPIRunningGame()
+		if err != nil {
+			log.Debug().Err(err).Msg("RetroBat ES API unavailable while watching running game")
+			continue
+		}
+		if running {
+			seenRunning = true
+			continue
+		}
+		if !seenRunning {
+			continue
+		}
+
+		// Recheck after the API call so media that was replaced meanwhile is
+		// never cleared.
+		if ctx.Err() != nil || !sameRetroBatMedia(activeMedia(), watched) {
+			return
+		}
+		log.Info().Str("path", watched.Path).Msg("RetroBat game ended, clearing active media")
+		setActiveMedia(nil)
+		return
+	}
 }

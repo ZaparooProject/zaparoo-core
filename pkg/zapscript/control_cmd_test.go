@@ -22,12 +22,16 @@ package zapscript
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -640,4 +644,210 @@ func TestCmdControl_NilLauncherCache(t *testing.T) {
 
 	_, err := cmdControl(mocks.NewMockPlatform(), env)
 	require.ErrorIs(t, err, ErrNoLauncherCache)
+}
+
+// slotControlRig records which launcher a control reached and with what
+// params: a game launcher in the primary slot and native audio in the
+// background slot.
+type slotControlRig struct {
+	game      *platforms.ControlParams
+	audio     *platforms.ControlParams
+	cache     *helpers.LauncherCache
+	primary   *zapscript.ArgExprEnv
+	bgMedia   *apimodels.ActiveMedia
+	gameCalls int
+}
+
+func newSlotControlRig(gameRunning bool) *slotControlRig {
+	rig := &slotControlRig{
+		bgMedia: &apimodels.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID},
+		primary: &zapscript.ArgExprEnv{},
+	}
+	if gameRunning {
+		rig.primary = newControlExprEnv("game-launcher")
+	}
+	gameFunc := func(_ context.Context, _ *config.Instance, params platforms.ControlParams) error {
+		rig.gameCalls++
+		rig.game = &params
+		// The save state slot check the MiSTer and RePlayOS launchers make.
+		if _, err := platforms.SlotArg(params, 0, 9); err != nil {
+			return fmt.Errorf("save state slot: %w", err)
+		}
+		return nil
+	}
+	audioFunc := func(_ context.Context, _ *config.Instance, params platforms.ControlParams) error {
+		rig.audio = &params
+		return nil
+	}
+	rig.cache = newControlLauncherCache([]platforms.Launcher{
+		{
+			ID: "game-launcher",
+			Controls: map[string]platforms.Control{
+				platforms.ControlPause:     {Func: gameFunc},
+				platforms.ControlStop:      {Func: gameFunc},
+				platforms.ControlSaveState: {Func: gameFunc},
+			},
+		},
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				platforms.ControlPause: {Func: audioFunc},
+				platforms.ControlStop:  {Func: audioFunc},
+			},
+		},
+	})
+	return rig
+}
+
+func (r *slotControlRig) env(action string, advArgs map[string]string) platforms.CmdEnv {
+	return platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "control",
+			Args:    []string{action},
+			AdvArgs: zapscript.NewAdvArgs(advArgs),
+		},
+		ExprEnv:         r.primary,
+		LauncherCache:   r.cache,
+		BackgroundMedia: func() *apimodels.ActiveMedia { return r.bgMedia },
+	}
+}
+
+func TestCmdControl_BackgroundSlotWithoutPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(false)
+	_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlPause, map[string]string{
+		"slot": "background",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rig.audio)
+	assert.Equal(t, map[string]string{"slot": mediaslot.Background}, rig.audio.Args)
+}
+
+func TestCmdControl_BackgroundSlotLeavesGameAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"background", "Background", " bg "} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newSlotControlRig(true)
+			_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlPause, map[string]string{
+				"slot": raw,
+			}))
+			require.NoError(t, err)
+			require.NotNil(t, rig.audio)
+			assert.Equal(t, map[string]string{"slot": mediaslot.Background}, rig.audio.Args)
+			assert.Zero(t, rig.gameCalls)
+		})
+	}
+}
+
+func TestCmdControl_BackgroundSlotNoBackgroundMedia(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	rig.bgMedia = nil
+	_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlPause, map[string]string{
+		"slot": "background",
+	}))
+	require.ErrorIs(t, err, ErrNoActiveMedia)
+	assert.Zero(t, rig.gameCalls)
+}
+
+func TestCmdControl_BackgroundSlotWithoutStateHook(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	env := rig.env(platforms.ControlPause, map[string]string{"slot": "background"})
+	env.BackgroundMedia = nil
+	_, err := cmdControl(mocks.NewMockPlatform(), env)
+	require.ErrorIs(t, err, ErrNoActiveMedia)
+	assert.Zero(t, rig.gameCalls)
+}
+
+func TestCmdControl_SaveStateSlotNumberGoesToPrimary(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlSaveState, map[string]string{
+		"slot": "3",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rig.game)
+	assert.Equal(t, map[string]string{"slot": "3"}, rig.game.Args)
+	assert.Nil(t, rig.audio)
+}
+
+func TestCmdControl_PrimarySlotNotPassedToGameLauncher(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlSaveState, map[string]string{
+		"slot": "primary",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rig.game)
+	assert.Nil(t, rig.game.Args)
+}
+
+func TestCmdControl_PrimarySlotPassedToNativeAudio(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(false)
+	rig.primary = newControlExprEnv(platforms.NativeAudioLauncherID)
+	_, err := cmdControl(mocks.NewMockPlatform(), rig.env(platforms.ControlPause, map[string]string{
+		"slot": "PRIMARY",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, rig.audio)
+	assert.Equal(t, map[string]string{"slot": mediaslot.Primary}, rig.audio.Args)
+}
+
+func TestCmdControl_BackgroundStopClosesBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	queue := make(chan *playlists.Playlist, 1)
+	env := rig.env(platforms.ControlStop, map[string]string{"slot": "background"})
+	env.Playlist = playlists.PlaylistController{Queue: queue}
+	env.RecordMediaStop = func(string) func() {
+		t.Error("a background stop must not record a primary stop")
+		return func() {}
+	}
+	env.WaitForMediaReady = func(context.Context) error {
+		t.Error("a background control must not wait for the primary media")
+		return nil
+	}
+
+	result, err := cmdControl(mocks.NewMockPlatform(), env)
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	require.NotNil(t, rig.audio)
+	assert.Zero(t, rig.gameCalls)
+	require.Len(t, queue, 1)
+	update := <-queue
+	assert.Equal(t, mediaslot.Background, update.Slot)
+	assert.True(t, update.Clear)
+}
+
+func TestCmdControl_PrimaryStopRecordsStop(t *testing.T) {
+	t.Parallel()
+
+	rig := newSlotControlRig(true)
+	env := rig.env(platforms.ControlStop, nil)
+	recorded := false
+	env.RecordMediaStop = func(reason string) func() {
+		recorded = true
+		assert.Equal(t, apimodels.MediaStopReasonStopped, reason)
+		return func() {}
+	}
+
+	result, err := cmdControl(mocks.NewMockPlatform(), env)
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged)
+	assert.True(t, recorded)
+	assert.Equal(t, 1, rig.gameCalls)
 }

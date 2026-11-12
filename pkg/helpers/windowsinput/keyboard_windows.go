@@ -123,6 +123,7 @@ func sendKey(code int, up bool) error {
 		},
 	}
 
+	markKeyboardInjection()
 	sent, _, err := procSendInput.Call(
 		1,
 		uintptr(unsafe.Pointer(&in)), //nolint:gosec // required for Windows API

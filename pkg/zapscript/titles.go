@@ -20,6 +20,8 @@
 package zapscript
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -104,6 +106,16 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		Launchers:      launchersForSystem,
 		MediaType:      system.GetMediaType(),
 	})
+	if err != nil && (errors.Is(err, titles.ErrNoMatch) || errors.Is(err, titles.ErrLowConfidence)) {
+		if fallback, ok := resolveTitleInFallbacks(ctx, &env, system, gameName, args.Tags); ok {
+			result, err = fallback, nil
+			if !explicitLauncher {
+				// The named system's launcher cannot start another system's
+				// game; the launch picks the fallback system's own.
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+			}
+		}
+	}
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("error resolving title %s/%s: %w", system.ID, gameName, err)
 	}
@@ -123,6 +135,38 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
 	}
 	return cmdResult, launch(target)
+}
+
+// resolveTitleInFallbacks looks for a title the named system has no match for
+// in that system's fallbacks, in their order. A card written for a game whose
+// system has since split off, such as a Doom WAD once filed under DOS, keeps
+// working. Only a confident match is taken: another system's weak guess is
+// not the game the card was written for.
+func resolveTitleInFallbacks(
+	ctx context.Context, env *platforms.CmdEnv, system *systemdefs.System, gameName string, tags []zapscript.TagFilter,
+) (*titles.ResolveResult, bool) {
+	for _, fallbackID := range system.Fallbacks {
+		fallback, err := systemdefs.GetSystem(fallbackID)
+		if err != nil {
+			continue
+		}
+		result, err := titles.ResolveTitle(ctx, &titles.ResolveParams{
+			SystemID:       fallback.ID,
+			GameName:       gameName,
+			AdditionalTags: tags,
+			MediaDB:        env.Database.MediaDB,
+			Cfg:            env.Cfg,
+			Launchers:      helpers.GlobalLauncherCache.GetLaunchersBySystem(fallback.ID),
+			MediaType:      fallback.GetMediaType(),
+		})
+		if err != nil || result.Confidence < titles.ConfidenceAcceptable {
+			continue
+		}
+		log.Info().Str("system", system.ID).Str("fallback", fallback.ID).Str("title", gameName).
+			Msg("title not found in its system, found in a fallback system")
+		return result, true
+	}
+	return nil, false
 }
 
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.

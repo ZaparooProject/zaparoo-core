@@ -613,6 +613,42 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	// A page by position lists everything and slices it, because the rows have
+	// to be settled against hidden folders before they can be numbered: a LIMIT
+	// and OFFSET in the statement would count rows the listing goes on to drop.
+	rowOpts := opts
+	if opts.Offset > 0 {
+		rowOpts.Limit = 0
+	}
+	results, err := sqlBrowseDirectoryRows(ctx, db, rowOpts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Offset > 0 {
+		results = results[min(opts.Offset, len(results)):]
+		results = browseTruncateDirectories(results, opts.Limit)
+	}
+
+	// Decorate what the caller will actually see. Attaching cover flags before
+	// the hidden rows are dropped would query artwork for directories the page
+	// is about to discard.
+	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, &opts, results); err != nil {
+		return nil, fmt.Errorf("browse directory cover flags: %w", err)
+	}
+	return results, nil
+}
+
+// sqlBrowseDirectoryRows is the directory listing without its cover flags:
+// the names, counts and order media.browse pages through, routed to the
+// browse cache or Media exactly as the listing is. The directory facet reads
+// it directly, since it needs every name in order and no artwork.
+//
+//nolint:gocritic // Value options preserve the browse contract.
+func sqlBrowseDirectoryRows(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
 	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
 	if err != nil {
 		return nil, err
@@ -643,14 +679,20 @@ func sqlBrowseDirectories(
 				return nil, cacheErr
 			}
 			if parentFound {
-				results = browseTruncateDirectories(
-					applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems), opts.Limit,
-				)
+				// Cut back below, after the path filter: a stale count can keep a
+				// hidden folder that the filter then drops.
+				results = applyHiddenToDirectories(cached, hidden, opts.PathPrefix, opts.Systems)
 				served = true
 			}
 		}
 		if !served {
-			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+			// Media counts no folder as hidden, so a hidden folder would take a
+			// row of the page and its lookahead until it is dropped below.
+			scoped := opts
+			scoped.Limit = browseHiddenFetchLimit(
+				opts.Limit, hidden.childNameCount([]string{opts.PathPrefix}, opts.Systems),
+			)
+			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, scoped)
 			if err != nil {
 				return nil, err
 			}
@@ -663,14 +705,59 @@ func sqlBrowseDirectories(
 			}
 		}
 	}
-
-	// Decorate what the caller will actually see. Attaching cover flags before
-	// the hidden rows are dropped would query artwork for directories the page
-	// is about to discard.
-	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, &opts, results); err != nil {
-		return nil, fmt.Errorf("browse directory cover flags: %w", err)
+	results, err = applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+	if err != nil {
+		return nil, err
 	}
-	return results, nil
+	return browseTruncateDirectories(results, opts.Limit), nil
+}
+
+// applyHiddenDirsToDirectories settles the hidden folders among a listing's
+// rows. A listing that excludes hidden entries drops them: the cached routes
+// already have, by subtracting each folder's whole count, and this covers the
+// Media fallbacks, which count from rows no folder filters. One that includes
+// hidden entries keeps them and says which they are.
+//
+//nolint:gocritic // Value options preserve the browse contract.
+func applyHiddenDirsToDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+	hidden *hiddenMedia,
+	results []database.BrowseDirectoryResult,
+) ([]database.BrowseDirectoryResult, error) {
+	if len(results) == 0 {
+		return results, nil
+	}
+	var dirs []hiddenDir
+	if opts.ExcludeHidden {
+		if hidden != nil {
+			dirs = hidden.dirs
+		}
+	} else {
+		var err error
+		if dirs, err = loadHiddenDirs(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if len(dirs) == 0 {
+		return results, nil
+	}
+	kept := results[:0]
+	for i := range results {
+		prefix := results[i].Path
+		if prefix == "" {
+			prefix = opts.PathPrefix + results[i].Name
+		}
+		if hiddenDirCovers(dirs, hiddenDirPrefix(prefix), results[i].SystemIDs, opts.Systems) {
+			if opts.ExcludeHidden {
+				continue
+			}
+			results[i].Hidden = true
+		}
+		kept = append(kept, results[i])
+	}
+	return kept, nil
 }
 
 func browseDirectoryPropertyPath(
@@ -1398,7 +1485,7 @@ func sqlBrowseScopeRows(
 
 // browseTagDriverCandidates returns the filters that could be resolved from the
 // tag side. Only required filters qualify: NOT filters already resolve to a
-// forward anti-set, OR filters are one grouped clause, and credit filters match
+// forward anti-set, OR filters are one clause per tag type, and credit filters match
 // across three tag types, which the bounded count below does not model.
 func browseTagDriverCandidates(filters []zapscript.TagFilter) []zapscript.TagFilter {
 	candidates := make([]zapscript.TagFilter, 0, len(filters))
@@ -2024,7 +2111,9 @@ func browseOverlayMergedFilesQuery(
 			ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + `
 			LIMIT ?
 		)`
-		args = append(args, opts.Limit)
+		// The rows a page skips can all come from one route, so each branch has
+		// to reach past them.
+		args = append(args, opts.Limit+opts.Offset)
 	}
 
 	// A subquery column carries no explicit collation, so the merge has to name
@@ -2045,7 +2134,36 @@ func browseOverlayMergedFilesQuery(
 	INNER JOIN Systems s ON m.SystemDBID = s.DBID
 	INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 	ORDER BY ` + mergeOrder + ` ` + direction + `, m.DBID ` + direction + `
-	LIMIT ?`, append(args, opts.Limit)
+	LIMIT ?` + browseOffsetClause(opts.Offset), append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
+}
+
+// browseOffsetClause is left out for an ordinary page, so its statement stays
+// the one the query-plan tests measure.
+func browseOffsetClause(offset int) string {
+	if offset <= 0 {
+		return ""
+	}
+	return " OFFSET ?"
+}
+
+func browseOffsetArgs(offset int) []any {
+	if offset <= 0 {
+		return nil
+	}
+	return []any{offset}
+}
+
+// browseOverlaySort maps a requested sort to the merge's ordered expression, its
+// direction, and the comparison that seeks past a row in that direction.
+func browseOverlaySort(sortOrder string) (sortExpr, direction, cursorOp string) {
+	sortExpr = browseTitleSortExpr()
+	if sortOrder == "filename-asc" || sortOrder == "filename-desc" {
+		sortExpr = browseFilenameExpr()
+	}
+	if sortOrder == "name-desc" || sortOrder == "filename-desc" {
+		return sortExpr, "DESC", "<"
+	}
+	return sortExpr, "ASC", ">"
 }
 
 // browseOverlayFilesQuery builds the overlay file-listing statement and its
@@ -2055,14 +2173,7 @@ func browseOverlayMergedFilesQuery(
 func browseOverlayFilesQuery(
 	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
 ) (query string, args []any) {
-	sortExpr := browseTitleSortExpr()
-	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
-		sortExpr = browseFilenameExpr()
-	}
-	direction, cursorOp := "ASC", ">"
-	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
-		direction, cursorOp = "DESC", "<"
-	}
+	sortExpr, direction, cursorOp := browseOverlaySort(opts.Sort)
 
 	sole, single := browseOverlaySoleSource(opts.Overlay)
 	if !single {
@@ -2087,8 +2198,9 @@ func browseOverlayFilesQuery(
 		query += browseOverlayCursorCondition(route.orderExpr, cursorOp)
 		args = append(args, route.cursorValue, route.cursorValue, opts.Cursor.LastID)
 	}
-	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
-	return query, append(args, opts.Limit)
+	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction +
+		` LIMIT ?` + browseOffsetClause(opts.Offset)
+	return query, append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
 }
 
 func sqlBrowseOverlayFilesFromMedia(
@@ -2156,8 +2268,8 @@ func browseFilesQuery(
 		query += browseCursorCondition(sortMode)
 		args = append(args, browseCursorArgs(opts.Cursor)...)
 	}
-	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?`
-	return query, append(args, opts.Limit)
+	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?` + browseOffsetClause(opts.Offset)
+	return query, append(append(args, opts.Limit), browseOffsetArgs(opts.Offset)...)
 }
 
 func sqlBrowseFilesFromMedia(
@@ -3066,7 +3178,83 @@ func sqlBrowseDirCount(
 			return max(count-emptied, 0), nil
 		}
 	}
-	return sqlBrowseDirCountFromMedia(ctx, db, opts)
+	count, err := sqlBrowseDirCountFromMedia(ctx, db, opts)
+	if err != nil {
+		return 0, err
+	}
+	dropped, err := sqlHiddenChildDirsInMedia(ctx, db, opts, hidden)
+	if err != nil {
+		return 0, err
+	}
+	return max(count-dropped, 0), nil
+}
+
+// sqlHiddenChildDirsInMedia counts the hidden child folders the Media
+// fallback listing would show and then drop by path. Media counts no folder as
+// hidden, so without this the count and the listing disagree about how many
+// directories there are to page through. The hidden set is small, so this is a
+// few ranged lookups rather than a listing of every sibling.
+func sqlHiddenChildDirsInMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+	hidden *hiddenMedia,
+) (int, error) {
+	names := hidden.hiddenChildDirNames(opts.PathPrefix, opts.Systems)
+	if len(names) == 0 {
+		return 0, nil
+	}
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	dropped := 0
+	for _, name := range names {
+		childPrefix := opts.PathPrefix + name + "/"
+		pathCondition, pathArgs := browsePathPrefixCondition("m.Path", childPrefix)
+		args := append([]any{}, pathArgs...)
+		query := `SELECT DISTINCT s.SystemID
+			FROM ` + browseMediaSource(opts.ExcludeHidden) + ` m
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE m.IsMissing = 0 AND ` + pathCondition
+		if systemClause != "" {
+			query += ` AND ` + systemClause
+			args = append(args, systemArgs...)
+		}
+		systemIDs, err := sqlQueryStrings(ctx, db, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("browse hidden child dir systems: %w", err)
+		}
+		if len(systemIDs) == 0 {
+			continue
+		}
+		// The listing only carries row systems when it filters by system.
+		var rowSystems []string
+		if len(opts.Systems) > 0 {
+			rowSystems = systemIDs
+		}
+		if hiddenDirCovers(hidden.dirs, childPrefix, rowSystems, opts.Systems) {
+			dropped++
+		}
+	}
+	return dropped, nil
+}
+
+func sqlQueryStrings(ctx context.Context, db sqlQueryable, query string, args ...any) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var values []string
+	for rows.Next() {
+		var value string
+		if scanErr := rows.Scan(&value); scanErr != nil {
+			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		values = append(values, value)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("rows: %w", rowsErr)
+	}
+	return values, nil
 }
 
 // sqlEmptiedChildDirCount reports how many immediate child directories hold
@@ -3098,8 +3286,11 @@ func sqlEmptiedChildDirCount(
 		if batchErr != nil {
 			return 0, batchErr
 		}
-		for name, total := range batch {
-			if total-drops[name] <= 0 {
+		for name, child := range batch {
+			// The listing drops a folder hidden by path even when a stale count
+			// still shows something left in it.
+			if child.total-drops[name] <= 0 ||
+				hiddenDirCovers(hidden.dirs, opts.PathPrefix+name+"/", child.systemIDs, opts.Systems) {
 				emptied++
 			}
 		}
@@ -3112,6 +3303,13 @@ func sqlEmptiedChildDirCount(
 // curated library builds a single statement past SQLite's parameter cap.
 const hiddenChildDirNamesPerQuery = 200
 
+// childDirFileCount is one child directory's cached file count and the
+// systems it holds, which decide whether a folder hidden by path covers it.
+type childDirFileCount struct {
+	systemIDs []string
+	total     int
+}
+
 func sqlChildDirFileCounts(
 	ctx context.Context,
 	db sqlQueryable,
@@ -3119,7 +3317,7 @@ func sqlChildDirFileCounts(
 	names []string,
 	systemClause string,
 	systemArgs []any,
-) (map[string]int, error) {
+) (map[string]childDirFileCount, error) {
 	placeholders := make([]string, len(names))
 	args := make([]any, 0, len(names)+len(systemArgs)+1)
 	args = append(args, parentID)
@@ -3127,7 +3325,7 @@ func sqlChildDirFileCounts(
 		placeholders[i] = "?"
 		args = append(args, name)
 	}
-	query := `SELECT d.Name, SUM(c.FileCount)
+	query := `SELECT d.Name, SUM(c.FileCount), GROUP_CONCAT(DISTINCT s.SystemID)
 		FROM BrowseDirCounts c
 		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
 		INNER JOIN Systems s ON c.SystemDBID = s.DBID
@@ -3144,14 +3342,14 @@ func sqlChildDirFileCounts(
 		return nil, fmt.Errorf("browse cache hidden child dir counts: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	counts := make(map[string]int, len(names))
+	counts := make(map[string]childDirFileCount, len(names))
 	for rows.Next() {
-		var name string
+		var name, systemIDs string
 		var total int
-		if scanErr := rows.Scan(&name, &total); scanErr != nil {
+		if scanErr := rows.Scan(&name, &total, &systemIDs); scanErr != nil {
 			return nil, fmt.Errorf("browse cache hidden child dir scan: %w", scanErr)
 		}
-		counts[name] = total
+		counts[name] = childDirFileCount{total: total, systemIDs: splitBrowseSystemIDs(systemIDs)}
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("browse cache hidden child dir rows: %w", rowsErr)
@@ -3344,7 +3542,106 @@ const browseIndexBucketHint = 38
 // When resolveBrowseSortMode picks a filename / rank-prefix / date-prefix
 // ordering, the first-character mapping would not match the displayed order, so
 // the result reports scheme "none" with no buckets.
+//
+// A scope that lists directories ahead of files and has no files to bucket
+// gets the facet of its directories instead; see sqlBrowseDirectoryIndex.
 func sqlBrowseIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	result, err := sqlBrowseFileIndex(ctx, db, opts)
+	if err != nil || !opts.DirectoryFallback || result.TotalFiles > 0 {
+		return result, err
+	}
+	directories, found, err := sqlBrowseDirectoryIndex(ctx, db, opts)
+	if err != nil {
+		return database.BrowseIndexResult{}, err
+	}
+	if !found {
+		return result, nil
+	}
+	return directories, nil
+}
+
+// sqlBrowseDirectoryIndex computes the first-character facet over a scope's
+// directory entries, for a folder whose games are each a folder of their own
+// (most CD systems) and which therefore has no direct files to bucket. found
+// is false when the scope has no directories either.
+//
+// It folds the same listing media.browse pages through rather than a second
+// statement, so a bucket's offset is by construction the position
+// media.browse returns that directory at, with the same system and hidden
+// filtering, whichever of the cache or Media routes answered. Directories are
+// never tag filtered and always ascend by name, whatever sort the files below
+// them use, so neither Tags nor Sort is consulted.
+//
+// The listing comes from BrowseDirCounts on a ready cache, which holds one
+// row per child directory, so this reads as many rows as the folder has
+// directories and none of Media. The fold is done in Go because the listing
+// has four statement shapes (cache, single-system cache, Media, overlay) and
+// hidden rows are subtracted after the read; a folder of game directories is
+// a few hundred to a few thousand names.
+func sqlBrowseDirectoryIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (result database.BrowseIndexResult, found bool, err error) {
+	dirs, err := sqlBrowseDirectoryRows(ctx, db, database.BrowseDirectoriesOptions{
+		ExcludeHidden: opts.ExcludeHidden,
+		PathPrefix:    opts.PathPrefix,
+		Overlay:       opts.Overlay,
+		Systems:       opts.Systems,
+	})
+	if err != nil {
+		return database.BrowseIndexResult{}, false, err
+	}
+	if len(dirs) == 0 {
+		return database.BrowseIndexResult{}, false, nil
+	}
+
+	result = database.BrowseIndexResult{
+		Scheme:      browseIndexSchemeLatin,
+		Directories: true,
+		TotalDirs:   len(dirs),
+		Buckets:     make([]database.BrowseIndexBucket, 0, browseIndexBucketHint),
+	}
+	seen := make(map[string]struct{}, browseIndexBucketHint)
+	for i := range dirs {
+		key := browseDirectoryBucketKey(dirs[i].Name)
+		if last := len(result.Buckets) - 1; last >= 0 && result.Buckets[last].Key == key {
+			result.Buckets[last].Count++
+			continue
+		}
+		if _, repeated := seen[key]; repeated {
+			// The listing is not grouped by first character, so offsets could
+			// not describe contiguous sections. No rail applies.
+			return database.BrowseIndexResult{
+				Scheme:      browseIndexSchemeNone,
+				Directories: true,
+				TotalDirs:   len(dirs),
+			}, true, nil
+		}
+		seen[key] = struct{}{}
+		bucket := database.BrowseIndexBucket{Key: key, Count: 1, Offset: i, AtStart: i == 0}
+		if i > 0 {
+			bucket.AfterDirName = dirs[i-1].Name
+		}
+		result.Buckets = append(result.Buckets, bucket)
+	}
+	return result, true, nil
+}
+
+// browseDirectoryBucketKey folds a directory name into its browse bucket. The
+// directory collation orders by the name with its bracketed metadata removed,
+// so the bucket is taken from that same stripped name: "[T-En]Mario" sorts,
+// and is bucketed, under M.
+func browseDirectoryBucketKey(name string) string {
+	return BrowseNameFirstChar(stripBrowseDirectoryMetadata(name))
+}
+
+// sqlBrowseFileIndex is the facet over a scope's direct media files.
+func sqlBrowseFileIndex(
 	ctx context.Context,
 	db sqlQueryable,
 	opts *database.BrowseIndexOptions,
@@ -3653,6 +3950,18 @@ func sqlBrowseRouteCounts(
 	if err != nil {
 		return nil, err
 	}
+	if !opts.ExcludeHidden {
+		dirs, dirsErr := loadHiddenDirs(ctx, db)
+		if dirsErr != nil {
+			return nil, dirsErr
+		}
+		for route, count := range counts {
+			if hiddenDirCovers(dirs, browseRouteCacheKey(route), count.SystemIDs, opts.Systems) {
+				count.Hidden = true
+				counts[route] = count
+			}
+		}
+	}
 	return applyHiddenToRouteCounts(counts, hidden, opts.Systems), nil
 }
 
@@ -3922,9 +4231,10 @@ func sqlBrowseSystemRootCandidates(
 }
 
 // applyHiddenToRootCandidates drops roots and child directories whose media is
-// entirely hidden. Only subtrees that actually hold hidden media are probed, and
-// the probe stops at the first visible row, so the work scales with the hidden
-// set rather than with the library.
+// entirely hidden. Only subtrees that actually hold hidden media are looked
+// at, and each is answered from the browse cache: what the cache counts under
+// the subtree less what is hidden there. A subtree the cache has no count for
+// is probed row by row instead, which stops at the first visible row.
 func applyHiddenToRootCandidates(
 	ctx context.Context,
 	db sqlQueryable,
@@ -3935,16 +4245,49 @@ func applyHiddenToRootCandidates(
 	if hidden.empty() {
 		return nil
 	}
+	hiddenUnder := make(map[string]int)
+	var prefixes []string
+	consider := func(prefix string) {
+		if _, seen := hiddenUnder[prefix]; seen {
+			return
+		}
+		count := hidden.countUnder(prefix, opts.Systems)
+		hiddenUnder[prefix] = count
+		if count > 0 {
+			prefixes = append(prefixes, prefix)
+		}
+	}
 	for root := range result.HasMedia {
+		consider(browseRouteCacheKey(root))
+	}
+	for root, children := range result.Children {
 		key := browseRouteCacheKey(root)
-		if hidden.countUnder(key, opts.Systems) == 0 {
-			continue
+		for _, name := range children {
+			consider(key + name + "/")
 		}
-		visible, err := sqlAnyVisibleMedia(ctx, db, key, opts.Systems)
-		if err != nil {
-			return err
+	}
+	cached, err := sqlBrowseRouteCountsFromCache(ctx, db, database.BrowseRouteCountsOptions{
+		Routes: prefixes, Systems: opts.Systems,
+	})
+	if err != nil {
+		return err
+	}
+	visible := func(prefix string) (bool, error) {
+		if hiddenUnder[prefix] == 0 {
+			return true, nil
 		}
-		if !visible {
+		if count, ok := cached[prefix]; ok {
+			return count.FileCount > hiddenUnder[prefix], nil
+		}
+		return sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems, hidden)
+	}
+
+	for root := range result.HasMedia {
+		shown, visibleErr := visible(browseRouteCacheKey(root))
+		if visibleErr != nil {
+			return visibleErr
+		}
+		if !shown {
 			delete(result.HasMedia, root)
 		}
 	}
@@ -3952,17 +4295,13 @@ func applyHiddenToRootCandidates(
 		key := browseRouteCacheKey(root)
 		kept := children[:0]
 		for _, name := range children {
-			prefix := key + name + "/"
-			if hidden.countUnder(prefix, opts.Systems) > 0 {
-				visible, err := sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems)
-				if err != nil {
-					return err
-				}
-				if !visible {
-					continue
-				}
+			shown, visibleErr := visible(key + name + "/")
+			if visibleErr != nil {
+				return visibleErr
 			}
-			kept = append(kept, name)
+			if shown {
+				kept = append(kept, name)
+			}
 		}
 		result.Children[root] = kept
 	}

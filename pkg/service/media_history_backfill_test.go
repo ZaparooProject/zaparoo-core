@@ -107,6 +107,7 @@ func TestMediaHistoryIdentitySweep_EnrichesAndCompletesDespiteUnresolvableRows(t
 
 	runMediaHistoryIdentitySweep(
 		context.Background(),
+		nil,
 		&database.Database{UserDB: userDB, MediaDB: mediaDB},
 		nil,
 		func() { syncRequests++ },
@@ -116,6 +117,45 @@ func TestMediaHistoryIdentitySweep_EnrichesAndCompletesDespiteUnresolvableRows(t
 
 	assert.Equal(t, 1, syncRequests, "sync requested once per batch, not per row")
 	userDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", int64(11), mock.Anything)
+	userDB.AssertExpectations(t)
+	mediaDB.AssertExpectations(t)
+}
+
+// Plays recorded before unindexed files got an identity (Operator cartridge
+// dumps) are filled in by the sweep with the identity the indexer would give.
+func TestMediaHistoryIdentitySweep_FillsUnindexedFileWithScannerIdentity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "MEGAMAN X.sfc")
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+	userDB.On(
+		"GetMediaHistoryIdentityBackfillBatch",
+		int64(0), database.CurrentMediaIdentityPolicyVersion, mediaHistoryIdentityBackfillBatchSize,
+	).Return([]database.MediaHistoryEntry{{DBID: 12, SystemID: "SNES", MediaPath: path}}, nil).Once()
+	mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+		Return([]database.SearchResult{}, nil).Once()
+	userDB.On("UpdateMediaHistoryIdentity", int64(12), mock.MatchedBy(
+		func(identity *database.MediaIdentity) bool {
+			return identity != nil && identity.CanonicalSystemID == "SNES" &&
+				identity.DisplayName == "MEGAMAN X" && identity.ObservationFingerprint != ""
+		},
+	)).Return(true, nil).Once()
+	userDB.On(
+		"SetDeviceState",
+		database.DeviceStateKeyMediaHistoryIdentitySweep, mediaHistoryIdentitySweepMarker(mediaDB),
+	).Return(nil).Once()
+	syncRequests := 0
+
+	runMediaHistoryIdentitySweep(
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+		nil, func() { syncRequests++ }, 0, testRetryDelays,
+	)
+
+	assert.Equal(t, 1, syncRequests)
 	userDB.AssertExpectations(t)
 	mediaDB.AssertExpectations(t)
 }
@@ -130,7 +170,7 @@ func TestMediaHistoryIdentitySweep_SkipsTableWalkWhenMarkerCurrent(t *testing.T)
 		Return(mediaHistoryIdentitySweepMarker(mediaDB), true, nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
@@ -151,7 +191,7 @@ func TestMediaHistoryIdentitySweep_DefersWhileMediaUpdating(t *testing.T) {
 		Return("", false, nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
@@ -174,7 +214,7 @@ func TestMediaHistoryIdentitySweep_DefersWhileOptimizing(t *testing.T) {
 		Return("", false, nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
@@ -220,7 +260,7 @@ func TestMediaHistoryIdentitySweep_TreatsStatusReadFailuresAsUnsettled(t *testin
 				Return("", false, nil).Once()
 
 			runMediaHistoryIdentitySweep(
-				context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB},
+				context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 				nil, nil, 0, testRetryDelays,
 			)
 
@@ -250,7 +290,7 @@ func TestMediaHistoryIdentitySweep_SweepsWhenMarkerUnreadable(t *testing.T) {
 	).Return(nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertExpectations(t)
@@ -266,15 +306,15 @@ func TestMediaHistoryIdentitySweepMarker_FallsBackWithoutIndexTime(t *testing.T)
 
 	unreadable := testhelpers.NewMockMediaDBI()
 	unreadable.On("GetLastGenerated").Return(time.Time{}, errors.New("database busy"))
-	assert.Equal(t, current+":0", mediaHistoryIdentitySweepMarker(unreadable))
+	assert.Equal(t, current+":0:"+mediaHistoryIdentitySweepRevision, mediaHistoryIdentitySweepMarker(unreadable))
 
 	neverIndexed := testhelpers.NewMockMediaDBI()
 	neverIndexed.On("GetLastGenerated").Return(time.Time{}, nil)
-	assert.Equal(t, current+":0", mediaHistoryIdentitySweepMarker(neverIndexed))
+	assert.Equal(t, current+":0:"+mediaHistoryIdentitySweepRevision, mediaHistoryIdentitySweepMarker(neverIndexed))
 
 	indexed := testhelpers.NewMockMediaDBI()
 	indexed.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
-	assert.Equal(t, current+":1754000000", mediaHistoryIdentitySweepMarker(indexed))
+	assert.Equal(t, current+":1754000000:"+mediaHistoryIdentitySweepRevision, mediaHistoryIdentitySweepMarker(indexed))
 }
 
 // Every failure that stops a pass short must leave the marker unwritten, so
@@ -326,7 +366,7 @@ func TestMediaHistoryIdentitySweep_AbortsWithoutMarkerOnFailure(t *testing.T) {
 			tt.stub(userDB, mediaDB)
 
 			runMediaHistoryIdentitySweep(
-				context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB},
+				context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 				nil, nil, 0, testRetryDelays,
 			)
 
@@ -359,7 +399,7 @@ func TestMediaHistoryIdentitySweep_AbortsWhenMediaUpdateStartsMidSweep(t *testin
 		Return([]database.SearchResult{}, nil)
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNumberOfCalls(t, "GetMediaHistoryIdentityBackfillBatch", 1)
@@ -417,7 +457,7 @@ func TestMediaHistoryIdentitySweep_StopsPromptlyOnCancellation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				runMediaHistoryIdentitySweep(
-					ctx, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+					ctx, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 					nil, nil, tt.batchDelay, testRetryDelays,
 				)
 				close(done)
@@ -451,7 +491,7 @@ func TestMediaHistoryIdentitySweep_ToleratesMarkerWriteFailure(t *testing.T) {
 		Return(errors.New("database is locked")).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertExpectations(t)
@@ -479,7 +519,7 @@ func TestMediaHistoryIdentitySweep_TransientFailureAbortsWithoutMarker(t *testin
 		Times(len(testRetryDelays) + 1)
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+		context.Background(), nil, &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
@@ -522,6 +562,7 @@ func TestMediaHistoryIdentitySweep_AbortAfterUpdateStillRequestsSync(t *testing.
 
 	runMediaHistoryIdentitySweep(
 		context.Background(),
+		nil,
 		&database.Database{UserDB: userDB, MediaDB: mediaDB},
 		nil,
 		func() { syncRequests++ },
@@ -551,7 +592,7 @@ func TestWatchMediaHistoryBackfill_ReturnsWithoutDatabases(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				watchMediaHistoryBackfillAtInterval(
-					context.Background(), nil, db, nil, nil, time.Hour, time.Hour, 0,
+					context.Background(), nil, nil, db, nil, nil, time.Hour, time.Hour, 0,
 				)
 				close(done)
 			}()
@@ -598,7 +639,7 @@ func TestWatchMediaHistoryBackfill_SweepsOnPollInterval(t *testing.T) {
 	go func() {
 		// No startup trigger and no notifications: only the ticker can fire.
 		watchMediaHistoryBackfillAtInterval(
-			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, b, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			nil, nil, time.Hour, 10*time.Millisecond, 0,
 		)
 		close(done)
@@ -648,7 +689,7 @@ func TestWatchMediaHistoryBackfill_SweepsOnIndexingNotification(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		watchMediaHistoryBackfillAtInterval(
-			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, b, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			nil, nil, time.Hour, time.Hour, 0,
 		)
 		close(done)
@@ -708,7 +749,7 @@ func TestWatchMediaHistoryBackfill_StartupSweepAndUUIDBackfillSync(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		watchMediaHistoryBackfillAtInterval(
-			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, b, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			nil, func() { syncRequests <- struct{}{} },
 			10*time.Millisecond, time.Hour, 0,
 		)
@@ -764,7 +805,7 @@ func TestWatchMediaHistoryBackfill_RetriesUUIDBackfillUntilSuccess(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		watchMediaHistoryBackfillAtInterval(
-			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, b, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			nil, func() { syncRequests <- struct{}{} }, time.Hour, time.Hour, 0,
 		)
 		close(done)
@@ -824,7 +865,7 @@ func TestMediaHistoryIdentitySweep_StopsWhilePausedForGameplay(t *testing.T) {
 	go func() {
 		defer close(done)
 		runMediaHistoryIdentitySweep(
-			ctx, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			pauser, nil, 0, testRetryDelays,
 		)
 	}()
@@ -874,7 +915,7 @@ func TestWatchMediaHistoryBackfill_StopsWhenBrokerCloses(t *testing.T) {
 	go func() {
 		defer close(done)
 		watchMediaHistoryBackfillAtInterval(
-			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			ctx, b, nil, &database.Database{UserDB: userDB, MediaDB: mediaDB},
 			nil, nil, time.Hour, 20*time.Millisecond, 0,
 		)
 	}()

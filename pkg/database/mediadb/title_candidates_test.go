@@ -868,6 +868,7 @@ func TestTitleCandidatesSQLReadsAreBatched(t *testing.T) {
 	db.sql.Store(conn)
 	mockDB.ExpectQuery("SELECT DBID FROM Systems").WithArgs("NES").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	expectNoHiddenDirectories(mockDB)
 	columns := []string{"DBID", "Name", "Slug", "SecondarySlug"}
 	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(columns)) // exact pass
 	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(columns)) // bare-prefix pass
@@ -879,7 +880,8 @@ func TestTitleCandidatesSQLReadsAreBatched(t *testing.T) {
 	got, err := db.TitleCandidates(context.Background(), "NES", "Mario", 5)
 	require.NoError(t, err)
 	require.Len(t, got, 5)
-	require.NoError(t, mockDB.ExpectationsWereMet(), "one system read and three title queries, not per-candidate reads")
+	require.NoError(t, mockDB.ExpectationsWereMet(),
+		"one system read, one hidden folder read and three title queries, not per-candidate reads")
 }
 
 func TestTitleCandidatesStreamErrorDiscardsPartialResults(t *testing.T) {
@@ -890,6 +892,7 @@ func TestTitleCandidatesStreamErrorDiscardsPartialResults(t *testing.T) {
 	db := &MediaDB{}
 	db.sql.Store(conn)
 	mockDB.ExpectQuery("SELECT DBID FROM Systems").WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	expectNoHiddenDirectories(mockDB)
 	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(
 		[]string{"DBID", "Name", "Slug", "SecondarySlug"}).
 		AddRow(1, "Mario", "mario", "").AddRow(2, "Mario", "mario", "").RowError(1, context.Canceled))

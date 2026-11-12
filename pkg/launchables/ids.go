@@ -36,6 +36,7 @@ var (
 	MisterOtherTamagotchi    = uuid.MustParse("ee9f97fb-df75-460a-82af-13ed03c3deb5")
 	MisterOtherSonicMania    = uuid.MustParse("02abc813-464d-4c7c-8feb-5d11411b959c")
 	MisterOtherQuake         = uuid.MustParse("c483707b-deb9-4f9b-8414-7fd45717fa7f")
+	MisterOtherGroovy        = uuid.MustParse("df74dc72-9558-4226-841d-2ab1d2400c9c")
 	MisterArcadeThirdStrike  = uuid.MustParse("618433aa-0e8b-4230-800e-ec33758affb7")
 	MisterGenesisPaprium     = uuid.MustParse("b97b6512-01ac-4685-94c9-96264ee86f01")
 	MisterConsoleMMS2Gameboy = uuid.MustParse("c25b1083-e180-4cad-83f8-ad34c1598b4d")

@@ -25,6 +25,7 @@
 package inbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -148,7 +150,14 @@ func (s *Service) Add(title string, opts ...MessageOption) error {
 
 	inserted, err := s.db.AddInboxMessage(msg)
 	if err != nil {
-		log.Error().Err(err).Str("title", title).Msg("failed to add inbox message")
+		// The caller logs the returned error too, so this line only adds the
+		// title. A cancelled write is shutdown overtaking the message, and a
+		// failing disk is the device's storage; anything else is a fault.
+		level := database.StorageFailureLevel(err)
+		if errors.Is(err, context.Canceled) {
+			level = zerolog.DebugLevel
+		}
+		log.WithLevel(level).Err(err).Str("title", title).Msg("failed to add inbox message")
 		return fmt.Errorf("failed to add inbox message: %w", err)
 	}
 

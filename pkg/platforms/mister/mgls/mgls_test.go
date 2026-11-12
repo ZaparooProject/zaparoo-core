@@ -27,9 +27,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -277,6 +279,62 @@ func TestLaunchFileErrorClassification(t *testing.T) {
 	}
 }
 
+// TestLaunchFileRejectsEntryInsideZip verifies an MGL, MRA or RBF inside a zip,
+// which MiSTer Main cannot load, fails as media no launcher can run without
+// writing to the command interface. A real directory named like a zip is
+// still loaded.
+func TestLaunchFileRejectsEntryInsideZip(t *testing.T) {
+	t.Parallel()
+
+	for _, ext := range []string{".mgl", ".MRA", ".rbf"} {
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+
+			// Stat through a zip file fails with ENOTDIR, as on the device.
+			fs := launchStatErrorFS{Fs: afero.NewMemMapFs(), err: syscall.ENOTDIR}
+			path := filepath.Join("media", "fat", "games", "X68000", "Final Fight.zip", "X68000", "Final Fight"+ext)
+
+			var command bytes.Buffer
+			err := launchFile(fs, &command, path, true)
+
+			require.ErrorIs(t, err, ErrLaunchFileInZip)
+			require.ErrorIs(t, err, helpers.ErrNoLauncher)
+			require.NotErrorIs(t, err, syscall.ENOTDIR)
+			assert.True(t, zapscript.IsExpectedRunError(err))
+			assert.Empty(t, command.String())
+		})
+	}
+
+	t.Run("other failure under a zip-named directory", func(t *testing.T) {
+		t.Parallel()
+
+		fs := launchStatErrorFS{Fs: afero.NewMemMapFs(), err: os.ErrPermission}
+		path := filepath.Join("media", "fat", "games", "Pack.zip", "game.mgl")
+
+		var command bytes.Buffer
+		err := launchFile(fs, &command, path, true)
+
+		require.ErrorIs(t, err, os.ErrPermission)
+		require.NotErrorIs(t, err, ErrLaunchFileInZip)
+		assert.Empty(t, command.String())
+	})
+
+	t.Run("directory named like a zip", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		path := filepath.Join("media", "fat", "games", "Pack.zip", "game.mgl")
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
+
+		var command bytes.Buffer
+		err := launchFile(fs, &command, path, true)
+
+		require.NoError(t, err)
+		assert.Equal(t, "load_core "+path+"\n", command.String())
+	})
+}
+
 func TestLaunchGeneratedFileMissingIsUnexpected(t *testing.T) {
 	t.Parallel()
 
@@ -351,10 +409,13 @@ func TestCommandInterfaceWriter(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, misterconfig.CmdInterface, nil, 0o600))
 		command := []byte("load_core " + filepath.Join("media", "fat", "game.mgl") + "\n")
 
+		before := LoadsSent()
 		n, err := newCommandInterfaceWriter(fs).Write(command)
 
 		require.NoError(t, err)
 		require.Equal(t, len(command), n)
+		// Other tests can launch at the same time, so only growth is certain.
+		require.Greater(t, LoadsSent(), before)
 		got, err := afero.ReadFile(fs, misterconfig.CmdInterface)
 		require.NoError(t, err)
 		require.Equal(t, command, got)
@@ -363,15 +424,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("open failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return nil, assert.AnError
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed open sends nothing")
 		require.ErrorContains(t, err, "failed to open command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})
@@ -379,15 +443,18 @@ func TestCommandInterfaceWriter(t *testing.T) {
 	t.Run("write failure", func(t *testing.T) {
 		t.Parallel()
 
+		var sent atomic.Uint64
 		writer := commandInterfaceWriter{
 			open: func() (io.WriteCloser, error) {
 				return errorWriteCloser{err: assert.AnError}, nil
 			},
+			sent: &sent,
 		}
 
 		n, err := writer.Write([]byte("command"))
 
 		require.Zero(t, n)
+		require.Zero(t, sent.Load(), "a failed write sends nothing")
 		require.ErrorContains(t, err, "write command interface")
 		require.ErrorIs(t, err, assert.AnError)
 	})
@@ -788,4 +855,105 @@ func TestGenerateMgl_NeoGeoNeoMatchesZip(t *testing.T) {
 			"</mistergamedescription>"
 		assert.Equal(t, want, mgl, path)
 	}
+}
+
+// MGLs come from MiSTer and third-party scripts, so callers need to tell a
+// file that does not decode apart from one they could not read at all.
+func TestReadMglMalformed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tests := map[string]string{
+		"truncated": "<mistergamedescription>\n\t<rbf>_Console/SNES</rbf>\n\t<file",
+		"mra xml":   "<misterromdescription><name>Pooyan</name></misterromdescription>",
+	}
+	for name, content := range tests {
+		path := filepath.Join(dir, name+".mgl")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		_, err := ReadMgl(path)
+		require.ErrorIs(t, err, ErrMalformedMGL, name)
+	}
+
+	_, err := ReadMgl(filepath.Join(dir, "missing.mgl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.NotErrorIs(t, err, ErrMalformedMGL)
+}
+
+func TestBuildLaunchMglNamesExactReleaseRBF(t *testing.T) {
+	t.Parallel()
+
+	rbf := func(name string) cores.RBFInfo {
+		return cores.RBFInfo{
+			Path:      "/media/fat/_Console/" + name + ".rbf",
+			Filename:  name + ".rbf",
+			ShortName: "PSX",
+			MglName:   "_Console/PSX",
+		}
+	}
+	unstable := cores.RBFInfo{
+		Path:      "/media/fat/_Console/PSX_unstable_20250101_abc123.rbf",
+		Filename:  "PSX_unstable_20250101_abc123.rbf",
+		ShortName: "PSX_unstable_20250101_abc123",
+		MglName:   "_Console/PSX_unstable_20250101_abc123",
+	}
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{rbf("PSX_20240101"), rbf("PSX_20241010"), unstable})
+
+	system, err := cores.GetCore("PSX")
+	require.NoError(t, err)
+	mgl, err := buildLaunchMgl(nil, cache, system, "/media/fat/games/PSX/game.cue", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/PSX_20241010</rbf>")
+}
+
+func TestBuildLaunchMglErrors(t *testing.T) {
+	t.Parallel()
+
+	nes, err := cores.GetCore("NES")
+	require.NoError(t, err)
+
+	t.Run("core not installed", func(t *testing.T) {
+		t.Parallel()
+		_, err := buildLaunchMgl(nil, &cores.RBFCache{}, nes, "/media/fat/games/NES/game.nes", nil)
+		require.ErrorContains(t, err, "resolving core RBF")
+	})
+
+	t.Run("no slot for file", func(t *testing.T) {
+		t.Parallel()
+		cache := &cores.RBFCache{}
+		cache.BuildFromRBFs([]cores.RBFInfo{{
+			Path:      "/media/fat/_Console/NES_20241010.rbf",
+			Filename:  "NES_20241010.rbf",
+			ShortName: "NES",
+			MglName:   "_Console/NES",
+		}})
+		_, err := buildLaunchMgl(nil, cache, nes, "/media/fat/games/NES/game.sfc", nil)
+		require.ErrorContains(t, err, "failed to generate MGL")
+	})
+}
+
+func TestBuildLaunchMglAppliesSystemHook(t *testing.T) {
+	t.Parallel()
+
+	neoGeo, err := cores.GetCore("NeoGeo")
+	require.NoError(t, err)
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs([]cores.RBFInfo{{
+		Path:      "/media/fat/_Console/NeoGeo_20241010.rbf",
+		Filename:  "NeoGeo_20241010.rbf",
+		ShortName: "NeoGeo",
+		MglName:   "_Console/NeoGeo",
+	}})
+
+	mgl, err := buildLaunchMgl(nil, cache, neoGeo, "/media/fat/games/NeoGeo/mslug.zip", nil)
+	require.NoError(t, err)
+	assert.Contains(t, mgl, "<rbf>_Console/NeoGeo_20241010</rbf>")
+	assert.Contains(t, mgl, `path="../../../../../media/fat/games/NeoGeo/mslug.zip"`)
+}
+
+func TestLaunchTempMglReportsMissingCore(t *testing.T) {
+	t.Parallel()
+
+	err := launchTempMgl(nil, &cores.Core{ID: "NotInstalled", RBF: "_Console/NotInstalled"}, "", nil)
+	require.ErrorContains(t, err, "resolving core RBF")
 }

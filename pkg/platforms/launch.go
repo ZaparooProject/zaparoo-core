@@ -23,17 +23,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -185,7 +187,13 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// starting anything, so it must leave the running media alone.
 	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" &&
 		!IsActionDetails(params.Options.Action) {
+		// Recorded before the stop so a clear that lands late is still
+		// labelled as the replacement it is.
+		cancelStop := params.Options.RecordStop(models.MediaStopReasonReplaced)
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
+			// Nothing was stopped, so media still running must not be
+			// labelled as replaced if it exits by itself later.
+			cancelStop()
 			// A confirmed stop failure means the previous media is still
 			// running. Launching anyway would leave two games going at once
 			// and Core tracking only the second, so abort instead.
@@ -244,9 +252,18 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		log.Debug().Msg("skipping ActiveMedia for details action")
 		return nil
 	}
+	if params.Launcher.NoActiveMedia {
+		log.Debug().Msg("skipping ActiveMedia - launcher does not start media")
+		return nil
+	}
 	if params.Launcher.Lifecycle == LifecycleExternal {
 		log.Debug().Msg("deferring ActiveMedia to external platform lifecycle tracker")
 		return nil
+	}
+
+	publishedPath := params.Path
+	if params.Options.LaunchedPath != "" {
+		publishedPath = params.Options.LaunchedPath
 	}
 
 	// Look up the indexed display name from MediaDB. SearchMediaPathExact
@@ -254,17 +271,31 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// SystemID has nothing to scope the search to, so displayName stays the
 	// filename-parsed fallback in that case, same as before.
 	systemID := params.Launcher.SystemID
-	displayName := tags.ParseTitleFromFilename(getDisplayName(params.Path), false)
+	mediaType := slugs.MediaTypeGame
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+	displayName := tags.ParseTitleFromFilenameForMedia(getDisplayName(publishedPath), false, mediaType)
 
 	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
 		ctx, cancel := activeMediaLookupContext(params.Context)
 		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(
-			ctx, []systemdefs.System{{ID: systemID}}, params.Path,
+			ctx, []systemdefs.System{{ID: systemID}}, publishedPath,
 		)
 		cancel()
 		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
 			displayName = results[0].Name
 		}
+	}
+
+	if params.Options != nil && params.Options.AudioStream.Name() != "" {
+		displayName = params.Options.AudioStream.Name()
+	} else if _, _, track := audio.SplitTrackPath(publishedPath); track {
+		// One track of a multi-track file is named for the file, not for
+		// its track number.
+		displayName = audioDisplayName(publishedPath)
+	} else if displayName == "" {
+		displayName = urlHost(publishedPath)
 	}
 
 	if systemID == "" {
@@ -280,19 +311,12 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	activeMedia := models.NewActiveMedia(
 		systemID,
 		systemMeta.Name,
-		params.Path,
+		publishedPath,
 		displayName,
 		params.Launcher.ID,
 	)
 
-	if len(params.Launcher.Controls) > 0 {
-		caps := make([]string, 0, len(params.Launcher.Controls))
-		for action := range params.Launcher.Controls {
-			caps = append(caps, action)
-		}
-		sort.Strings(caps)
-		activeMedia.LauncherControls = caps
-	}
+	activeMedia.LauncherControls = ControlNames(params.Launcher)
 
 	log.Info().Msgf(
 		"DoLaunch setting ActiveMedia: SystemID='%s', SystemName='%s', Path='%s', Name='%s', LauncherID='%s'",
@@ -333,4 +357,17 @@ func waitForBlockingProcess(
 
 	setActiveMedia(nil)
 	log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+}
+
+// urlHost is the host of a URL, which names media whose URL has no path to
+// name it by, or "" when path is not a URL.
+func urlHost(path string) string {
+	if !strings.Contains(path, "://") {
+		return ""
+	}
+	u, err := url.Parse(path)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

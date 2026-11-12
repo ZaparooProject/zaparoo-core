@@ -22,6 +22,7 @@ package platforms
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,12 +47,16 @@ type fakePlayback struct {
 	resumeErr error
 	toggleErr error
 	seekErr   error
+	skipErr   error
 
 	lastCall   string
 	lastSlot   string
 	lastPath   string
 	lastOpts   audio.PlaybackOptions
+	state      audio.PlaybackState
 	lastOffset time.Duration
+	lastVolume float64
+	lastSkip   int
 }
 
 func (f *fakePlayback) Play(slot, path string, opts audio.PlaybackOptions) error {
@@ -79,20 +84,30 @@ func (f *fakePlayback) TogglePause(slot string) error {
 	return f.toggleErr
 }
 
+func (f *fakePlayback) SkipTrack(slot string, delta int) error {
+	f.lastCall, f.lastSlot, f.lastSkip = "skip", slot, delta
+	return f.skipErr
+}
+
 func (f *fakePlayback) Seek(slot string, offset time.Duration) error {
 	f.lastCall, f.lastSlot, f.lastOffset = "seek", slot, offset
 	return f.seekErr
 }
 
-func (*fakePlayback) State(_ string) audio.PlaybackState {
-	return audio.PlaybackState{}
+func (f *fakePlayback) SetVolume(slot string, volume float64) error {
+	f.lastCall, f.lastSlot, f.lastVolume = "volume", slot, volume
+	return nil
+}
+
+func (f *fakePlayback) State(_ string) audio.PlaybackState {
+	return f.state
 }
 
 // --- launchNativeAudio ---
 
 func TestLaunchNativeAudio_NilPlayback(t *testing.T) {
 	t.Parallel()
-	_, err := launchNativeAudio(nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
+	_, err := launchNativeAudio(nil, nil, nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
 }
@@ -100,8 +115,7 @@ func TestLaunchNativeAudio_NilPlayback(t *testing.T) {
 func TestLaunchNativeAudio_BadSlot(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	_, err := launchNativeAudio(
-		fp, nil, nil,
+	_, err := launchNativeAudio(fp, nil, nil, nil, nil,
 		filepath.Join("Music", "file.mp3"),
 		&LaunchOptions{Slot: "badvalue"},
 	)
@@ -112,7 +126,7 @@ func TestLaunchNativeAudio_BadSlot(t *testing.T) {
 func TestLaunchNativeAudio_NilOptsDefaultsPrimary(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	proc, err := launchNativeAudio(fp, nil, nil, filepath.Join("Music", "file.mp3"), nil)
+	proc, err := launchNativeAudio(fp, nil, nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
 	require.NoError(t, err)
 	assert.Nil(t, proc)
 	assert.Equal(t, "play", fp.lastCall)
@@ -126,27 +140,46 @@ func TestLaunchNativeAudio_VolumeFromConfig(t *testing.T) {
 	cfg.SetAudioVolume(50)
 
 	fp := &fakePlayback{}
-	_, err = launchNativeAudio(fp, nil, cfg, filepath.Join("Music", "file.mp3"), nil)
+	_, err = launchNativeAudio(fp, nil, nil, nil, cfg, filepath.Join("Music", "file.mp3"), nil)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.5, fp.lastOpts.Volume, 1e-9)
 }
 
-func TestLaunchNativeAudio_VolumeZeroDefaultsTo1(t *testing.T) {
+func TestLaunchNativeAudio_VolumeZeroIsSilent(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 	cfg.SetAudioVolume(0)
 
 	fp := &fakePlayback{}
-	_, err = launchNativeAudio(fp, nil, cfg, filepath.Join("Music", "file.mp3"), nil)
+	_, err = launchNativeAudio(fp, nil, nil, nil, cfg, filepath.Join("Music", "file.mp3"), nil)
 	require.NoError(t, err)
-	assert.InDelta(t, 1.0, fp.lastOpts.Volume, 1e-9)
+	assert.Zero(t, fp.lastOpts.Volume)
+}
+
+func TestLaunchNativeAudio_MusicVolumeOverridesAudioVolume(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetAudioVolume(50)
+	cfg.SetAudioMusicVolume(150)
+
+	fp := &fakePlayback{}
+	_, err = launchNativeAudio(fp, nil, nil, nil, cfg, filepath.Join("Music", "file.mp3"),
+		&LaunchOptions{Slot: mediaslot.Background})
+	require.NoError(t, err)
+	assert.InDelta(t, 1.5, fp.lastOpts.Volume, 1e-9)
+
+	cfg.SetAudioMusicVolume(0)
+	_, err = launchNativeAudio(fp, nil, nil, nil, cfg, filepath.Join("Music", "file.mp3"), nil)
+	require.NoError(t, err)
+	assert.Zero(t, fp.lastOpts.Volume, "a music volume of 0 is silent in the primary slot too")
 }
 
 func TestLaunchNativeAudio_NilCfgVolumeDefaultsTo1(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	_, err := launchNativeAudio(fp, nil, nil, filepath.Join("Music", "file.mp3"), nil)
+	_, err := launchNativeAudio(fp, nil, nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
 	require.NoError(t, err)
 	assert.InDelta(t, 1.0, fp.lastOpts.Volume, 1e-9)
 }
@@ -154,7 +187,7 @@ func TestLaunchNativeAudio_NilCfgVolumeDefaultsTo1(t *testing.T) {
 func TestLaunchNativeAudio_PlayError(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{playErr: errors.New("device busy")}
-	_, err := launchNativeAudio(fp, nil, nil, filepath.Join("Music", "file.mp3"), nil)
+	_, err := launchNativeAudio(fp, nil, nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "play native audio")
 	assert.Contains(t, err.Error(), "device busy")
@@ -167,8 +200,7 @@ func TestLaunchNativeAudio_BackgroundCallsSetter(t *testing.T) {
 	var gotMedia *models.ActiveMedia
 	setter := func(m *models.ActiveMedia) { gotMedia = m }
 
-	proc, err := launchNativeAudio(
-		fp, setter, nil, path,
+	proc, err := launchNativeAudio(fp, setter, nil, nil, nil, path,
 		&LaunchOptions{Slot: mediaslot.Background},
 	)
 	require.NoError(t, err)
@@ -180,14 +212,29 @@ func TestLaunchNativeAudio_BackgroundCallsSetter(t *testing.T) {
 	assert.Equal(t, path, gotMedia.Path)
 }
 
+func TestNativeAudioLauncher_BackgroundMediaCarriesControls(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	var gotMedia *models.ActiveMedia
+	launcher := NativeAudioLauncher(fp, func(m *models.ActiveMedia) { gotMedia = m }, nil, nil)
+
+	_, err := launcher.Launch(nil, filepath.Join("Music", "track.mp3"), &LaunchOptions{Slot: mediaslot.Background})
+	require.NoError(t, err)
+	require.NotNil(t, gotMedia)
+	assert.Equal(t, ControlNames(&launcher), gotMedia.LauncherControls)
+	assert.ElementsMatch(t, []string{
+		ControlFastForward, ControlNext, ControlPause, ControlPrevious, ControlResume, ControlRewind,
+		ControlStop, ControlTogglePause,
+	}, gotMedia.LauncherControls)
+}
+
 func TestLaunchNativeAudio_PrimarySlotSkipsSetter(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
 	called := false
 	setter := func(*models.ActiveMedia) { called = true }
 
-	_, err := launchNativeAudio(
-		fp, setter, nil,
+	_, err := launchNativeAudio(fp, setter, nil, nil, nil,
 		filepath.Join("Music", "track.mp3"),
 		&LaunchOptions{Slot: mediaslot.Primary},
 	)
@@ -198,7 +245,7 @@ func TestLaunchNativeAudio_PrimarySlotSkipsSetter(t *testing.T) {
 func TestLaunchNativeAudio_ReturnsNilProcess(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	proc, err := launchNativeAudio(fp, nil, nil, filepath.Join("Music", "file.mp3"), nil)
+	proc, err := launchNativeAudio(fp, nil, nil, nil, nil, filepath.Join("Music", "file.mp3"), nil)
 	require.NoError(t, err)
 	assert.Nil(t, proc)
 }
@@ -523,7 +570,7 @@ func TestAudioDisplayName(t *testing.T) {
 func TestNativeAudioLauncher_Fields(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	l := NativeAudioLauncher(fp, nil, nil)
+	l := NativeAudioLauncher(fp, nil, nil, nil)
 
 	assert.Equal(t, NativeAudioLauncherID, l.ID)
 	assert.Equal(t, "Audio", l.SystemID)
@@ -546,6 +593,26 @@ func TestNativeAudioLauncher_Fields(t *testing.T) {
 	}
 }
 
+// A track of a multi-track file is not on disk, so the launcher must vouch
+// for it to the launch lookup, and only for tracks the file has.
+func TestNativeAudioLauncher_VouchesForTrackPaths(t *testing.T) {
+	t.Parallel()
+	nsf := make([]byte, 0x80+1)
+	copy(nsf, "NESM\x1a")
+	nsf[5], nsf[6], nsf[7] = 1, 3, 1
+	nsf[0x09], nsf[0x0B], nsf[0x0D] = 0x80, 0x80, 0x80
+	file := filepath.Join(t.TempDir(), "game.nsf")
+	require.NoError(t, os.WriteFile(file, nsf, 0o600))
+
+	l := NativeAudioLauncher(&fakePlayback{}, nil, nil, nil)
+	require.NotNil(t, l.VirtualPathExists)
+	assert.True(t, l.VirtualPathExists(nil, filepath.Join(file, "1")))
+	assert.True(t, l.VirtualPathExists(nil, filepath.Join(file, "3")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(file, "4")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(file, "0")))
+	assert.False(t, l.VirtualPathExists(nil, filepath.Join(filepath.Dir(file), "missing.nsf", "1")))
+}
+
 // TestNativeAudioLauncher_StopControlRunsThroughHook checks the factory wires the
 // stop hook to stop and nothing else. Native audio has no OS process, so without it
 // an explicit stop leaves the daemon reporting the track as still playing.
@@ -556,7 +623,7 @@ func TestNativeAudioLauncher_StopControlRunsThroughHook(t *testing.T) {
 	l := NativeAudioLauncher(fp, nil, func(_ context.Context, stop func() error) error {
 		hookCalls++
 		return stop()
-	})
+	}, nil)
 
 	err := l.Controls[ControlPause].Func(context.Background(), nil, ControlParams{})
 	require.NoError(t, err)
@@ -575,7 +642,7 @@ func TestNativeAudioLauncher_BackgroundStopClearsBackgroundMedia(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
 	var current *models.ActiveMedia
-	l := NativeAudioLauncher(fp, func(m *models.ActiveMedia) { current = m }, nil)
+	l := NativeAudioLauncher(fp, func(m *models.ActiveMedia) { current = m }, nil, nil)
 
 	_, err := l.Launch(nil, "/music/track.mp3", &LaunchOptions{Slot: mediaslot.Background})
 	require.NoError(t, err)
@@ -586,4 +653,51 @@ func TestNativeAudioLauncher_BackgroundStopClearsBackgroundMedia(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Nil(t, current)
+}
+
+func TestLaunchNativeAudio_PrimaryResumesWherePlaybackGot(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	path := filepath.Join("Music", "book.mp3")
+	var asked string
+	resumeAt := func(p string) (time.Duration, time.Duration) {
+		asked = p
+		return 90 * time.Second, time.Hour
+	}
+
+	_, err := launchNativeAudio(fp, nil, resumeAt, nil, nil, path, nil)
+	require.NoError(t, err)
+	assert.Equal(t, path, asked)
+	assert.Equal(t, 90*time.Second, fp.lastOpts.StartAt)
+	assert.Equal(t, time.Hour, fp.lastOpts.StartAtDuration)
+}
+
+func TestLaunchNativeAudio_BackgroundNeverResumes(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	resumeAt := func(string) (time.Duration, time.Duration) {
+		t.Fatal("background tracks are never resumed")
+		return 0, 0
+	}
+
+	_, err := launchNativeAudio(fp, nil, resumeAt, nil, nil, filepath.Join("Music", "track.mp3"),
+		&LaunchOptions{Slot: mediaslot.Background})
+	require.NoError(t, err)
+	assert.Zero(t, fp.lastOpts.StartAt)
+}
+
+// A stream is named by the last part of its path, or by its host when the
+// path names nothing.
+func TestAudioDisplayName_Streams(t *testing.T) {
+	t.Parallel()
+	soma := tags.ParseTitleFromFilename("groovesalad-128-mp3", false)
+	tests := map[string]string{
+		"https://ice1.somafm.com/groovesalad-128-mp3":               soma,
+		"https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance": "fip",
+		"http://uk1.internet-radio.com:8004/":                       "uk1.internet-radio.com",
+		"http://uk1.internet-radio.com:8004":                        "uk1.internet-radio.com",
+	}
+	for location, want := range tests {
+		assert.Equal(t, want, audioDisplayName(location), location)
+	}
 }

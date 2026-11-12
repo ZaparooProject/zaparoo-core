@@ -23,8 +23,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +35,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/gme"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -45,38 +49,63 @@ const NativeAudioLauncherID = "native-audio"
 // of the primary slot: native audio has no OS process, so no platform tracker notices
 // the stop and the drain callback only fires for tracks that end on their own, which
 // leaves the service to run the stop it is handed and clear the active media around it.
+// resumeAt, when not nil, returns how far into a primary track playback got last time
+// and how long the track was then.
 func NativeAudioLauncher(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
 	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
+	resumeAt func(path string) (position, length time.Duration),
 ) Launcher {
+	controls := map[string]Control{
+		ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
+		ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
+		ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
+		ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
+		ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
+		ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
+		ControlNext:        {Func: nativeAudioControl(playback, nil, nil, ControlNext)},
+		ControlPrevious:    {Func: nativeAudioControl(playback, nil, nil, ControlPrevious)},
+	}
+	// Background media is published by the launch itself rather than by the
+	// launch pipeline, so it carries the control names from here.
+	controlNames := ControlNames(&Launcher{Controls: controls})
 	return Launcher{
 		ID:       NativeAudioLauncherID,
 		SystemID: "Audio",
 		Folders:  []string{"Audio", "Music"},
-		Extensions: []string{
-			".wav",
-			".mp3",
-			".ogg",
-			".flac",
+		// Playlist files are listed with audio so they can be browsed and
+		// picked; launching one runs it as a playlist instead.
+		Extensions: slices.Concat(audio.SupportedExtensions, audio.PlaylistExtensions),
+		// A single track of a multi-track chiptune file is <file>/<n>.
+		Test: func(_ *config.Instance, path string) bool {
+			return nativeAudioTrackExists(path)
+		},
+		// The track path is not on disk, so the launch lookup asks here.
+		VirtualPathExists: func(_ *config.Instance, path string) bool {
+			return nativeAudioTrackExists(path)
 		},
 		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
-			return launchNativeAudio(playback, setBackgroundMedia, cfg, path, opts)
+			return launchNativeAudio(playback, setBackgroundMedia, resumeAt, controlNames, cfg, path, opts)
 		},
-		Controls: map[string]Control{
-			ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
-			ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
-			ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
-			ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
-			ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
-			ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
-		},
+		Controls: controls,
 	}
+}
+
+// MusicVolumeGain converts a configured music volume level (0-200) to the
+// playback gain native audio plays at. 0 is silent.
+func MusicVolumeGain(cfg *config.Instance) float64 {
+	if cfg == nil {
+		return 1.0
+	}
+	return float64(cfg.AudioMusicVolume()) / 100.0
 }
 
 func launchNativeAudio(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
+	resumeAt func(path string) (position, length time.Duration),
+	controlNames []string,
 	cfg *config.Instance,
 	path string,
 	opts *LaunchOptions,
@@ -94,20 +123,25 @@ func launchNativeAudio(
 		}
 	}
 
-	volume := 1.0
-	if cfg != nil {
-		v := cfg.AudioVolume()
-		if v > 0 {
-			volume = float64(v) / 100.0
-		}
+	playOpts := audio.PlaybackOptions{Volume: MusicVolumeGain(cfg)}
+	if opts != nil {
+		playOpts.Stream = opts.AudioStream
 	}
 
-	if err := playback.Play(slot, path, audio.PlaybackOptions{Volume: volume}); err != nil {
+	if slot == mediaslot.Primary && resumeAt != nil {
+		playOpts.StartAt, playOpts.StartAtDuration = resumeAt(path)
+	}
+	if err := playback.Play(slot, path, playOpts); err != nil {
 		return nil, fmt.Errorf("play native audio: %w", err)
 	}
 
 	if slot == mediaslot.Background && setBackgroundMedia != nil {
-		media := models.NewActiveMedia("Audio", "Audio", path, audioDisplayName(path), NativeAudioLauncherID)
+		name := audioDisplayName(path)
+		if opts != nil && opts.AudioStream.Name() != "" {
+			name = opts.AudioStream.Name()
+		}
+		media := models.NewActiveMedia("Audio", "Audio", path, name, NativeAudioLauncherID)
+		media.LauncherControls = slices.Clone(controlNames)
 		setBackgroundMedia(media)
 	}
 
@@ -166,6 +200,10 @@ func nativeAudioControl(
 			return playback.Seek(slot, controlSeekDuration(params.Args, 10*time.Second))
 		case ControlRewind:
 			return playback.Seek(slot, -controlSeekDuration(params.Args, 10*time.Second))
+		case ControlNext:
+			return playback.SkipTrack(slot, 1)
+		case ControlPrevious:
+			return playback.SkipTrack(slot, -1)
 		default:
 			return fmt.Errorf("unsupported native audio control: %s", action)
 		}
@@ -184,7 +222,38 @@ func controlSeekDuration(args map[string]string, fallback time.Duration) time.Du
 	return time.Duration(seconds * float64(time.Second))
 }
 
-func audioDisplayName(path string) string {
-	base := filepath.Base(path)
+// nativeAudioTrackExists reports whether path names a track of a multi-track
+// chiptune file that exists.
+func nativeAudioTrackExists(path string) bool {
+	file, track, ok := audio.SplitTrackPath(path)
+	if !ok {
+		return false
+	}
+	info, err := os.Stat(file)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	count, err := gme.TrackCount(file)
+	return err == nil && track < count
+}
+
+func audioDisplayName(location string) string {
+	if audio.IsStreamURL(location) {
+		u, err := url.Parse(location)
+		if err != nil || u.Host == "" {
+			return location
+		}
+		// A stream is named by the last part of its path, as a file is,
+		// or by its host when the path names nothing.
+		base := pathpkg.Base(u.Path)
+		if base == "/" || base == "." {
+			return u.Hostname()
+		}
+		return tags.ParseTitleFromFilename(strings.TrimSuffix(base, pathpkg.Ext(base)), false)
+	}
+	if file, track, ok := audio.SplitTrackPath(location); ok {
+		return fmt.Sprintf("%s - %d", audioDisplayName(file), track+1)
+	}
+	base := filepath.Base(location)
 	return tags.ParseTitleFromFilename(strings.TrimSuffix(base, filepath.Ext(base)), false)
 }

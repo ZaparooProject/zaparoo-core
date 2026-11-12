@@ -26,6 +26,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -340,4 +343,19 @@ func TestLoadRetroArchCatalogRejectsAPackagedCoreNoProfileReferences(t *testing.
 	_, err = loadRetroArchCatalog(data)
 	require.ErrorIs(t, err, ErrLaunchDefinition)
 	require.ErrorContains(t, err, "unused_test_core")
+}
+
+// Doom WADs are their own system: PrBoom takes them from a Doom folder and no
+// longer from a DOS one.
+func TestPrBoomLauncherMatchesDoomFolders(t *testing.T) {
+	t.Parallel()
+	platform := startedPlatform(t.Context(), t, &fakeHost{})
+	launcher := launcherByID(t, platform.Launchers(nil), "RetroArch.PrBoom")
+	assert.Equal(t, systemdefs.SystemDoom, launcher.SystemID)
+
+	cfg := &config.Instance{}
+	assert.True(t, helpers.PathIsLauncher(cfg, platform, launcher, identity(t, "doom", "DOOM2.WAD")))
+	assert.True(t, helpers.PathIsLauncher(cfg, platform, launcher, identity(t, "prboom", "Sub", "tnt.wad")))
+	assert.True(t, helpers.PathIsLauncher(cfg, platform, launcher, identity(t, "gzdoom", "plutonia.iwad")))
+	assert.False(t, helpers.PathIsLauncher(cfg, platform, launcher, identity(t, "dos", "doom2.wad")))
 }

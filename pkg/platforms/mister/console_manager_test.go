@@ -179,12 +179,56 @@ func TestMiSTerConsoleManager_Open_AlreadyActive(t *testing.T) {
 	cm.mu.RUnlock()
 }
 
+// frontendInControl gives a test manager an active frontend, which is when
+// Main's console lease applies.
+func frontendInControl(cm *MiSTerConsoleManager) {
+	cm.frontendActive = func() bool { return true }
+}
+
+// With the frontend switched off Main refuses its console lease, so the
+// stock F9 console is used even though Main is alive.
+func TestMiSTerConsoleManager_Open_SkipsLeaseWithoutFrontend(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.frontendActive = func() bool { return false }
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+
+	// The F9 path fails in tests: no virtual keyboard.
+	err := cm.Open(context.Background(), "3")
+	require.ErrorContains(t, err, "failed to press F9 key")
+	assert.Empty(t, lease.acquiredVT)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+// A lease whose release failed is released again even after the frontend
+// was switched off, so Main does not keep holding the console.
+func TestMiSTerConsoleManager_Open_ReleasesStaleLeaseWithoutFrontend(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.frontendActive = func() bool { return false }
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+	cm.staleLeaseNonce = "stale-nonce"
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorContains(t, err, "failed to press F9 key")
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.Empty(t, lease.acquiredVT)
+	assert.Empty(t, cm.staleLeaseNonce)
+}
+
 func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
 	t.Parallel()
 
 	lease := &mockConsoleLeaseController{available: true}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.fbChecker = &mockFramebufferChecker{ready: true}
 
 	err := cm.Open(context.Background(), "3")
@@ -201,6 +245,7 @@ func TestMiSTerConsoleManager_Open_UsesLeasePublishedAfterMenuTransition(t *test
 	lease := &mockConsoleLeaseController{availableAfter: 2}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.coreNameGetter = &mockCoreNameGetter{coreName: "GAMEBOY"}
 	cm.fbChecker = &mockFramebufferChecker{ready: true}
 
@@ -217,6 +262,7 @@ func TestMiSTerConsoleManager_Open_LeaseFailure(t *testing.T) {
 	lease := &mockConsoleLeaseController{available: true, acquireErr: assert.AnError}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 
 	err := cm.Open(context.Background(), "3")
 	require.ErrorIs(t, err, assert.AnError)
@@ -231,6 +277,7 @@ func TestMiSTerConsoleManager_Open_LeaseContextCancellation(t *testing.T) {
 	lease := &mockConsoleLeaseController{available: true, acquireErr: context.Canceled}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 
 	err := cm.Open(context.Background(), "3")
 	require.ErrorIs(t, err, context.Canceled)
@@ -244,6 +291,7 @@ func TestMiSTerConsoleManager_Open_FramebufferFailureReleasesLease(t *testing.T)
 	lease := &mockConsoleLeaseController{available: true}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.fbChecker = &mockFramebufferChecker{ready: false}
 	cm.framebufferWait = time.Millisecond
 
@@ -261,6 +309,7 @@ func TestMiSTerConsoleManager_Open_FramebufferAndReleaseFailurePreservesLease(t 
 	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.fbChecker = &mockFramebufferChecker{ready: false}
 	cm.framebufferWait = time.Millisecond
 
@@ -280,6 +329,7 @@ func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
 	hardware := &mockConsoleHardware{}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.hardware = hardware
 	cm.active = true
 	cm.activeVT = "3"
@@ -294,23 +344,37 @@ func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
 	assert.Empty(t, cm.leaseNonce)
 }
 
-func TestMiSTerConsoleManager_Close_ReleaseFailurePreservesRetryState(t *testing.T) {
+// A lease Main never confirms releasing must not leave the console marked
+// active: every later Open would skip console setup and every Close would
+// retry the same dead nonce.
+func TestMiSTerConsoleManager_Close_ReleaseFailureClearsState(t *testing.T) {
 	t.Parallel()
 
-	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	lease := &mockConsoleLeaseController{available: true, releaseErr: context.DeadlineExceeded}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	frontendInControl(cm)
 	cm.hardware = &mockConsoleHardware{}
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
 	cm.active = true
 	cm.activeVT = "3"
-	cm.leaseNonce = "test-nonce"
+	cm.leaseNonce = "stale-nonce"
 
 	err := cm.Close()
-	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.activeVT)
+	assert.Empty(t, cm.leaseNonce)
+
+	// Main may still hold the old lease, so the next Open releases it first.
+	lease.releaseErr = nil
+	lease.releasedKey = ""
+	require.NoError(t, cm.Open(context.Background(), "7"))
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.Equal(t, "7", lease.acquiredVT, "the next Open acquires a fresh lease")
 	assert.True(t, cm.active)
-	assert.Equal(t, "3", cm.activeVT)
 	assert.Equal(t, "test-nonce", cm.leaseNonce)
-	assert.Equal(t, "test-nonce", lease.releasedKey)
 }
 
 func TestMiSTerConsoleManager_CleanAndRestoreUseHardwareBoundary(t *testing.T) {
@@ -553,4 +617,23 @@ func TestRealCoreNameGetter(t *testing.T) {
 	// In test environment, coreName will be empty (no /tmp/CORENAME file)
 	// We can't assert the exact value since it depends on environment
 	_ = coreName
+}
+
+// A lease that still cannot be released does not stop the console opening:
+// the new lease is acquired anyway.
+func TestMiSTerConsoleManager_Open_StaleLeaseReleaseFailureStillOpens(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, releaseErr: context.DeadlineExceeded}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	frontendInControl(cm)
+	cm.hardware = &mockConsoleHardware{}
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+	cm.staleLeaseNonce = "stale-nonce"
+
+	require.NoError(t, cm.Open(context.Background(), "7"))
+	assert.Equal(t, "stale-nonce", lease.releasedKey)
+	assert.Equal(t, "7", lease.acquiredVT)
+	assert.Empty(t, cm.staleLeaseNonce, "the stale lease is tried once, not on every Open")
 }

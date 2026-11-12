@@ -115,7 +115,11 @@ Event and resolution fields are defined under [`ui`](./methods.md#ui-event-objec
         "kind": "picker",
         "title": "Favorites",
         "choices": [
-          {"id": "e88560a7-76bb-4ab4-a914-da4be745778d", "label": "Game One"},
+          {
+            "id": "e88560a7-76bb-4ab4-a914-da4be745778d",
+            "label": "Game One",
+            "media": {"system": "SNES", "path": "/media/fat/games/SNES/Game One.sfc", "name": "Game One"}
+          },
           {"id": "ce99379a-b803-4489-9da4-e752e96471e9", "label": "Game Two"}
         ],
         "selectedChoiceId": "e88560a7-76bb-4ab4-a914-da4be745778d",
@@ -155,11 +159,40 @@ Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for co
 
 ### media.visibility
 
-An indexed media item's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing `media.browse`, `media.browse.index` and `media.search` cursors, all of which stop being valid. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
+An indexed media item's or a folder's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing `media.browse`, `media.browse.index` and `media.search` cursors, all of which stop being valid. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
 
 ### media.history.changed
 
 A platform recorded or updated play history outside the `media.started` and `media.stopped` lifecycle - for example, an externally launched game's playtime confirmed from host foreground evidence after it closed. No payload. Refetch `media.history`, `media.history.latest` and `media.history.top`. Notifications are not replayed, so also refetch after reconnect.
+
+### media.tags.changed
+
+An item's user flags changed, through [`media.tags.update`](methods.md#mediatagsupdate), Library sync, or anything else that sets them. Sent once per item whose flags changed. Update what you show for the item without searching again. A folder hidden or unhidden through `media.tags.update` is reported the same way, with the folder's path.
+
+#### Parameters
+
+| Key    | Type                                     | Required | Description                                                                                           |
+| :----- | :--------------------------------------- | :------- | :---------------------------------------------------------------------------------------------------- |
+| system | string                                   | Yes      | System ID of the item.                                                                                |
+| path   | string                                   | Yes      | Path of the item.                                                                                     |
+| tags   | [TagInfo](methods.md#taginfo-object)[] | Yes      | The item's full set of user flags after the change: any of `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`. Empty when none is set. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.tags.changed",
+  "params": {
+    "system": "SNES",
+    "path": "/media/fat/games/SNES/Super Metroid (USA).sfc",
+    "tags": [
+      { "tag": "favorite", "type": "user" },
+      { "tag": "playlater", "type": "user" }
+    ]
+  }
+}
+```
 
 ### media.started
 
@@ -173,6 +206,7 @@ New media was started on server.
 | systemName | string | Yes      | Display name of system.                      |
 | mediaPath  | string | Yes      | Path to media file on server.                |
 | mediaName  | string | Yes      | Cleaned display title of media.              |
+| slot       | string | No       | Media slot: `primary`, or `background` for background audio. A new background track is reported whenever its path changes, even when its title is the same. |
 
 #### Example
 
@@ -199,6 +233,8 @@ Media has stopped on server.
 | mediaPath  | string | Yes      | Path to media file on server.                  |
 | launcherId | string | Yes      | ID of the launcher.                            |
 | elapsed    | number | Yes      | Duration of the media session in seconds.      |
+| slot       | string | No       | Media slot: `primary`, or `background` for background audio. |
+| reason     | string | No       | Why the media stopped: `finished` (it reached its natural end), `exited` (it ended without Core asking, such as a player quitting a game), `stopped` (Core stopped it on request) or `replaced` (other media took its place). Omitted by Core versions that do not report it, so treat a missing value as unknown. |
 
 #### Example
 
@@ -212,7 +248,86 @@ Media has stopped on server.
     "mediaName": "Super Mario World",
     "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
     "launcherId": "SNES",
-    "elapsed": 2730
+    "slot": "primary",
+    "elapsed": 2730,
+    "reason": "exited"
+  }
+}
+```
+
+### media.playback
+
+Native audio playback changed in a slot: a track started playing, paused, resumed or seeked, or its tags finished reading. It is sent for tracks played in-process by the `native-audio` launcher, in either slot, and not for position progress; `media.stopped` reports the end of a track. Each notification is the slot's whole state, so replace the client's copy of that slot with it. Bursts are merged for slow clients, keeping the latest per slot.
+
+#### Parameters
+
+An [ActiveMedia](methods.md#active-media-object) object, the same one [media.active](methods.md#mediaactive) returns for the slot, including `slot`, `positionMs`, `durationMs`, `playbackState`, `launcherControls`, `zapScript` and, once the track's tags are read, `track`.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.playback",
+  "params": {
+    "started": "2024-09-24T17:49:42.938167429+08:00",
+    "launcherId": "native-audio",
+    "systemId": "Audio",
+    "systemName": "Audio",
+    "mediaPath": "/media/fat/Music/Album/01 Intro.mp3",
+    "mediaName": "01 Intro",
+    "slot": "background",
+    "zapScript": "/media/fat/Music/Album/01 Intro.mp3",
+    "positionMs": 20000,
+    "durationMs": 180000,
+    "playbackState": "paused",
+    "launcherControls": ["fast_forward", "pause", "resume", "rewind", "stop", "toggle_pause"],
+    "track": {
+      "title": "Intro",
+      "artist": "Some Artist",
+      "album": "Some Album",
+      "trackNumber": 1,
+      "trackTotal": 12,
+      "hasArt": true
+    }
+  }
+}
+```
+
+### playlists.changed
+
+An open playlist changed: it was opened, closed, moved to another item, played, paused, or had its shuffle or repeat changed. The notification always carries every open playlist, in every slot, so the latest one is the whole state; bursts are merged for slow clients. It is only sent when what a client would see changed.
+
+#### Parameters
+
+| Key       | Type | Required | Description |
+| :-------- | :--- | :------- | :---------- |
+| playlists | [PlaylistState](methods.md#playlist-state-object)[] | Yes | Every open playlist, primary first. `[]` when none is open. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "playlists.changed",
+  "params": {
+    "playlists": [
+      {
+        "id": "/media/fat/Music/Chill",
+        "name": "Chill",
+        "slot": "background",
+        "repeat": "all",
+        "shuffle": true,
+        "items": [
+          { "name": "Intro", "zapScript": "/media/fat/Music/Chill/01 Intro.mp3" },
+          { "name": "Outro", "zapScript": "/media/fat/Music/Chill/02 Outro.mp3" }
+        ],
+        "index": 0,
+        "total": 2,
+        "playing": true,
+        "unsafe": false
+      }
+    ]
   }
 }
 ```
@@ -782,6 +897,107 @@ Download progress is reported at most a few times a second, and the final byte a
     "version": "2.10.0",
     "trigger": "auto",
     "error": "verifying the download: checksum mismatch"
+  }
+}
+```
+
+## Device
+
+### device.changed
+
+Sent when the state of the device Core runs on changes: its battery, network link, internet reachability, Bluetooth adapter, docked state, connected controllers, or whether its clock can be trusted.
+
+Only localhost and authenticated clients receive it, the same clients [`device.status`](methods.md#devicestatus) answers.
+
+Core only watches the device while at least one client holds a WebSocket or SSE connection. Call [`device.status`](methods.md#devicestatus) once after connecting for the full state, then apply these notifications.
+
+Each notification carries the whole of the state it covers, not a difference from the last one. Replace what you hold with it. When changes arrive faster than a client reads them, intermediate notifications are dropped and the latest is delivered.
+
+The payload leaves out interface names, addresses, the hostname, the hardware model and storage paths. Notifications reach every connected client, so anything that identifies the device on its network is only available from `device.status`.
+
+#### Parameters
+
+Each key is always present and is `null` when the device has no such section or no reading. The values have the same meaning as in [`device.status`](methods.md#devicestatus).
+
+| Key         | Type           | Required | Description                                              |
+| :---------- | :------------- | :------- | :------------------------------------------------------- |
+| power       | object \| null | Yes      | `present`, `percent`, `source` and `chargeState`.        |
+| network     | object \| null | Yes      | `type` and `internet`.                                   |
+| bluetooth   | object \| null | Yes      | `present` and `powered`.                                 |
+| display     | object \| null | Yes      | `docked`.                                                |
+| controllers | object \| null | Yes      | `count` and `items`, as in `device.status`.              |
+| time        | object         | Yes      | `clockReliable`.                                         |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "device.changed",
+  "params": {
+    "power": { "present": true, "percent": 96, "source": "external", "chargeState": "charging" },
+    "network": { "type": "wifi", "internet": "full" },
+    "bluetooth": { "present": true, "powered": true },
+    "display": { "docked": true },
+    "controllers": {
+      "count": 1,
+      "items": [
+        {
+          "id": "input17",
+          "name": "DualSense Wireless Controller",
+          "displayName": "DualSense",
+          "vendorId": "054c",
+          "productId": "0ce6",
+          "connection": "bluetooth",
+          "battery": { "percent": 80, "level": "full", "chargeState": "charging" }
+        }
+      ]
+    },
+    "time": { "clockReliable": true }
+  }
+}
+```
+
+### device.bluetooth.changed
+
+Sent when Bluetooth devices change while at least one client holds a WebSocket or SSE connection: a scan starts or stops, a device is found, paired, connected or forgotten, the adapter is switched on or off, or a pairing attempt moves on. Changes that arrive together, such as a burst of devices found by a scan, are sent as one notification about a quarter of a second later.
+
+Only clients granted the `device.bluetooth` capability receive it, because it names and addresses every device in range. Local clients and API key clients have it; a paired client needs the admin role.
+
+The `scanning` field is `true` while the scan Core started runs. Scans started by other programs on the device do not set it. It also follows the adapter: when the Bluetooth stack ends discovery on its own, for example after a fault or a restart of the stack, it turns `false` even though no client stopped the scan.
+
+Each notification carries the whole state, not a difference. Replace what you hold with it. Call [`device.bluetooth.devices`](methods.md#devicebluetoothdevices) once after connecting, then apply these notifications.
+
+The outcome of [`device.bluetooth.pair`](methods.md#devicebluetoothpair) arrives here: `pairing.state` turns to `paired` or `failed`.
+
+#### Parameters
+
+A [Bluetooth state](methods.md#bluetooth-state-object), the same as the result of `device.bluetooth.devices`. When the adapter or the Bluetooth stack goes away, `powered` is `false` and `devices` is empty.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "device.bluetooth.changed",
+  "params": {
+    "powered": true,
+    "scanning": false,
+    "devices": [
+      {
+        "id": "E4:17:D8:33:44:55",
+        "name": "8BitDo Pro 2",
+        "displayName": "8BitDo Pro 2",
+        "vendorId": "2dc8",
+        "productId": "6006",
+        "paired": true,
+        "connected": true,
+        "trusted": true,
+        "gamepad": true,
+        "controllerId": "input18"
+      }
+    ],
+    "pairing": { "id": "E4:17:D8:33:44:55", "state": "paired", "error": null, "attempt": 1 }
   }
 }
 ```

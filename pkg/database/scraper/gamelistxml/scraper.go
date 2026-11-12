@@ -365,7 +365,9 @@ func resolveSystemsFromPlatform(
 	}
 
 	pathsBySystem := make(map[string][]string, len(sysDefs))
-	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
+	systemPaths := mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs)
+	for i := range systemPaths {
+		pathResult := &systemPaths[i]
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
 	launchers := pl.Launchers(cfg)
@@ -1545,7 +1547,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	}
 
 	ch <- scraper.ScrapeUpdate{
-		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+		Done: true, Processed: totalProcessed, Total: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
 		TotalSteps: totalSteps, CurrentStep: totalSteps,
 	}
 }

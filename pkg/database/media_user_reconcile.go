@@ -80,6 +80,14 @@ func ReconcileMediaUserData(ctx context.Context, db *Database) error {
 	if err != nil {
 		return err
 	}
+	if _, err := projectHiddenDirectoryRows(ctx, db.MediaDB, rows); err != nil {
+		return err
+	}
+	// No flag write is in flight under mediaUserFlagsMu, so a marker still
+	// saved here was left by one that never finished, and is now answered.
+	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
+		return fmt.Errorf("failed to clear the media user flag write marker: %w", err)
+	}
 	log.Info().Int("rows", len(rows)).Int("flagsChanged", flagsChanged).
 		Int("overridesSet", set).Int("overridesCleared", cleared).
 		Msg("reconciled media user data")

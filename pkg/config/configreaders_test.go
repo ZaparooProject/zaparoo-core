@@ -969,3 +969,94 @@ func TestConnectionStringFoldsCase(t *testing.T) {
 	assert.Equal(t, "simpleserial:/dev/ttyACM0",
 		ReadersConnect{Driver: "Simple_Serial", Path: "/dev/ttyACM0"}.ConnectionString())
 }
+
+// The ccid driver replaced acr122pcsc. Config written for the old driver has to
+// keep meaning what it meant.
+func TestReplacedDriverSettingsApplyToItsSuccessor(t *testing.T) {
+	t.Parallel()
+	ccid := DriverInfo{ID: "ccid", DefaultEnabled: true, DefaultAutoDetect: true}
+
+	newCfg := func(t *testing.T, toml string) *Instance {
+		t.Helper()
+		fs := afero.NewMemMapFs()
+		cfg, err := NewConfigWithFs(filepath.Join(t.TempDir(), "zaparoo"), BaseDefaults, fs)
+		require.NoError(t, err)
+		require.NoError(t, cfg.LoadTOML(toml))
+		return cfg
+	}
+
+	t.Run("no config uses the defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, "")
+		assert.True(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextCandidate))
+		assert.True(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextAutoDetect))
+	})
+
+	t.Run("old driver disabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.acr122pcsc]
+enabled = false
+`)
+		assert.False(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextCandidate),
+			"an install that turned the old driver off must not find the new one on")
+		assert.False(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextManualConnect))
+		assert.False(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextAutoDetect))
+	})
+
+	t.Run("old driver auto-detect off, legacy spelling", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.acr122_pcsc]
+auto_detect = false
+`)
+		assert.True(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextCandidate))
+		assert.False(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextAutoDetect))
+	})
+
+	t.Run("the new driver's own entry wins", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.acr122pcsc]
+enabled = false
+auto_detect = false
+
+[readers.drivers.ccid]
+enabled = true
+`)
+		assert.True(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextCandidate))
+		assert.False(t, cfg.IsReaderEnabled(ccid, ReaderEnableContextAutoDetect),
+			"a setting the new entry leaves out still comes from the old one")
+	})
+
+	t.Run("a connection written for the old driver keeps a default-off driver a candidate", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[[readers.connect]]
+driver = "acr122_pcsc"
+path = "ACS ACR122 0"
+`)
+		off := DriverInfo{ID: "ccid"}
+		assert.True(t, cfg.IsReaderEnabled(off, ReaderEnableContextCandidate))
+	})
+
+	t.Run("other drivers are not affected", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.acr122pcsc]
+enabled = false
+`)
+		pn532 := DriverInfo{ID: "pn532", DefaultEnabled: true, DefaultAutoDetect: true}
+		assert.True(t, cfg.IsReaderEnabled(pn532, ReaderEnableContextAutoDetect))
+	})
+
+	t.Run("scan mode set on the old driver reaches the new one", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.acr122pcsc]
+scan_mode = "hold"
+`)
+		assert.Equal(t, ScanModeHold,
+			cfg.ScanModeForReader([]string{"ccid", "acr122pcsc", "acr122_pcsc"}, "ACS ACR122 0"))
+	})
+}

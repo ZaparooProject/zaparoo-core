@@ -33,10 +33,12 @@ var retroArchPrecedenceBaselineJSON []byte
 
 // TestRetroArchCatalogMatchesPreMigrationPrecedence guards the migration of
 // Android's system→core assignment onto pkg/platforms/shared/retroarch
-// (2026-09-30): every one of the 92 systems this catalog covers must offer
+// (2026-09-30): every one of the 92 systems this catalog covered must offer
 // the exact same cores, in the exact same order, as it did before. The
 // fixture was captured directly from this package's own pre-migration
 // loadRetroArchCatalog output - see the migration's PR description for how.
+// Doom has since become its own system, taking PrBoom out of DOS's list, so
+// the fixture now holds 93.
 //
 // This checks per-system order only, not each system's absolute position in
 // the wider catalog: Android's old JSON happened to list every system's
@@ -53,7 +55,7 @@ func TestRetroArchCatalogMatchesPreMigrationPrecedence(t *testing.T) {
 
 	var baseline map[string][]string
 	require.NoError(t, json.Unmarshal(retroArchPrecedenceBaselineJSON, &baseline))
-	require.Len(t, baseline, 92)
+	require.Len(t, baseline, 93)
 
 	entries, err := loadRetroArchCatalog(retroArchCatalogJSON)
 	require.NoError(t, err)

@@ -18,12 +18,17 @@ on:
     - cron: "0 4 * * 1"
   workflow_dispatch:
 
-# Declared once for the whole workflow: a job-level block would replace this
-# rather than add to it. Enough to build and reach the zigcc image, and nothing
-# that could publish.
+# A caller must grant every permission the called workflow's jobs declare, even
+# jobs that test_build skips, or the run fails at startup before any job exists.
+# The publishing jobs are skipped by test_build, so these are never exercised.
 permissions:
-  contents: read
+  contents: write
   packages: write
+  actions: read
+  pull-requests: read
+  security-events: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: build-check

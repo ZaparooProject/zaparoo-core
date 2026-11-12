@@ -773,3 +773,154 @@ func TestHandleMediaMeta_ZapScriptDBError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get media zapscripts")
 }
+
+// A multi-disc folder's entry asked for with the disc it launches describes
+// that disc, and lists the folder's own artwork among the media image types.
+func TestHandleMediaMeta_DirectoryMediaRef(t *testing.T) {
+	t.Parallel()
+
+	f := newDirectoryMediaRefFixture()
+	mockDB := testhelpers.NewMockMediaDBI()
+	expectMediaByID(mockDB, f.disc2)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{f.disc2.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, []int64{f.disc2.Title.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil)
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, []int64{f.disc2.DBID}).
+		Return(map[int64][]database.MediaProperty{
+			f.disc2.DBID: {{TypeTag: "property:image-boxart", Text: "disc2.png"}},
+		}, nil)
+	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, []int64{f.disc2.Title.DBID}).
+		Return(map[int64][]database.MediaProperty{}, nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+		Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: "folder.png"}}, nil)
+
+	result, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, string(f.request(f.disc2, ""))))
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, f.disc2.Path, resp.Media.Path)
+	assert.Equal(t, []string{"image", "boxart"}, resp.Media.AvailableImageTypes)
+	assert.NotContains(t, resp.Media.Properties, "property:image-image")
+	mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_DirectoryPathListsFolderImageTypes(t *testing.T) {
+	t.Parallel()
+
+	f := newDirectoryMediaRefFixture()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+		Return(&f.disc1.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, f.disc1.DBID).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, f.disc1.Title.DBID).
+		Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+		Return([]database.MediaProperty{{TypeTag: "property:image-thumbnail", Text: "folder.png"}}, nil)
+
+	result, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, fmt.Sprintf(
+		`{"system":%q,"path":%q}`, f.system.SystemID, f.directoryPath)))
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, f.disc1.Path, resp.Media.Path)
+	assert.Equal(t, []string{"thumbnail"}, resp.Media.AvailableImageTypes)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_BatchDirectoryMediaRef(t *testing.T) {
+	t.Parallel()
+
+	f := newDirectoryMediaRefFixture()
+	other := makeMediaFullRow(40, 41)
+	other.System = f.system
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{f.disc2.DBID: *f.disc2, other.DBID: *other}, nil)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{f.disc2.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, []int64{f.disc2.Title.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil)
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, []int64{f.disc2.DBID}).
+		Return(map[int64][]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, []int64{f.disc2.Title.DBID}).
+		Return(map[int64][]database.MediaProperty{}, nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+		Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: "folder.png"}}, nil)
+
+	result, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, fmt.Sprintf(
+		`{"items":[%s,%s]}`, f.request(f.disc2, ""), f.request(other, ""))))
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaMetaBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 2)
+	require.NotNil(t, resp.Items[0].Media)
+	assert.Equal(t, f.disc2.Path, resp.Items[0].Media.Path)
+	assert.Equal(t, []string{"image"}, resp.Items[0].Media.AvailableImageTypes)
+	require.NotNil(t, resp.Items[1].Error)
+	assert.Contains(t, *resp.Items[1].Error, "media not in path")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_DirectoryPropertiesDBError(t *testing.T) {
+	t.Parallel()
+
+	f := newDirectoryMediaRefFixture()
+	expectMediaIDMeta := func(mockDB *testhelpers.MockMediaDBI) {
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.TagInfo{}, nil)
+		mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.TagInfo{}, nil)
+		mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
+			Return(map[int64][]database.MediaProperty{}, nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+	}
+
+	for name, params := range map[string]string{
+		"single": string(f.request(f.disc2, "")),
+		"batch":  fmt.Sprintf(`{"items":[%s]}`, f.request(f.disc2, "")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mockDB := testhelpers.NewMockMediaDBI()
+			expectMediaIDMeta(mockDB)
+			_, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, params))
+			require.ErrorIs(t, err, assert.AnError)
+		})
+	}
+
+	t.Run("path", func(t *testing.T) {
+		t.Parallel()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc1.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+		mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, f.disc1.DBID).Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, f.disc1.Title.DBID).
+			Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+
+		_, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, fmt.Sprintf(
+			`{"system":%q,"path":%q}`, f.system.SystemID, f.directoryPath)))
+		require.ErrorIs(t, err, assert.AnError)
+	})
+}

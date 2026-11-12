@@ -62,6 +62,8 @@ type Song struct {
 	ID       int    `json:"songid"`
 	AlbumID  int    `json:"albumid"`
 	Duration int    `json:"duration"`
+	Track    int    `json:"track"`
+	Disc     int    `json:"disc"`
 }
 
 // Album represents an album in Kodi's library
@@ -104,6 +106,7 @@ const (
 	APIMethodPlayerPlayPause APIMethod = "Player.PlayPause"
 	APIMethodPlayerSetSpeed  APIMethod = "Player.SetSpeed"
 	APIMethodPlayerGoTo      APIMethod = "Player.GoTo"
+	APIMethodPlayerSetRepeat APIMethod = "Player.SetRepeat"
 
 	// Application Control
 	APIMethodApplicationQuit APIMethod = "Application.Quit"
@@ -146,10 +149,15 @@ type Item struct {
 
 // ItemOptions represents options for playing a media item
 type ItemOptions struct {
-	Resume bool `json:"resume"`
+	// Repeat is sent as "off" only when Core is tracking natural completion,
+	// so a repeating Kodi cannot loop the item forever.
+	Repeat string `json:"repeat,omitempty"`
+	Resume bool   `json:"resume"`
 }
 
 // PlayerOpenParams represents parameters for Player.Open API method
+//
+//nolint:govet // field order is the JSON key order sent to Kodi
 type PlayerOpenParams struct {
 	Item    Item        `json:"item"`
 	Options ItemOptions `json:"options,omitempty"`
@@ -163,6 +171,19 @@ type PlayerStopParams struct {
 // PlayerPlayPauseParams represents parameters for Player.PlayPause API method
 type PlayerPlayPauseParams struct {
 	PlayerID int `json:"playerid"`
+}
+
+// PlayerSetPlayingParams represents parameters for Player.PlayPause with an
+// explicit play state: true resumes playback, false pauses it.
+type PlayerSetPlayingParams struct {
+	PlayerID int  `json:"playerid"`
+	Play     bool `json:"play"`
+}
+
+// PlayerSetRepeatParams represents parameters for Player.SetRepeat API method
+type PlayerSetRepeatParams struct {
+	Repeat   string `json:"repeat"`
+	PlayerID int    `json:"playerid"`
 }
 
 // PlayerSetSpeedParams represents parameters for Player.SetSpeed API method
@@ -260,16 +281,15 @@ type PlaylistItemEpisodeID struct {
 	EpisodeID int `json:"episodeid"`
 }
 
-// FilterRule represents a Kodi API filter rule
-type FilterRule struct {
-	Value    any    `json:"value"`
-	Field    string `json:"field"`
-	Operator string `json:"operator"`
+// SongFilter narrows AudioLibrary.GetSongs to the songs of one album or artist.
+type SongFilter struct {
+	AlbumID  int `json:"albumid,omitempty"`
+	ArtistID int `json:"artistid,omitempty"`
 }
 
 // AudioLibraryGetSongsParams represents parameters for AudioLibrary.GetSongs API method
 type AudioLibraryGetSongsParams struct {
-	Filter     *FilterRule `json:"filter,omitempty"`
+	Filter     *SongFilter `json:"filter,omitempty"`
 	Properties []string    `json:"properties,omitempty"`
 }
 

@@ -20,8 +20,13 @@
 package esapi
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,5 +92,69 @@ func TestParseRunningGameResponse_InvalidGameResponse(t *testing.T) {
 			assert.Empty(t, game)
 			assert.Contains(t, err.Error(), "did not include game identity")
 		})
+	}
+}
+
+// TestAPIRequest_RefusedIsLauncherUnavailable verifies a request nothing is
+// listening for, as when EmulationStation is not running, is reported as an
+// unavailable launcher rather than an unclassified failure.
+func TestAPIRequest_RefusedIsLauncherUnavailable(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	_, err = sendAPIRequest("http://"+addr, "/launch", "/userdata/roms/snes/game.sfc", time.Second)
+
+	require.ErrorIs(t, err, platforms.ErrLauncherUnavailable)
+	assert.Contains(t, err.Error(), "failed to send request")
+}
+
+// TestAPIRequest_DroppedConnectionIsNotLauncherUnavailable verifies only a
+// refused connection is classified as an unavailable launcher: a server that
+// accepts and then fails is still reported as a fault.
+func TestAPIRequest_DroppedConnectionIsNotLauncherUnavailable(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	_, err = sendAPIRequest("http://"+listener.Addr().String(), "/launch", "game", time.Second)
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, platforms.ErrLauncherUnavailable)
+}
+
+func TestAPIRequest_GetWithDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(server.Close)
+
+	body, err := sendAPIRequest(server.URL, "/runningGame", "", 0)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", string(body))
+}
+
+// The exported request targets EmulationStation's fixed local address; with
+// nothing on it the launcher is unavailable rather than broken.
+func TestAPIRequest_LocalEmulationStation(t *testing.T) {
+	t.Parallel()
+
+	_, err := APIRequest("/runningGame", "", 200*time.Millisecond)
+	if err != nil {
+		assert.ErrorIs(t, err, platforms.ErrLauncherUnavailable)
 	}
 }

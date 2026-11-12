@@ -30,9 +30,12 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"sync/atomic"
+	"syscall"
 	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -42,6 +45,15 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+// Option sets one OSD option on a launched core.
+type Option = mglgen.Option
+
+// Reset holds the core's reset button after the media is loaded.
+type Reset = mglgen.Reset
+
+// Setting is an element added to a generated MGL after the media.
+type Setting = mglgen.Setting
 
 // missingRequestedFileError preserves the diagnostic and filesystem cause while
 // marking a missing user-selected file as an expected launch failure.
@@ -59,6 +71,17 @@ func (e missingRequestedFileError) Unwrap() error {
 
 type commandInterfaceWriter struct {
 	open func() (io.WriteCloser, error)
+	sent *atomic.Uint64
+}
+
+// loadsSent counts launch commands written to Main's command interface.
+var loadsSent atomic.Uint64
+
+// LoadsSent returns how many launch commands have reached Main's command
+// interface. A launch that fails with the count unchanged never asked Main
+// to load anything.
+func LoadsSent() uint64 {
+	return loadsSent.Load()
 }
 
 // MRA represents the structure of a MiSTer Arcade ROM file.
@@ -67,6 +90,13 @@ type MRA struct {
 	SetName string   `xml:"setname"`
 	Name    string   `xml:"name"`
 	Rbf     string   `xml:"rbf"`
+	Roms    []MRARom `xml:"rom"`
+}
+
+// MRARom is a <rom> element of an MRA. Zip names the archives the ROM data
+// comes from, separated by | when there are alternatives.
+type MRARom struct {
+	Zip string `xml:"zip,attr"`
 }
 
 func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
@@ -74,6 +104,7 @@ func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
 		open: func() (io.WriteCloser, error) {
 			return fs.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 		},
+		sent: &loadsSent,
 	}
 }
 
@@ -91,6 +122,9 @@ func (w commandInterfaceWriter) Write(p []byte) (int, error) {
 	n, err := cmd.Write(p)
 	if err != nil {
 		return n, fmt.Errorf("write command interface: %w", err)
+	}
+	if w.sent != nil {
+		w.sent.Add(1)
 	}
 	return n, nil
 }
@@ -121,9 +155,9 @@ func ReadMRA(path string) (MRA, error) {
 
 // GenerateMgl is retained for compatibility. New dependency-light callers
 // should use mgl.Generate directly.
-func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
+func GenerateMgl(core *cores.Core, rbfPath, path, override string, options ...Setting) (string, error) {
 	//nolint:wrapcheck // Compatibility wrapper preserves the dependency-light package error.
-	return mglgen.Generate(core, rbfPath, path, override)
+	return mglgen.Generate(core, rbfPath, path, override, options...)
 }
 
 func writeTempFile(content string) (string, error) {
@@ -153,6 +187,16 @@ func validateLoadCorePath(path string) error {
 	return nil
 }
 
+// ErrLaunchFileInZip is returned for an MGL, MRA or RBF path inside a zip.
+// MiSTer Main loads these from disk and cannot reach inside an archive, so
+// no launcher can run one.
+var ErrLaunchFileInZip = fmt.Errorf("%w: MiSTer cannot load this file from inside a zip", helpers.ErrNoLauncher)
+
+// inZip reports whether a lowercased path names an entry inside a zip.
+func inZip(lowerPath string) bool {
+	return s.Contains(filepath.ToSlash(lowerPath), ".zip/")
+}
+
 func launchFileWithDefaults(path string) error {
 	fs := afero.NewOsFs()
 	return launchFile(fs, newCommandInterfaceWriter(fs), path, true)
@@ -175,6 +219,11 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 	}
 
 	if _, err := fs.Stat(path); err != nil {
+		// Only ENOTDIR shows the path runs through a file; a real directory
+		// named like a zip can still fail for any other reason.
+		if inZip(lowerPath) && errors.Is(err, syscall.ENOTDIR) {
+			return fmt.Errorf("%w: %s", ErrLaunchFileInZip, path)
+		}
 		wrapped := fmt.Errorf("launch file not accessible: %w", err)
 		// A generated MGL disappearing is an internal failure, not missing media.
 		if requested && errors.Is(err, os.ErrNotExist) {
@@ -193,26 +242,11 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested boo
 	return nil
 }
 
-func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error {
-	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+func launchTempMgl(cfg *config.Instance, system *cores.Core, path string, options []Setting) error {
+	mgl, err := buildLaunchMgl(cfg, cores.GlobalRBFCache, system, path, options)
 	if err != nil {
-		return fmt.Errorf("resolving core RBF: %w", err)
+		return err
 	}
-
-	override, err := cores.RunSystemHook(cfg, system, path)
-	if err != nil {
-		return fmt.Errorf("failed to run system hook: %w", err)
-	}
-	if override != "" {
-		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
-	}
-
-	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override)
-	if err != nil {
-		return fmt.Errorf("failed to generate MGL: %w", err)
-	}
-	log.Debug().Str("system", system.ID).Msg("MGL generated successfully")
-	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
@@ -220,6 +254,33 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 	}
 
 	return launchGeneratedFile(tmpFile)
+}
+
+// buildLaunchMgl generates the MGL for launching path on system, naming the
+// exact RBF the cache resolved so Main cannot pick another build of it.
+func buildLaunchMgl(
+	cfg *config.Instance, cache *cores.RBFCache, system *cores.Core, path string, options []Setting,
+) (string, error) {
+	rbfInfo, err := cache.Resolve(cfg, system)
+	if err != nil {
+		return "", fmt.Errorf("resolving core RBF: %w", err)
+	}
+
+	override, err := cores.RunSystemHook(cfg, system, path)
+	if err != nil {
+		return "", fmt.Errorf("failed to run system hook: %w", err)
+	}
+	if override != "" {
+		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
+	}
+
+	mgl, err := GenerateMgl(system, rbfInfo.MglExactName(), path, override, options...)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate MGL: %w", err)
+	}
+	log.Debug().Str("system", system.ID).Msg("MGL generated successfully")
+	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
+	return mgl, nil
 }
 
 // LaunchShortCore attempts to launch a core with a short path, as per what's
@@ -277,6 +338,13 @@ func writeCurrentPathTo(
 }
 
 func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
+	return LaunchGameWithOptions(cfg, system, path, nil)
+}
+
+// LaunchGameWithOptions launches a game and asks Main to set OSD options on the
+// core first. Options only travel in a generated MGL, so media that launches as
+// an .mra or .mgl file ignores them.
+func LaunchGameWithOptions(cfg *config.Instance, system *cores.Core, path string, options []Setting) error {
 	ext := s.ToLower(filepath.Ext(path))
 	log.Info().Str("system", system.ID).Str("path", path).Str("type", ext).Msg("launching game")
 
@@ -301,7 +369,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 			}
 		}
 	default:
-		err := launchTempMgl(cfg, system, path)
+		err := launchTempMgl(cfg, system, path, options)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
@@ -416,6 +484,11 @@ type MGL struct {
 	File    MGLFile  `xml:"file"`
 }
 
+// ErrMalformedMGL reports an MGL file that exists but does not decode as an
+// MGL. MGLs are written by MiSTer and third-party scripts, so a truncated or
+// foreign file is an expected input rather than a fault.
+var ErrMalformedMGL = errors.New("malformed MGL")
+
 func ReadMgl(path string) (MGL, error) {
 	var mgl MGL
 
@@ -434,7 +507,7 @@ func ReadMgl(path string) (MGL, error) {
 
 	err = decoder.Decode(&mgl)
 	if err != nil {
-		return mgl, fmt.Errorf("failed to decode MGL: %w", err)
+		return mgl, fmt.Errorf("%w: %w", ErrMalformedMGL, err)
 	}
 
 	return mgl, nil

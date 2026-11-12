@@ -64,6 +64,10 @@ type System struct {
 	Aliases   []string
 	Fallbacks []string
 	Slugs     []string
+	// ExplicitOnly keeps the system out of launches that span every system,
+	// such as a random pick or an unscoped search. It can still be searched,
+	// browsed and launched when it is named.
+	ExplicitOnly bool
 }
 
 // Lazy initialization for system lookup map
@@ -111,6 +115,7 @@ const (
 	SystemIntellivision       = "Intellivision"
 	SystemJaguar              = "Jaguar"
 	SystemJaguarCD            = "JaguarCD"
+	SystemLaserActive         = "LaserActive"
 	SystemMasterSystem        = "MasterSystem"
 	SystemMegaCD              = "MegaCD"
 	SystemMegaDuck            = "MegaDuck"
@@ -247,6 +252,7 @@ const (
 	SystemCasioPV2000            = "CasioPV2000"
 	SystemCoCo2                  = "CoCo2"
 	SystemDOS                    = "DOS"
+	SystemDoom                   = "Doom"
 	SystemEDSAC                  = "EDSAC"
 	SystemGalaksija              = "Galaksija"
 	SystemInteract               = "Interact"
@@ -412,6 +418,7 @@ const (
 	SystemTamagotchi          = "Tamagotchi"
 	SystemSolarus             = "Solarus"
 	SystemBennuGD             = "BennuGD"
+	SystemScript              = "Script"
 )
 
 // GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
@@ -551,6 +558,19 @@ func AllSystems() []System {
 		systems = append(systems, Systems[k])
 	}
 
+	return systems
+}
+
+// AllImplicitSystems returns every system a launch may pick without the
+// system being named, which is AllSystems without the ExplicitOnly ones.
+func AllImplicitSystems() []System {
+	all := AllSystems()
+	systems := make([]System, 0, len(all))
+	for i := range all {
+		if !all[i].ExplicitOnly {
+			systems = append(systems, all[i])
+		}
+	}
 	return systems
 }
 
@@ -733,6 +753,10 @@ var Systems = map[string]System{
 	SystemJaguar: {
 		ID:    SystemJaguar,
 		Slugs: []string{"atarijaguar", "jag"},
+	},
+	SystemLaserActive: {
+		ID:    SystemLaserActive,
+		Slugs: []string{"pioneerlaseractive"},
 	},
 	SystemJaguarCD: {
 		ID:        SystemJaguarCD,
@@ -1212,7 +1236,7 @@ var Systems = map[string]System{
 		ID:        SystemDOS,
 		Aliases:   []string{"ao486", "MS-DOS"},
 		Slugs:     []string{"ibmpc", "pcdos", "microsoftdos", "ibmdos", "dosbox"},
-		Fallbacks: []string{SystemPC},
+		Fallbacks: []string{SystemPC, SystemDoom},
 	},
 	SystemApogee: {
 		ID:    SystemApogee,
@@ -1534,9 +1558,16 @@ var Systems = map[string]System{
 		MediaType: MediaTypeAudio,
 	},
 	SystemApplication: {
-		ID:        SystemApplication,
-		Aliases:   []string{"App", "Apps", "Software"},
-		MediaType: MediaTypeApplication,
+		ID:           SystemApplication,
+		Aliases:      []string{"App", "Apps", "Software"},
+		MediaType:    MediaTypeApplication,
+		ExplicitOnly: true,
+	},
+	SystemScript: {
+		ID:           SystemScript,
+		Aliases:      []string{"Scripts"},
+		MediaType:    MediaTypeApplication,
+		ExplicitOnly: true,
 	},
 	SystemMovie: {
 		ID:        SystemMovie,
@@ -1705,6 +1736,11 @@ var Systems = map[string]System{
 	},
 	SystemOpenBOR: {
 		ID: SystemOpenBOR,
+	},
+	SystemDoom: {
+		ID:        SystemDoom,
+		Slugs:     []string{"prboom", "gzdoom"},
+		Fallbacks: []string{SystemDOS},
 	},
 	SystemPico8: {
 		ID:    SystemPico8,

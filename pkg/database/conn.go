@@ -21,7 +21,10 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"sync/atomic"
+
+	"github.com/mattn/go-sqlite3"
 )
 
 // Conn holds a *sql.DB handle that may be swapped at runtime — corruption
@@ -55,4 +58,15 @@ func (c *Conn) Load() *sql.DB {
 // Conn invariant above).
 func (c *Conn) Store(db *sql.DB) {
 	c.ptr.Store(db)
+}
+
+// LockContention returns the SQLite error when err is SQLITE_BUSY or
+// SQLITE_LOCKED: another connection held the lock for longer than the busy
+// timeout let this one wait.
+func LockContention(err error) (sqlite3.Error, bool) {
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) {
+		return sqlite3.Error{}, false
+	}
+	return sqliteErr, sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -48,6 +49,12 @@ var ErrNotSupported = errors.New("operation not supported on this platform")
 // is preserved. Return this directly, without joining it with another failure.
 var ErrScannerUnavailable = errors.New("optional scanner source is unavailable")
 
+// ErrScannerSourceUnreachable marks a configured scanner source, such as a
+// media server on the network, that did not answer usefully: it was offline,
+// timed out, or replied with something other than its API. That is the
+// user's network and setup, not a Core fault. Scanning stays incomplete.
+var ErrScannerSourceUnreachable = errors.New("scanner source is unreachable")
+
 // ErrScriptAlreadyRunning reports a script launch refused because the platform's
 // script runner is occupied. The caller must still receive the refusal.
 var ErrScriptAlreadyRunning = errors.New("a script is already running")
@@ -57,6 +64,12 @@ var ErrScriptAlreadyRunning = errors.New("a script is already running")
 // platforms returning it must leave active media in place so Core's state
 // keeps matching reality.
 var ErrStopFailed = errors.New("failed to stop active launcher")
+
+// ErrLauncherUnavailable reports a launch refused because the program or
+// service the launcher hands media to is not there: a configured executable
+// that is missing, or a frontend API that is not running. It is a condition of
+// the host, not a fault in Core.
+var ErrLauncherUnavailable = errors.New("launcher is unavailable")
 
 // ScreenshotResult is the result of a platform screenshot capture.
 type ScreenshotResult struct {
@@ -178,6 +191,7 @@ const (
 	ControlNext        = "next"
 	ControlPrevious    = "previous"
 	ControlToggleTray  = "toggle_tray"
+	ControlCheat       = "cheat"
 )
 
 // ControlParams contains parameters for a control action.
@@ -192,15 +206,30 @@ type ControlFunc func(context.Context, *config.Instance, ControlParams) error
 // built-in launchers) or Script (zapscript string for custom launchers)
 // should be set, not both.
 type Control struct {
-	Func   ControlFunc // Native Go implementation
-	Script string      // ZapScript string executed via RunControlScript
+	Func ControlFunc // Native Go implementation
+	// Available reports whether the control can be offered right now, for a
+	// control that depends on something outside Core that can come and go.
+	// A nil Available means always. ControlNames leaves out an unavailable
+	// control; Func still checks for itself when it is called.
+	Available func() bool
+	Script    string // ZapScript string executed via RunControlScript
 }
 
 // MediaLaunchAccess is the state publication capability held for one launch.
 // Release must be called after LaunchMedia returns.
 type MediaLaunchAccess struct {
 	SetActiveMedia func(*models.ActiveMedia)
-	Release        func()
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before it is issued. See state.State.RecordMediaStop. The returned
+	// function withdraws the note when the stop did not take effect.
+	RecordMediaStop func(reason string) (cancel func())
+	// MediaFinished reports the natural end of the media this launch
+	// publishes. It is bound to that publication and idempotent.
+	MediaFinished func()
+	// MediaExited reports the media this launch published ended without a
+	// natural end. Shares one once with MediaFinished.
+	MediaExited func()
+	Release     func()
 }
 
 // LaunchPathNormalizer resolves platform-specific launch aliases before comparing
@@ -253,6 +282,13 @@ type CmdEnv struct {
 	ServiceCtx         context.Context
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (MediaLaunchAccess, error)
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before it is issued, so the clear that follows is not reported as the
+	// media quitting by itself. Nil when no state is attached.
+	RecordMediaStop func(reason string) (cancel func())
+	// StopSeq returns the count of stops of the primary media Core has been
+	// asked to make, so a playlist update can be stamped with it when issued.
+	StopSeq            func() uint64
 	SkipMediaLaunch    func(ResolvedLaunch) bool
 	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
 	AcquireLaunch      func() (func(), error)
@@ -269,7 +305,10 @@ type CmdEnv struct {
 	// in the background as the deck opens. It returns at once and never
 	// blocks the open; nil when no sync is configured.
 	RefreshOwnedDeck func(ctx context.Context, deckID string)
-	PlaybackManager  audio.PlaybackManager
+	// BackgroundMedia returns the media playing in the background slot, nil
+	// when there is none. Nil when no state is attached.
+	BackgroundMedia func() *models.ActiveMedia
+	PlaybackManager audio.PlaybackManager
 	// LauncherCache resolves the launcher behind the active media. It holds
 	// launchers the platform cannot build itself, so it is the only complete
 	// source; never resolve a launcher ID from Platform.Launchers alone.
@@ -279,6 +318,9 @@ type CmdEnv struct {
 	Launchers *LauncherSnapshot
 	UI        *uievents.Service
 	Playlist  playlists.PlaylistController
+	// PlaylistMemory opens a loaded playlist where it was left last time.
+	// Nil remembers nothing.
+	PlaylistMemory PlaylistMemory
 	// AllowedCommands is the bound the running token carries. It is forwarded
 	// so a playlist opened by this command keeps the same bound, the way
 	// Unsafe does.
@@ -293,6 +335,23 @@ type CmdEnv struct {
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
+}
+
+// PlaylistMemory readies a playlist that was just loaded: it belongs to the
+// active profile, and opens on start, counted from 1, or where that profile
+// left it when start is 0.
+type PlaylistMemory interface {
+	Prepare(pls *playlists.Playlist, start int)
+}
+
+// RecordStop notes that Core is about to stop the current primary media. It is
+// a no-op when the environment carries no recorder. The returned function
+// withdraws the note when the stop did not take effect.
+func (e *CmdEnv) RecordStop(reason string) (cancel func()) {
+	if e != nil && e.RecordMediaStop != nil {
+		return e.RecordMediaStop(reason)
+	}
+	return func() {}
 }
 
 // ProfileSwitchRequest asks the script runner to change the device's
@@ -381,6 +440,11 @@ type ScanResult struct {
 	// Name is the display name of the media, shown to the users and used for
 	// search queries.
 	Name string
+	// LinkTarget is the absolute path of the media this entry is a symlink
+	// alias of, when the launcher indexes its alias trees as links. The index
+	// gives such a row its target's scraped data. A pipeline scanner that
+	// rebuilds results must carry it over or the link is lost.
+	LinkTarget string
 	// NoExt indicates this is a virtual path with no file extension.
 	// When true, filepath.Ext() extraction is skipped to avoid extracting
 	// garbage from paths like "/games/file.txt/Game (v1.0)" or "kodi://123/Dr. Strange".
@@ -392,6 +456,29 @@ type LaunchOptions struct {
 	// ActiveMediaPublisher is the launch-scoped publication callback supplied
 	// by Core. Launchers must not retain or invoke it directly.
 	ActiveMediaPublisher func(*models.ActiveMedia)
+	// LaunchedPath is set by a launcher that started a different file from the
+	// one it was given, such as the same arcade set on another root because
+	// the requested one has no core beside it. The media is published under
+	// it, so history names the file that ran.
+	LaunchedPath string
+	// MediaFinished is the launch-scoped callback a launcher invokes, at most
+	// once and from any goroutine, when the media it launched reached its
+	// natural end. It is never called for a stop, a quit or a replacement, and
+	// a launcher that cannot tell those apart must not call it. Core ignores
+	// the call when the launched media is no longer the active media.
+	MediaFinished func()
+	// MediaExited is the launch-scoped callback a launcher invokes, at most
+	// once and from any goroutine, when the media it launched ended without
+	// reaching its natural end and the launcher knows it: the user stopped it
+	// from the player's own controls, or the player closed. Core has usually
+	// already cleared the media when it asked for the stop, and then the call
+	// does nothing. Like MediaFinished it may be nil, and it is ignored when
+	// the launched media is no longer the active media.
+	MediaExited func()
+	// RecordMediaStop notes a Core-initiated stop of the current primary media
+	// before the launch preempts it. Core-supplied and may be nil; call it
+	// through RecordStop.
+	RecordMediaStop func(reason string) (cancel func())
 	// RenderScale is the preferred internal rendering size as a percentage of
 	// available output dimensions. It does not change physical display mode.
 	RenderScale *int
@@ -412,8 +499,26 @@ type LaunchOptions struct {
 	// SetName should keep the original game directory. On MiSTer this maps to the
 	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
 	SetNameSameDir string
+	// AudioStream is an http(s) stream Core has already probed, handed to
+	// the native audio launcher so playing it does not connect twice.
+	AudioStream *radio.Probe
 	// Slot selects the media slot for launch routing. Empty means primary.
 	Slot string
+	// PlaylistItem is set by Core when the launch plays a playlist item. A
+	// launcher that can stop media from looping on its own uses it to do so,
+	// since a playlist that waits for the media to finish never moves on from
+	// media that repeats; a launch from a scan keeps the player's own settings.
+	PlaylistItem bool
+}
+
+// RecordStop notes that Core is about to stop the current primary media.
+// It is a no-op when the launch carries no recorder. The returned function
+// withdraws the note when the stop did not take effect.
+func (o *LaunchOptions) RecordStop(reason string) (cancel func()) {
+	if o != nil && o.RecordMediaStop != nil {
+		return o.RecordMediaStop(reason)
+	}
+	return func() {}
 }
 
 // LaunchCommand is an executable and argument vector that can be delegated to
@@ -428,25 +533,43 @@ type LaunchCommand struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	Controls                 map[string]Control
-	Scanner                  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
-	Test                     func(*config.Instance, string) bool
-	Availability             func(*config.Instance) error
-	Preflight                func(*config.Instance, string, *LaunchOptions) error
-	Kill                     func(*config.Instance) error
-	Launch                   func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
-	BuildLaunchCommand       func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
-	WaitForReady             func(context.Context, *config.Instance, *models.ActiveMedia) error
-	ID                       string
-	SystemID                 string
-	UsesRunningInstance      string
-	AvailabilityReason       string
-	Detected                 *bool
-	Folders                  []string
-	Groups                   []string
-	Extensions               []string
-	ScanExcludes             []string
-	ScanDirectoryExcludes    []string
+	Controls map[string]Control
+	Scanner  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Test     func(*config.Instance, string) bool
+	// VirtualPathExists reports that a path which is not on disk names media
+	// this launcher can play, such as a game in a listing file. Optional. It
+	// must confirm the entry exists, not just that the path has its shape: a
+	// launch of a path that is neither on disk nor vouched for is refused.
+	VirtualPathExists  func(*config.Instance, string) bool
+	Availability       func(*config.Instance) error
+	Preflight          func(*config.Instance, string, *LaunchOptions) error
+	Kill               func(*config.Instance) error
+	Launch             func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	Collection         func(context.Context, *config.Instance, string) ([]CollectionItem, error)
+	BuildLaunchCommand func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
+	WaitForReady       func(context.Context, *config.Instance, *models.ActiveMedia) error
+	ReadyTimeout       func(*models.ActiveMedia) time.Duration
+	// GameRunning reports whether the frontend that started the media is
+	// running a game at all. Optional, and set only where the platform can
+	// tell for its own launches: once a launch's readiness wait has ended,
+	// media of a launcher that says nothing is running is cleared, so a game
+	// that never started is not left playing. Launchers without it, such as
+	// custom launchers that run scripts, are never checked.
+	GameRunning           func(context.Context, *config.Instance, *models.ActiveMedia) (bool, error)
+	ID                    string
+	SystemID              string
+	UsesRunningInstance   string
+	AvailabilityReason    string
+	Detected              *bool
+	Folders               []string
+	Groups                []string
+	Extensions            []string
+	ScanExcludes          []string
+	ScanDirectoryExcludes []string
+	// NoArchiveExtensions lists extensions the launcher can only load from a
+	// file on disk. With ZipsAsDirs, a matching entry inside an archive is not
+	// indexed for this launcher, since launching it could only fail.
+	NoArchiveExtensions      []string
 	Schemes                  []string
 	Lifecycle                LauncherLifecycle
 	SupportsDetails          bool
@@ -455,6 +578,18 @@ type Launcher struct {
 	ScanSkipInternalSymlinks bool
 	ScanOnly                 bool
 	Available                bool
+	// NoActiveMedia marks a launcher that runs an action instead of starting
+	// media, so Core publishes no active media for its launches.
+	NoActiveMedia bool
+}
+
+// CollectionItem is one piece of media inside a launcher's collection. A
+// launcher whose paths name a group of media instead of one item lists it
+// through Launcher.Collection, and each item's path is an ordinary launchable
+// path.
+type CollectionItem struct {
+	Name string
+	Path string
 }
 
 type BackupPattern struct {
@@ -584,7 +719,16 @@ type Scraper struct {
 	// AutoScrapeLaunchers opts successful index contributions into ordinary
 	// fill-missing jobs. Empty leaves this scraper manual-only.
 	AutoScrapeLaunchers []string
+	// AutoScrapeOrder places the scraper among the jobs an index queues:
+	// lower runs first, and scrapers with the same order run by ID. Index
+	// jobs only fill what is missing, so the scraper that runs first keeps
+	// any single-valued field two of them offer. See the scraper.AutoOrder
+	// constants.
+	AutoScrapeOrder     int
 	SupportsFillMissing bool
+	// AutoScrapeAllLaunchers opts in the contributions of every launcher, for
+	// a scraper that is not tied to particular ones.
+	AutoScrapeAllLaunchers bool
 }
 
 // LauncherResolver looks up a launcher by its unique ID. Implementations cover

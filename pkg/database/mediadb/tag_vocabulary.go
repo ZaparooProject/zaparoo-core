@@ -112,8 +112,10 @@ func acceptScrapeTargets(
 	copied := false
 	for i := range targets {
 		write := targets[i].Write
-		if err := tags.ValidateTagValue(tags.TagType(write.Sentinel.Type), write.Sentinel.Tag); err != nil {
-			return nil, fmt.Errorf("%s: sentinel: %w", method, err)
+		if write.Sentinel.Type != "" {
+			if err := tags.ValidateTagValue(tags.TagType(write.Sentinel.Type), write.Sentinel.Tag); err != nil {
+				return nil, fmt.Errorf("%s: sentinel: %w", method, err)
+			}
 		}
 		mediaTags := acceptTagInfos(write.Sentinel.Type, write.MediaTags)
 		titleTags := acceptTagInfos(write.Sentinel.Type, write.TitleTags)

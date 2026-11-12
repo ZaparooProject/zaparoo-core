@@ -41,8 +41,10 @@ func TestDiscoveryVisibilityFilters(t *testing.T) {
 		{"user:playlater", true},
 		{"-user:favorite", false},
 		{"-user:liked", false},
-		{"~user:playlater", false},
-		{"~user:favorite", false},
+		{"~user:playlater", true},
+		{"~user:favorite", true},
+		{"-user:hidden", false},
+		{"~genre:action", false},
 		{"genre:action", false},
 	} {
 		parsed, err := ParseTagFilters([]string{tc.tag})

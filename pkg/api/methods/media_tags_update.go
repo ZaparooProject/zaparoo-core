@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,6 +33,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,6 +71,18 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		return nil, models.ClientErrf("invalid remove tags: %w", err)
 	}
 
+	// Record changed preferences before their disposable projection. Adds win
+	// over removes, matching UpdateMediaTags; unrelated flags stay intact, and
+	// UserDB clears a flag the model forbids beside a requested one.
+	changes, err := requestedUserFlagChanges(add, remove)
+	if err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	if response, handled, dirErr := updateHiddenDirectory(&env, mediaRef, changes); handled || dirErr != nil {
+		return response, dirErr
+	}
+
 	resolveStarted := time.Now()
 	resolved, err := resolveMediaRefs(&env, []mediaRefParam{mediaRef})
 	if err != nil {
@@ -82,14 +97,6 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 
 	row := resolved[0].Row
 	resolveDuration := time.Since(resolveStarted)
-
-	// Record changed preferences before their disposable projection. Adds win
-	// over removes, matching UpdateMediaTags; unrelated flags stay intact, and
-	// UserDB clears a flag the model forbids beside a requested one.
-	changes, err := requestedUserFlagChanges(add, remove)
-	if err != nil {
-		return nil, models.ClientErrf("invalid params: %w", err)
-	}
 
 	updateStarted := time.Now()
 	projected, applyErr := database.ApplyMediaUserFlags(
@@ -178,6 +185,98 @@ func mutableUserTagList() string {
 		names = append(names, string(tags.TagTypeUser)+":"+string(v))
 	}
 	return strings.Join(names, ", ")
+}
+
+// updateHiddenDirectory handles a request that hides or unhides a folder: a
+// system and path that name no indexed file but do hold indexed media, with
+// user:hidden as the only change. The hide is recorded against the folder's
+// path, never against the files under it. handled is false for every other
+// request, which then resolves to one media item as before; that includes a
+// folder given any other tag, which still means its single launch target.
+func updateHiddenDirectory(
+	env *requests.RequestEnv, ref mediaRefParam, changes map[database.MediaUserFlag]bool,
+) (response any, handled bool, err error) {
+	hidden, onlyHidden := changes[database.MediaUserFlagHidden]
+	if ref.MediaID != nil || !onlyHidden || len(changes) != 1 {
+		return nil, false, nil
+	}
+	system, err := env.Database.MediaDB.FindSystemBySystemID(ref.System)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to resolve system: %w", err)
+	}
+	// Media paths are stored canonically, so a trailing slash or a backslash
+	// in the request must not make an indexed file look like a folder.
+	dirPath := pathutil.CanonicalMediaPath(ref.Path)
+	exact, err := env.Database.MediaDB.FindMediaBySystemAndPaths(env.Context, system.DBID, []string{dirPath})
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to find media: %w", err)
+	}
+	if _, isMedia := exact[dirPath]; isMedia {
+		return nil, false, nil
+	}
+
+	isDir, err := env.Database.MediaDB.HasMediaUnderDirectory(env.Context, system.DBID, dirPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to probe directory: %w", err)
+	}
+	if !isDir {
+		// A hidden path that has since left the index can still be unhidden.
+		stored, found, readErr := env.Database.UserDB.GetMediaUserData(system.SystemID, dirPath)
+		if readErr != nil {
+			return nil, false, fmt.Errorf("failed to read media user data: %w", readErr)
+		}
+		isDir = !hidden && found && stored.IsHidden
+	}
+	if !isDir {
+		return nil, false, nil
+	}
+	if hidden && !hiddenDirectoryIsListed(env, dirPath) {
+		return nil, true, models.ClientErrf("folder is not inside a library folder: %s", ref.Path)
+	}
+
+	changed, err := database.ApplyDirectoryHidden(env.Context, env.Database, system.SystemID, dirPath, hidden)
+	if err != nil {
+		return nil, true, mediaWriteClientError(
+			fmt.Errorf("failed to apply hidden directory: %w", err), database.MediaWriteOperationNone,
+		)
+	}
+	if changed && env.State != nil {
+		notifications.MediaVisibility(env.State.Notifications)
+	}
+	log.Debug().Str("system", system.SystemID).Str("path", dirPath).Bool("hidden", hidden).
+		Msg("media tags update applied to directory")
+	folderTags := make([]database.TagInfo, 0, 1)
+	if hidden {
+		folderTags = append(folderTags, hiddenDirectoryTag())
+	}
+	return models.TagsResponse{Tags: folderTags}, true, nil
+}
+
+// hiddenDirectoryIsListed reports whether a browse lists dirPath as an entry
+// of its parent: a folder below one of the library's own folders. Those
+// folders and everything above them hold indexed media as well, but nothing
+// lists them, so a hide there would have no entry to be undone from. A virtual
+// path has no such folder above it and is left to the index.
+func hiddenDirectoryIsListed(env *requests.RequestEnv, dirPath string) bool {
+	if strings.Contains(dirPath, "://") {
+		return true
+	}
+	for _, root := range browseRootDirs(env) {
+		if helpers.PathHasPrefix(dirPath, root) &&
+			helpers.NormalizePathForComparison(dirPath) != helpers.NormalizePathForComparison(root) {
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenDirectoryTag is how a hidden folder reports its state: the tag a
+// hidden file carries.
+func hiddenDirectoryTag() database.TagInfo {
+	return database.TagInfo{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserHidden)}
 }
 
 // requestedUserFlagChanges turns parsed add and remove tag lists into the

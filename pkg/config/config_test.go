@@ -1810,3 +1810,153 @@ zapscript = "**launch.system:SNES"
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.Mappings(), "a mapping deleted from config.toml must not survive a reload")
 }
+
+// A hand-edited config.toml with a syntax error is the user's to fix. Load
+// marks it so callers can tell it from a failure to read the file, and keeps
+// the running configuration.
+func TestLoad_UnparseableFileIsInvalidConfigFile(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, CfgFile), []byte("[audio\n"), 0o600))
+
+	err = cfg.Load()
+	require.ErrorIs(t, err, ErrInvalidConfigFile)
+	assert.True(t, cfg.AudioFeedback(), "a refused load keeps the running values")
+}
+
+func TestAudioMusicVolume_FollowsAudioVolumeUntilSet(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+	assert.Equal(t, 100, cfg.AudioMusicVolume())
+	assert.False(t, cfg.AudioMusicVolumeSet())
+
+	cfg.SetAudioVolume(40)
+	assert.Equal(t, 40, cfg.AudioMusicVolume(), "an unset music volume follows audio.volume")
+
+	cfg.SetAudioMusicVolume(0)
+	assert.True(t, cfg.AudioMusicVolumeSet())
+	assert.Equal(t, 0, cfg.AudioMusicVolume(), "0 is a real volume, not unset")
+
+	cfg.SetAudioMusicVolume(500)
+	assert.Equal(t, 200, cfg.AudioMusicVolume())
+	cfg.SetAudioMusicVolume(-5)
+	assert.Equal(t, 0, cfg.AudioMusicVolume())
+}
+
+func TestAudioMusicSettings_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioMusicAutoplay(), "autoplay is on by default")
+
+	cfg.SetAudioMusicVolume(150)
+	cfg.SetAudioMusicAutoplay(true)
+	require.NoError(t, cfg.Save())
+
+	data, err := os.ReadFile(filepath.Join(dir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "music_volume = 150")
+	assert.Contains(t, string(data), "music_autoplay = true")
+
+	loaded, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.Equal(t, 150, loaded.AudioMusicVolume())
+	assert.True(t, loaded.AudioMusicAutoplay())
+}
+
+func TestSetAudioPauseOnLaunch(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioPauseOnLaunch(), "pausing for games is on by default")
+
+	cfg.SetAudioPauseOnLaunch(false)
+	assert.False(t, cfg.AudioPauseOnLaunch())
+	defaults := cfg.SystemDefaults()
+	require.Len(t, defaults, 1, "an Audio entry is added when there is none")
+	assert.Equal(t, "Audio", defaults[0].System)
+
+	cfg.SetSystemDefaults([]SystemsDefault{
+		{System: "SNES", Launcher: "snes9x"},
+		{System: "audio", Launcher: "player"},
+	})
+	cfg.SetAudioPauseOnLaunch(true)
+	defaults = cfg.SystemDefaults()
+	require.Len(t, defaults, 2, "the existing Audio entry is used, whatever case names it")
+	require.NotNil(t, defaults[1].PauseOnLaunch)
+	assert.True(t, *defaults[1].PauseOnLaunch)
+	assert.Equal(t, "player", defaults[1].Launcher)
+	assert.Nil(t, defaults[0].PauseOnLaunch)
+}
+
+func TestAudioNormalize_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.AudioNormalize(), "normalization is on by default")
+
+	cfg.SetAudioNormalize(false)
+	require.NoError(t, cfg.Save())
+	data, err := os.ReadFile(filepath.Join(dir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "normalize = false")
+
+	loaded, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.False(t, loaded.AudioNormalize())
+}
+
+func TestMidiSoundFont(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	t.Run("unset uses FM", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		assert.Empty(t, cfg.MidiSoundFont())
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("relative path resolves under assets", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		cfg.SetMidiSoundFont("gm.sf2")
+		assert.Equal(t, "gm.sf2", cfg.MidiSoundFont())
+		assert.Equal(t, filepath.Join(dataDir, AssetsDir, "gm.sf2"), cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("absolute path kept", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		abs := filepath.Join(dataDir, "fonts", "gm.sf2")
+		cfg.SetMidiSoundFont(abs)
+		assert.Equal(t, abs, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("empty clears back to FM", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{fs: afero.NewMemMapFs()}
+		cfg.SetMidiSoundFont("gm.sf2")
+		cfg.SetMidiSoundFont("")
+		assert.Nil(t, cfg.vals.Audio.MidiSoundFont)
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+
+	t.Run("empty string in file uses FM", func(t *testing.T) {
+		t.Parallel()
+		empty := ""
+		cfg := &Instance{fs: afero.NewMemMapFs(), vals: Values{Audio: Audio{MidiSoundFont: &empty}}}
+		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
+	})
+}

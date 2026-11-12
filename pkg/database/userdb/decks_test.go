@@ -600,3 +600,272 @@ func TestUpsertFetchedDeckEvictsTheLongestUnfetched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, all, 4)
 }
+
+func TestSetDeckSaved(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
+	const link = "https://zpr.au/d$lhm6n9t8"
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: link, Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "someone", got.OwnerName)
+	list, err := db.ListDecks()
+	require.NoError(t, err)
+	for i := range list {
+		if list[i].DeckID == result.DeckID {
+			assert.True(t, list[i].Saved, "the list reads the flag too")
+			assert.Equal(t, "someone", list[i].OwnerName)
+		}
+	}
+
+	// A refresh from the link keeps the deck saved and its owner.
+	refreshed, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs, renamed", SourceURL: link, Items: []database.DeckItem{scriptItem("B", "**b")},
+	}, 10)
+	require.NoError(t, err)
+	require.True(t, refreshed.Changed)
+	got, err = db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, "Theirs, renamed", got.Name)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "someone", got.OwnerName)
+
+	require.NoError(t, db.SetDeckSaved(result.DeckID, false, ""))
+	got, err = db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
+
+	require.ErrorIs(t, db.SetDeckSaved("aaaaaaaaaaaa", true, "x"), database.ErrDeckOwned,
+		"an owned deck is never saved")
+	require.ErrorIs(t, db.SetDeckSaved("bbbbbbbbbbbb", true, "x"), database.ErrDeckNotFound)
+}
+
+func TestUpsertFetchedDeckNeverEvictsSavedDecks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+
+	ids := make([]string, 0, 3)
+	for i := range 3 {
+		result, err := db.UpsertFetchedDeck(&database.Deck{
+			Name: "Theirs", SourceURL: fmt.Sprintf("https://decks.example/%d", i),
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}, 2)
+		require.NoError(t, err)
+		require.Empty(t, result.Evicted)
+		ids = append(ids, result.DeckID)
+		_, err = db.sql.Load().ExecContext(t.Context(),
+			`update Decks set FetchedAt = ? where DeckID = ?;`, 100+i, result.DeckID)
+		require.NoError(t, err)
+		if i == 0 {
+			// The oldest copy is saved, so it neither goes nor takes a place.
+			require.NoError(t, db.SetDeckSaved(result.DeckID, true, ""))
+		}
+	}
+
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/new",
+		Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ids[1]}, result.Evicted, "the oldest unsaved copy makes room")
+	_, err = db.GetDeck(ids[0])
+	require.NoError(t, err, "a saved deck is never evicted")
+}
+
+func TestUpsertRemoteDeckOwnedNeverStaysSaved(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/1", Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+
+	_, err = db.UpsertRemoteDeck(&database.Deck{
+		DeckID: result.DeckID, Name: "Mine now", Owned: true, Items: []database.DeckItem{scriptItem("A", "**a")},
+	})
+	require.NoError(t, err)
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Owned)
+	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
+}
+
+// The saved deck migration adds columns with defaults, so decks kept before
+// it come back unsaved and keep everything else.
+func TestDeckSavedMigrationKeepsDecks(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/1", Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 10)
+	require.NoError(t, err)
+	require.NoError(t, db.SetDeckSaved(result.DeckID, true, "someone"))
+
+	require.NoError(t, database.MigrateDownTo(db.sql.Load(), migrationFiles, "migrations", 20261103120000-1))
+	require.NoError(t, sqlMigrateUp(db.sql.Load(), ""))
+
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, "Theirs", got.Name)
+	assert.Equal(t, "https://decks.example/1", got.SourceURL)
+	assert.Len(t, got.Items, 1)
+	assert.False(t, got.Saved)
+	assert.Empty(t, got.OwnerName)
+}
+
+// A deck stored saved from the start is not counted among the copies kept
+// from links, so storing it when they are full removes none of them.
+func TestUpsertFetchedDeckStoresASavedDeckWithoutEvicting(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	for i := range 2 {
+		_, err := db.UpsertFetchedDeck(&database.Deck{
+			Name: "Theirs", SourceURL: fmt.Sprintf("https://decks.example/%d", i),
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}, 2)
+		require.NoError(t, err)
+	}
+
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Saved", SourceURL: "https://zpr.au/d$lhm6n9t8", Saved: true, OwnerName: "sam",
+		Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 2)
+	require.NoError(t, err)
+	assert.Empty(t, result.Evicted)
+	got, err := db.GetDeck(result.DeckID)
+	require.NoError(t, err)
+	assert.True(t, got.Saved)
+	assert.Equal(t, "sam", got.OwnerName)
+	all, err := db.ListDecks()
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+
+	// Created decks are owned, and an owned deck is never stored saved.
+	require.NoError(t, db.CreateDeck(&database.Deck{
+		DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true, Saved: true, OwnerName: "x",
+	}))
+	mine, err := db.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err)
+	assert.False(t, mine.Saved)
+	assert.Empty(t, mine.OwnerName)
+}
+
+func TestDeckCoverColumns(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Mine", Owned: true}))
+	_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.CoverFile, deck.CoverPending = "a.png", database.DeckCoverPendingSet
+		return nil
+	})
+	require.NoError(t, err)
+
+	// A pull with a new image keeps a cover still waiting to be sent.
+	_, err = db.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true, ImageURL: "https://x/1",
+	})
+	require.NoError(t, err)
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, "a.png", got.CoverFile)
+	assert.Equal(t, "https://x/1", got.ImageURL)
+
+	// Settling a push of another cover leaves the newer change pending.
+	require.NoError(t, db.SettleDeckCoverPush("0123456789ab", database.DeckCoverPendingSet, "old.png", "https://x/2"))
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, database.DeckCoverPendingSet, got.CoverPending)
+	require.NoError(t, db.SettleDeckCoverPush("0123456789ab", database.DeckCoverPendingSet, "a.png", "https://x/2"))
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.CoverPending)
+	assert.Equal(t, "a.png", got.CoverFile)
+
+	// With nothing pending, a different image from the account replaces the
+	// local cover; the same one keeps it.
+	_, err = db.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true, ImageURL: "https://x/2",
+	})
+	require.NoError(t, err)
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, "a.png", got.CoverFile)
+	_, err = db.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true, ImageURL: "https://x/3",
+	})
+	require.NoError(t, err)
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.CoverFile)
+	assert.Equal(t, "https://x/3", got.RemoteImageURL())
+
+	require.NoError(t, db.DiscardDeckCover("0123456789ab", ""))
+	require.ErrorIs(t, db.SettleDeckCoverPush("zzzzzzzzzzzz", "", "", ""), database.ErrDeckNotFound)
+}
+
+func TestFindDeckItemsByAnchor(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	anchored := database.DeckItem{
+		Kind: database.DeckItemKindScript, Name: "G", ZapScript: "@NES/G",
+		Anchor: database.DeckItemAnchor{SystemID: "NES", Path: "roms/g.nes"},
+	}
+	require.NoError(t, db.CreateDeck(testDeck("0123456789ab", "One", scriptItem("A", "**a"), anchored)))
+	require.NoError(t, db.CreateDeck(testDeck("0123456789ac", "Two", scriptItem("B", "**b"))))
+	found, err := db.FindDeckItemsByAnchor("NES", "roms/g.nes")
+	require.NoError(t, err)
+	deck, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]int64{"0123456789ab": {deck.Items[1].DBID}}, found)
+	found, err = db.FindDeckItemsByAnchor("SNES", "roms/g.nes")
+	require.NoError(t, err)
+	assert.Empty(t, found)
+	// Another spelling of the same path finds it too.
+	found, err = db.FindDeckItemsByAnchor("NES", "roms/./sub/../g.nes")
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]int64{"0123456789ab": {deck.Items[1].DBID}}, found)
+}
+
+// A removal the account took also drops the image the deck's metadata
+// named, so the removed cover is not served again from there.
+func TestSettleDeckCoverPushRemovalDropsMetadataImage(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true,
+		Metadata: []byte(`{"image_url":"https://x/old.png","tint":"red"}`),
+	}))
+	_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.CoverPending = database.DeckCoverPendingRemove
+		return nil
+	})
+	require.NoError(t, err)
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.RemoteImageURL(), "hidden while the removal is pending")
+
+	require.NoError(t, db.SettleDeckCoverPush("0123456789ab", database.DeckCoverPendingRemove, "", ""))
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Empty(t, got.CoverPending)
+	assert.Empty(t, got.RemoteImageURL())
+	assert.JSONEq(t, `{"tint":"red"}`, string(got.Metadata))
+}

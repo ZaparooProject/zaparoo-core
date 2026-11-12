@@ -23,13 +23,16 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
@@ -278,6 +281,67 @@ func TestFillMissingRevisitsSentinelRowsAndMarksTheWrite(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetScrapedMediaIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestFillMissingSkipsASystemWhoseCatalogAndLibraryAreUnchanged(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := descriptor(t, fs, "Filled", "1941")
+	entry := cps1Entry()
+	fill := scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"}
+
+	newDB := func(stored string) *testhelpers.MockMediaDBI {
+		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+		mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
+		mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
+			Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
+		mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
+			Return(map[int64]struct{}{}, nil)
+		mediaDB.On("LibraryRevision", mock.Anything, systemdefs.SystemArcade).Return(int64(3), nil)
+		mediaDB.On("GetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade).Return(stored, nil)
+		return mediaDB
+	}
+
+	// The first run does the work and records the state it finished in.
+	first := newDB("")
+	var remembered string
+	first.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Run(func(args mock.Arguments) { remembered = args.String(3) }).Return(nil)
+	writes := captureWrites(t, first)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	run(t, &s, fs, first, fill)
+	require.Len(t, *writes, 1)
+	require.NotEmpty(t, remembered)
+
+	// With that state stored and nothing moved, the next run reads no rows.
+	unchanged := newDB(remembered)
+	skipped := captureWrites(t, unchanged)
+	updates := run(t, &s, fs, unchanged, fill)
+	assert.Empty(t, *skipped)
+	unchanged.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
+	assert.Equal(t, systemdefs.SystemArcade, updates[0].SystemID)
+
+	// A refreshed catalog is a new source, so the system is read again.
+	refreshed := entry
+	refreshed.Year = "1999"
+	changed := newDB(remembered)
+	changed.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Return(nil)
+	rewritten := captureWrites(t, changed)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(refreshed), nil)
+	run(t, &s, fs, changed, fill)
+	assert.Len(t, *rewritten, 1)
+
+	// A manual run never consults the fingerprint.
+	manual := newDB(remembered)
+	manual.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).Return(map[int64]struct{}{}, nil)
+	manual.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
+		Return(nil)
+	manualWrites := captureWrites(t, manual)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	run(t, &s, fs, manual, scraper.ScrapeOptions{})
+	assert.Len(t, *manualWrites, 1)
+}
+
 func TestScrapeRejectsFillMissingWithForce(t *testing.T) {
 	t.Parallel()
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(), nil)
@@ -484,4 +548,98 @@ func TestScrapeDoesNotLoadTitles(t *testing.T) {
 	require.Len(t, *writes, 1)
 	mediaDB.AssertNotCalled(t, "GetTitlesBySystemID", mock.Anything)
 	mediaDB.AssertExpectations(t)
+}
+
+// A scoped run, such as one game's "Update metadata", reads and writes only
+// the selected row. The system's other descriptors are never loaded.
+func TestScopedScrapeWritesOnlyTheSelectedRow(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	selected := descriptor(t, fs, "1941 - Counter Attack (World)", "1941")
+	descriptor(t, fs, "1942", "1941")
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+	scope := &database.ScrapeScope{SystemID: systemdefs.SystemArcade, Path: selected, MediaID: 100}
+	mediaDB.On("GetScrapeMedia", mock.Anything, *scope).Return([]database.MediaFullRow{{
+		Media:  database.Media{DBID: 100, MediaTitleDBID: 1, Path: selected},
+		Title:  database.MediaTitle{DBID: 1, Name: "1941", Slug: "1941"},
+		System: arcadeSystem(),
+	}}, nil).Once()
+	writes := captureWrites(t, mediaDB)
+
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{Scope: scope, Force: true})
+
+	last := final[len(final)-1]
+	assert.Equal(t, 1, last.Total)
+	assert.Equal(t, 1, last.Matched)
+	require.Len(t, *writes, 1)
+	assert.Equal(t, int64(100), (*writes)[0].MediaDBID)
+	mediaDB.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
+	mediaDB.AssertExpectations(t)
+}
+
+// A paused scrape reads no descriptor until the pause lifts, so a launch never
+// competes with the scrape for slow storage.
+func TestBuildTargetsWaitsWhilePaused(t *testing.T) {
+	t.Parallel()
+	var reads atomic.Int32
+	impl := &scraperImpl{
+		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
+		cache: func(string) (string, bool) {
+			reads.Add(1)
+			return "1941", true
+		},
+	}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		err     error
+		targets []database.ScrapeWriteTarget
+	}
+	done := make(chan result, 1)
+	go func() {
+		targets, _, err := impl.buildTargets(ctx, []descriptorRow{
+			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
+		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		done <- result{targets: targets, err: err}
+	}()
+
+	assert.Never(t, func() bool { return reads.Load() > 0 }, 50*time.Millisecond, 5*time.Millisecond,
+		"no descriptor is read while the scrape is paused")
+	pauser.Resume()
+	res := <-done
+	require.NoError(t, res.err)
+	assert.Len(t, res.targets, 1)
+	assert.Equal(t, int32(1), reads.Load())
+}
+
+// A scoped scrape cancelled while paused stops without reading a descriptor.
+func TestBuildTargetsCancelledWhilePaused(t *testing.T) {
+	t.Parallel()
+	var reads atomic.Int32
+	impl := &scraperImpl{
+		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
+		cache: func(string) (string, bool) {
+			reads.Add(1)
+			return "1941", true
+		},
+	}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := impl.buildTargets(ctx, []descriptorRow{
+			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
+		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		done <- err
+	}()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	assert.Zero(t, reads.Load())
 }

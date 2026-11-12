@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -69,6 +70,10 @@ func (p *Platform) startGameTracker(
 		return nil
 	}, nil
 }
+
+// kodiTracking reports whether a launch-scoped Kodi watcher owns the end of
+// the current Kodi media. Tests replace it.
+var kodiTracking = kodi.Tracking
 
 // checkKodiPlaybackStatus checks if Kodi is running and what's playing.
 // Returns the currently playing item as ActiveMedia, or nil if nothing is playing or Kodi is not running.
@@ -237,6 +242,13 @@ func (p *Platform) checkAndUpdateRunningGame(
 
 		// Kodi is running - check if playback state changed
 		if kodiMedia == nil && lastKnown != nil {
+			// A watcher still following this Kodi launch reports finished or
+			// exited itself, once it has waited out a possible loop or next
+			// queue item; clearing here would mislabel a natural end.
+			if kodiTracking(kodi.NewClient(p.cfg).GetURL()) {
+				log.Debug().Msg("Kodi playback gone, deferring to the launch watcher")
+				return
+			}
 			// Playback stopped
 			log.Info().Msg("detected Kodi playback stopped")
 			p.trackerMu.Lock()
@@ -333,8 +345,16 @@ func (p *Platform) checkAndUpdateRunningGame(
 		systemMeta.Name,
 		gameResp.Path,
 		gameResp.Name,
-		"", // LauncherID unknown for externally launched games
+		"",
 	)
+	// Name the launcher that would run this game so games started from
+	// EmulationStation can be controlled too. The emulator's hotkeys are not
+	// known yet, because configgen writes them after ES reports the game, so
+	// each control checks them when it runs.
+	if info, ok := esde.SystemMap[gameResp.SystemName]; ok {
+		newGame.LauncherID = info.GetLauncherID()
+		newGame.LauncherControls = hotkeyControlNames()
+	}
 
 	// Check if this is actually a new game (compare by path)
 	if lastKnown != nil && lastKnown.Path == newGame.Path {

@@ -85,14 +85,26 @@ func TestCustomLauncherUnknownFieldReporting(t *testing.T) {
 			switch mode {
 			case "unknown":
 				require.ErrorIs(t, err, ErrCustomLauncherUnknownFields)
-				require.EqualError(t, err, "failed to parse any custom launcher files")
+				require.EqualError(t, err, "failed to parse any custom launcher files: "+
+					"unknown.toml: unknown field launchers.custom.excute (line 3, column 1)")
 				assert.NotContains(t, output.String(), `"level":"error"`)
 			case "valid_and_unknown":
 				require.NoError(t, err)
 				assert.NotContains(t, output.String(), `"level":"error"`)
+			case "syntax_and_unknown":
+				// Both files are the user's content, so nothing is a fault.
+				require.ErrorIs(t, err, ErrCustomLauncherInvalid)
+				require.NotErrorIs(t, err, ErrCustomLauncherUnknownFields)
+				require.EqualError(t, err, "failed to parse any custom launcher files: "+
+					"syntax.toml: line 1, column 8: toml: expected '=' after key")
+				assert.NotContains(t, output.String(), `"level":"error"`)
+				assert.Contains(t, output.String(), "custom launcher file skipped: invalid TOML or value")
+				assert.Contains(t, output.String(), `"line":1`)
+				assert.NotContains(t, output.String(), "broken {{{")
 			default:
 				require.Error(t, err)
 				require.NotErrorIs(t, err, ErrCustomLauncherUnknownFields)
+				require.NotErrorIs(t, err, ErrCustomLauncherInvalid)
 				assert.Contains(t, output.String(), `"level":"error"`)
 			}
 			assert.Contains(t, output.String(), `"level":"warn"`)

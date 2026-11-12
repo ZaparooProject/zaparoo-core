@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
@@ -38,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
@@ -100,14 +103,15 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.InputManager
-	ctx                 context.Context
-	fs                  afero.Fs
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
+	launcherRBFCache    launcherRBFCache
+	ctx                 context.Context
+	fs                  afero.Fs
 	launcherManager     platforms.LauncherContextManager
-	trackedProcess      *os.Process
-	processDone         chan struct{} // Signals when tracked process cleanup completes
+	activeMedia         func() *models.ActiveMedia
+	profileData         *profileDataManager
+	processDone         chan struct{}
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
@@ -115,33 +119,50 @@ type Platform struct {
 	lastScan            *tokens.Token
 	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
-	activeMedia         func() *models.ActiveMedia
+	trackedProcess      *os.Process
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
-	profileData         *profileDataManager
+	stopRequestedProc   *os.Process
+	battery             *batteryBoard
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
 	launchCoreAtRBF     func(cores.RBFInfo) error
+	launchSystemCore    func(*config.Instance, platforms.Platform, *cores.Core) error
 	closeConsole        func() error
-	launcherRBFCache    launcherRBFCache
-	lastLauncher        platforms.Launcher
-	arcadeCardLaunch    arcadeCardLaunchCache
-	stopIntent          platforms.StopIntent
+	// uiReturnToMenu ends running media so the frontend can draw a UI
+	// event; nil stops the active launcher for the menu.
+	uiReturnToMenu func() error
+	// uiFrontendRunning reports whether the frontend process is up and
+	// holding its activity lease; nil means probe the lease file. Tests
+	// replace it.
+	uiFrontendRunning func() bool
+	// uiReloadWait replaces frontendReloadWait; tests shorten it.
+	uiReloadWait *time.Duration
+	coreLoads    coreLoadStops
+	lastLauncher platforms.Launcher
+	shared.InputManager
+	arcadeCardLaunch arcadeCardLaunchCache
+	stopIntent       platforms.StopIntent
+	processMu        syncutil.RWMutex
+	platformMu       syncutil.Mutex
+	// uiAbandonedPID is the orphaned status file pid HandOffUI last gave up
+	// waiting on.
+	uiAbandonedPID      atomic.Int64
 	trackedProcessGroup bool
-	processMu           syncutil.RWMutex
-	platformMu          syncutil.Mutex
 }
 
 func NewPlatform() *Platform {
 	p := &Platform{
-		platformMu:      syncutil.Mutex{},
-		fs:              afero.NewOsFs(),
-		launchShortCore: mgls.LaunchShortCore,
-		launchBasicFile: mgls.LaunchBasicFile,
-		launchCoreAtRBF: mgls.LaunchCoreAtRBF,
+		platformMu:       syncutil.Mutex{},
+		fs:               afero.NewOsFs(),
+		launchShortCore:  mgls.LaunchShortCore,
+		launchBasicFile:  mgls.LaunchBasicFile,
+		launchCoreAtRBF:  mgls.LaunchCoreAtRBF,
+		launchSystemCore: mgls.LaunchCore,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
+	p.battery = newBatteryBoard()
 	return p
 }
 
@@ -187,6 +208,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		tty2oled.NewReader(cfg, p),
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
@@ -465,6 +487,38 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	p.trackedProcess = nil
 	p.processDone = nil
 	p.trackedProcessGroup = false
+	if p.stopRequestedProc == proc {
+		p.stopRequestedProc = nil
+	}
+}
+
+// clearMediaAfterProcessExit clears the active media once a console launcher
+// process has ended on its own. It does nothing when Core stopped the process
+// (the stop path clears media itself), when a newer process is tracked, or when
+// the active media belongs to a different launcher.
+func (p *Platform) clearMediaAfterProcessExit(proc *os.Process, launcherID string) bool {
+	p.processMu.RLock()
+	current := p.trackedProcess == proc
+	stoppedByCore := p.stopRequestedProc == proc
+	p.processMu.RUnlock()
+	if !current || stoppedByCore || p.setActiveMedia == nil {
+		return false
+	}
+	if p.activeMedia != nil {
+		media := p.activeMedia()
+		if media == nil || media.LauncherID != launcherID {
+			return false
+		}
+	}
+	p.setActiveMedia(nil)
+	return true
+}
+
+// processStoppedByCore reports whether Core asked proc to stop.
+func (p *Platform) processStoppedByCore(proc *os.Process) bool {
+	p.processMu.RLock()
+	defer p.processMu.RUnlock()
+	return p.stopRequestedProc == proc
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
@@ -760,12 +814,29 @@ func (p *Platform) clearTrackedActiveGame() {
 	}
 }
 
+// KeyboardPressSequence primes Main's virtual keyboard when a core has loaded
+// since the last sequence, so the first typed keys are not lost.
+func (p *Platform) KeyboardPressSequence(args []string, interKeyDelay time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), readyPrimeSettle*5)
+	defer cancel()
+	if err := launchReadiness.primeForInput(ctx); err != nil {
+		log.Debug().Err(err).Msg("keyboard priming cut short; continuing")
+	}
+	if err := p.InputManager.KeyboardPressSequence(args, interKeyDelay); err != nil {
+		return fmt.Errorf("keyboard sequence: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.processMu.Lock()
 	p.stopIntent = intent
 	proc := p.trackedProcess
 	done := p.processDone
 	processGroup := p.trackedProcessGroup
+	if proc != nil {
+		p.stopRequestedProc = proc
+	}
 	p.processMu.Unlock()
 
 	if proc == nil && intent == platforms.StopForPreemption && p.launcherManager != nil {
@@ -798,8 +869,10 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 
 	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
-		if err := p.ReturnToMenu(); err != nil {
+		if err := p.loadMenu(intent == platforms.StopForMenu); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
+			// The core is still running, so callers must not treat it as stopped.
+			return fmt.Errorf("%w: %w", platforms.ErrStopFailed, err)
 		}
 	}
 
@@ -810,7 +883,14 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	return nil
 }
 
+// ReturnToMenu stops what is running and loads the menu core. A core still
+// being loaded for a launch is stopped once it is up: Main drops the menu
+// request it gets while loading a core.
 func (p *Platform) ReturnToMenu() error {
+	return p.loadMenu(true)
+}
+
+func (p *Platform) loadMenu(stopLoadingCore bool) error {
 	p.processMu.Lock()
 	hasTrackedProcess := p.trackedProcess != nil
 	p.processMu.Unlock()
@@ -832,6 +912,9 @@ func (p *Platform) ReturnToMenu() error {
 	if err != nil {
 		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
+	}
+	if stopLoadingCore {
+		p.coreLoads.stopWhenLoaded(time.Now())
 	}
 	p.clearTrackedActiveGame()
 
@@ -870,7 +953,23 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	if err = mgls.LaunchCore(cfg, p, system); err != nil {
+	// The bare Minimig core boots without AmigaVision's settings, to a black
+	// screen. With AmigaVision installed, the menu's Amiga entry is its MGL.
+	if system.ID == systemdefs.SystemAmiga {
+		if mglPath, ok := installedAmigaVisionMGL(); ok {
+			if launchErr := p.launchBasicFilePath(mglPath); launchErr != nil {
+				return fmt.Errorf("failed to launch AmigaVision: %w", launchErr)
+			}
+			p.clearTrackedActiveGame()
+			return nil
+		}
+	}
+
+	launchCore := p.launchSystemCore
+	if launchCore == nil {
+		launchCore = mgls.LaunchCore
+	}
+	if err = launchCore(cfg, p, system); err != nil {
 		// The system's own core is not installed, but an alternate
 		// implementation of it may be. Launchers are already ordered by
 		// preference, so the first core-backed one that resolves is the one a
@@ -935,6 +1034,7 @@ func (p *Platform) LaunchMedia(
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
+	p.coreLoads.launched(time.Now())
 	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
 
@@ -1326,16 +1426,17 @@ func splitAmigaVisionInstallPaths(paths []mediascanner.PathResult) (
 	preferred = make([]mediascanner.PathResult, 0, len(paths))
 	other = make([]mediascanner.PathResult, 0, len(paths))
 
-	for _, path := range paths {
+	for i := range paths {
+		path := &paths[i]
 		if !hasAmigaVisionImage(path.Path) {
 			log.Debug().Str("path", path.Path).Msg("skipping AmigaVision path without boot image")
 			continue
 		}
 		if isPreferredAmigaVisionPath(path.Path) {
-			preferred = append(preferred, path)
+			preferred = append(preferred, *path)
 			continue
 		}
-		other = append(other, path)
+		other = append(other, *path)
 	}
 
 	return preferred, other
@@ -1415,6 +1516,17 @@ func amigaVisionListingContainsGame(installPath, listingName, gameName string) b
 	return false
 }
 
+// amigaVisionVirtualEntryExists reports whether a Games or Demos path names a
+// game in the listing of an install with a boot image, which is how the
+// scanner built the path.
+func amigaVisionVirtualEntryExists(path string) bool {
+	virtualPath, ok := amigaVisionVirtualPathParts(path)
+	if !ok || !hasAmigaVisionImage(virtualPath.InstallPath) {
+		return false
+	}
+	return amigaVisionListingContainsGame(virtualPath.InstallPath, virtualPath.ListingName, virtualPath.GameName)
+}
+
 func isAmigaVisionVirtualPath(path string) bool {
 	virtualPath, ok := amigaVisionVirtualPathParts(path)
 	if !ok {
@@ -1452,6 +1564,16 @@ func scanAmigaVisionListingFile(path, installPath string, listing amigaVisionLis
 		log.Warn().Err(err).Str("path", path).Msg("unable to scan amiga txt")
 	}
 	return results
+}
+
+// installedAmigaVisionMGL returns the first AmigaVision MGL on the SD card.
+func installedAmigaVisionMGL() (string, bool) {
+	for _, mglPath := range amigaVisionMGLPaths {
+		if _, err := os.Stat(mglPath); err == nil {
+			return mglPath, true
+		}
+	}
+	return "", false
 }
 
 func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platforms.ScanResult {
@@ -1586,6 +1708,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			return isAmigaVisionVirtualPath(path)
 		},
+		VirtualPathExists: func(_ *config.Instance, path string) bool {
+			return isAmigaVisionVirtualMGLPath(path) || amigaVisionVirtualEntryExists(path)
+		},
 		Launch: launchAmiga(p),
 		Scanner: func(
 			ctx context.Context,
@@ -1616,7 +1741,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			validPaths = append(validPaths, preferredPaths...)
 			validPaths = append(validPaths, otherPaths...)
 
-			for _, sf := range validPaths {
+			for pathIdx := range validPaths {
+				sf := &validPaths[pathIdx]
 				select {
 				case <-ctx.Done():
 					return results, ctx.Err()
@@ -1684,13 +1810,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			// Collect NEOGEO paths for filtering
 			neogeoPaths := make([]string, len(sfs))
-			for i, sf := range sfs {
-				neogeoPaths[i] = sf.Path
+			for i := range sfs {
+				neogeoPaths[i] = sfs[i].Path
 			}
 			log.Debug().Int("paths", len(sfs)).Strs("roots", neogeoPaths).Msg("neogeo scan paths found")
 
 			// First pass: load all romsets from all directories
-			for _, sf := range sfs {
+			for pathIdx := range sfs {
+				sf := &sfs[pathIdx]
 				select {
 				case <-ctx.Done():
 					return results, ctx.Err()
@@ -1740,7 +1867,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			} else {
 				osFs := afero.NewOsFs()
 				seenNeoGeoEntries := make(map[string]struct{})
-				for _, sf := range sfs {
+				for pathIdx := range sfs {
+					sf := &sfs[pathIdx]
 					select {
 					case <-ctx.Done():
 						return results, ctx.Err()
@@ -1772,11 +1900,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	neogeo, neogeoMVS := addNeoGeoMVSLauncher(p, &neogeo)
-	ls := addArcadeSystemLaunchers(p, CreateLaunchers(p))
+	ls := withCoreReadiness(p, withCoreControls(p, addArcadeSystemLaunchers(p, CreateLaunchers(p))))
+	ls = append(ls, withCoreReadiness(p, withCoreControls(p, []platforms.Launcher{amiga, neogeo, neogeoMVS}))...)
 	ls = append(
-		ls, amiga, neogeo, neogeoMVS,
+		ls,
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
+		createScriptsLauncher(p),
 	)
+	ls = applyNoArchiveExtensions(ls)
 	setCoreAvailability(ls)
 
 	return helpers.CombineLaunchers(cfg, p, prioritizeNGPCCore(cfg, ls))
@@ -1788,6 +1919,21 @@ func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {
 	}
 	return 0
 }
+
+// RendersUIKind reports the events PresentUI can show, which is every kind.
+func (*Platform) RendersUIKind(kind models.UIEventKind) bool {
+	switch kind {
+	case models.UIEventKindNotice, models.UIEventKindLoader,
+		models.UIEventKindPicker, models.UIEventKindConfirm:
+		return true
+	default:
+		return false
+	}
+}
+
+// RendersOverMedia is false: the MiSTer menu widget replaces the running core,
+// so an event shown while a game runs ends that game.
+func (*Platform) RendersOverMedia() bool { return false }
 
 func (p *Platform) PresentUI(
 	ctx context.Context,
@@ -1845,9 +1991,13 @@ func (p *Platform) PresentUI(
 			selected = 0
 		} else {
 			for i, choice := range event.Choices {
+				name := choice.Label
+				if choice.Current {
+					name = "> " + name
+				}
 				items = append(items, widgetmodels.PickerItem{
 					ID:     choice.ID,
-					Name:   choice.Label,
+					Name:   name,
 					Action: models.UIResponseActionSelect,
 				})
 				if choice.ID == event.SelectedChoiceID {
@@ -1908,11 +2058,13 @@ func (*Platform) ManagedByPackageManager() bool {
 func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
-	docs := misterdocs.NewPlatformScraper()
+	docs := misterdocs.NewPlatformScraper(misterdocs.SetNameCache(NewArcadeSetNameCache(p)))
 	arcade := NewArcadeScraper(p, ArcadeSystemIDs())
 	thumbnails := libretrothumbs.NewPlatformScraper()
+	catalog := gamedatabase.NewPlatformScraper(gamedatabase.SetNameCache(NewArcadeSetNameCache(p)))
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade, thumbnails.ID: thumbnails,
+		catalog.ID: catalog,
 	}
 }
 
@@ -1959,4 +2111,11 @@ func (p *Platform) CheckAndClearArcadeCardLaunch(setname string) bool {
 		Msg("suppressing duplicate arcade notification")
 	p.arcadeCardLaunch.setname = ""
 	return true
+}
+
+// isTrackedProcess reports whether proc is the currently tracked process.
+func (p *Platform) isTrackedProcess(proc *os.Process) bool {
+	p.processMu.RLock()
+	defer p.processMu.RUnlock()
+	return p.trackedProcess == proc
 }

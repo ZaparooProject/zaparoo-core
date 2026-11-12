@@ -309,6 +309,16 @@ func sqlDeleteProfile(ctx context.Context, db *sql.DB, profileID string) error {
 		return fmt.Errorf("failed to clear active profile device state: %w", err)
 	}
 
+	for _, stmt := range []string{
+		`DELETE FROM PlaylistMemory WHERE ProfileID = ?;`,
+		`DELETE FROM OpenPlaylists WHERE ProfileID = ?;`,
+		`DELETE FROM MediaPositions WHERE ProfileID = ?;`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, profileID); err != nil {
+			return fmt.Errorf("failed to clear profile playlist state: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit profile delete transaction: %w", err)
 	}

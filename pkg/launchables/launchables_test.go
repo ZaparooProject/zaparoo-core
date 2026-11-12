@@ -382,3 +382,13 @@ func TestLaunchablesRejectsInvalidMediaSystem(t *testing.T) {
 		Launchables(&config.Instance{}, platform)
 	})
 }
+
+func TestIsLauncherID(t *testing.T) {
+	t.Parallel()
+
+	system := VirtualSystem{ID: MisterOtherChess, Name: "Chess"}
+	generated := systemLauncher(&system).ID
+	assert.True(t, IsLauncherID(generated))
+	assert.False(t, IsLauncherID("Genesis"))
+	assert.False(t, IsLauncherID("zaparoovirtual-"+EncodeID(MisterOtherChess)))
+}

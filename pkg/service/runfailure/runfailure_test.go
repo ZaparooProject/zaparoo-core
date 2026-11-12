@@ -67,6 +67,14 @@ func TestClassify(t *testing.T) {
 		},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, category: models.ErrorCategoryInvalidScript},
 		{
+			name: "write with other commands", category: models.ErrorCategoryInvalidScript,
+			err: zapscript.ErrWriteNotAlone,
+		},
+		{
+			name: "write outside a token", category: models.ErrorCategoryInvalidScript,
+			err: zapscript.ErrWriteUnsupported,
+		},
+		{
 			name: "invalid advanced arguments", category: models.ErrorCategoryInvalidScript,
 			err: fmt.Errorf("%w: slot", zapscript.ErrInvalidArguments),
 		},
@@ -75,6 +83,14 @@ func TestClassify(t *testing.T) {
 			err: fmt.Errorf("%w: execute", zapscript.ErrCommandNotPermitted),
 		},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, category: models.ErrorCategoryInvalidScript},
+		{
+			name: "rotation time under a second", category: models.ErrorCategoryInvalidScript,
+			err: fmt.Errorf("%w: advance=500ms", zapscript.ErrInvalidRotation),
+		},
+		{
+			name: "playlist start out of range", category: models.ErrorCategoryInvalidScript,
+			err: fmt.Errorf("%w: start=0", zapscript.ErrInvalidPlaylistStart),
+		},
 		{name: "blocked", err: zapscript.ErrCommandBlocked, category: models.ErrorCategoryBlocked},
 		{name: "requires profile", err: state.ErrLaunchRequiresProfile, category: models.ErrorCategoryBlocked},
 		{name: "playtime", err: playtime.ErrLimitReached, category: models.ErrorCategoryPlaytimeLimit},

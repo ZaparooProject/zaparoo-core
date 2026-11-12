@@ -21,13 +21,86 @@ package kodi
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/jonboulle/clockwork"
 )
+
+// readyPollInterval is how often a readiness probe asks Kodi for its players.
+const readyPollInterval = 250 * time.Millisecond
+
+// kodiReady builds the WaitForReady probe shared by the Kodi launchers.
+func kodiReady(id string, groups []string) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return waitForPlayer(func(cfg *config.Instance) KodiClient {
+		return NewClientWithLauncherID(cfg, id, groups)
+	}, clockwork.NewRealClock())
+}
+
+// waitForPlayer returns a launcher readiness probe that polls Kodi until the
+// launched media is playing, which is when playback controls act on it.
+// Player.Open returns before playback starts, and Kodi may not be reachable
+// at all yet, so a failed query is retried and reported as unavailable if it
+// is still failing when the wait ends.
+//
+// A player that is already running when the probe starts is playing something
+// else. Its item is remembered, and the probe is ready once the item changes
+// or is the launched media by name.
+func waitForPlayer(
+	newClient func(*config.Instance) KodiClient,
+	clock clockwork.Clock,
+) func(context.Context, *config.Instance, *models.ActiveMedia) error {
+	return func(ctx context.Context, cfg *config.Instance, media *models.ActiveMedia) error {
+		client := newClient(cfg)
+		var before *PlayerItem
+		first := true
+		return platforms.PollReady(ctx, clock, readyPollInterval, func(ctx context.Context) (bool, error) {
+			players, err := client.GetActivePlayers(ctx)
+			if err != nil {
+				return false, fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
+			}
+			if len(players) == 0 {
+				first = false
+				return false, nil
+			}
+			if media == nil {
+				return true, nil
+			}
+			item, itemErr := client.GetPlayerItem(ctx, players[0].ID)
+			if itemErr != nil || item == nil {
+				// An item that cannot be read cannot be told apart from the
+				// last one; an active player is the best signal left.
+				return true, nil //nolint:nilerr // see above
+			}
+			if media.Name != "" && (item.Label == media.Name || item.Title == media.Name) {
+				return true, nil
+			}
+			if media.Path != "" && item.File != "" &&
+				filepath.Clean(media.Path) == filepath.Clean(item.File) {
+				return true, nil
+			}
+			if first && before == nil {
+				before = item
+				first = false
+				return false, nil
+			}
+			first = false
+			return before == nil || !sameKodiItem(before, item), nil
+		})
+	}
+}
+
+// sameKodiItem reports whether two player items are the same media.
+func sameKodiItem(a, b *PlayerItem) bool {
+	return a.File == b.File && a.Label == b.Label && a.Type == b.Type
+}
 
 // kodiControls builds a Controls map for Kodi launchers with standard
 // playback controls. The launcherID and groups are captured by closures
@@ -49,6 +122,16 @@ func kodiControls(
 		platforms.ControlTogglePause: {
 			Func: cf(func(ctx context.Context, c KodiClient) error {
 				return c.PlayPause(ctx)
+			}),
+		},
+		platforms.ControlPause: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.SetPaused(ctx, true)
+			}),
+		},
+		platforms.ControlResume: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.SetPaused(ctx, false)
 			}),
 		},
 		platforms.ControlStop: {
@@ -85,6 +168,7 @@ func NewKodiLocalLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemVideo,
@@ -95,9 +179,11 @@ func NewKodiLocalLauncher() platforms.Launcher {
 			".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
 			".m3u", ".m3u8",
 		},
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchFile(path)
+			return nil, launchTracked(client, opts, expectation{}, func(c KodiClient) error {
+				return c.LaunchFile(path)
+			})
 		},
 	}
 }
@@ -108,15 +194,19 @@ func NewKodiMovieLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMovie,
 		Schemes:             []string{shared.SchemeKodiMovie},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchMovie(path)
+			exp := libraryExpectation(path, shared.SchemeKodiMovie, "movie")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchMovie(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -136,15 +226,19 @@ func NewKodiTVLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVEpisode,
 		Schemes:             []string{shared.SchemeKodiEpisode},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchTVEpisode(path)
+			exp := libraryExpectation(path, shared.SchemeKodiEpisode, "episode")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchTVEpisode(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -164,6 +258,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,
@@ -172,9 +267,11 @@ func NewKodiMusicLauncher() platforms.Launcher {
 		Extensions: []string{
 			".mp3", ".flac", ".ogg", ".m4a", ".wav", ".wma", ".aac", ".opus",
 		},
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchFile(path)
+			return nil, launchTracked(client, opts, expectation{}, func(c KodiClient) error {
+				return c.LaunchFile(path)
+			})
 		},
 	}
 }
@@ -185,15 +282,18 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicAlbum,
 		Schemes:             []string{shared.SchemeKodiAlbum},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchAlbum(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchAlbum(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -204,6 +304,11 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanAlbums(ctx, client, cfg, path, results)
 		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectAlbum(ctx, NewClientWithLauncherID(cfg, id, groups), path)
+		},
 	}
 }
 
@@ -213,15 +318,18 @@ func NewKodiArtistLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicArtist,
 		Schemes:             []string{shared.SchemeKodiArtist},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchArtist(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchArtist(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -232,6 +340,11 @@ func NewKodiArtistLauncher() platforms.Launcher {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanArtists(ctx, client, cfg, path, results)
 		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectArtist(ctx, NewClientWithLauncherID(cfg, id, groups), path)
+		},
 	}
 }
 
@@ -241,15 +354,18 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVShow,
 		Schemes:             []string{shared.SchemeKodiShow},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchTVShow(path)
+			return nil, launchTracked(client, opts, expectation{queue: true}, func(c KodiClient) error {
+				return c.LaunchTVShow(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,
@@ -260,6 +376,11 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 			client := NewClientWithLauncherID(cfg, id, groups)
 			return ScanTVShows(ctx, client, cfg, path, results)
 		},
+		Collection: func(
+			ctx context.Context, cfg *config.Instance, path string,
+		) ([]platforms.CollectionItem, error) {
+			return CollectTVShow(ctx, NewClientWithLauncherID(cfg, id, groups), path)
+		},
 	}
 }
 
@@ -269,15 +390,19 @@ func NewKodiSongLauncher() platforms.Launcher {
 	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
+		WaitForReady:        kodiReady(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,
 		Schemes:             []string{shared.SchemeKodiSong},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			return nil, client.LaunchSong(path)
+			exp := libraryExpectation(path, shared.SchemeKodiSong, "song")
+			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
+				return c.LaunchSong(path)
+			})
 		},
 		Scanner: func(
 			ctx context.Context,

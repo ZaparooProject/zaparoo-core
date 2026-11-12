@@ -24,8 +24,12 @@ package tracker
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,5 +74,56 @@ func TestLookupCoreNameAlternateCores(t *testing.T) {
 			t.Parallel()
 			assert.Nil(t, tr.LookupCoreName(tc.core))
 		})
+	}
+}
+
+func TestCoreNameAliases_MapToKnownSystems(t *testing.T) {
+	t.Parallel()
+
+	for coreName, systemID := range coreNameAliases() {
+		_, err := systemdefs.LookupSystem(systemID)
+		require.NoError(t, err, coreName)
+		assert.True(t, coreMatchesSystem(coreName, systemID, []NameMapping{
+			{CoreName: coreName, System: systemID, Name: systemID},
+		}), coreName)
+	}
+	assert.Equal(t, "ZXSpectrum", coreNameAliases()["Spectrum"])
+}
+
+// Some catalog cores are named for the machine rather than the system, such as
+// MacQuadra800 for MacOS and Z486 for DOS. Their name map entry used the core
+// ID as the system, so every load of one logged an unknown system and the core
+// matched no system at all.
+func TestGenerateNameMapResolvesCatalogCoresToTheirSystem(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("mock-platform").Maybe()
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "MacQuadra800", SystemID: systemdefs.SystemMacOS},
+		{ID: "Z486", SystemID: systemdefs.SystemDOS},
+		{ID: "MegaVGMDrive", SystemID: systemdefs.SystemAudio},
+	})
+
+	nameMap := generateNameMap(pl, &config.Instance{})
+	for i := range nameMap {
+		if nameMap[i].System == ArcadeSystem {
+			continue
+		}
+		_, err := systemdefs.LookupSystem(nameMap[i].System)
+		require.NoError(t, err, "core %q", nameMap[i].CoreName)
+	}
+
+	tr := &Tracker{NameMap: nameMap}
+	for core, system := range map[string]string{
+		"MacQuadra800": systemdefs.SystemMacOS,
+		"Z486":         systemdefs.SystemDOS,
+		"MegaVGMDrive": systemdefs.SystemAudio,
+	} {
+		mapping := tr.LookupCoreName(core)
+		require.NotNil(t, mapping, core)
+		assert.Equal(t, system, mapping.System, core)
+		assert.True(t, coreMatchesSystem(core, system, nameMap), core)
 	}
 }

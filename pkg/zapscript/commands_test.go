@@ -35,8 +35,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -444,6 +447,7 @@ func TestIsSensitiveCommand(t *testing.T) {
 		zapscript.ZapScriptCmdInputKeyboard,
 		zapscript.ZapScriptCmdInputGamepad,
 		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdWrite,
 		zapscript.ZapScriptCmdInputKey, // deprecated
 		zapscript.ZapScriptCmdKey,      // deprecated
 		zapscript.ZapScriptCmdGet,      // deprecated
@@ -852,6 +856,51 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			level: "warn",
 		},
 		{
+			name:  "no active playlist is expected",
+			err:   fmt.Errorf("wrapped: %w", ErrNoPlaylistActive),
+			level: "warn",
+		},
+		{
+			name:  "invalid launch format is expected",
+			err:   fmt.Errorf("%w: sfiii2n", ErrInvalidLaunchFormat),
+			level: "warn",
+		},
+		{
+			name:  "media with no launcher is expected",
+			err:   fmt.Errorf("%w for: game.xyz", helpers.ErrNoLauncher),
+			level: "warn",
+		},
+		{
+			name:  "unavailable launcher is expected",
+			err:   fmt.Errorf("failed to send request: %w", platforms.ErrLauncherUnavailable),
+			level: "warn",
+		},
+		{
+			name:  "launcher given another scheme's path is expected",
+			err:   fmt.Errorf("%w: expected launchbox, got steam", virtualpath.ErrSchemeMismatch),
+			level: "warn",
+		},
+		{
+			name:  "execute timeout is expected",
+			err:   fmt.Errorf("%w after 2s", ErrExecuteTimeout),
+			level: "warn",
+		},
+		{
+			name:  "execute non-zero exit is expected",
+			err:   fmt.Errorf("%w: exit status 1", ErrExecuteExitStatus),
+			level: "warn",
+		},
+		{
+			name:  "playtime limit is expected",
+			err:   playtime.ErrLimitReached,
+			level: "warn",
+		},
+		{
+			name:  "launch blocked by hook is expected",
+			err:   state.ErrLaunchBlockedByHook,
+			level: "warn",
+		},
+		{
 			name:  "malformed Kodi response stays reportable",
 			err:   fmt.Errorf("control action stop failed: %w", &json.SyntaxError{}),
 			level: "error",
@@ -992,6 +1041,59 @@ func TestRunCommandUnboundedTokenRunsAnyCommand(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnknownCommand)
 	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
+}
+
+// TestRunCommandWriteNotAlone pins that a write sharing a script with other
+// commands says why it can't run instead of reporting an unknown command.
+func TestRunCommandWriteNotAlone(t *testing.T) {
+	t.Parallel()
+
+	script, err := zapscript.NewParser("**write:hello||**stop").ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 2)
+
+	_, err = RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		script.Cmds[0],
+		len(script.Cmds),
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrWriteNotAlone)
+	require.NotErrorIs(t, err, ErrUnknownCommand)
+	assert.True(t, IsExpectedRunError(err))
+}
+
+// TestRunCommandWriteOutsideToken pins that a write which is a script's only
+// command, but reaches the runner because nothing armed it (a control script),
+// is not blamed on other commands.
+func TestRunCommandWriteOutsideToken(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceControl},
+		zapscript.Command{Name: zapscript.ZapScriptCmdWrite, Args: []string{"hello"}},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrWriteUnsupported)
+	require.NotErrorIs(t, err, ErrWriteNotAlone)
+	assert.True(t, IsExpectedRunError(err))
 }
 
 // TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
@@ -1176,6 +1278,29 @@ func TestRunCommandOwnedDeckZapLinkPlaysAsServed(t *testing.T) {
 	all, err := db.UserDB.ListDecks()
 	require.NoError(t, err)
 	assert.Empty(t, all, "no read-only copy of the user's own deck is kept")
+}
+
+// A ZapLink that serves a plain stream URL keeps that URL's query string,
+// the way the same URL written on a card does.
+func TestRunCommandZapLinkStreamURLKeepsItsQuery(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	stream := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(stream.Close)
+	want := stream.URL + "/live?id=station"
+	link, db := ownedLinkServer(t, want)
+
+	pl := newPlaylistTestPlatform()
+	pl.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	_, err := RunCommand(
+		t.Context(), pl, &config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{Name: "launch", Args: []string{link}},
+		1, 0, db, &RunCommandOptions{LauncherManager: state.NewLauncherManager()}, &zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{want}, pl.GetLaunchedMedia())
 }
 
 // TestRunCommandZapLinkCannotWidenTokenPolicy is the point of the bound: a
@@ -1396,4 +1521,9 @@ func TestRunCommandBoundedTokenAllowsArgumentlessCommand(t *testing.T) {
 	)
 
 	require.NoError(t, err)
+}
+
+func TestIsExpectedRunError_Nil(t *testing.T) {
+	t.Parallel()
+	assert.False(t, IsExpectedRunError(nil))
 }

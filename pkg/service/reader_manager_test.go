@@ -498,6 +498,30 @@ func TestReaderManager_WrittenTagRemovalAllowsImmediateLaunch(t *testing.T) {
 	assert.Equal(t, "just-written", tok.UID)
 }
 
+// A tag that is scanned, rewritten with the text it already held, lifted and
+// presented again has the same UID and text as the scan before the write. The
+// written tag's removal has to clear that scan, or the tap is dropped as a
+// duplicate.
+func TestReaderManager_WrittenTagRemovalForgetsEarlierScanOfSameTag(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	tag := &tokens.Token{
+		UID: "same-tag", Text: "**echo:same text", ScanTime: time.Now(), ReaderID: "reader-1",
+	}
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: tag})
+	assert.Equal(t, "same-tag", env.expectToken(t).UID)
+
+	env.st.SetReaderWriteActive(true, "reader-1")
+	env.st.SetWroteToken(tag)
+	env.st.SetReaderWriteActive(false, "reader-1")
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: tag})
+	assert.Equal(t, "same-tag", env.expectToken(t).UID)
+}
+
 func TestReaderManager_WrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t)

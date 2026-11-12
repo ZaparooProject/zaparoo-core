@@ -42,6 +42,13 @@ const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.M
 	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
 	`ORDER BY m\.Path`
 
+// expectNoMediaLinks answers the link check the scraper streams make before
+// their query, as on an install without linked media.
+func expectNoMediaLinks(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM MediaLinks\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+}
+
 func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -1730,6 +1737,7 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda", false).
 		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", true)
 
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1770,6 +1778,7 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "IsMissing"}
 	rows := sqlmock.NewRows(emptyCols)
 
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1787,6 +1796,7 @@ func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
 
 	systemID := "nes"
 
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1809,6 +1819,7 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "Path"}).
 		AddRow(int64(1), "/games/mario.nes")
 
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1834,6 +1845,7 @@ func TestSqlGetTitlesBySystemID_Success(t *testing.T) {
 
 	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
 		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1873,6 +1885,7 @@ func TestSqlGetTitlesBySystemID_EmptyResult(t *testing.T) {
 
 	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
 		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1892,6 +1905,7 @@ func TestSqlGetTitlesBySystemID_QueryError(t *testing.T) {
 
 	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
 		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1916,6 +1930,7 @@ func TestSqlGetTitlesBySystemID_ScanError(t *testing.T) {
 
 	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
 		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
+	expectNoMediaLinks(mock)
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)

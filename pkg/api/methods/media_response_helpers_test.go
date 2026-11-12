@@ -23,17 +23,18 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -42,7 +43,12 @@ import (
 
 // stubPlaybackManager is a minimal PlaybackManager that returns fixed state per slot.
 type stubPlaybackManager struct {
-	states map[string]audio.PlaybackState
+	states  map[string]audio.PlaybackState
+	volumes map[string]float64
+	paused  []string
+	resumed []string
+	toggled []string
+	stopped []string
 }
 
 func newStubPlaybackManager(slot string, state audio.PlaybackState) *stubPlaybackManager {
@@ -50,13 +56,42 @@ func newStubPlaybackManager(slot string, state audio.PlaybackState) *stubPlaybac
 }
 
 func (*stubPlaybackManager) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
-func (*stubPlaybackManager) Stop(_ string) error                             { return nil }
-func (*stubPlaybackManager) Pause(_ string) error                            { return nil }
-func (*stubPlaybackManager) Resume(_ string) error                           { return nil }
-func (*stubPlaybackManager) TogglePause(_ string) error                      { return nil }
 func (*stubPlaybackManager) Seek(_ string, _ time.Duration) error            { return nil }
+
+func (s *stubPlaybackManager) Stop(slot string) error {
+	s.stopped = append(s.stopped, slot)
+	return nil
+}
+
 func (s *stubPlaybackManager) State(slot string) audio.PlaybackState {
 	return s.states[slot]
+}
+
+func (s *stubPlaybackManager) Pause(slot string) error {
+	s.paused = append(s.paused, slot)
+	return nil
+}
+
+func (s *stubPlaybackManager) Resume(slot string) error {
+	s.resumed = append(s.resumed, slot)
+	return nil
+}
+
+func (s *stubPlaybackManager) TogglePause(slot string) error {
+	s.toggled = append(s.toggled, slot)
+	return nil
+}
+
+func (*stubPlaybackManager) SkipTrack(string, int) error {
+	return nil
+}
+
+func (s *stubPlaybackManager) SetVolume(slot string, volume float64) error {
+	if s.volumes == nil {
+		s.volumes = make(map[string]float64)
+	}
+	s.volumes[slot] = volume
+	return nil
 }
 
 func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
@@ -92,67 +127,6 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 		{SystemID: "NES", Path: pathTwo}: 11,
 	}, ids)
 	mockDB.AssertExpectations(t)
-}
-
-// ----- toPlaylistState tests -----
-
-func TestToPlaylistState_RepeatNone(t *testing.T) {
-	t.Parallel()
-	p := &playlists.Playlist{
-		ID:   "pl-1",
-		Name: "Rock Classics",
-		Slot: mediaslot.Background,
-		Items: []playlists.PlaylistItem{
-			{Name: "Track A", ZapScript: "**launch:a.mp3"},
-			{Name: "Track B", ZapScript: "**launch:b.mp3"},
-		},
-		Index: 1,
-	}
-	got := toPlaylistState(p)
-	assert.Equal(t, "pl-1", got.ID)
-	assert.Equal(t, "Rock Classics", got.Name)
-	assert.Equal(t, mediaslot.Background, got.Slot)
-	assert.Equal(t, 1, got.Index)
-	assert.Equal(t, 2, got.Total)
-	assert.Equal(t, "none", got.Repeat)
-	assert.False(t, got.Playing)
-	assert.Len(t, got.Items, 2)
-	assert.Equal(t, "Track A", got.Items[0].Name)
-}
-
-func TestToPlaylistState_RepeatAll(t *testing.T) {
-	t.Parallel()
-	p := &playlists.Playlist{Slot: mediaslot.Primary, Loop: true}
-	assert.Equal(t, "all", toPlaylistState(p).Repeat)
-}
-
-func TestToPlaylistState_RepeatOne(t *testing.T) {
-	t.Parallel()
-	// LoopOne takes priority over Loop if both are set (defensive)
-	p := &playlists.Playlist{Slot: mediaslot.Primary, Loop: true, LoopOne: true}
-	assert.Equal(t, "one", toPlaylistState(p).Repeat)
-}
-
-func TestToPlaylistState_Playing(t *testing.T) {
-	t.Parallel()
-	p := &playlists.Playlist{Slot: mediaslot.Primary, Playing: true}
-	assert.True(t, toPlaylistState(p).Playing)
-}
-
-func TestToPlaylistState_Unsafe(t *testing.T) {
-	t.Parallel()
-	untrusted := &playlists.Playlist{Slot: mediaslot.Primary, Unsafe: true}
-	assert.True(t, toPlaylistState(untrusted).Unsafe)
-	trusted := &playlists.Playlist{Slot: mediaslot.Primary}
-	assert.False(t, toPlaylistState(trusted).Unsafe)
-}
-
-func TestToPlaylistState_EmptyItems(t *testing.T) {
-	t.Parallel()
-	p := &playlists.Playlist{Slot: mediaslot.Primary}
-	state := toPlaylistState(p)
-	assert.Empty(t, state.Items)
-	assert.Equal(t, 0, state.Total)
 }
 
 // ----- enrichPlaybackState tests -----
@@ -225,6 +199,29 @@ func TestEnrichPlaybackState_BackgroundSlotUsesPausedState(t *testing.T) {
 	assert.Equal(t, bgPos.Milliseconds(), *entry.PositionMs)
 	assert.Equal(t, bgDur.Milliseconds(), *entry.DurationMs)
 	assert.Equal(t, models.MediaPlaybackStatePaused, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_TrackInfo(t *testing.T) {
+	t.Parallel()
+	meta := &trackmeta.Meta{
+		Title: "Intro", Artist: "A", Album: "B", AlbumArtist: "C", Genre: "D", Year: 1999,
+		TrackNumber: 1, TrackTotal: 10, DiscNumber: 2, DiscTotal: 3, HasArt: true,
+	}
+	mgr := newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{Path: "intro.mp3", Meta: meta})
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID, Path: "intro.mp3"}
+	enrichPlaybackState(env, entry, mediaslot.Background)
+	require.NotNil(t, entry.Track)
+	assert.Equal(t, models.TrackInfo{
+		Title: "Intro", Artist: "A", Album: "B", AlbumArtist: "C", Genre: "D", Year: 1999,
+		TrackNumber: 1, TrackTotal: 10, DiscNumber: 2, DiscTotal: 3, HasArt: true,
+	}, *entry.Track)
+
+	untagged := newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{Path: "intro.mp3"})
+	bare := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID, Path: "intro.mp3"}
+	enrichPlaybackState(&requests.RequestEnv{PlaybackManager: untagged}, bare, mediaslot.Background)
+	assert.Nil(t, bare.Track, "a track with no tags has no track field")
 }
 
 func TestEnrichPlaybackState_StoppedState(t *testing.T) {
@@ -357,6 +354,58 @@ func TestMediaEntryTags_TriState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.expected, mediaEntryTags(tt.known, tt.mediaID, tags))
+		})
+	}
+}
+
+// The native-audio launcher lists every control it has, but a live stream
+// cannot seek and only a source of several tracks has a next or previous one,
+// so the entry advertises what the playing source can do.
+func TestEnrichPlaybackState_ControlsFollowTheSource(t *testing.T) {
+	t.Parallel()
+
+	all := []string{
+		platforms.ControlFastForward, platforms.ControlNext, platforms.ControlPause,
+		platforms.ControlPrevious, platforms.ControlResume, platforms.ControlRewind,
+		platforms.ControlStop, platforms.ControlTogglePause,
+	}
+	tests := []struct {
+		name  string
+		want  []string
+		state audio.PlaybackState
+	}{
+		{
+			name:  "single track file",
+			state: audio.PlaybackState{Playing: true},
+			want: []string{
+				platforms.ControlFastForward, platforms.ControlPause, platforms.ControlResume,
+				platforms.ControlRewind, platforms.ControlStop, platforms.ControlTogglePause,
+			},
+		},
+		{
+			name:  "multi track file",
+			state: audio.PlaybackState{Playing: true, MultiTrack: true},
+			want:  all,
+		},
+		{
+			name:  "live stream",
+			state: audio.PlaybackState{Playing: true, Live: true},
+			want: []string{
+				platforms.ControlPause, platforms.ControlResume,
+				platforms.ControlStop, platforms.ControlTogglePause,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := &requests.RequestEnv{PlaybackManager: newStubPlaybackManager(mediaslot.Background, tt.state)}
+			entry := &models.ActiveMedia{
+				LauncherID:       platforms.NativeAudioLauncherID,
+				LauncherControls: slices.Clone(all),
+			}
+			enrichPlaybackState(env, entry, mediaslot.Background)
+			assert.Equal(t, tt.want, entry.LauncherControls)
 		})
 	}
 }

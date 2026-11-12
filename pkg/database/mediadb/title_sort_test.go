@@ -92,7 +92,7 @@ func TestCompareBrowseTitles(t *testing.T) {
 	assert.Negative(t, compareBrowseTitles("Alpha", "alpha"),
 		"raw title must provide a stable tiebreaker after case folding")
 	assert.Negative(t,
-		compareBrowseDirectoryNames("Pandemonium! (USA) (Rev 1)", "Pandemonium 2 (USA)"),
+		CompareBrowseDirectoryNames("Pandemonium! (USA) (Rev 1)", "Pandemonium 2 (USA)"),
 		"directory metadata must not outrank the punctuated base title")
 }
 
@@ -299,7 +299,7 @@ func TestBrowseIndex_CaseInsensitiveNaturalOrderStaysContiguous(t *testing.T) {
 		index.Buckets[2].Offset,
 	})
 	for _, bucket := range index.Buckets {
-		assert.Equal(t, bucket.Key, firstBrowsedBucketForCursor(t, mediaDB, bucket, index.SortMode))
+		assert.Equal(t, bucket.Key, firstBrowsedBucketForCursor(t, mediaDB, &bucket, index.SortMode))
 	}
 }
 

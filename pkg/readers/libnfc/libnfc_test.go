@@ -24,6 +24,7 @@ package libnfc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -223,6 +224,40 @@ func TestCancelWrite_NoActiveWrite(t *testing.T) {
 
 	// Should not panic when there's no active write
 	reader.CancelWrite()
+}
+
+// A cancel that arrives while the tag is being written has nobody listening
+// for it. It used to block there holding the write lock, which then stopped
+// the write from ever finishing.
+func TestCancelWrite_DoesNotBlockWhenNobodyIsListening(t *testing.T) {
+	t.Parallel()
+
+	reader := NewReader(&config.Instance{})
+	reader.activeWrite = &WriteRequest{Cancel: make(chan bool, 1)}
+
+	done := make(chan struct{})
+	go func() {
+		reader.CancelWrite()
+		reader.CancelWrite()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CancelWrite blocked")
+	}
+
+	// The write can still take the lock to finish.
+	reader.activeWriteMu.Lock()
+	reader.activeWrite = nil
+	reader.activeWriteMu.Unlock()
+}
+
+func TestErrWriteCancelled_IsACancellation(t *testing.T) {
+	t.Parallel()
+	require.ErrorIs(t, ErrWriteCancelled, context.Canceled,
+		"a cancel the user asked for must not be logged as a write failure")
 }
 
 func TestIsRetryableError(t *testing.T) {

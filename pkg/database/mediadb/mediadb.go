@@ -86,7 +86,7 @@ const (
 )
 
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
-const defaultSlugSearchLimit = 50
+const defaultSlugSearchLimit = database.SlugSearchLimit
 
 // maxSelectiveInvalidationSystems avoids huge per-commit IN clauses and debug
 // logs during full-library indexing while preserving selective reindexing wins.
@@ -168,11 +168,13 @@ type systemMediaCountsSnapshot struct {
 }
 
 type MediaDB struct {
+	browseListings          database.BrowseListingCache
 	clock                   clockwork.Clock
 	ctx                     context.Context
 	pl                      platforms.Platform
 	scrapeImageSystems      map[string]struct{}
 	scrapeTagSystems        map[string]struct{}
+	beforeAllocate          func() error // set only by tests, to hold or fail an allocation
 	batchInsertTagType      *BatchInserter
 	stmtInsertMedia         *sql.Stmt
 	tx                      *sql.Tx
@@ -198,6 +200,7 @@ type MediaDB struct {
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	batchInsertScanSource   *BatchInserter
+	batchInsertScanLink     *BatchInserter
 	dbPath                  string
 	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
@@ -299,6 +302,8 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	}
 	clearPrefixPolicyCache()
 	clearCoverAvailabilityCacheFor(db.sql.Load())
+	clearHiddenDirCountCacheFor(db.sql.Load())
+	db.browseListings.Clear()
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
 		clearImagePropertyTagCache()
@@ -569,7 +574,6 @@ func (db *MediaDB) Open() error {
 	// happen to equal baseMaxOpenConns: an idle cap below the open cap lets the
 	// pool recycle connections and lose their pragmas. See SetIndexingConnBoost.
 	sqlInstance.SetMaxIdleConns(baseMaxOpenConns)
-	db.resetSlugCacheSource(sqlInstance)
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
 			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
@@ -583,21 +587,30 @@ func (db *MediaDB) Open() error {
 	}
 	database.LogEffectivePragmasForDB(db.ctx, sqlInstance, "media", database.SynchronousNormal, database.UnsetPageSize)
 
+	// A new database is built before it is published. Recreate reaches here
+	// with the old handle closed, and readers that do not take the recovery
+	// gate (indexing status, system counts) would otherwise query a database
+	// with no tables yet. A failed build leaves the closed handle in place,
+	// which fails cleanly, rather than an empty one.
+	if !exists {
+		log.Debug().Msg("media database is new, allocating schema")
+		if err = db.allocateOn(sqlInstance); err != nil {
+			if closeErr := sqlInstance.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close media database after failed allocation")
+			}
+			return err
+		}
+	}
+	db.resetSlugCacheSource(sqlInstance)
+
 	clearUtilityTagCache()
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.browseListings.Clear()
 	db.systemMediaCountsCache.Store(nil)
 	db.systemMediaCountsGen.Add(1)
 	db.clearMediaSearchBounds()
-
-	if !exists {
-		log.Debug().Msg("media database is new, allocating schema")
-		err = db.Allocate()
-		if err != nil {
-			return err
-		}
-	}
 
 	registerCoverAvailabilityCacheOwner(sqlInstance, db)
 
@@ -941,6 +954,12 @@ func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
 	defer cancel()
 	resetErr := applyConnPragmas(cleanupCtx, conn, defaultConnCacheSize, defaultConnTempStore)
+	if errors.Is(resetErr, sql.ErrConnDone) {
+		// database/sql already discarded the connection, which it does to a
+		// transaction's connection when db.ctx is cancelled. Nothing is left to
+		// restore or to leak.
+		return nil
+	}
 	if resetErr != nil {
 		// Returning ErrBadConn from Raw closes and discards the physical
 		// connection. A later Conn.Close would only report sql.ErrConnDone.
@@ -968,7 +987,9 @@ func (db *MediaDB) releaseWriterConn() error {
 	// database from slow storage. SetIndexingCacheSize(false) drains and restores
 	// the whole pool when indexing ends.
 	if db.indexingCacheBoost.Load() {
-		if err := conn.Close(); err != nil {
+		// ErrConnDone means database/sql already discarded the connection,
+		// as it does when db.ctx is cancelled under an open transaction.
+		if err := conn.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
 			return fmt.Errorf("failed to release boosted writer connection: %w", err)
 		}
 		return nil
@@ -1378,6 +1399,9 @@ func (db *MediaDB) UpdateLastGenerated() error {
 	if err == nil {
 		if countErr := sqlRefreshMediaCounts(db.ctx, db.conn()); countErr != nil {
 			log.Warn().Err(countErr).Msg("failed to refresh cached media counts")
+		}
+		if countErr := sqlRefreshScrapedCounts(db.ctx, db.conn()); countErr != nil {
+			log.Warn().Err(countErr).Msg("failed to refresh stored scraped counts")
 		}
 	}
 
@@ -1988,6 +2012,9 @@ func (db *MediaDB) Truncate() error {
 	if err := sqlTruncate(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
+	if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), nil); err != nil {
+		return err
+	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
@@ -2013,6 +2040,11 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	if err != nil {
 		return err
 	}
+	if len(systemIDs) > 0 {
+		if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), systemIDs); err != nil {
+			return err
+		}
+	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
@@ -2025,24 +2057,38 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) Allocate() error {
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
 		return ErrNullSQL
 	}
-	if err := sqlAllocate(db.sql.Load(), db.dbPath); err != nil {
+	return db.allocateOn(sqlDB)
+}
+
+// allocateOn builds the schema on sqlDB, which need not be the published
+// handle. Open allocates a new database before publishing it, so readers never
+// see one whose tables do not exist yet.
+func (db *MediaDB) allocateOn(sqlDB *sql.DB) error {
+	if db.beforeAllocate != nil {
+		if err := db.beforeAllocate(); err != nil {
+			return err
+		}
+	}
+	if err := sqlAllocate(sqlDB, db.dbPath); err != nil {
 		return err
 	}
-	db.applySchemaReadyFixups()
+	db.applySchemaReadyFixups(sqlDB)
 	return nil
 }
 
 func (db *MediaDB) MigrateUp() error {
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
 		return ErrNullSQL
 	}
-	if err := sqlMigrateUp(db.sql.Load(), db.dbPath); err != nil {
+	if err := sqlMigrateUp(sqlDB, db.dbPath); err != nil {
 		return err
 	}
-	db.applySchemaReadyFixups()
+	db.applySchemaReadyFixups(sqlDB)
 	// Best-effort: stamp the disambiguation version on a database with no
 	// titles before the first index writes any. The pending check performs the
 	// stamp as a side effect; without this, the check first runs during
@@ -2068,12 +2114,12 @@ func (db *MediaDB) MigrateUp() error {
 // matter: it reopens into a fresh database and starts a reindex immediately,
 // without a MigrateUp in between, so anything hooked only there was skipped for
 // every user-triggered rebuild.
-func (db *MediaDB) applySchemaReadyFixups() {
+func (db *MediaDB) applySchemaReadyFixups(sqlDB *sql.DB) {
 	// A database without real Media statistics gets the captured seed so
 	// mid-index queries have sane plans; the first system commit's approximate
 	// ANALYZE replaces it. Without this a rebuild reindexes against an empty
 	// sqlite_stat1, which is the plan regression #1279 started from.
-	if err := sqlSeedPlannerStats(db.ctx, db.sql.Load()); err != nil {
+	if err := sqlSeedPlannerStats(db.ctx, sqlDB); err != nil {
 		log.Warn().Err(err).Msg("failed to seed planner statistics")
 	}
 	// The browse-cache migrations stamp OptimizationStatus=pending
@@ -2081,7 +2127,7 @@ func (db *MediaDB) applySchemaReadyFixups() {
 	// stamps a brand-new database that has nothing to rebuild. Drop it when
 	// there is no media, or the next start "resumes" an optimization over an
 	// empty database.
-	if err := db.clearOptimizationStampIfEmpty(db.ctx); err != nil {
+	if err := sqlClearOptimizationStampIfEmpty(db.ctx, sqlDB); err != nil {
 		log.Warn().Err(err).Msg("failed to clear optimization stamp on empty database")
 	}
 }
@@ -2174,6 +2220,9 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	}
 
 	if deleted > 0 {
+		if countErr := sqlRefreshScrapedCounts(ctx, db.sql.Load()); countErr != nil {
+			log.Warn().Err(countErr).Msg("failed to refresh stored scraped counts after orphan cleanup")
+		}
 		if countErr := sqlRefreshMediaCounts(ctx, db.sql.Load()); countErr != nil {
 			log.Warn().Err(countErr).Msg("failed to refresh cached media counts after orphan cleanup")
 			if cacheErr := sqlInvalidateMediaCountCache(
@@ -2212,7 +2261,9 @@ func (db *MediaDB) Close() error {
 	clearUtilityTagCacheFor(sqlDB)
 	clearImagePropertyTagCacheFor(sqlDB)
 	unregisterCoverAvailabilityCacheOwner(sqlDB)
+	forgetHiddenDirCountCacheFor(sqlDB)
 	clearPrefixPolicyCacheFor(sqlDB)
+	db.browseListings.Clear()
 
 	closeErr := sqlDB.Close()
 	if closeErr != nil {
@@ -2263,6 +2314,7 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.browseListings.Clear()
 	db.clearMediaSearchBounds()
 	db.ctx = ctx
 	db.pl = platform
@@ -2411,6 +2463,13 @@ func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 		}
 		db.batchInsertScanSource = nil
 	}
+	if db.batchInsertScanLink != nil {
+		if closeErr := db.batchInsertScanLink.finish(flush); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanLink")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanLink: %w", closeErr))
+		}
+		db.batchInsertScanLink = nil
+	}
 
 	return errors.Join(closeErrs...)
 }
@@ -2442,6 +2501,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 		db.batchInsertScanTag,
 		db.batchInsertScanProperty,
 		db.batchInsertScanSource,
+		db.batchInsertScanLink,
 	} {
 		if bi == nil {
 			continue
@@ -2493,6 +2553,21 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 			return fmt.Errorf("failed to stage scanned media source %s: %w", media.Path, err)
 		}
 	}
+	if media.LinkTarget != "" && media.LinkTarget != media.Path {
+		// Created on the first link, so a scan without any holds no buffer
+		// for them.
+		if db.batchInsertScanLink == nil {
+			inserter, err := NewBatchInserterWithOptions(db.ctx, db.tx, "ScanStageLinks",
+				[]string{"Path", "TargetPath"}, db.batchSize, true)
+			if err != nil {
+				return fmt.Errorf("failed to create batch inserter for scan stage links: %w", err)
+			}
+			db.batchInsertScanLink = inserter
+		}
+		if err := db.batchInsertScanLink.Add(media.Path, media.LinkTarget); err != nil {
+			return fmt.Errorf("failed to stage scanned media link %s: %w", media.Path, err)
+		}
+	}
 	return nil
 }
 
@@ -2513,6 +2588,15 @@ func (db *MediaDB) ReconcileStagedSystem(
 	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), db.clock, systemID, opts)
 	if err != nil {
 		return stats, err
+	}
+	// A reconcile that changed nothing leaves the revision alone, which is
+	// what lets an index-triggered scrape tell the system holds nothing new.
+	if stats.TitlesInserted > 0 || stats.TitlesRenamed > 0 || stats.MediaUpserted > 0 ||
+		stats.MediaMissing > 0 || stats.TagLinksAdded > 0 || stats.TagLinksDeleted > 0 ||
+		stats.MediaLinksDeleted > 0 {
+		if bumpErr := sqlBumpLibraryRevision(ctx, db.conn(), systemID); bumpErr != nil {
+			return stats, bumpErr
+		}
 	}
 	if stats.MediaUpserted > 0 || stats.MediaMissing > 0 {
 		db.mediaSearchBoundsDirty = true
@@ -3257,7 +3341,7 @@ func (db *MediaDB) BrowseFiles(
 	}
 	defer call.finish(db)
 	scoped := *opts
-	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return nil, err
 	}
@@ -3302,7 +3386,7 @@ func (db *MediaDB) BrowseFileCount(
 		return 0, err
 	}
 	defer call.finish(db)
-	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return 0, err
 	}
@@ -3347,11 +3431,39 @@ func (db *MediaDB) BrowseIndex(
 		return database.BrowseIndexResult{}, err
 	}
 	defer call.finish(db)
-	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return database.BrowseIndexResult{}, err
 	}
 	return sqlBrowseIndex(ctx, call.conn, &opts)
+}
+
+// BrowseAnchorPosition locates one path in a browse listing, through the same
+// visibility scoping the listing itself runs under.
+func (db *MediaDB) BrowseAnchorPosition(
+	ctx context.Context, opts *database.BrowseAnchorOptions,
+) (database.BrowseAnchorResult, error) {
+	if db.sql.Load() == nil {
+		return database.BrowseAnchorResult{}, ErrNullSQL
+	}
+	call, err := db.beginBrowse(ctx, "browse anchor", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return database.BrowseAnchorResult{}, err
+	}
+	defer call.finish(db)
+	scoped := *opts
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
+	if err != nil {
+		return database.BrowseAnchorResult{}, err
+	}
+	result, err := sqlBrowseAnchorPosition(ctx, call.conn, &scoped)
+	db.NoteCorruption(err)
+	return result, err
+}
+
+// BrowseListingCache returns this handle's cache of letter indexes and totals.
+func (db *MediaDB) BrowseListingCache() *database.BrowseListingCache {
+	return &db.browseListings
 }
 
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
@@ -3425,7 +3537,9 @@ func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
+	err := sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
+	db.browseListings.Clear()
+	return err
 }
 
 // PopulateBrowseCacheForSystems incrementally refreshes browse cache rows for
@@ -3468,7 +3582,9 @@ func (db *MediaDB) PopulateBrowseCacheForSystems(ctx context.Context, systemIDs 
 		return fmt.Errorf("browse cache: system DBID iteration error: %w", rowsErr)
 	}
 
-	return sqlPopulateBrowseCacheForSystems(plainCtx, db.sql.Load(), systemDBIDs)
+	err = sqlPopulateBrowseCacheForSystems(plainCtx, db.sql.Load(), systemDBIDs)
+	db.browseListings.Clear()
+	return err
 }
 
 // BrowseCacheNeedsRebuild reports whether the browse cache is stale or absent and
@@ -3513,11 +3629,19 @@ func (db *MediaDB) SearchMediaWithFilters(
 
 	scoped := *filters
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden)
+	scoped.Tags, visibilityErr = discoveryTags(
+		ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden, recursiveScope(filters.PathPrefix),
+	)
 	if visibilityErr != nil {
 		return nil, visibilityErr
 	}
 	filters = &scoped
+
+	if filters.TitleDBID != 0 {
+		return sqlSearchMediaByTitleDBIDsSorted(
+			ctx, db.sql.Load(), []int64{filters.TitleDBID}, filters.PathPrefix, filters.Tags,
+			nil, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit)
+	}
 
 	qWords := strings.Fields(filters.Query)
 	if len(qWords) == 0 || len(filters.Systems) == 0 {
@@ -3574,7 +3698,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 		}
 
 		canStreamCandidates := filters.Sort == "" && filters.SortCursor == nil && filters.PathPrefix == "" &&
-			len(filters.Tags) == 0 && filters.Letter == nil && len(candidateIDs) >= filters.Limit
+			onlyVisibilityTagFilters(filters.Tags) && filters.Letter == nil && len(candidateIDs) >= filters.Limit
 		if canStreamCandidates {
 			var streamResults []database.SearchResultWithCursor
 			var streamErr error
@@ -3616,7 +3740,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 						strategy = "system-scope"
 						streamResults, streamErr = sqlSearchMediaByLargeTitleDBIDSetInSystems(
 							ctx, db.sql.Load(), candidateIDs, scopedSystems, bounds,
-							filters.Cursor, filters.Limit)
+							filters.Tags, filters.Cursor, filters.Limit)
 					}
 				}
 			}
@@ -4046,7 +4170,7 @@ func (db *MediaDB) SystemMediaCounts(
 		return nil, ErrNullSQL
 	}
 	if len(tagFilters) > 0 {
-		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
+		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden, recursiveScope(""))
 		if visibilityErr != nil {
 			if database.IsCorruptionError(visibilityErr) {
 				db.NoteCorruption(visibilityErr)
@@ -4139,7 +4263,9 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	excludeHidden := discoveryExcludesHidden(query.Tags)
 	scoped := *query
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, excludeHidden)
+	scoped.Tags, visibilityErr = discoveryTags(
+		ctx, db.sql.Load(), query.Tags, excludeHidden, recursiveScope(query.PathPrefix),
+	)
 	if visibilityErr != nil {
 		return result, visibilityErr
 	}
@@ -4860,6 +4986,54 @@ func logOptimizationFailure(err error, message string) {
 	}
 }
 
+// recordOptimizationStepFailure logs a step that failed after its retries and
+// persists the failure so the next start resumes from the first step.
+//
+// A corruption-coded error marks the database corrupt, which discards it and
+// reindexes from scratch, only when the integrity check agrees. Steps can
+// report corruption that is not in the file: a WAL checkpoint has failed with
+// "malformed" on a database whose integrity check came back ok, and throwing a
+// healthy library away for that costs the user a full reindex. A corrupt file
+// fails the check, and the sidecar marker is the durable signal recovery keys
+// on, since the in-DB status write may itself fail on a malformed database.
+func (db *MediaDB) recordOptimizationStepFailure(stepName string, attempts int, stepErr error) {
+	log.WithLevel(database.StorageFailureLevel(stepErr)).Err(stepErr).
+		Msgf("optimization step %s failed after %d attempts", stepName, attempts)
+	if database.IsCorruptionError(stepErr) {
+		integrity := db.IntegrityReport()
+		if len(integrity) == 1 && integrity[0] == "ok" {
+			log.Warn().Err(stepErr).Str("step", stepName).
+				Msg("optimization step reported corruption but the integrity check passed; keeping the database")
+		} else {
+			// Warn: the rebuild that follows reports the corruption itself.
+			log.Warn().Strs("integrity", integrity).
+				Msg("media database integrity check after optimization failure")
+			db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", stepName, stepErr))
+			if !database.IsOptimizationCanceled(db.ctx.Err()) {
+				if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
+					logOptimizationFailure(setErr,
+						"failed to mark media database as corrupt after optimization failure")
+				}
+			}
+		}
+	}
+	// Clear the step before writing the failed status: a crash between the
+	// two writes must not leave a Failed status with a stale step, or the
+	// next boot's failure-resume would start mid-list and skip the steps
+	// before it. The reverse gap (step cleared, status still running) just
+	// re-runs everything from the first step.
+	if !database.IsOptimizationCanceled(db.ctx.Err()) {
+		if setErr := db.SetOptimizationStep(""); setErr != nil {
+			logOptimizationFailure(setErr, "failed to clear optimization step on failure")
+		}
+		if !database.IsOptimizationCanceled(db.ctx.Err()) {
+			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
+				logOptimizationFailure(setErr, "failed to set optimization status to failed")
+			}
+		}
+	}
+}
+
 func (db *MediaDB) waitOptimizationRetry(delay time.Duration) error {
 	timer := db.clock.NewTimer(delay)
 	defer timer.Stop()
@@ -5171,38 +5345,7 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 		}
 		// Final check after all retries
 		if stepErr != nil {
-			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, attempts)
-			// Database corruption can't be repaired by optimization. Route it to the
-			// same corrupt-database state the indexer uses so the app surfaces the
-			// repair/rebuild flow instead of repeatedly failing maintenance. The sidecar
-			// marker is the durable signal recovery keys on, since the in-DB status write
-			// may itself fail on a malformed database.
-			if database.IsCorruptionError(stepErr) {
-				log.Error().Strs("integrity", db.IntegrityReport()).
-					Msg("media database integrity check after optimization failure")
-				db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", step.name, stepErr))
-				if !database.IsOptimizationCanceled(db.ctx.Err()) {
-					if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
-						logOptimizationFailure(setErr,
-							"failed to mark media database as corrupt after optimization failure")
-					}
-				}
-			}
-			// Clear the step before writing the failed status: a crash between the
-			// two writes must not leave a Failed status with a stale step, or the
-			// next boot's failure-resume would start mid-list and skip the steps
-			// before it. The reverse gap (step cleared, status still running) just
-			// re-runs everything from the first step.
-			if !database.IsOptimizationCanceled(db.ctx.Err()) {
-				if setErr := db.SetOptimizationStep(""); setErr != nil {
-					logOptimizationFailure(setErr, "failed to clear optimization step on failure")
-				}
-				if !database.IsOptimizationCanceled(db.ctx.Err()) {
-					if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-						logOptimizationFailure(setErr, "failed to set optimization status to failed")
-					}
-				}
-			}
+			db.recordOptimizationStepFailure(step.name, attempts, stepErr)
 			return stepErr
 		}
 

@@ -35,12 +35,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -54,6 +56,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlistmemory"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -66,6 +69,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -228,6 +232,11 @@ func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bo
 
 type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
+	SetDecodeFailureCallback(slot string, fn func())
+}
+
+func ownedByNativeAudio(media *models.ActiveMedia) bool {
+	return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
 }
 
 // clearNativeAudioPrimaryMedia clears active media once native audio has stopped
@@ -237,9 +246,13 @@ type drainCallbackRegistrar interface {
 // step, so a lifecycle tracker publishing another launcher's media in between
 // is left alone.
 func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
-	svc.State.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
-		return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
-	})
+	svc.State.ClearActiveMediaIf(ownedByNativeAudio)
+}
+
+// finishNativeAudioPrimaryMedia reports the natural end of a primary track to
+// state, under the same ownership rule as clearNativeAudioPrimaryMedia.
+func finishNativeAudioPrimaryMedia(svc *ServiceContext) {
+	svc.State.FinishActiveMediaIf(ownedByNativeAudio)
 }
 
 // stopNativeAudioPrimaryMedia runs an explicit stop of native audio on the
@@ -259,11 +272,30 @@ func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop 
 	}
 	defer release()
 
+	// Only native audio's own media is stopped here; recording against a game
+	// that happens to be active would mislabel the game's later exit.
+	cancelStop := func() {}
+	if ownedByNativeAudio(svc.State.ActiveMedia()) {
+		cancelStop = svc.State.RecordMediaStop(models.MediaStopReasonStopped)
+	}
 	if err := stop(); err != nil {
+		cancelStop()
 		return err
 	}
 	clearNativeAudioPrimaryMedia(svc)
 	return nil
+}
+
+// stopAbandonedNativeAudio stops native-audio playback that a launch started
+// before a stop overtook it. The launch published no media, so the stop paths
+// that look for published media never reach the playback.
+func stopAbandonedNativeAudio(svc *ServiceContext, media *models.ActiveMedia) {
+	if media.LauncherID != platforms.NativeAudioLauncherID || svc.PlaybackManager == nil {
+		return
+	}
+	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		log.Warn().Err(err).Msg("failed to stop native audio that a stop overtook")
+	}
 }
 
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
@@ -271,62 +303,67 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		if !natural {
 			return
 		}
-		clearNativeAudioPrimaryMedia(svc)
+		if media := svc.State.ActiveMedia(); ownedByNativeAudio(media) {
+			svc.Positions.Finished(media.Path)
+		}
+		finishNativeAudioPrimaryMedia(svc)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
 		if !natural {
 			return
 		}
-		advanceBackgroundPlaylist(svc)
+		// The engine sees this as the end of the bound track and moves the
+		// background playlist on.
+		// A drain that arrives after other media took the slot must not clear
+		// that media, or the engine would move on from a track still playing.
+		svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonFinished)
+	})
+	pm.SetDecodeFailureCallback(mediaslot.Background, func() {
+		skipUndecodableBackgroundTrack(svc)
 	})
 }
 
-// advanceBackgroundPlaylist is called when a background track ends naturally.
-// It advances to the next track according to the playlist's repeat mode, or clears
-// the background state when the playlist has finished and repeat is off.
-func advanceBackgroundPlaylist(svc *ServiceContext) {
+// skipUndecodableBackgroundTrack carries music on past a track that stopped
+// because it failed to decode: the slot is cleared, and the playlist moves to
+// the next item the way it does for a track that cannot launch. It pauses
+// the playlist instead when there is nowhere to go.
+func skipUndecodableBackgroundTrack(svc *ServiceContext) {
 	pls := svc.State.GetBackgroundPlaylist()
-	if pls == nil {
-		// Single-track background (not a playlist) — just clear media state.
-		svc.State.SetBackgroundMedia(nil)
+	svc.State.ClearBackgroundMediaIf(ownedByNativeAudio, models.MediaStopReasonStopped)
+	if pls == nil || !pls.Playing {
 		return
 	}
-
-	var next *playlists.Playlist
-	switch {
-	case pls.LoopOne:
-		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
-		next = playlists.Play(*pls)
-		next.ForceRelaunch = true
-	case pls.Index+1 < len(pls.Items):
-		// More tracks remain — advance normally.
-		next = playlists.Next(*pls)
-		next.Playing = true
-	case pls.Loop:
-		// Last track finished and repeat=all — wrap back to the start.
-		next = playlists.Next(*pls) // Next already wraps to 0
-		next.Playing = true
-		if len(pls.Items) <= 1 {
-			// Single-item loop: same index after wrap, need ForceRelaunch.
-			next.ForceRelaunch = true
+	next, ok := playlists.SkipFailed(*pls)
+	if !ok {
+		if svc.State.PausePlaylistIfCurrent(mediaslot.Background, pls) {
+			log.Info().Str("playlist", pls.ID).Msg("background track failed to decode, playlist paused")
+			svc.AutoAdvance.PlaylistChanged(mediaslot.Background)
 		}
-	default:
-		// repeat=off, end of playlist — clear state and stop.
-		svc.State.SetBackgroundPlaylist(nil)
-		svc.State.SetBackgroundMedia(nil)
 		return
 	}
+	log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+		Msg("background track failed to decode, skipping it")
+	go func() {
+		select {
+		case svc.PlaylistQueue <- next:
+		case <-svc.State.GetContext().Done():
+		}
+	}()
+}
 
-	select {
-	case svc.PlaylistQueue <- next:
-	case <-svc.State.GetContext().Done():
-	}
+// wirePlaybackNotifier has the notifier hear of every native-audio playback
+// change and of every media start, so media.playback follows both.
+func wirePlaybackNotifier(pm playbackChangeRegistrar, st *state.State, notifier *playbackNotifier) {
+	pm.SetChangeCallback(notifier.Signal)
+	st.AddMediaObserver(notifier)
 }
 
 // resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
 // media stops. Runs synchronously from the media-stop hook so that launch-path code
 // running after a SetActiveMedia(nil) observes the resumed state.
 func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
+	// Music that was to start on boot while a game ran starts now instead.
+	svc.musicAutoplay.Load().mediaStopped()
 	if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
 		return
 	}
@@ -467,6 +504,11 @@ func startServiceWithOptions(
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 	platformSettings := pl.Settings()
 	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
+	playbackManager.SetTrackMetaLimit(methods.MediaImageMaxBytes(pl))
+	playbackManager.SetMidiSoundFontSource(func() string {
+		return cfg.MidiSoundFontPath(helpers.DataDir(pl))
+	})
+	playbackManager.SetNormalizeSource(cfg.AudioNormalize)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
@@ -485,8 +527,17 @@ func startServiceWithOptions(
 		st.GetContext(), ns,
 		models.NotificationMediaIndexing,
 		models.NotificationUIChanged,
+		models.NotificationDeviceChanged,
+		models.NotificationDeviceBluetooth,
+		models.NotificationPlaylistsChanged,
+		// Merged per slot through the notification's coalesce key, so one
+		// slot's latest playback never replaces the other's.
+		models.NotificationMediaPlayback,
 	)
 	notifBroker.Start()
+
+	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish)
+	st.SetDeviceMonitor(deviceMonitor)
 
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
 		notifications.UIChanged(notifBroker.Publish, payload)
@@ -521,7 +572,7 @@ func startServiceWithOptions(
 		if startupErr != nil {
 			// No listener means no page to explain anything on, so there is
 			// nothing to stay alive for.
-			log.Error().Err(startupErr).Msg("failed to bind to port")
+			api.LogBindFailure(startupErr)
 			st.StopService()
 			return nil, fmt.Errorf("api startup failed: %w", startupErr)
 		}
@@ -592,7 +643,7 @@ func startServiceWithOptions(
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	restoreReporter()
 	if err != nil {
-		log.Error().Err(err).Msgf("error opening databases")
+		log.WithLevel(database.StartupFailureLevel(err)).Err(err).Msg("error opening databases")
 		headline, detail := describeDatabaseStartupFailure(pl, err)
 		return nil, startupFailure(true, headline, detail, err)
 	}
@@ -608,6 +659,10 @@ func startServiceWithOptions(
 		)
 	}
 	closeHangingMediaHistoryOnStartup(db)
+	// Before the API starts, so no request reads an image mid-move and the
+	// thumbnail cache opens in its new folder.
+	migrateImageStorage(st.GetContext(), afero.NewOsFs(), helpers.DataDir(pl),
+		cfg.ImageDir(helpers.DataDir(pl)), db.MediaDB)
 	deckTagger := decks.NewTagger(&decks.ResolveDeps{
 		MediaDB: db.MediaDB,
 		UserDB:  db.UserDB,
@@ -621,6 +676,11 @@ func startServiceWithOptions(
 		})
 	})
 	db.DeckTags = deckTagger
+	db.OnMediaUserFlagsChanged = func(systemID, path string, data *database.MediaUserData) {
+		notifications.MediaTagsChanged(st.Notifications, models.MediaTagsChangedNotification{
+			System: systemID, Path: path, Tags: data.UserTags(),
+		})
+	}
 	mediaUserReconcile := newMediaUserReconciler(db)
 	db.MediaUserData = mediaUserReconcile
 
@@ -648,6 +708,7 @@ func startServiceWithOptions(
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
+	limitsManager.SetMediaStopRecorder(st.RecordMediaStop)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
@@ -696,7 +757,61 @@ func startServiceWithOptions(
 		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
+	if store, ok := db.UserDB.(database.PlaylistMemoryStore); ok {
+		svc.PlaylistMemory = playlistmemory.New(store, func() string {
+			if profile := st.ActiveProfile(); profile != nil {
+				return profile.ProfileID
+			}
+			return ""
+		})
+		svc.PlaylistMemory.Start()
+		svc.Positions = playlistmemory.NewPositionTracker(svc.PlaylistMemory, playbackManager, st.ActiveMedia, nil)
+		svc.Positions.Start()
+	}
+	playlistNotify := newPlaylistNotifier(st, notifBroker.Publish)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		playlistNotify.run(st.GetContext())
+	}()
+	// Every stored playlist reaches the memory, when there is one, and the
+	// notifier. Both only queue work, so neither holds up the state lock.
+	st.SetPlaylistObserver(func(slot string, pls *playlists.Playlist) {
+		svc.PlaylistMemory.PlaylistChanged(slot, pls)
+		playlistNotify.Signal()
+	})
+	// The queue worker is the only writer of the playlists, so an API
+	// request to change one is handed to it.
+	st.SetPlaylistRequester(func(ctx context.Context, pls *playlists.Playlist) error {
+		select {
+		case plq <- pls:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("queue playlist update: %w", ctx.Err())
+		case <-st.GetContext().Done():
+			return fmt.Errorf("queue playlist update: %w", st.GetContext().Err())
+		}
+	})
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
+	playbackNotify := newPlaybackNotifier(func(slot string) *models.ActiveMediaResponse {
+		env := requests.RequestEnv{
+			Context:         st.GetContext(),
+			Platform:        pl,
+			Config:          cfg,
+			State:           st,
+			Database:        db,
+			LauncherCache:   helpers.GlobalLauncherCache,
+			PlaybackManager: playbackManager,
+		}
+		return methods.ActiveMediaEntry(&env, slot)
+	}, playbackManager, notifBroker.Publish)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		playbackNotify.run(st.GetContext())
+	}()
+	wirePlaybackNotifier(playbackManager, st, playbackNotify)
+	svc.AutoAdvance = startAutoAdvance(svc, rendersPickers(pl, opts))
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
@@ -713,6 +828,10 @@ func startServiceWithOptions(
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnLaunchAbandoned(func(media *models.ActiveMedia) {
+		stopAbandonedNativeAudio(svc, media)
+	})
+
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
 		select {
@@ -733,7 +852,7 @@ func startServiceWithOptions(
 	launchersStarted := time.Now()
 	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
-		if errors.Is(err, config.ErrCustomLauncherUnknownFields) {
+		if errors.Is(err, config.ErrCustomLauncherUnknownFields) || errors.Is(err, config.ErrCustomLauncherInvalid) {
 			log.Warn().Err(err).Msg("error loading custom launchers")
 		} else {
 			log.Error().Err(err).Msg("error loading custom launchers")
@@ -752,6 +871,9 @@ func startServiceWithOptions(
 		st.SetBackgroundMedia,
 		func(ctx context.Context, stop func() error) error {
 			return stopNativeAudioPrimaryMedia(ctx, svc, stop)
+		},
+		func(path string) (time.Duration, time.Duration) {
+			return svc.PlaylistMemory.ResumeAt(systemdefs.SystemAudio, path)
 		},
 	)
 	launcherCacheDone := make(chan struct{})
@@ -821,6 +943,9 @@ func startServiceWithOptions(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
+		svc.Positions.Stop()
+		svc.PlaylistMemory.Stop()
 		dataSwap.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -932,28 +1057,29 @@ func startServiceWithOptions(
 	// doesn't compete with the launcher's first request for the single
 	// ARM core, the SQLite file lock, or the network. Each of these has a
 	// 300 s hard cap so they still run on a saturated system.
+	//
+	// These all write to the user database, so they run one after another in a
+	// single task: started together they queued on its one write lock along
+	// with token history, and the losers failed with "database is locked".
+	// Pre-warming goes last because it first waits on the network.
+	//
+	// Retention then repeats daily so devices that stay up for weeks don't
+	// grow their history and inbox tables until the next restart.
 	idleSched.Schedule(
-		st.GetContext(), "zaplink-prewarm",
-		5*time.Second, 300*time.Second,
+		st.GetContext(), "userdb-maintenance",
+		userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
 		func(ctx context.Context) {
-			zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
+			runInSequence(ctx,
+				func(ctx context.Context) {
+					runUserDBRetention(ctx, cfg, pl, db)
+				},
+				func(ctx context.Context) {
+					zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
+				},
+			)
 		},
 	)
-	idleSched.Schedule(
-		st.GetContext(), "history-retention-cleanup",
-		5*time.Second, 300*time.Second,
-		func(ctx context.Context) {
-			remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
-			cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
-		},
-	)
-	idleSched.Schedule(
-		st.GetContext(), "zaplink-host-prune",
-		5*time.Second, 300*time.Second,
-		func(_ context.Context) {
-			pruneExpiredZapLinkHosts(db)
-		},
-	)
+	startUserDBRetentionScheduler(st.GetContext(), cfg, pl, db, idleSched, backgroundWG)
 	playSyncRequests := make(chan struct{}, 1)
 	requestPlaySync := func() {
 		select {
@@ -974,7 +1100,7 @@ func startServiceWithOptions(
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()
-		watchMediaHistoryBackfill(st.GetContext(), notifBroker, db, indexPauser, requestPlaySync)
+		watchMediaHistoryBackfill(st.GetContext(), notifBroker, cfg, db, indexPauser, requestPlaySync)
 	}()
 	startRemoteBackupScheduler(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
@@ -983,6 +1109,7 @@ func startServiceWithOptions(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, notifBroker, backgroundWG,
 	)
 	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
+	startDeviceMonitor(st.GetContext(), deviceMonitor, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchDecksForPlaylistRefresh(st.GetContext(), notifBroker, svc)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
@@ -999,6 +1126,7 @@ func startServiceWithOptions(
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
 		st:              st,
+		cfg:             cfg,
 		db:              db,
 		clock:           clockwork.NewRealClock(),
 		requestPlaySync: requestPlaySync,
@@ -1040,6 +1168,8 @@ func startServiceWithOptions(
 		readerManager(svc, itq, make(chan readers.Scan), player, nil)
 	}()
 
+	restoreOpenPlaylists(svc, player)
+
 	log.Info().Msg("starting input token queue manager")
 	processTokenQueueDone := make(chan struct{})
 	go func() {
@@ -1069,6 +1199,8 @@ func startServiceWithOptions(
 		indexPauser.Resume()
 		scrapePauser.Resume()
 
+		// Where a long track got is saved before its playback goes away.
+		svc.Positions.Stop()
 		if stopErr := playbackManager.Stop(mediaslot.Primary); stopErr != nil {
 			log.Warn().Err(stopErr).Msg("error stopping primary playback during cleanup")
 		}
@@ -1092,6 +1224,7 @@ func startServiceWithOptions(
 		}
 		bleManager.Stop()
 		limitsManager.Stop()
+		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone
@@ -1100,6 +1233,7 @@ func startServiceWithOptions(
 		<-processTokenQueueDone
 		<-readerManagerDone
 		backgroundWG.Wait()
+		svc.PlaylistMemory.Stop()
 		// Wait for idle-scheduled tasks (history retention, zaplink prune,
 		// etc.) before closing the database so an in-flight task can't
 		// race with closeDatabase.
@@ -1192,13 +1326,38 @@ func startServiceWithOptions(
 		}()
 	}
 
-	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			runConfiguredServiceHooks(svc)
-		}()
-	}
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		// Every start records itself, whatever is configured, so a later
+		// start in the same boot is not mistaken for the first. The answer
+		// is taken once and shared by everything that asks.
+		firstBootStart, bootErr := isFirstServiceStartForBoot(svc.Platform)
+		if cfg.AudioMusicAutoplay() {
+			switch {
+			case bootErr != nil:
+				log.Warn().Err(bootErr).Msg("skipping music autoplay: failed to detect boot state")
+			case !firstBootStart:
+				log.Debug().Msg("skipping music autoplay: Core already started during this boot")
+			default:
+				autoplay := newMusicAutoplay(svc, func(ctx context.Context) {
+					select {
+					case <-launcherCacheDone:
+					case <-ctx.Done():
+						return
+					}
+					waitForServiceReady(svc)
+				})
+				svc.musicAutoplay.Store(autoplay)
+				backgroundWG.Add(1)
+				go func() {
+					defer backgroundWG.Done()
+					autoplay.run(st.GetContext())
+				}()
+			}
+		}
+		runConfiguredServiceHooks(svc, firstBootStart, bootErr)
+	}()
 
 	stopContext := func(ctx context.Context) error {
 		st.StopService()

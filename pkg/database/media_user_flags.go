@@ -25,6 +25,7 @@ import (
 
 	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/rs/zerolog/log"
 )
 
 // mediaUserFlagsMu serializes flag edits, so one edit's UserDB write and the
@@ -71,6 +72,26 @@ func ApplyMediaUserFlags(
 			return nil, err
 		}
 	}
+	reportFlags := db.watchMediaUserFlags(systemID, path)
+	defer reportFlags()
+
+	// The two stores are separate files, so nothing makes the pair of writes
+	// atomic. The marker is what a kill between them leaves behind. One that
+	// is already there was left by an earlier write the reconcile has not yet
+	// answered, and stays for it.
+	markerHeld := false
+	if mediaDBID > 0 {
+		_, found, err := db.UserDB.GetDeviceState(DeviceStateKeyMediaUserFlagWrite)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read media user flag write marker: %w", err)
+		}
+		markerHeld = found
+		if !markerHeld {
+			if err := db.UserDB.SetDeviceState(DeviceStateKeyMediaUserFlagWrite, "1"); err != nil {
+				return nil, fmt.Errorf("failed to mark media user flag write: %w", err)
+			}
+		}
+	}
 
 	for _, flag := range MediaUserFlags {
 		value, ok := changes[flag]
@@ -115,13 +136,52 @@ func ApplyMediaUserFlags(
 			remove = append(remove, ref)
 		}
 	}
-	if len(written) == 0 {
+	if len(written) > 0 {
+		if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
+			return nil, fmt.Errorf("failed to update media tag projection: %w", err)
+		}
+	}
+	if markerHeld {
 		return written, nil
 	}
-	if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
-		return nil, fmt.Errorf("failed to update media tag projection: %w", err)
+	// A marker that cannot be cleared only costs the next start a reconcile.
+	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
+		log.Warn().Err(err).Msg("failed to clear the media user flag write marker")
 	}
 	return written, nil
+}
+
+// watchMediaUserFlags reads a path's flags before an edit and returns the
+// function that reads them after it and tells OnMediaUserFlagsChanged when
+// they differ. It reads nothing when nobody listens. A failed read before
+// the edit is taken as a change; a failed read after it sends nothing, since
+// there are no flags to send, and is logged.
+func (db *Database) watchMediaUserFlags(systemID, path string) func() {
+	if db == nil || db.OnMediaUserFlagsChanged == nil || db.UserDB == nil {
+		return func() {}
+	}
+	before, _, beforeErr := db.UserDB.GetMediaUserData(systemID, path)
+	return func() {
+		after, _, err := db.UserDB.GetMediaUserData(systemID, path)
+		if err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("failed to read media user flags after an edit")
+			return
+		}
+		if beforeErr == nil && sameMediaUserFlags(&before, &after) {
+			return
+		}
+		after.SystemID, after.Path = systemID, path
+		db.OnMediaUserFlagsChanged(systemID, path, &after)
+	}
+}
+
+func sameMediaUserFlags(a, b *MediaUserData) bool {
+	for _, flag := range MediaUserFlags {
+		if a.Flag(flag) != b.Flag(flag) {
+			return false
+		}
+	}
+	return true
 }
 
 // setFlag sets one flag to true, reporting false for an unknown flag.
@@ -141,4 +201,16 @@ func (d *MediaUserData) setFlag(flag MediaUserFlag) bool {
 		return false
 	}
 	return true
+}
+
+// UserTags returns the user utility tags the row holds, in MediaUserFlags
+// order, as media.tags.update reports them.
+func (d *MediaUserData) UserTags() []TagInfo {
+	out := make([]TagInfo, 0, len(MediaUserFlags))
+	for _, flag := range MediaUserFlags {
+		if d.Flag(flag) {
+			out = append(out, TagInfo{Type: string(mediatags.TagTypeUser), Tag: string(flag)})
+		}
+	}
+	return out
 }

@@ -2,7 +2,7 @@ version: "3"
 
 vars:
   # Pinned so CI, cross-lint and the pre-push hook all agree on one version.
-  GOLANGCI_LINT_VERSION: v2.13.2
+  GOLANGCI_LINT_VERSION: v2.14.0
 
 tasks:
   setup:
@@ -51,7 +51,7 @@ tasks:
             -F/opt/macosx-sdk/System/Library/Frameworks
           CXX: >-
             zig c++ -w --target=x86_64-macos
-            -I/opt/macosx-sdk/usr/include
+            -idirafter /opt/macosx-sdk/usr/include
             -L/opt/macosx-sdk/usr/lib
             -F/opt/macosx-sdk/System/Library/Frameworks
           EXEC: >-

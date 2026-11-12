@@ -41,5 +41,6 @@ func (*RealExecutor) StartWithOptions(
 	if opts.HideWindow {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	}
-	return cmd.Start()
+	applyEnv(cmd, opts.Env)
+	return StartAndReap(cmd)
 }

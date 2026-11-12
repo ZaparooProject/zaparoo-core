@@ -74,6 +74,7 @@ func TestPinUPPopperScraperRequiresInstallation(t *testing.T) {
 	platform := &Platform{popper: integration}
 
 	assert.NotContains(t, platform.Scrapers(nil), "pinup-popper")
+	assert.Contains(t, platform.Scrapers(nil), "gamedatabase", "the catalog needs no Popper install")
 
 	require.NoError(t, fs.MkdirAll(dir, 0o755))
 	for _, name := range []string{"PinUpMenu.exe", "PUPDatabase.db"} {

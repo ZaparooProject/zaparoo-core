@@ -267,3 +267,36 @@ func TestHandleMediaBrowseIndex_OutsideRootRejected(t *testing.T) {
 	require.Error(t, err)
 	mockMediaDB.AssertNotCalled(t, "BrowseIndex", mock.Anything, mock.Anything)
 }
+
+// The index describes the list media.browse returns for the same scope, so it
+// takes the launcher-relative path media.browse takes.
+func TestHandleMediaBrowseIndex_RelativePath(t *testing.T) {
+	t.Parallel()
+
+	romsRoot := browseTestAbsPath("roms")
+	prefix := filepath.ToSlash(filepath.Join(romsRoot, "SNES", "USA")) + "/"
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}}})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountSystemOpts(prefix, "SNES")).Return(2, nil)
+	mockMediaDB.On("BrowseIndex", mock.Anything, mock.MatchedBy(func(opts database.BrowseIndexOptions) bool {
+		return opts.PathPrefix == prefix
+	})).Return(database.BrowseIndexResult{
+		Scheme: "latin", SortMode: "name-asc",
+		Buckets: []database.BrowseIndexBucket{{Key: "A", AtStart: true, Count: 2}},
+	}, nil)
+
+	path := "SNES/USA"
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &path})
+
+	result, err := HandleMediaBrowseIndex(env)
+	require.NoError(t, err)
+	res, ok := result.(models.BrowseIndexResults)
+	require.True(t, ok)
+	require.Len(t, res.Groups, 1)
+	mockMediaDB.AssertExpectations(t)
+}

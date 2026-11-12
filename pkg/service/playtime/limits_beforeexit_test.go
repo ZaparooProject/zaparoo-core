@@ -103,3 +103,42 @@ func TestLimitsManager_NilBeforeExitHookIsSafe(t *testing.T) {
 	assert.Equal(t, []string{"stop"}, events)
 	mockPlatform.AssertExpectations(t)
 }
+
+// A limit ends the game from Core's side, so the stop is recorded after
+// before_exit and before the launcher is told to stop.
+func TestLimitsManager_RecordsStoppedBeforeStoppingGame(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	tm, mockPlatform := newExceededLimitsManager(t, &events)
+	tm.SetBeforeExitHook(func() { events = append(events, "before_exit") })
+	tm.SetMediaStopRecorder(func(reason string) func() {
+		events = append(events, "record:"+reason)
+		return func() { events = append(events, "cancel") }
+	})
+
+	tm.checkLimits()
+
+	assert.Equal(t, []string{"before_exit", "record:stopped", "stop"}, events)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLimitsManager_FailedStopWithdrawsNote(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	tm, mockPlatform := newExceededLimitsManager(t, &events)
+	mockPlatform.ExpectedCalls = nil
+	mockPlatform.On("ID").Return("mock-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).
+		Return(platforms.ErrStopFailed).Once()
+	tm.SetMediaStopRecorder(func(reason string) func() {
+		events = append(events, "record:"+reason)
+		return func() { events = append(events, "cancel") }
+	})
+
+	tm.checkLimits()
+
+	assert.Equal(t, []string{"record:stopped", "cancel"}, events)
+}

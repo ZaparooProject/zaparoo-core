@@ -224,10 +224,16 @@ func sqlForEachTitleBySystemID(
 	systemID string,
 	fn func(*database.TitleWithSystem) error,
 ) error {
+	// A title whose only present rows are links has nothing to scrape.
+	linkFilter, err := titleLinkFilter(queryCtx, db, "t")
+	if err != nil {
+		return err
+	}
+	//nolint:gosec // linkFilter is a fixed predicate.
 	query := `
 		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID
 		FROM MediaTitles t
-		WHERE t.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		WHERE t.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)` + linkFilter + `
 	`
 	rows, err := db.QueryContext(queryCtx, query, systemID)
 	if err != nil {

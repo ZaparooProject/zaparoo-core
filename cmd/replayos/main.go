@@ -38,9 +38,11 @@ import (
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/replayos"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
@@ -131,7 +133,11 @@ func runDaemon(pl *replayos.Platform, cfg *config.Instance) error {
 			return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
 		}
 
-		log.Error().Err(err).Msg("error starting service")
+		// A taken API port and a database newer than this build were already
+		// logged at Warn where they happened.
+		if !api.IsAddrInUse(err) && !errors.Is(err, database.ErrSchemaAhead) {
+			log.Error().Err(err).Msg("error starting service")
+		}
 		return fmt.Errorf("error starting service: %w", err)
 	}
 

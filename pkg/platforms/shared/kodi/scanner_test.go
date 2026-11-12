@@ -180,6 +180,14 @@ func (m *MockKodiClient) PlayPause(ctx context.Context) error {
 	return nil
 }
 
+func (m *MockKodiClient) SetPaused(ctx context.Context, paused bool) error {
+	args := m.Called(ctx, paused)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock SetPaused error: %w", err)
+	}
+	return nil
+}
+
 func (m *MockKodiClient) FastForward(ctx context.Context) error {
 	args := m.Called(ctx)
 	if err := args.Error(0); err != nil {
@@ -235,6 +243,22 @@ func (m *MockKodiClient) LaunchTVShow(path string) error {
 
 func (m *MockKodiClient) GetSongs(ctx context.Context) ([]Song, error) {
 	args := m.Called(ctx)
+	if songs, ok := args.Get(0).([]Song); ok {
+		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+}
+
+func (m *MockKodiClient) GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error) {
+	args := m.Called(ctx, albumID)
+	if songs, ok := args.Get(0).([]Song); ok {
+		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
+}
+
+func (m *MockKodiClient) GetArtistSongs(ctx context.Context, artistID int) ([]Song, error) {
+	args := m.Called(ctx, artistID)
 	if songs, ok := args.Get(0).([]Song); ok {
 		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}

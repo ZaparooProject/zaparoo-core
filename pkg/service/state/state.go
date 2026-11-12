@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/device"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -67,48 +68,64 @@ type readerWriteState struct {
 }
 
 type State struct {
-	activeToken           tokens.Token
-	lastScanned           tokens.Token
-	platform              platforms.Platform
-	ctx                   context.Context
-	softwareToken         *tokens.Token
-	ctxCancelFunc         context.CancelFunc
-	readers               map[string]readers.Reader
-	readerWrites          map[string]*readerWriteState
-	Notifications         chan<- models.Notification
-	activeMedia           *models.ActiveMedia
-	backgroundMedia       *models.ActiveMedia
-	activeProfile         *models.ActiveProfile
-	activePlaylist        *playlists.Playlist
-	backgroundPlaylist    *playlists.Playlist
-	activeMediaReadyCh    chan struct{}
-	inbox                 *inbox.Service
-	onMediaStartHook      func(*models.ActiveMedia, uint64)
-	onMediaStopHook       func()
-	beforeExitHook        func()
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
-	backupCoordinator     *backupcoordinator.Coordinator
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
-	remoteStatus          RemoteStatus
-	librarySyncSignals    LibrarySyncSignals
-	bootUUID              string
-	activeMediaReadyGen   uint64
-	zapScriptHolds        int
-	activeMediaPublishMu  syncutil.RWMutex
-	remoteStatusMu        syncutil.RWMutex
-	mediaRestoreMu        syncutil.RWMutex
-	mu                    syncutil.RWMutex
-	mediaLaunchMu         syncutil.RWMutex
-	activeMediaReady      bool
-	beforeExitRunning     bool
-	restartRequested      bool
-	restorePendingRestart bool
-	runZapScript          bool
-	backgroundAutoPaused  bool
-	mediaDBRecoveryActive bool
-	stopService           bool
+	activeToken            tokens.Token
+	lastScanned            tokens.Token
+	librarySyncSignals     LibrarySyncSignals
+	activeMediaPublishedAt time.Time
+	lastLaunchAt           time.Time
+	platform               platforms.Platform
+	ctx                    context.Context
+	uiEvents               *uievents.Service
+	Notifications          chan<- models.Notification
+	activeMedia            *models.ActiveMedia
+	backgroundMedia        *models.ActiveMedia
+	activeProfile          *models.ActiveProfile
+	activePlaylist         *playlists.Playlist
+	backgroundPlaylist     *playlists.Playlist
+	activeMediaReadyCh     chan struct{}
+	inbox                  *inbox.Service
+	deviceMonitor          *device.Monitor
+	onMediaStartHook       func(*models.ActiveMedia, uint64)
+	onMediaStopHook        func()
+	onLaunchAbandoned      func(*models.ActiveMedia)
+	ctxCancelFunc          context.CancelFunc
+	playlistObserver       func(slot string, pls *playlists.Playlist)
+	playlistRequester      func(ctx context.Context, pls *playlists.Playlist) error
+	beforeExitHook         func()
+	pendingLaunchOverride  *PendingLaunchOverride
+	pendingWrite           *PendingWrite
+	backupCoordinator      *backupcoordinator.Coordinator
+	launcherManager        *LauncherManager
+	readerWrites           map[string]*readerWriteState
+	softwareToken          *tokens.Token
+	readers                map[string]readers.Reader
+	remoteStatus           RemoteStatus
+	earlyStop              earlyStop
+	bootUUID               string
+	mediaObservers         []MediaObserver
+	stopIntent             mediaStopIntent
+	stopIntentTTL          time.Duration
+	earlyStopWindow        time.Duration
+	activeMediaReadyGen    uint64
+	stopSeq                uint64
+	userStopSeq            uint64
+	stopsDone              uint64
+	stopsInProgress        int
+	zapScriptHolds         int
+	activeMediaPublishMu   syncutil.RWMutex
+	remoteStatusMu         syncutil.RWMutex
+	mediaRestoreMu         syncutil.RWMutex
+	mu                     syncutil.RWMutex
+	mediaLaunchMu          syncutil.RWMutex
+	activeMediaReady       bool
+	publishedSinceLaunch   bool
+	beforeExitRunning      bool
+	restartRequested       bool
+	restorePendingRestart  bool
+	runZapScript           bool
+	backgroundAutoPaused   bool
+	mediaDBRecoveryActive  bool
+	stopService            bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -127,6 +144,8 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 		launcherManager:   NewLauncherManager(),
 		backupCoordinator: backupcoordinator.New(),
 		bootUUID:          bootUUID,
+		stopIntentTTL:     defaultStopIntentTTL,
+		earlyStopWindow:   defaultEarlyStopWindow,
 	}
 	// Terminal backup.state event: clients showing a paused/throttled backup
 	// banner clear it when the operation's lease is released.
@@ -346,6 +365,16 @@ func (s *State) SetOnMediaStopHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStopHook = hook
+}
+
+// SetOnLaunchAbandoned registers the callback run when a stop overtakes a
+// launch whose media was about to be published. It stops anything the launch
+// started that the platform's own stop cannot find because nothing was
+// published, such as native audio playback. Pass nil to clear it.
+func (s *State) SetOnLaunchAbandoned(hook func(*models.ActiveMedia)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onLaunchAbandoned = hook
 }
 
 // SetBeforeExitHook registers the callback run just before active media is
@@ -669,8 +698,50 @@ func (s *State) GetActivePlaylist() *playlists.Playlist {
 
 func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.activePlaylist = playlist
-	s.mu.Unlock()
+	s.notifyPlaylistLocked(mediaslot.Primary, playlist)
+}
+
+// SetPlaylistObserver registers fn to hear every playlist stored in either
+// slot, nil when a slot is closed. fn runs under the state lock, so changes
+// reach it in the order they were made; it must return at once and must not
+// call back into State.
+func (s *State) SetPlaylistObserver(fn func(slot string, pls *playlists.Playlist)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playlistObserver = fn
+}
+
+// ErrPlaylistQueueUnavailable is returned by RequestPlaylistUpdate when no
+// playlist queue is wired, as before the service has started.
+var ErrPlaylistQueueUnavailable = errors.New("playlist queue unavailable")
+
+// SetPlaylistRequester registers fn as the way RequestPlaylistUpdate hands a
+// playlist update to the playlist queue worker, the only writer of the
+// playlists.
+func (s *State) SetPlaylistRequester(fn func(ctx context.Context, pls *playlists.Playlist) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playlistRequester = fn
+}
+
+// RequestPlaylistUpdate queues pls for the playlist queue worker, waiting no
+// longer than ctx allows.
+func (s *State) RequestPlaylistUpdate(ctx context.Context, pls *playlists.Playlist) error {
+	s.mu.RLock()
+	fn := s.playlistRequester
+	s.mu.RUnlock()
+	if fn == nil {
+		return ErrPlaylistQueueUnavailable
+	}
+	return fn(ctx, pls)
+}
+
+func (s *State) notifyPlaylistLocked(slot string, pls *playlists.Playlist) {
+	if s.playlistObserver != nil {
+		s.playlistObserver(slot, pls)
+	}
 }
 
 func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
@@ -681,8 +752,9 @@ func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
 
 func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.backgroundPlaylist = playlist
-	s.mu.Unlock()
+	s.notifyPlaylistLocked(mediaslot.Background, playlist)
 }
 
 // PausePlaylistIfCurrent stores the playlist in slot as paused, but only while
@@ -699,6 +771,8 @@ func (s *State) PausePlaylistIfCurrent(slot string, launched *playlists.Playlist
 	target := &s.activePlaylist
 	if slot == mediaslot.Background {
 		target = &s.backgroundPlaylist
+	} else {
+		slot = mediaslot.Primary
 	}
 	current := *target
 	if current == nil || current != launched || !current.Playing {
@@ -707,6 +781,7 @@ func (s *State) PausePlaylistIfCurrent(slot string, launched *playlists.Playlist
 	paused := playlists.Pause(*current)
 	paused.PausedByFailure = true
 	*target = paused
+	s.notifyPlaylistLocked(slot, paused)
 	return true
 }
 
@@ -768,19 +843,39 @@ func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 		return platforms.MediaLaunchAccess{}, err
 	}
 
+	// A new launch supersedes any stop still waiting for a game to turn up.
+	s.mu.Lock()
+	s.lastLaunchAt = time.Now()
+	s.publishedSinceLaunch = false
+	s.earlyStop = earlyStop{}
+	s.mu.Unlock()
+
 	var accessMu syncutil.Mutex
 	held := true
+	finish := newLaunchFinish(s)
+	startedAtStops := s.UserStopSeq()
 	return platforms.MediaLaunchAccess{
 		SetActiveMedia: func(media *models.ActiveMedia) {
+			if media != nil && s.UserStopSeq() > startedAtStops {
+				// A stop was requested after this launch began and before its
+				// media appeared: it is the launch that gets stopped.
+				s.abandonOvertakenLaunch(media)
+				return
+			}
 			accessMu.Lock()
 			if !held {
 				accessMu.Unlock()
 				s.SetActiveMedia(media)
+				finish.bind(media)
 				return
 			}
 			s.publishActiveMedia(media, true)
 			accessMu.Unlock()
+			finish.bind(media)
 		},
+		RecordMediaStop: s.RecordMediaStop,
+		MediaFinished:   finish.finish,
+		MediaExited:     finish.exit,
 		Release: func() {
 			accessMu.Lock()
 			defer accessMu.Unlock()
@@ -794,17 +889,98 @@ func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 	}, nil
 }
 
+// abandonOvertakenLaunch drops the publication of media whose launch a stop
+// overtook, and has what that launch started stopped. The launch still holds
+// the launch gate, so the stop runs once it is released.
+func (s *State) abandonOvertakenLaunch(media *models.ActiveMedia) {
+	log.Info().Str("path", media.Path).Msg("a stop came during the launch, not publishing its media")
+	s.mu.RLock()
+	gen := s.activeMediaReadyGen
+	hook := s.onLaunchAbandoned
+	s.mu.RUnlock()
+	if s.platform == nil && hook == nil {
+		return
+	}
+	go s.stopAbandonedLaunch(media, gen, hook)
+}
+
+// stopAbandonedLaunch stops what an abandoned launch started. It waits for the
+// launch gate, which the launch holds until it returns, so that a launch begun
+// meanwhile is either not started yet or already published. Media published
+// since the launch was abandoned belongs to a newer launch, and the stop must
+// not reach it.
+func (s *State) stopAbandonedLaunch(media *models.ActiveMedia, gen uint64, hook func(*models.ActiveMedia)) {
+	release, err := acquireExclusiveGate(s.ctx, &s.mediaLaunchMu)
+	if err != nil {
+		log.Debug().Err(err).Msg("not stopping a launch that a stop overtook")
+		return
+	}
+	defer release()
+
+	s.mu.RLock()
+	superseded := s.activeMedia != nil && s.activeMediaReadyGen != gen
+	s.mu.RUnlock()
+	if superseded {
+		log.Info().Str("path", media.Path).Msg("newer media was published, leaving it running")
+		return
+	}
+
+	if hook != nil {
+		hook(media)
+	}
+	if s.platform == nil {
+		return
+	}
+	if err := s.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
+		log.Warn().Err(err).Msg("failed to stop a launch that a stop overtook")
+	}
+}
+
 // AcquireMediaStop waits for in-flight media launches, then prevents another
 // launch from starting until the returned release function is called.
 func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
-	return acquireExclusiveGate(ctx, &s.mediaLaunchMu)
+	release, err := acquireExclusiveGate(ctx, &s.mediaLaunchMu)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.stopsInProgress++
+	s.mu.Unlock()
+	return func() {
+		// Counted before the gate opens, so a launch that was waiting on the
+		// stop sees that one finished.
+		s.mu.Lock()
+		s.stopsInProgress--
+		s.stopsDone++
+		s.mu.Unlock()
+		release()
+	}, nil
+}
+
+// StopInProgress reports whether a stop holds the media stop gate right now.
+// Stopping takes seconds on some platforms, and what is decided meanwhile was
+// decided about media that is going away.
+func (s *State) StopInProgress() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stopsInProgress > 0
+}
+
+// StopEpoch counts every stop of the primary media at both its start and its
+// completion. The auto-advance engine stamps its moves with it, so a move
+// decided while a stop was running is cancelled once that stop completes,
+// where an update issued by a person during the stop is not.
+func (s *State) StopEpoch() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.userStopSeq + s.stopsDone
 }
 
 // AcquireUpdateMediaGate waits for in-flight launches and ActiveMedia
 // publications, then prevents either from starting until release. The updater
 // holds this gate from its final safety check through restart cancellation.
 func (s *State) AcquireUpdateMediaGate(ctx context.Context) (func(), error) {
-	releaseLaunch, err := s.AcquireMediaStop(ctx)
+	releaseLaunch, err := acquireExclusiveGate(ctx, &s.mediaLaunchMu)
 	if err != nil {
 		return nil, err
 	}
@@ -984,6 +1160,16 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 			return
 		}
 
+		// A launch publishes its own media with restore access held, and a
+		// stop that overtook it is handled by the launch itself. Media turning
+		// up any other way, from a tracker or watcher, may be the game a stop
+		// landed too early to end.
+		if !restoreAccessHeld && s.takeEarlyStopFor(media) {
+			log.Info().Str("path", media.Path).Msg("game appeared after a stop meant for it, stopping it")
+			s.abandonOvertakenLaunch(media)
+			return
+		}
+
 		// Restore access comes first. The service takes these three locks in
 		// one order everywhere — restore, then launch, then publish — and
 		// taking them in any other order closes a cycle between this, a media
@@ -1019,6 +1205,16 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 // whether the state changed. A non-nil cond is evaluated against the current
 // media under the lock and vetoes the update when it returns false.
 func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*models.ActiveMedia) bool) bool {
+	return s.updateActiveMediaStateAs(media, cond, "")
+}
+
+// updateActiveMediaStateAs is updateActiveMediaState with the reason the media
+// ends when the update clears it. A non-empty endReason takes the place of any
+// recorded stop, and is chosen in the same critical section that clears the
+// media, so a condition that fails leaves a recorded stop untouched.
+func (s *State) updateActiveMediaStateAs(
+	media *models.ActiveMedia, cond func(*models.ActiveMedia) bool, endReason string,
+) bool {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another
@@ -1042,6 +1238,12 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 	if media == nil {
 		// media has stopped
 		readyCh := s.activeMediaReadyCh
+		endedGen := s.activeMediaReadyGen
+		reason := s.takeStopReasonLocked(models.MediaStopReasonExited)
+		if endReason != "" {
+			reason = endReason
+		}
+		observers := s.mediaObservers
 		s.activeMedia = media
 		s.activeMediaReady = false
 		s.activeMediaReadyCh = nil
@@ -1054,8 +1256,10 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 
 		// Send notifications outside lock to prevent deadlock
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
+		stoppedParams.Reason = reason
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen)
 		// Run the hook synchronously (outside the lock) so callers observe its
 		// effects before their next step — the launch path stops native audio and
 		// then decides whether to pause background music, which must happen after
@@ -1071,9 +1275,12 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 		// media has started
 		s.activeMedia = media
 		s.activeMediaReady = false
+		s.activeMediaPublishedAt = time.Now()
+		s.publishedSinceLaunch = true
 		s.activeMediaReadyGen++
 		gen := s.activeMediaReadyGen
 		s.activeMediaReadyCh = make(chan struct{})
+		observers := s.mediaObservers
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
@@ -1085,6 +1292,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
+		notifyMediaStarted(observers, media, mediaslot.Primary, gen)
 
 		// Execute OnMediaStart hook if set
 		if hook != nil {
@@ -1096,8 +1304,13 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 	if !oldMedia.Equal(media) {
 		// media has changed
 		readyCh := s.activeMediaReadyCh
+		endedGen := s.activeMediaReadyGen
+		reason := s.takeStopReasonLocked(models.MediaStopReasonReplaced)
+		observers := s.mediaObservers
 		s.activeMedia = media
 		s.activeMediaReady = false
+		s.activeMediaPublishedAt = time.Now()
+		s.publishedSinceLaunch = true
 		s.activeMediaReadyGen++
 		gen := s.activeMediaReadyGen
 		s.activeMediaReadyCh = make(chan struct{})
@@ -1109,6 +1322,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 
 		// Send notifications outside lock to prevent deadlock
 		changedStoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
+		changedStoppedParams.Reason = reason
 		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
@@ -1118,6 +1332,8 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen)
+		notifyMediaStarted(observers, media, mediaslot.Primary, gen)
 
 		// Execute OnMediaStart hook if set (new media started)
 		if hook != nil {
@@ -1131,20 +1347,51 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*mod
 	return false
 }
 
+// SetBackgroundMedia sets the background-slot media. Clearing it with nil is
+// a Core-initiated stop; ClearBackgroundMedia says why when it is not.
 func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
+	s.applyBackgroundMedia(media, models.MediaStopReasonStopped, nil)
+}
+
+// ClearBackgroundMedia clears the background-slot media and reports reason,
+// one of the models.MediaStopReason values, to clients and media observers.
+func (s *State) ClearBackgroundMedia(reason string) {
+	s.applyBackgroundMedia(nil, reason, nil)
+}
+
+// ClearBackgroundMediaIf clears the background-slot media with reason when
+// owns holds for the media currently there, and reports whether it did. The
+// check and the clear are one step, so media that took the slot meanwhile is
+// left alone.
+func (s *State) ClearBackgroundMediaIf(owns func(*models.ActiveMedia) bool, reason string) bool {
+	return s.applyBackgroundMedia(nil, reason, owns)
+}
+
+// applyBackgroundMedia sets or clears the background slot. A non-nil owns
+// vetoes a clear when it returns false for the current media.
+func (s *State) applyBackgroundMedia(
+	media *models.ActiveMedia, clearReason string, owns func(*models.ActiveMedia) bool,
+) bool {
 	s.mu.Lock()
 	oldMedia := s.backgroundMedia
 	if oldMedia == nil && media == nil {
 		s.mu.Unlock()
-		return
+		return false
 	}
+	if owns != nil && !owns(oldMedia) {
+		s.mu.Unlock()
+		return false
+	}
+	observers := s.mediaObservers
 
 	if media == nil {
 		s.backgroundMedia = nil
 		s.mu.Unlock()
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		stoppedParams.Reason = clearReason
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
-		return
+		notifyMediaEnded(observers, oldMedia, mediaslot.Background, clearReason, 0)
+		return true
 	}
 
 	media.Slot = mediaslot.Background
@@ -1158,13 +1405,17 @@ func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
 			MediaPath:  media.Path,
 			Slot:       mediaslot.Background,
 		})
-		return
+		notifyMediaStarted(observers, media, mediaslot.Background, 0)
+		return true
 	}
 
-	if !oldMedia.Equal(media) {
+	// Background tracks are told apart by path: two tracks with the same
+	// title in different albums are different tracks.
+	if oldMedia.Path != media.Path || !oldMedia.Equal(media) {
 		s.backgroundMedia = media
 		s.mu.Unlock()
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		stoppedParams.Reason = models.MediaStopReasonReplaced
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
@@ -1173,10 +1424,13 @@ func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
 			MediaPath:  media.Path,
 			Slot:       mediaslot.Background,
 		})
-		return
+		notifyMediaEnded(observers, oldMedia, mediaslot.Background, models.MediaStopReasonReplaced, 0)
+		notifyMediaStarted(observers, media, mediaslot.Background, 0)
+		return true
 	}
 
 	s.mu.Unlock()
+	return false
 }
 
 func buildMediaStoppedParams(media *models.ActiveMedia, slot string) models.MediaStoppedParams {
@@ -1263,6 +1517,22 @@ func (s *State) BootUUID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.bootUUID
+}
+
+// SetDeviceMonitor sets the device status monitor. Called during service
+// startup, before the API accepts requests.
+func (s *State) SetDeviceMonitor(monitor *device.Monitor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deviceMonitor = monitor
+}
+
+// DeviceMonitor returns the device status monitor, or nil when the service
+// was started without one.
+func (s *State) DeviceMonitor() *device.Monitor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deviceMonitor
 }
 
 // SetInbox sets the inbox service. Called during service startup after database is ready.

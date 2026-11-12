@@ -256,6 +256,13 @@ func TestLauncherMatcher_ShouldSkipScanSymlink_ScanDuplicates(t *testing.T) {
 // suppresses duplicates, optionally with the scan_duplicates opt-in applied.
 func arcadeMatcherForBrokenSymlinks(t *testing.T, rootDir string, optIn bool) *LauncherMatcher {
 	t.Helper()
+	return arcadeMatcherWithLinks(t, rootDir, optIn, true)
+}
+
+// arcadeMatcherWithLinks builds a matcher over one Arcade launcher, with the
+// scan_duplicates opt-in and the internal-symlink declaration chosen per test.
+func arcadeMatcherWithLinks(t *testing.T, rootDir string, optIn, skipInternal bool) *LauncherMatcher {
+	t.Helper()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
@@ -266,7 +273,7 @@ func arcadeMatcherForBrokenSymlinks(t *testing.T, rootDir string, optIn bool) *L
 			Folders:                  []string{"_Arcade"},
 			Extensions:               []string{".mra"},
 			ScanDirectoryExcludes:    []string{"_Organized"},
-			ScanSkipInternalSymlinks: true,
+			ScanSkipInternalSymlinks: skipInternal,
 		},
 	})
 
@@ -346,4 +353,78 @@ func TestLauncherMatcher_ShouldSkipBrokenScanSymlink_NoOptIn(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, skip, "a dangling link is still indexed without the opt-in")
+}
+
+func TestLauncherMatcher_ScanDuplicateLinkTarget(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	matcher := arcadeMatcherWithLinks(t, rootDir, true, true)
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+	link := filepath.Join(arcadeDir, "_Organized", "_1 A-E", "ASO - Armored Scrum Object.mra")
+
+	target, ok, err := matcher.ScanDuplicateLinkTarget("Arcade", link, func() (string, error) {
+		return filepath.Join(arcadeDir, "ASO.mra"), nil
+	})
+	require.NoError(t, err)
+	assert.True(t, ok, "an alias of media inside the launcher's folders is a link")
+	assert.Equal(t, filepath.Join(arcadeDir, "ASO.mra"), target)
+
+	target, ok, err = matcher.ScanDuplicateLinkTarget("Arcade", link, func() (string, error) {
+		return filepath.Join("..", "..", "ASO.mra"), nil
+	})
+	require.NoError(t, err)
+	assert.True(t, ok, "a relative target resolves against the link's directory")
+	assert.Equal(t, filepath.Join(arcadeDir, "ASO.mra"), target)
+
+	_, ok, err = matcher.ScanDuplicateLinkTarget("Arcade", link, func() (string, error) {
+		return filepath.Join(rootDir, "elsewhere", "ASO.mra"), nil
+	})
+	require.NoError(t, err)
+	assert.False(t, ok, "a target outside the launcher's folders is its own media")
+
+	readErr := errors.New("input/output error")
+	_, ok, err = matcher.ScanDuplicateLinkTarget("Arcade", link, func() (string, error) {
+		return "", readErr
+	})
+	require.ErrorIs(t, err, readErr)
+	assert.False(t, ok)
+
+	_, ok, err = matcher.ScanDuplicateLinkTarget(
+		"Arcade", filepath.Join(rootDir, "elsewhere", "ASO.mra"),
+		func() (string, error) {
+			t.Helper()
+			t.Fatal("a link outside the launcher's folders must not be read")
+			return "", nil
+		},
+	)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestLauncherMatcher_ScanDuplicateLinkTarget_NotLinked(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tests := []struct {
+		name         string
+		optIn        bool
+		skipInternal bool
+	}{
+		{name: "without scan_duplicates", optIn: false, skipInternal: true},
+		{name: "launcher keeps its internal symlinks", optIn: true, skipInternal: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootDir := t.TempDir()
+			matcher := arcadeMatcherWithLinks(t, rootDir, tt.optIn, tt.skipInternal)
+			_, ok, err := matcher.ScanDuplicateLinkTarget(
+				"Arcade", filepath.Join(rootDir, "_Arcade", "_Organized", "ASO.mra"),
+				func() (string, error) {
+					t.Helper()
+					t.Fatal("readTarget must not be called")
+					return "", nil
+				},
+			)
+			require.NoError(t, err)
+			assert.False(t, ok)
+		})
+	}
 }

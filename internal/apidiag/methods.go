@@ -25,13 +25,14 @@ import "strings"
 // input. The API registration test requires intentional coverage for new methods.
 var knownMethods = func() map[string]struct{} {
 	methods := strings.Fields(`
-launch run confirm ui ui.respond run.script stop tokens media
+launch run confirm ui ui.respond ui.shown run.script stop tokens media
 media.generate media.generate.cancel media.generate.resume media.index
 media.search media.tags media.tags.update media.meta.update media.active
 media.history media.history.latest media.history.top media.lookup media.lookup.candidates
 media.meta media.image media.asset
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
 media.browse media.browse.index media.control media.active.update media.clean.orphans
+media.active.image playlists.update
 settings settings.update settings.zapscript.hold settings.reload settings.logs.download
 settings.backup settings.backup.list settings.backup.inspect settings.backup.delete
 settings.backup.restore settings.backup.status settings.backup.remote.run
@@ -39,12 +40,15 @@ settings.backup.remote.list settings.backup.remote.restore
 settings.playtime.limits settings.playtime.limits.update playtime playtime.extend
 clients clients.current clients.delete clients.pair.start clients.pair.cancel
 profiles profiles.new profiles.update profiles.delete profiles.active profiles.switch profiles.verify
-decks decks.get decks.new decks.update decks.delete decks.open
+decks decks.get decks.new decks.update decks.delete decks.open decks.image
 systems launchers launchers.refresh tokens.history mappings mappings.new mappings.delete
 mappings.update mappings.reload readers readers.write readers.write.cancel version health
 inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings.auth.unlink
 settings.auth.link settings.auth.link.status settings.auth.link.cancel
 update.check update.status update.apply input.keyboard input.gamepad screenshot media.title.parse remote.activity
+device.status device.power.reboot device.power.shutdown device.power.suspend online.status
+device.bluetooth.devices device.bluetooth.scan.start device.bluetooth.scan.stop
+device.bluetooth.pair device.bluetooth.forget
 `)
 	result := make(map[string]struct{}, len(methods))
 	for _, method := range methods {

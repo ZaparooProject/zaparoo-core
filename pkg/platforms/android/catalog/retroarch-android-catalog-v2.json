@@ -1406,7 +1406,7 @@
     },
     {
       "id": "RetroArch.PrBoom",
-      "system": "DOS",
+      "system": "Doom",
       "core": "prboom",
       "extensions": [
         ".wad",

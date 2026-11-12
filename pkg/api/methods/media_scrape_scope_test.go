@@ -78,6 +78,33 @@ func TestResolveScrapeScope(t *testing.T) {
 	}
 }
 
+// A linked row is never scraped itself, so a scope naming one scrapes its
+// target, and the link takes the result when the run finishes.
+func TestResolveScrapeScopeLinkResolvesToTarget(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	aliasPath := filepath.ToSlash(filepath.Join(dir, "_Organized", "ASO - Armored Scrum Object.mra"))
+	targetPath := filepath.ToSlash(filepath.Join(dir, "ASO.mra"))
+	mdb := helpers.NewMockMediaDBI()
+	env := requests.RequestEnv{Context: context.Background(), Database: &database.Database{MediaDB: mdb}}
+	system := database.System{DBID: 1, SystemID: "Arcade"}
+	aliasID, targetID := int64(42), int64(7)
+	mdb.On("GetMediaWithTitleAndSystem", mock.Anything, aliasID).Return(&database.MediaFullRow{
+		Media: database.Media{DBID: aliasID, Path: aliasPath}, System: system,
+	}, nil).Once()
+	mdb.On("GetMediaLinkTarget", mock.Anything, aliasID).Return(targetID, true, nil).Once()
+	mdb.On("GetMediaWithTitleAndSystem", mock.Anything, targetID).Return(&database.MediaFullRow{
+		Media: database.Media{DBID: targetID, Path: targetPath}, System: system,
+	}, nil).Once()
+
+	scope, err := resolveScrapeScope(&env, models.MediaScrapeParams{
+		Scope: &models.MediaScrapeScope{MediaID: &aliasID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, &database.ScrapeScope{SystemID: "Arcade", Path: targetPath, MediaID: targetID}, scope)
+	mdb.AssertExpectations(t)
+}
+
 func TestResolveScrapeScopeRejectsInvalidForms(t *testing.T) {
 	t.Parallel()
 	for _, input := range []string{

@@ -128,10 +128,12 @@
   ],
   "DOS": [
     "dosbox_pure",
-    "prboom",
     "dosbox_core",
     "dosbox",
     "dosbox_svn"
+  ],
+  "Doom": [
+    "prboom"
   ],
   "Dreamcast": [
     "flycast"

@@ -539,6 +539,9 @@ func TestCreateVIDPIDBlocklist(t *testing.T) {
 	assert.Contains(t, blocklist, "16C0:0F38")
 	assert.Contains(t, blocklist, "16D0:1094")
 
+	// Should contain the Greaseweazle floppy controller
+	assert.Contains(t, blocklist, "1209:4D69")
+
 	// All entries should be in VID:PID format
 	for _, entry := range blocklist {
 		assert.Regexp(t, `^[0-9A-F]{4}:[0-9A-F]{4}$`, entry,

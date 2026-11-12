@@ -231,8 +231,8 @@ func getSourceSystemPaths(
 			failedRoots = append(failedRoots, root)
 			continue
 		}
-		for _, match := range rootMatches {
-			seen[match.System.ID+":"+match.Path] = true
+		for i := range rootMatches {
+			seen[rootMatches[i].System.ID+":"+rootMatches[i].Path] = true
 		}
 		matches = append(matches, rootMatches...)
 	}

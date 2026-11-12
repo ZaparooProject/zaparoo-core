@@ -133,7 +133,7 @@ func parseRank(s string) Prefix {
 		}
 		sepEnd++
 	}
-	if sepEnd == digitEnd || sepEnd == len(s) {
+	if sepEnd == digitEnd || sepEnd == len(s) || !isListSeparator(s[digitEnd:sepEnd]) {
 		return Prefix{}
 	}
 
@@ -142,6 +142,19 @@ func parseRank(s string) Prefix {
 		return Prefix{}
 	}
 	return Prefix{Kind: KindRank, Rest: rest}
+}
+
+// isListSeparator reports whether sep, what follows a leading number or a
+// bare leading year, marks list numbering ("001 - Sonic", "42. Contra",
+// "7) Zelda", "1991 - Sonic") rather than being part of the title. A bare
+// space or a hyphen with no space beside it is a title's own: "720 Degrees",
+// "10-Yard Fight" and "3-D WorldRunner" lost their numbers to a folder that
+// was mostly such titles.
+func isListSeparator(sep string) bool {
+	if strings.ContainsAny(sep, ".)") {
+		return true
+	}
+	return strings.Contains(sep, "-") && strings.ContainsFunc(sep, unicode.IsSpace)
 }
 
 func parseDate(s string) Prefix {
@@ -173,6 +186,12 @@ func parseDate(s string) Prefix {
 		return Prefix{}
 	}
 	rest := strings.TrimLeftFunc(s[pos:], isSeparatorRune)
+	// A year alone is often the title's own ("1943 The Battle of Midway",
+	// "2020 Super Baseball"), so it is a date prefix only when set off the
+	// way a list number is. A month or day already marks a date.
+	if pos == 4 && !isListSeparator(s[pos:len(s)-len(rest)]) {
+		return Prefix{}
+	}
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
 		return Prefix{}

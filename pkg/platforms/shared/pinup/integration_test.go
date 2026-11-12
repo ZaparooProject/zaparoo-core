@@ -646,6 +646,10 @@ func TestNewLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Kill)
 	assert.NotNil(t, launcher.Availability)
 	assert.NotNil(t, launcher.Launch)
+	// Windows, 2026-10-26: VPX opened its player 15 to 22 s after the launch,
+	// and the 10 s service default released media_ready before it.
+	require.NotNil(t, launcher.ReadyTimeout)
+	assert.GreaterOrEqual(t, launcher.ReadyTimeout(nil), 30*time.Second)
 
 	results, err := launcher.Scanner(context.Background(), nil, systemdefs.SystemPinball, nil)
 	require.NoError(t, err)
@@ -686,4 +690,50 @@ func TestLauncherSelectionRejectsUnlaunchablePaths(t *testing.T) {
 	} {
 		assert.False(t, helpers.PathIsLauncher(nil, pl, &launcher, path), path)
 	}
+}
+
+// A watcher that sees the emulator leave while Core's stop is still waiting
+// must not treat it as the table ending on its own.
+func TestIntegrationWatcherDefersToCoreStop(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) (*harness, launchKey) {
+		t.Helper()
+		h := newHarness(t, harnessOptions{menuRunning: true, withServerExe: true})
+		h.serverRunning()
+		require.NoError(t, h.integ.Launch(nil, TablePath(10, "Attack from Mars")))
+		require.Eventually(t, func() bool { return h.hooks.activeMedia() != nil }, 2*time.Second, 5*time.Millisecond)
+		h.integ.mu.Lock()
+		key := h.integ.active
+		h.integ.mu.Unlock()
+		require.NotEqual(t, launchKey{}, key)
+
+		h.integ.beginStop(key)
+		h.lister.remove(fakeEmulatorPID)
+		h.tick(t, 1)
+		// EmulatorRunning turns false as soon as the process leaves the list,
+		// before the watcher has handled the exit; wait for the handling.
+		require.Eventually(t, func() bool {
+			h.integ.mu.Lock()
+			defer h.integ.mu.Unlock()
+			return h.integ.stopSkippedPath != ""
+		}, 2*time.Second, time.Millisecond)
+		return h, key
+	}
+
+	t.Run("confirmed stop leaves the clear to the platform", func(t *testing.T) {
+		t.Parallel()
+		h, key := setup(t)
+		assert.NotNil(t, h.hooks.activeMedia(), "watcher must not clear media for a Core stop")
+		h.integ.endStop(key, true)
+		assert.NotNil(t, h.hooks.activeMedia())
+	})
+
+	t.Run("unconfirmed stop still clears an exit that happened", func(t *testing.T) {
+		t.Parallel()
+		h, key := setup(t)
+		assert.NotNil(t, h.hooks.activeMedia())
+		h.integ.endStop(key, false)
+		assert.Nil(t, h.hooks.activeMedia())
+	})
 }

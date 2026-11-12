@@ -101,6 +101,9 @@ type CoreDef struct {
 	DefaultCore      string
 	ESFolder         string
 	Policy           DownloadPolicy
+	// ExtraFolders are other folders the system's games sit in. ESFolder names
+	// the launcher, so a folder another layout uses is added here.
+	ExtraFolders []string
 }
 
 // BuildCommand constructs a RetroArch invocation without starting it.

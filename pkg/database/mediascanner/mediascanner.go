@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -47,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/charlievieth/fastwalk"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -203,6 +205,7 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 	result := files[:0]
 	positions := make(map[string]int, len(files))
 	sourceConflicts := make(map[string]bool)
+	linkConflicts := make(map[string]bool)
 	for _, file := range files {
 		key := scanResultIdentity(file.Path)
 		position, found := positions[key]
@@ -232,6 +235,15 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 				sourceConflicts[key] = true
 				log.Warn().Str("system", systemID).Str("path", existing.Path).
 					Msg("coalesced scan result with conflicting media source provenance")
+			}
+		}
+		if !linkConflicts[key] {
+			switch {
+			case existing.LinkTarget == "":
+				existing.LinkTarget = file.LinkTarget
+			case file.LinkTarget != "" && existing.LinkTarget != file.LinkTarget:
+				existing.LinkTarget = ""
+				linkConflicts[key] = true
 			}
 		}
 		existing.NoExt = existing.NoExt || file.NoExt
@@ -322,14 +334,15 @@ func bestEffortMaintenanceError(err error, msg string) error {
 
 // logMaintenanceError logs an indexing maintenance failure (status writes, cache
 // population). When the failure is just the service context being cancelled
-// mid-index — an expected shutdown condition — it logs at Debug; any other
-// failure logs at Error so genuine problems stay visible in Sentry.
+// mid-index — an expected shutdown condition — it logs at Debug; a failing,
+// read-only or full disk logs at Warn; any other failure logs at Error so
+// genuine problems stay visible in Sentry.
 func logMaintenanceError(err error, msg string) {
 	if errors.Is(err, context.Canceled) {
 		log.Debug().Err(err).Msg(msg)
 		return
 	}
-	log.Error().Err(err).Msg(msg)
+	log.WithLevel(database.StorageFailureLevel(err)).Err(err).Msg(msg)
 }
 
 type PathResult struct {
@@ -652,11 +665,12 @@ func getSystemPathsForLauncherCache(
 	// failures when multiple root folders resolve to the same directory
 	seen := make(map[string]bool)
 	deduplicated := make([]PathResult, 0, len(matches))
-	for _, m := range matches {
+	for i := range matches {
+		m := &matches[i]
 		key := m.System.ID + ":" + m.Path
 		if !seen[key] {
 			seen[key] = true
-			deduplicated = append(deduplicated, m)
+			deduplicated = append(deduplicated, *m)
 		}
 	}
 
@@ -802,6 +816,24 @@ func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bo
 	return false, nil
 }
 
+// scanLinkTarget asks the matcher which media a symlink is a link to, keeping
+// cancellation distinguishable the same way shouldSkipSymlinkAlias does. A
+// target that cannot be read leaves the entry indexed as its own media.
+func scanLinkTarget(ctx context.Context, path string, check func() (string, bool, error)) (string, error) {
+	target, linked, err := check()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("unable to read scan symlink target")
+		return "", nil
+	}
+	if !linked {
+		return "", nil
+	}
+	return target, nil
+}
+
 // shouldSkipBrokenAlias asks the matcher whether a symlink is a dead alias,
 // keeping cancellation distinguishable from a filesystem answer the same way
 // shouldSkipSymlinkAlias does. Any other error keeps the entry: a scan must
@@ -842,12 +874,21 @@ func GetFiles(
 	path string,
 	pauser *syncutil.Pauser,
 ) ([]string, error) {
-	return getFilesReporting(ctx, cfg, platform, systemID, path, pauser, nil)
+	results, err := getScanResultsReporting(ctx, cfg, platform, systemID, path, pauser, nil)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(results))
+	for i := range results {
+		files = append(files, results[i].Path)
+	}
+	return files, nil
 }
 
-// getFilesReporting is GetFiles reporting the walk as it runs through onWalk,
-// which may be called from several walk workers at once.
-func getFilesReporting(
+// getScanResultsReporting is GetFiles reporting the walk as it runs through
+// onWalk, which may be called from several walk workers at once. Its results
+// also carry the target of every symlink indexed as a link to other media.
+func getScanResultsReporting(
 	ctx context.Context,
 	cfg *config.Instance,
 	platform platforms.Platform,
@@ -855,7 +896,7 @@ func getFilesReporting(
 	path string,
 	pauser *syncutil.Pauser,
 	onWalk func(walkUpdate),
-) ([]string, error) {
+) ([]platforms.ScanResult, error) {
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -866,7 +907,15 @@ func getFilesReporting(
 		if !ok {
 			return nil, fmt.Errorf("platform cannot read source root path %s", path)
 		}
-		return getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
+		files, sourceErr := getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		results := make([]platforms.ScanResult, 0, len(files))
+		for _, f := range files {
+			results = append(results, platforms.ScanResult{Path: f})
+		}
+		return results, nil
 	}
 
 	var entriesScanned atomic.Int64
@@ -878,7 +927,7 @@ func getFilesReporting(
 	progress := newWalkProgress(systemID, path, walkStartTime, onWalk)
 
 	var mu syncutil.Mutex
-	var results []string
+	var results []platforms.ScanResult
 
 	conf := &fastwalk.Config{
 		Follow:     true,
@@ -943,6 +992,7 @@ func getFilesReporting(
 			}
 		}
 
+		var linkTarget string
 		if isSymlink {
 			skip, skipErr := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
 				return matcher.ShouldSkipScanSymlink(system.ID, p, func() (string, error) {
@@ -976,6 +1026,18 @@ func getFilesReporting(
 					Str("path", p).
 					Msg("skipping symlink whose target no longer exists")
 				return skipEntry(d)
+			}
+
+			if !d.IsDir() {
+				var linkErr error
+				linkTarget, linkErr = scanLinkTarget(ctx, p, func() (string, bool, error) {
+					return matcher.ScanDuplicateLinkTarget(system.ID, p, func() (string, error) {
+						return readlinkWithContext(ctx, p)
+					})
+				})
+				if linkErr != nil {
+					return linkErr
+				}
 			}
 		}
 
@@ -1047,14 +1109,14 @@ func getFilesReporting(
 			mu.Lock()
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
-				if matcher.MatchSystemFileForScan(system.ID, abs) {
-					results = append(results, abs)
+				if matcher.MatchSystemArchiveEntryForScan(system.ID, abs) {
+					results = append(results, platforms.ScanResult{Path: abs})
 				}
 			}
 			mu.Unlock()
 		} else if matcher.MatchSystemFileForScan(system.ID, p) {
 			mu.Lock()
-			results = append(results, p)
+			results = append(results, platforms.ScanResult{Path: p, LinkTarget: linkTarget})
 			mu.Unlock()
 		}
 
@@ -1179,7 +1241,13 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 	log.Info().Msg(message)
 	terminalErr := ctx.Err()
 	if rbErr := db.RollbackTransaction(); rbErr != nil {
-		log.Error().Err(rbErr).Msg("failed to rollback transaction after cancellation")
+		// Cancellation can close the writer connection under the transaction
+		// before this rollback reaches it; that is the shutdown, not a fault.
+		level := database.StorageFailureLevel(rbErr)
+		if errors.Is(rbErr, context.Canceled) || errors.Is(rbErr, sql.ErrConnDone) {
+			level = zerolog.DebugLevel
+		}
+		log.WithLevel(level).Err(rbErr).Msg("failed to rollback transaction after cancellation")
 		terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback after cancellation: %w", rbErr))
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
@@ -1405,7 +1473,9 @@ func NewNamesIndexWithSources(
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
+	discovered := getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache)
+	for i := range discovered {
+		v := &discovered[i]
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	// Seeded only when one or more source roots fail to read below: the
@@ -1425,7 +1495,8 @@ func NewNamesIndexWithSources(
 		if sourceErr != nil {
 			return 0, fmt.Errorf("discover source root systems: %w", sourceErr)
 		}
-		for _, v := range sourcePaths {
+		for i := range sourcePaths {
+			v := &sourcePaths[i]
 			systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 		}
 		if len(failedRoots) > 0 {
@@ -1796,7 +1867,7 @@ func NewNamesIndexWithSources(
 			status.WalkStalled = false
 		}
 		for _, systemPath := range systemPaths[systemID] {
-			pathFiles, pathErr := getFilesReporting(ctx, cfg, platform, systemID, systemPath, pauser, onWalk)
+			pathFiles, pathErr := getScanResultsReporting(ctx, cfg, platform, systemID, systemPath, pauser, onWalk)
 			walkMu.Lock()
 			walkBase = status.WalkEntries
 			walkMu.Unlock()
@@ -1809,9 +1880,7 @@ func NewNamesIndexWithSources(
 				filesystemIncomplete = true
 				continue
 			}
-			for _, f := range pathFiles {
-				files = append(files, platforms.ScanResult{Path: f})
-			}
+			files = append(files, pathFiles...)
 		}
 		if status.WalkEntries > 0 {
 			status.WalkEntries = 0
@@ -1866,9 +1935,10 @@ func NewNamesIndexWithSources(
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 				}
-				if errors.Is(scanErr, syscall.ECONNREFUSED) {
-					// The scanner's backing service (e.g. Kodi) isn't running.
-					// Expected on devices without it; keep out of Sentry.
+				if scannerSourceUnavailable(scanErr) {
+					// The scanner's backing service (e.g. Kodi) is not running or
+					// not reachable. Expected on devices without it; keep out of
+					// Sentry.
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
 					continue
 				}
@@ -1896,6 +1966,11 @@ func NewNamesIndexWithSources(
 				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
+				}
+				if scannerSourceUnavailable(scanErr) {
+					log.Warn().Err(scanErr).Msgf("skipping %s 'any' scanner: service unavailable",
+						anyScanners[i].ID)
+					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s",
 					anyScanners[i].ID, systemID)
@@ -2006,6 +2081,7 @@ func NewNamesIndexWithSources(
 				ProvidedName: file.Name,
 				PrefixPolicy: prefixPolicy,
 				Source:       file.Source,
+				LinkTarget:   file.LinkTarget,
 				NoExt:        file.NoExt,
 			})
 			insertDur += time.Since(insertStart)
@@ -2132,6 +2208,7 @@ func NewNamesIndexWithSources(
 				Int64("tagsInserted", reconcileStats.TagsInserted).
 				Int64("tagLinksAdded", reconcileStats.TagLinksAdded).
 				Int64("tagLinksDeleted", reconcileStats.TagLinksDeleted).
+				Int64("mediaLinksDeleted", reconcileStats.MediaLinksDeleted).
 				Int64("touchedTitles", reconcileStats.TouchedTitles).
 				Msg("reconciled staged system")
 			pendingSystems = append(pendingSystems, systemID)
@@ -2347,6 +2424,14 @@ func NewNamesIndexWithSources(
 	} else {
 		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
 	}
+	// Hidden folders are projected whole, so one already in line writes nothing.
+	if syncErr := database.SyncHiddenDirectories(ctx, fdb.UserDB, db); syncErr != nil {
+		if maintenanceErr := bestEffortMaintenanceError(
+			syncErr, "failed to re-apply hidden directories",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
+		}
+	}
 	logPhaseMetrics("reapply_media_user_data")
 
 	status.Phase = PhaseBuildingCaches
@@ -2556,4 +2641,10 @@ func NewNamesIndexWithSources(
 		sourceOptions.Completed(sourceCollector.sources)
 	}
 	return indexedFiles, nil
+}
+
+// scannerSourceUnavailable reports a scanner whose backing service is down or
+// unreachable, which is the user's setup rather than a Core fault.
+func scannerSourceUnavailable(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, platforms.ErrScannerSourceUnreachable)
 }

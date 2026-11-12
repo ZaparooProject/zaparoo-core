@@ -108,6 +108,20 @@ func TestSortedSearchCursorEncodeDecode(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = decodeMediaSearchCursor(legacyEncoded, "name-asc")
 	require.Error(t, err)
+
+	// An empty sort value is a real keyset value and must not be replaced by
+	// the row's Name or Path.
+	encoded, err = encodeSortedSearchCursor(&database.SearchResultWithCursor{
+		Name:    "Mine Storm",
+		Path:    "/roms/Vectrex/Mine Storm.vec",
+		MediaID: 43,
+	}, "name-asc", searchVisibility{})
+	require.NoError(t, err)
+	_, sorted, err = decodeMediaSearchCursor(encoded, "name-asc")
+	require.NoError(t, err)
+	require.NotNil(t, sorted)
+	assert.Empty(t, sorted.SortValue)
+	assert.Equal(t, int64(43), sorted.LastID)
 }
 
 func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {

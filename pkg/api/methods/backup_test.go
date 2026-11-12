@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -288,6 +289,80 @@ func TestHandleBackupStatus_AllowsNonLocal(t *testing.T) {
 	assert.Equal(t, config.DefaultBackupRemoteSchedule, status.Remote.Schedule)
 }
 
+func TestHandleOnlineStatus_UnlinkedShape(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+	env.Database = nil
+
+	result, err := HandleOnlineStatus(env)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"linked":false,"features":[],"featuresCheckedAt":null}`, string(encoded))
+}
+
+func TestHandleOnlineStatus_NonLocalDoesNotContactServer(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+	var requestsSeen atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestsSeen.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Config.SetOnlineBaseURL(server.URL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	result, err := HandleOnlineStatus(env)
+	require.NoError(t, err)
+	status, ok := result.(models.OnlineStatusResponse)
+	require.True(t, ok)
+	assert.True(t, status.Linked)
+	assert.Empty(t, status.Features)
+	assert.Nil(t, status.FeaturesCheckedAt)
+	assert.Never(t, func() bool { return requestsSeen.Load() > 0 },
+		200*time.Millisecond, 20*time.Millisecond, "a non-local status read must not reach the server")
+}
+
+func TestHandleOnlineStatus_LocalRefreshesStaleFeatures(t *testing.T) {
+	env := newBackupTestEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/device/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, writeErr := w.Write([]byte(
+			`{"id":"dev-1","name":"Living Room","backup_active":false,"features":["custom_branding"]}`,
+		))
+		assert.NoError(t, writeErr)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Config.SetOnlineBaseURL(server.URL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	_, err := HandleOnlineStatus(env)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		result, statusErr := HandleOnlineStatus(env)
+		if statusErr != nil {
+			return false
+		}
+		status, ok := result.(models.OnlineStatusResponse)
+		return ok && status.FeaturesCheckedAt != nil
+	}, 5*time.Second, 20*time.Millisecond, "a local request refreshes stale state in the background")
+
+	result, err := HandleOnlineStatus(env)
+	require.NoError(t, err)
+	status, ok := result.(models.OnlineStatusResponse)
+	require.True(t, ok)
+	assert.True(t, status.Linked)
+	assert.Equal(t, []string{"custom_branding"}, status.Features)
+}
+
 func TestHandleBackupRemoteList_MapsOpaqueIDsAndSources(t *testing.T) {
 	env := newBackupTestEnv(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +429,14 @@ func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
 			contains: "busy with another request or a media launch",
 		},
 		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},
+		{
+			err:      fmt.Errorf("%w: zzz-probe", backupsvc.ErrInvalidBackupName),
+			contains: "invalid backup name: zzz-probe",
+		},
+		{
+			err:      fmt.Errorf("%w: zaparoo-backup.zip", backupsvc.ErrBackupNotFound),
+			contains: "backup not found",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.contains, func(t *testing.T) {

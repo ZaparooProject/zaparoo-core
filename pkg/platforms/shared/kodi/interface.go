@@ -44,6 +44,10 @@ type KodiClient interface {
 	// PlayPause toggles play/pause on the first active player
 	PlayPause(ctx context.Context) error
 
+	// SetPaused pauses (true) or resumes (false) the first active player.
+	// Repeating the current state is a no-op.
+	SetPaused(ctx context.Context, paused bool) error
+
 	// FastForward increases playback speed of the first active player
 	FastForward(ctx context.Context) error
 
@@ -74,6 +78,12 @@ type KodiClient interface {
 
 	// GetSongs retrieves all songs from Kodi's library
 	GetSongs(ctx context.Context) ([]Song, error)
+
+	// GetAlbumSongs retrieves the songs of one album from Kodi's library
+	GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error)
+
+	// GetArtistSongs retrieves the songs of one artist from Kodi's library
+	GetArtistSongs(ctx context.Context, artistID int) ([]Song, error)
 
 	// GetAlbums retrieves all albums from Kodi's library
 	GetAlbums(ctx context.Context) ([]Album, error)

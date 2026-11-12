@@ -163,6 +163,10 @@ func TestValidateTagValue(t *testing.T) {
 		{TagTypeUnknown, "blah", false},
 		{TagTypeSearch, "franchise:castlevania", true},
 		{TagTypeSearch, "franchise:not-a-listed-series", false},
+		// External catalog IDs are properties, not user-facing tag types.
+		{TagType("gamedatabase"), "supermarioworld", false},
+		{TagType("compilation"), "starsoldier", false},
+		{TagType("compilation"), "star-soldier", false},
 		// Format rules.
 		{TagTypeYear, "1987", true},
 		{TagTypeYear, "198x", true},
@@ -208,6 +212,9 @@ func TestValidateTagValue(t *testing.T) {
 		// Free text: normalised company names.
 		{TagTypeDeveloper, "t-and-e-soft", true},
 		{TagTypeDeveloper, "T&E Soft", false},
+		{TagTypeDeveloper, "Nintendo", false},
+		{TagTypeDeveloper, "\u54660\u03d20", true},
+		{TagTypeDeveloper, "ϒ", true},
 		{TagTypePublisher, "nintendo", true},
 		{TagTypePublisher, "nin:tendo", false},
 		{TagTypeCredit, "", false},

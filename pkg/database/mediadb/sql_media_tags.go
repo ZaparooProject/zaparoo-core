@@ -30,6 +30,10 @@ import (
 
 const insertMediaTagSQL = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
 
+// insertScrapedMediaTagSQL adds a link a scraper wrote. A link that is already
+// stored keeps its owner, so one the scanner wrote stays the scanner's.
+const insertScrapedMediaTagSQL = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID, Scraped) VALUES (?, ?, 1)`
+
 func sqlFindMediaTag(ctx context.Context, db sqlQueryable, mediaTag database.MediaTag) (database.MediaTag, error) {
 	var row database.MediaTag
 	stmt, err := db.PrepareContext(ctx, `

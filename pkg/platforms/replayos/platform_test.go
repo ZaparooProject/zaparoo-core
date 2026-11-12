@@ -480,8 +480,18 @@ func TestPlatform_Launchers(t *testing.T) {
 	p := &Platform{}
 	launchers := p.Launchers(cfg)
 
-	// SystemMap entries + Generic = len(SystemMap)+1 (excluding custom launchers from empty config)
-	assert.Len(t, launchers, len(SystemMap)+1)
+	// One launcher per launcher ID, plus Generic (no custom launchers from an
+	// empty config). RePlayOS 2.0 renamed folders, so an ID can own two.
+	ids := map[string]bool{}
+	for _, info := range SystemMap {
+		ids[info.GetLauncherID()] = true
+	}
+	assert.Len(t, launchers, len(ids)+1)
+	seen := map[string]bool{}
+	for i := range launchers {
+		assert.False(t, seen[launchers[i].ID], "launcher ID %s listed twice", launchers[i].ID)
+		seen[launchers[i].ID] = true
+	}
 
 	// Generic shell launcher
 	var generic *platforms.Launcher
@@ -517,6 +527,26 @@ func TestPlatform_Launchers(t *testing.T) {
 	}
 	require.NotNil(t, snes, "SNES launcher must exist")
 	assert.Equal(t, []string{"nintendo_snes"}, snes.Folders)
+
+	// ReplayOS 2.0.52, 2026-10-26: these folders held games Core never indexed.
+	byID := map[string]*platforms.Launcher{}
+	for i := range launchers {
+		byID[launchers[i].ID] = &launchers[i]
+	}
+	require.NotNil(t, byID[systemdefs.SystemDOS])
+	assert.Equal(t, []string{"ibm_pc", "pc_dos"}, byID[systemdefs.SystemDOS].Folders,
+		"the old and the new folder name both index as DOS")
+	for id, folder := range map[string]string{
+		systemdefs.SystemGameCube: "nintendo_gc",
+		systemdefs.SystemWii:      "nintendo_wii",
+		systemdefs.SystemPS2:      "sony_ps2",
+		systemdefs.SystemPSP:      "sony_psp",
+		systemdefs.SystemSaturn:   "sega_st",
+		systemdefs.SystemNeoGeo:   "snk_ng",
+	} {
+		require.NotNil(t, byID[id], id)
+		assert.Contains(t, byID[id].Folders, folder, id)
+	}
 }
 
 func TestDeleteAutostart(t *testing.T) {

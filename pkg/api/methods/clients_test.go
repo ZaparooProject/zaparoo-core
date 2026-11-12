@@ -118,6 +118,8 @@ func TestHandleClientsCurrent(t *testing.T) {
 	t.Parallel()
 
 	adminCapabilities := []string{
+		string(permissions.CapDeviceBluetooth),
+		string(permissions.CapDevicePower),
 		string(permissions.CapInput),
 		string(permissions.CapPlaytimeExtend),
 		string(permissions.CapProfilesManage),

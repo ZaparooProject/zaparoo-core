@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -44,6 +45,9 @@ var (
 	ErrRequestTimeout   = errors.New("request timed out")
 	ErrInvalidParams    = errors.New("invalid params")
 	ErrRequestCancelled = errors.New("request cancelled")
+	// ErrServiceUnavailable is the service refusing a connection while it is
+	// starting up or after its startup failed.
+	ErrServiceUnavailable = errors.New("service unavailable")
 )
 
 const APIPath = "/api/v0.1"
@@ -52,6 +56,10 @@ const APIPath = "/api/v0.1"
 // or headers, which may contain credentials or private server details.
 func websocketDialError(err error, response *http.Response) error {
 	if response != nil && errors.Is(err, websocket.ErrBadHandshake) {
+		if response.StatusCode == http.StatusServiceUnavailable {
+			return fmt.Errorf("failed to dial websocket (HTTP status %d): %w: %w",
+				response.StatusCode, ErrServiceUnavailable, err)
+		}
 		return fmt.Errorf("failed to dial websocket (HTTP status %d): %w", response.StatusCode, err)
 	}
 	return fmt.Errorf("failed to dial websocket: %w", err)
@@ -62,6 +70,10 @@ func websocketDialError(err error, response *http.Response) error {
 // such as the service restarting) rather than a genuine protocol/read fault.
 // Expected disconnects are logged below Error level to keep them out of Sentry.
 func isExpectedWebsocketClose(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
 	return errors.Is(err, net.ErrClosed) ||
 		websocket.IsCloseError(err,
 			websocket.CloseNormalClosure,
@@ -99,14 +111,29 @@ func disableZapScriptWithRequest(
 	}
 }
 
-// A stopped local service is expected when entering or leaving a management UI.
-// Keep authentication, protocol and other transport failures reportable.
+// A stopped, starting or restarting local service is expected when entering or
+// leaving a management UI. Keep authentication, protocol and other transport
+// failures reportable.
 func logZapScriptToggleError(err error, message string) {
-	if isConnectionRefused(err) {
+	if IsServiceUnavailable(err) {
 		log.Warn().Err(err).Msg(message)
 	} else {
 		log.Error().Err(err).Msg(message)
 	}
+}
+
+// RPCError is an error the service returned for a request it received. The
+// service has already logged it at a level that matches its cause.
+type RPCError struct {
+	Message string
+}
+
+func (e *RPCError) Error() string { return e.Message }
+
+// IsServiceUnavailable reports a request that did not reach a running
+// service: it was stopped, starting, or restarting.
+func IsServiceUnavailable(err error) bool {
+	return isConnectionRefused(err) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, ErrServiceUnavailable)
 }
 
 // dialLocalWebsocket opens a connection to the local API service.
@@ -231,7 +258,7 @@ func LocalClient(
 	}
 
 	if resp.Error != nil {
-		return "", errors.New(resp.Error.Message)
+		return "", &RPCError{Message: resp.Error.Message}
 	}
 
 	var b []byte
@@ -246,8 +273,8 @@ func LocalClient(
 // requestWaitTimeout returns how long to wait for a response and whether the
 // wait is bounded at all. A caller deadline always wins. Without one,
 // unbounded-runtime backup methods wait on cancellation alone — the server
-// runs them with no deadline either — and every other method falls back to
-// the default request timeout.
+// runs them with no deadline either — and every other method waits for the
+// same deadline the server gives it.
 func requestWaitTimeout(ctx context.Context, method string) (timeout time.Duration, bounded bool) {
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -256,10 +283,7 @@ func requestWaitTimeout(ctx context.Context, method string) (timeout time.Durati
 		}
 		return 0, true
 	}
-	if models.MethodHasUnboundedRuntime(method) {
-		return 0, false
-	}
-	return config.APIRequestTimeout, true
+	return config.APIRequestTimeoutFor(method)
 }
 
 func WaitNotification(
@@ -475,6 +499,10 @@ func waitNotificationsReadLogLevel(ctx context.Context, callerClosing bool, err 
 	}
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return zerolog.DebugLevel
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return zerolog.WarnLevel
 	}
 	if errors.Is(err, net.ErrClosed) || websocket.IsCloseError(err,
 		websocket.CloseNoStatusReceived,

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -19,13 +21,6 @@ import (
 )
 
 const misterAudioScannerLauncherID = "mister-audio-scanner"
-
-var misterAudioExtensions = map[string]struct{}{
-	".wav":  {},
-	".mp3":  {},
-	".ogg":  {},
-	".flac": {},
-}
 
 func createAudioScannerLauncher() platforms.Launcher {
 	return platforms.Launcher{
@@ -91,7 +86,8 @@ func scanMiSTerAudioPaths(ctx context.Context, roots []string) ([]platforms.Scan
 			if entry.IsDir() {
 				return nil
 			}
-			if _, ok := misterAudioExtensions[strings.ToLower(filepath.Ext(path))]; !ok {
+			ext := strings.ToLower(filepath.Ext(path))
+			if !slices.Contains(audio.SupportedExtensions, ext) && !slices.Contains(audio.PlaylistExtensions, ext) {
 				return nil
 			}
 			if _, ok := seenFiles[path]; ok {

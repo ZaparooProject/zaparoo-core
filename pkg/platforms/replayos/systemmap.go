@@ -247,4 +247,73 @@ var SystemMap = map[string]SystemInfo{
 		SystemID:   systemdefs.SystemVideo,
 		Extensions: []string{".mkv", ".avi", ".mp4", ".flac", ".ogg", ".nsf", ".vgm"},
 	},
+
+	// RePlayOS 2.0 folder names. Earlier releases used the names above, which
+	// stay for installs that have not been updated.
+	"ibm_pc": {
+		SystemID:   systemdefs.SystemDOS,
+		Extensions: []string{".pc", ".dos", ".zip", ".squashfs", ".dosz", ".m3u", ".iso", ".cue"},
+	},
+	"scummvm": {
+		SystemID:   systemdefs.SystemScummVM,
+		Extensions: []string{".scummvm", ".squashfs"},
+	},
+	"microsoft_msx": {
+		SystemID:   systemdefs.SystemMSX,
+		Extensions: []string{".dsk", ".mx1", ".mx2", ".rom", ".zip", ".7z", ".cas", ".m3u"},
+	},
+	"sega_sg": {
+		SystemID:   systemdefs.SystemSG1000,
+		Extensions: []string{".bin", ".sg", ".zip", ".7z"},
+	},
+	"sega_st": {
+		SystemID:   systemdefs.SystemSaturn,
+		Extensions: []string{".cue", ".ccd", ".m3u", ".chd", ".iso", ".zip"},
+	},
+	"sinclair_zx": {
+		SystemID:   systemdefs.SystemZXSpectrum,
+		Extensions: []string{".tzx", ".tap", ".z80", ".rzx", ".scl", ".trd", ".dsk", ".zip", ".7z"},
+	},
+	"snk_ng": {
+		SystemID:   systemdefs.SystemNeoGeo,
+		Extensions: []string{".7z", ".zip"},
+	},
+	"snk_ngcd": {
+		SystemID:   systemdefs.SystemNeoGeoCD,
+		Extensions: []string{".cue", ".iso", ".chd"},
+	},
+
+	// Systems RePlayOS 2.0 added.
+	"arcade_stv": {
+		SystemID:   systemdefs.SystemSegaSTV,
+		Extensions: []string{".zip"},
+	},
+	"arcade_triforce": {
+		SystemID:   systemdefs.SystemTriforce,
+		Extensions: []string{".iso", ".gcz"},
+	},
+	"atari_jaguarcd": {
+		SystemID:   systemdefs.SystemJaguarCD,
+		Extensions: []string{".cue", ".chd"},
+	},
+	"nintendo_gc": {
+		SystemID:   systemdefs.SystemGameCube,
+		Extensions: []string{".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".elf", ".dol", ".m3u"},
+	},
+	"nintendo_wii": {
+		SystemID:   systemdefs.SystemWii,
+		Extensions: []string{".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".wad", ".rvz", ".elf", ".dol", ".m3u"},
+	},
+	"nintendo_vb": {
+		SystemID:   systemdefs.SystemVirtualBoy,
+		Extensions: []string{".vb", ".zip", ".7z"},
+	},
+	"sony_ps2": {
+		SystemID:   systemdefs.SystemPS2,
+		Extensions: []string{".iso", ".mdf", ".nrg", ".bin", ".img", ".dump", ".gz", ".cso", ".chd", ".m3u"},
+	},
+	"sony_psp": {
+		SystemID:   systemdefs.SystemPSP,
+		Extensions: []string{".iso", ".cso", ".pbp", ".chd"},
+	},
 }

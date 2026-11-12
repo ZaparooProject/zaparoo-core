@@ -276,7 +276,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 		// Other input types
 		TagInputPuncher, // Physical punching bag input
-		TagInputMotion,  // Motion detection/accelerometer
+		TagInputMotion,  // Motion detection/accelerometer,
+		TagInputAccelerometer, TagInputButtons, TagInputButtons9,
+		TagInputDDRPad, TagInputHRM, TagInputJoystick,
+		TagInputPedals, TagInputPedals3, TagInputPositional,
+		TagInputPuncher6, TagInputPuncher7, TagInputStick,
 	},
 	TagTypePlayers: {
 		// Player counts
@@ -381,7 +385,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagGameGenreNotAGameTest,        // Test/diagnostic software
 		TagGameGenreNotAGameSDK,         // Software development kits
 		TagGameGenreNotAGameSlideshow,   // Picture slideshows
-		TagGameGenreNotAGameSound,       // Audio-only content
+		TagGameGenreNotAGameSound,       // Audio-only content,
+		TagGameGenreSimManagement, TagGameGenreSportsRoller,
 	},
 
 	TagTypeAddon: {
@@ -462,6 +467,16 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonPocketsakura, TagAddonSpectrumcommunicator,
 		TagAddonRSS, TagAddonPocketcamera, TagAddonCapturecassette,
 		TagAddonPhotoreader, TagAddonDevelobox, TagAddonTeststation,
+		TagAddonBackup, TagAddonController, TagAddonDrawing,
+		TagAddonExpansion, TagAddonGlasses, TagAddonHealth,
+		TagAddonKeyboard, TagAddonLED, TagAddonLightgun,
+		TagAddonLink, TagAddonLinkGbacable, TagAddonLinkGbalinkcable,
+		TagAddonLinkJoycarry, TagAddonLinkWirelessadapter, TagAddonLockon,
+		TagAddonMic, TagAddonMIDI, TagAddonMouse,
+		TagAddonMultitap, TagAddonOnline, TagAddonOnlineNetcard,
+		TagAddonPeripheral, TagAddonPrinter, TagAddonReader,
+		TagAddonReaderBattlechip, TagAddonReaderCardereader, TagAddonReaderCardereaderplus,
+		TagAddonReaderMultipluston, TagAddonROB, TagAddonVibration,
 	},
 	TagTypeEmbedded: {
 		// Embedded extra hardware inside the cartridge itself.
@@ -500,7 +515,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Other embedded hardware
 		TagEmbeddedLED,         // LED indicator
 		TagEmbeddedGBKiss,      // Hudson GB Kiss (IR communication)
-		TagEmbeddedPocketsonar, // Bandai Pocket Sonar (fishing game sonar)
+		TagEmbeddedPocketsonar, // Bandai Pocket Sonar (fishing game sonar),
+		TagEmbeddedBackup, TagEmbeddedChip, TagEmbeddedChipFlashdacs,
+		TagEmbeddedHealth, TagEmbeddedHealthBloodglucose, TagEmbeddedMotion,
+		TagEmbeddedMotionGyroscope, TagEmbeddedSlot, TagEmbeddedSlotAAABattery,
+		TagEmbeddedSlotCompactflash, TagEmbeddedUVSensor, TagEmbeddedVibration,
 	},
 	TagTypeSave: {
 		TagSaveBackup,   // Battery/memory-based save system
@@ -666,6 +685,17 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagArcadeBoardUniversalMrDo,
 		// Williams
 		TagArcadeBoardWilliamsGen1, TagArcadeBoardWilliamsGen2,
+		TagArcadeBoardCapcom, TagArcadeBoardIrem, TagArcadeBoardJaleco,
+		TagArcadeBoardKonami, TagArcadeBoardKonami573, TagArcadeBoardKonami573A,
+		TagArcadeBoardKonamiBubble, TagArcadeBoardKonamiCobra, TagArcadeBoardKonamiDJMain,
+		TagArcadeBoardKonamiGV, TagArcadeBoardKonamiGX, TagArcadeBoardKonamiGX330,
+		TagArcadeBoardKonamiGX361, TagArcadeBoardKonamiHornet, TagArcadeBoardKonamiM2,
+		TagArcadeBoardKonamiNWKTR, TagArcadeBoardKonamiPolygonet, TagArcadeBoardKonamiUltra,
+		TagArcadeBoardKonamiViper, TagArcadeBoardKonamiZR107, TagArcadeBoardMidway,
+		TagArcadeBoardNamco, TagArcadeBoardNintendo, TagArcadeBoardSega,
+		TagArcadeBoardSNK, TagArcadeBoardStern, TagArcadeBoardTaito,
+		TagArcadeBoardTecfri, TagArcadeBoardToaplan, TagArcadeBoardVectorbeam,
+		TagArcadeBoardNintendoPlaychoice10,
 	},
 
 	TagTypeCompatibility: {
@@ -762,6 +792,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Games based on other media (movies, comics, TV shows)
 		TagBasedManganime, TagBasedMovie, TagBasedDisney, TagBasedDND, TagBasedJurassicpark,
 		TagBasedLooneytunes, TagBasedMarvel, TagBasedSimpsons, TagBasedSmurfs, TagBasedStarwars, TagBasedTMNT,
+		TagBasedCartoonnetwork, TagBasedHannabarbera, TagBasedNickelodeon,
+		TagBasedBased,
 	},
 	TagTypeSearch: {
 		// Search metadata - franchises, featured characters, technical features, and keywords
@@ -905,7 +937,13 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSearchKeywordEndorsed, // Endorsed by public figure
 		TagSearchKeywordBrand,    // Branded by company/product
 		TagSearchKeywordUbikey,   // Ubikey protection
-		TagSearchKeywordFlip,     // Cabinet screen-flip support
+		TagSearchKeywordFlip,     // Cabinet screen-flip support,
+		TagSearch3D, TagSearchFeature, TagSearchFranchise,
+		TagSearchKeyword, TagSearchSoftware, TagSearchSoftwareADX,
+		TagSearchSoftwareCinepak, TagSearchSoftwareCybersound, TagSearchSoftwareGAX,
+		TagSearchSoftwareGEMS, TagSearchSoftwareKrisalis, TagSearchSoftwareMusyx,
+		TagSearchSoftwareSegasound, TagSearchSoftwareSofdec, TagSearchSoftwareTruemotion,
+		TagSearchTate,
 	},
 	TagTypeMultigame: {
 		TagMultigameCompilation, // Compilation of multiple games in one title
@@ -926,6 +964,9 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagReboxedComicclassics, TagReboxedSeganet,
 		// Bundles
 		TagReboxedBundle, TagReboxedBundleGenesis,
+		TagReboxedBanprestobest, TagReboxedBestprice, TagReboxedEbikore,
+		TagReboxedHudsonthebest, TagReboxedKikangentei, TagReboxedKonamithebest,
+		TagReboxedOkaidokuban, TagReboxedValueselection,
 	},
 	TagTypePort: {
 		TagPortArcade,
@@ -945,6 +986,10 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPortSonyPlayStation,
 		TagPort3DO, TagPortCDI, TagPortLaseractive, TagPortFMTowns,
 		TagPortArchimedes, TagPortAtariFalcon, TagPortSega32X, TagPortWonderSwan,
+		TagPortApple, TagPortAtari, TagPortCommodore,
+		TagPortGP32, TagPortNEC, TagPortNintendo,
+		TagPortNintendoGamecube, TagPortSega, TagPortSharp,
+		TagPortSony, TagPortSonyPlaystation2, TagPortXbox,
 	},
 	TagTypeLang: {
 		TagLangEN, TagLangES, TagLangFR, TagLangPT, TagLangDE, TagLangIT, TagLangSV, TagLangNL,
@@ -957,6 +1002,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagLangSQ, TagLangSR, TagLangTH, TagLangTR, TagLangUR, TagLangVI, TagLangYI,
 		// Language variants
 		TagLangZHTrad, TagLangZHHans, TagLangPTBR,
+		TagLangFremen,
 	},
 	TagTypeUnfinished: {
 		// Development status - pre-release or incomplete builds
@@ -1007,6 +1053,10 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagRereleaseGamenokanzume1, TagRereleaseGamenokanzume2,
 		TagRereleaseFightnightround2,
 		TagRereleaseNinjajajamaru, TagRereleaseZeldacollection, TagRereleasePCEMini,
+		TagRereleaseEvercade, TagRereleaseGamenokanzume, TagRereleaseMdclassics3,
+		TagRereleaseMdmini, TagRereleaseNamcoanthology, TagRereleaseNamcot,
+		TagRereleaseRockmanclassic, TagRereleaseRockmanexeadvance, TagRereleaseSmashpack1,
+		TagRereleaseSmashpack3, TagRereleaseVirtualconsole,
 	},
 	TagTypeRev: {
 		TagRev1, TagRev2, TagRev3, TagRev4, TagRev5,
@@ -1015,6 +1065,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagRevPRG, TagRevPRG0, TagRevPRG1, TagRevPRG2, TagRevPRG3,
 		// Note: Dotted versions (v1.0, v1.2.3, etc.) are handled dynamically
 		// by the parser and do not need hardcoded constants.
+		TagRevNobattery,
 	},
 	TagTypeSet: {
 		TagSet1, TagSet2, TagSet3, TagSet4, TagSet5, TagSet6, TagSet7, TagSet8,
@@ -1254,6 +1305,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyVideo,
 		TagPropertyManual,
 		TagPropertyXMLGameID,
+		TagPropertyGameDatabaseID,
+		TagPropertyGameDatabaseContains,
 		TagPropertyGameID,
 		TagPropertyLauncherOverride,
 		TagPropertyMAMESetName,

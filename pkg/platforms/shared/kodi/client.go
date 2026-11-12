@@ -36,13 +36,25 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
 )
 
 // Client implements the KodiClient interface
 type Client struct {
-	url string
+	watch    *watchSettings
+	url      string
+	noRepeat bool
+}
+
+// repeatMode is the Player.Open repeat option: "off" while completion is
+// tracked, empty (omitted) otherwise so requests are unchanged.
+func (c *Client) repeatMode() string {
+	if c.noRepeat {
+		return repeatOff
+	}
+	return ""
 }
 
 // Ensure Client implements KodiClient at compile time
@@ -92,6 +104,7 @@ func (c *Client) LaunchFile(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -115,6 +128,7 @@ func (c *Client) LaunchMovie(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -138,6 +152,7 @@ func (c *Client) LaunchTVEpisode(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -163,6 +178,20 @@ func (c *Client) PlayPause(ctx context.Context) error {
 	}
 	_, err = c.APIRequest(ctx, APIMethodPlayerPlayPause, PlayerPlayPauseParams{
 		PlayerID: player.ID,
+	})
+	return err
+}
+
+// SetPaused pauses or resumes the first active player. Unlike PlayPause it is
+// idempotent: pausing a paused player or resuming a playing one changes nothing.
+func (c *Client) SetPaused(ctx context.Context, paused bool) error {
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerPlayPause, PlayerSetPlayingParams{
+		PlayerID: player.ID,
+		Play:     !paused,
 	})
 	return err
 }
@@ -344,8 +373,23 @@ func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, erro
 
 // GetSongs retrieves all songs from Kodi's library
 func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
+	return c.fetchSongs(ctx, nil)
+}
+
+// GetAlbumSongs retrieves the songs of one album from Kodi's library
+func (c *Client) GetAlbumSongs(ctx context.Context, albumID int) ([]Song, error) {
+	return c.fetchSongs(ctx, &SongFilter{AlbumID: albumID})
+}
+
+// GetArtistSongs retrieves the songs of one artist from Kodi's library
+func (c *Client) GetArtistSongs(ctx context.Context, artistID int) ([]Song, error) {
+	return c.fetchSongs(ctx, &SongFilter{ArtistID: artistID})
+}
+
+func (c *Client) fetchSongs(ctx context.Context, filter *SongFilter) ([]Song, error) {
 	params := AudioLibraryGetSongsParams{
-		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file"},
+		Filter:     filter,
+		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file", "track", "disc"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, params)
@@ -417,6 +461,7 @@ func (c *Client) LaunchSong(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -440,6 +485,7 @@ func (c *Client) LaunchAlbum(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -463,26 +509,42 @@ func (c *Client) LaunchArtist(path string) error {
 		},
 		Options: ItemOptions{
 			Resume: true,
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
 }
 
-// LaunchTVShow resolves a durable show identity and launches its episodes as a playlist.
-func (c *Client) LaunchTVShow(path string) error {
+// resolveShow finds the show a kodi-show path names in Kodi's current library.
+func resolveShow(ctx context.Context, client KodiClient, path string) (TVShow, error) {
 	reference, err := parseTVShowReference(path)
 	if err != nil {
-		return err
+		return TVShow{}, err
 	}
 
-	shows, err := c.GetTVShows(context.Background())
+	shows, err := client.GetTVShows(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve current Kodi TV show ID: %w", err)
+		return TVShow{}, fmt.Errorf("failed to resolve current Kodi TV show ID: %w", err)
 	}
 	showID, err := resolveTVShowID(reference, shows)
 	if err != nil {
+		return TVShow{}, err
+	}
+	for _, show := range shows {
+		if show.ID == showID {
+			return show, nil
+		}
+	}
+	return TVShow{ID: showID, Label: reference.Name}, nil
+}
+
+// LaunchTVShow resolves a durable show identity and launches its episodes as a playlist.
+func (c *Client) LaunchTVShow(path string) error {
+	show, err := resolveShow(context.Background(), c, path)
+	if err != nil {
 		return err
 	}
+	showID := show.ID
 
 	// Step 1: Clear video playlist (playlistid=1)
 	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
@@ -520,6 +582,9 @@ func (c *Client) LaunchTVShow(path string) error {
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			PlaylistID: 1,
+		},
+		Options: ItemOptions{
+			Repeat: c.repeatMode(),
 		},
 	})
 	return err
@@ -562,28 +627,22 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	kodiReq.Header.Set("Content-Type", "application/json")
 	kodiReq.Header.Set("Accept", "application/json")
 
-	// Add authentication if configured
-	authCfg := config.GetAuthCfg()
-	if cred := config.LookupAuth(authCfg, c.url); cred != nil {
-		if cred.Bearer != "" {
-			kodiReq.Header.Set("Authorization", "Bearer "+cred.Bearer)
-		} else if cred.Username != "" && cred.Password != "" {
-			auth := base64.StdEncoding.EncodeToString([]byte(cred.Username + ":" + cred.Password))
-			kodiReq.Header.Set("Authorization", "Basic "+auth)
-		}
+	if auth := authorizationHeader(c.url); auth != "" {
+		kodiReq.Header.Set("Authorization", auth)
 	}
 
 	client := &http.Client{Transport: useragent.Transport(nil)}
 	resp, err := client.Do(kodiReq) //nolint:gosec // G704: URL from user config, Kodi client's purpose
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("failed to send request: %w: %w", platforms.ErrScannerSourceUnreachable, err)
 	}
 	defer func() {
 		_ = resp.Body.Close() // Ignore close error in defer
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("unexpected HTTP status from kodi api: %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w: unexpected HTTP status from kodi api: %d",
+			platforms.ErrScannerSourceUnreachable, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
@@ -603,12 +662,28 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 		} else if mediaType == "" {
 			mediaType = "unspecified"
 		}
-		return nil, fmt.Errorf("invalid kodi JSON response (status %d, content type %s)",
-			resp.StatusCode, mediaType)
+		return nil, fmt.Errorf("%w: invalid kodi JSON response (status %d, content type %s)",
+			platforms.ErrScannerSourceUnreachable, resp.StatusCode, mediaType)
 	}
 	if apiResp.Error != nil {
 		return nil, fmt.Errorf("error from kodi api: %s", apiResp.Error.Message)
 	}
 
 	return apiResp.Result, nil
+}
+
+// authorizationHeader returns the configured Authorization header value for a
+// Kodi URL, or "" when no credentials are configured.
+func authorizationHeader(serverURL string) string {
+	cred := config.LookupAuth(config.GetAuthCfg(), serverURL)
+	if cred == nil {
+		return ""
+	}
+	if cred.Bearer != "" {
+		return "Bearer " + cred.Bearer
+	}
+	if cred.Username != "" && cred.Password != "" {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password))
+	}
+	return ""
 }

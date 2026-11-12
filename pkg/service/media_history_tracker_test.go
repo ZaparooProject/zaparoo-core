@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -374,6 +375,59 @@ func TestMediaHistoryTracker_SnapshotIdentity_UnindexedLaunchKeepsFallback(t *te
 
 	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
 	mockMediaDB.AssertExpectations(t)
+	assert.Zero(t, syncRequests)
+}
+
+// A file played from outside the index (an Operator cartridge dump) gets the
+// identity the indexer would give it, so Online can match it to a title.
+func TestMediaHistoryTracker_SnapshotIdentity_UnindexedFileGetsScannerIdentity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "SECRET OF MANA.sfc")
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+		Return([]database.SearchResult{}, nil).Once()
+	stubSettledMediaDB(mockMediaDB, time.Unix(1754000000, 0))
+	mockUserDB.On("UpdateMediaHistoryIdentity", int64(42), mock.MatchedBy(
+		func(identity *database.MediaIdentity) bool {
+			return identity != nil && identity.CanonicalSystemID == "SNES" &&
+				identity.DisplayName == "SECRET OF MANA" && identity.CoreSlug != "" &&
+				identity.ObservationFingerprint != ""
+		},
+	)).Return(true, nil).Once()
+	syncRequests := 0
+	tracker := &mediaHistoryTracker{
+		db:              &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		requestPlaySync: func() { syncRequests++ },
+	}
+
+	tracker.snapshotMediaHistoryIdentity(42, "SNES", path)
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, 1, syncRequests)
+}
+
+// Mid-index a library game may simply not be indexed yet: it must wait for
+// the sweep to resolve it from its indexed row, not take a fallback identity.
+func TestMediaHistoryTracker_SnapshotIdentity_NoScannerIdentityWhileIndexing(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "SECRET OF MANA.sfc")
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+		Return([]database.SearchResult{}, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
+	syncRequests := 0
+	tracker := &mediaHistoryTracker{
+		db:              &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		requestPlaySync: func() { syncRequests++ },
+	}
+
+	tracker.snapshotMediaHistoryIdentity(42, "SNES", path)
+
+	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
 	assert.Zero(t, syncRequests)
 }
 
@@ -1161,4 +1215,19 @@ func TestMediaHistoryTracker_Listen_OrphanedEntryWithoutReplacementResetsSyncSta
 	assert.True(t, tracker.currentMediaStartTimeMono.IsZero())
 	assert.True(t, tracker.lastPlaySyncRequestAt.IsZero())
 	assert.Equal(t, 1, syncRequests)
+}
+
+// A name parsed from the path keeps a game's all-caps hyphenated title but
+// still drops a video file's scene release group.
+func TestHistoryMediaName_ParsesWithSystemMediaType(t *testing.T) {
+	t.Parallel()
+
+	game := &models.ActiveMedia{SystemID: "SNES", Path: filepath.Join(string(filepath.Separator), "tmp", "F-ZERO.sfc")}
+	assert.Equal(t, "F-ZERO", historyMediaName(game))
+
+	video := &models.ActiveMedia{
+		SystemID: "Video",
+		Path:     filepath.Join(string(filepath.Separator), "media", "Movie Title-GROUP.mkv"),
+	}
+	assert.Equal(t, "Movie Title", historyMediaName(video))
 }

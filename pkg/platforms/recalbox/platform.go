@@ -33,14 +33,17 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
@@ -61,7 +64,12 @@ type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
-	processMu      syncutil.RWMutex
+	// completedProcess is the last tracked process that exited while still
+	// tracked, so only its own waiter may clear media.
+	completedProcess *os.Process
+	processDone      chan struct{}
+	processMu        syncutil.RWMutex
+	waitClaimed      bool
 }
 
 func (*Platform) ID() string {
@@ -71,6 +79,7 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
+		ccid.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
@@ -125,6 +134,65 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 	p.trackedProcess = proc
+	p.completedProcess = nil
+	p.waitClaimed = false
+	if proc == nil {
+		p.processDone = nil
+	} else {
+		p.processDone = make(chan struct{})
+	}
+}
+
+// WaitTrackedProcess waits for and reaps proc. It returns an error when proc is
+// no longer the tracked process, for example after Core stopped it.
+func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
+	p.processMu.Lock()
+	if proc == nil || p.trackedProcess != proc {
+		p.processMu.Unlock()
+		return errors.New("process is no longer tracked")
+	}
+	done := p.processDone
+	if p.waitClaimed {
+		p.processMu.Unlock()
+		<-done
+		return nil
+	}
+	p.waitClaimed = true
+	p.processMu.Unlock()
+
+	_, err := proc.Wait()
+
+	p.processMu.Lock()
+	if p.trackedProcess == proc {
+		p.trackedProcess = nil
+		p.completedProcess = proc
+		p.processDone = nil
+		p.waitClaimed = false
+	}
+	p.processMu.Unlock()
+	close(done)
+
+	if err != nil {
+		return fmt.Errorf("wait for tracked process: %w", err)
+	}
+	return nil
+}
+
+// ClearTrackedProcessMedia clears active media only if proc exited without a
+// newer process being tracked, so a late exit never clears a newer launch.
+func (p *Platform) ClearTrackedProcessMedia(proc *os.Process) bool {
+	p.processMu.Lock()
+	if p.completedProcess != proc || p.trackedProcess != nil {
+		p.processMu.Unlock()
+		return false
+	}
+	p.completedProcess = nil
+	p.processMu.Unlock()
+
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
+	return true
 }
 
 func (*Platform) ScanHook(_ *tokens.Token) error {
@@ -155,7 +223,10 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 			log.Debug().Msg("killed tracked process")
 		}
 		p.trackedProcess = nil
+		p.processDone = nil
+		p.waitClaimed = false
 	}
+	p.completedProcess = nil
 	p.processMu.Unlock()
 
 	p.setActiveMedia(nil)
@@ -229,7 +300,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := exec.CommandContext(context.Background(), path).Start()
+				err := command.StartAndReap(exec.CommandContext(context.Background(), path))
 				if err != nil {
 					return nil, fmt.Errorf("failed to start command: %w", err)
 				}
@@ -253,5 +324,8 @@ func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
+	catalog := gamedatabase.NewPlatformScraper(nil)
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+	}
 }

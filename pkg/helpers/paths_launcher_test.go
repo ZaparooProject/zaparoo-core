@@ -1069,3 +1069,38 @@ func TestShouldSkipScanDirectory_DuplicateLauncherIDs(t *testing.T) {
 	assert.False(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "games")),
 		"a directory nothing excludes must still be scanned")
 }
+
+// MiSTer Main cannot load an MGL from inside a zip, so the scanner must not
+// index one there; the same file on disk, and other files in the zip, still
+// match.
+func TestMatchSystemArchiveEntryForScan_NoArchiveExtensions(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:                  "X68000",
+		SystemID:            "X68000",
+		Folders:             []string{"X68000"},
+		Extensions:          []string{".hdf", ".mgl"},
+		NoArchiveExtensions: []string{".MGL", ""},
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	inZip := "/roms/X68000/Pack.zip/Game/Game"
+	assert.False(t, matcher.MatchSystemArchiveEntryForScan("X68000", inZip+".mgl"))
+	assert.True(t, matcher.MatchSystemArchiveEntryForScan("X68000", inZip+".hdf"))
+	assert.True(t, matcher.MatchSystemFileForScan("X68000", "/roms/X68000/Game.mgl"))
+}

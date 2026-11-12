@@ -26,6 +26,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -46,11 +47,9 @@ const coverTestBoxart = "property:image-boxart"
 
 func newMemThumbCache() *mediaThumbCache {
 	return &mediaThumbCache{
-		fs: afero.NewMemMapFs(),
-		dir: filepath.Join(
-			string(filepath.Separator), "cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir(),
-		),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs:       afero.NewMemMapFs(),
+		dir:      browseTestAbsPath("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 }
 
@@ -58,6 +57,17 @@ func installThumbCache(t *testing.T, cache *mediaThumbCache) {
 	t.Helper()
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+}
+
+// writeCoverSource writes a cover image file and returns its path and the
+// source key its thumbnails are cached under.
+func writeCoverSource(t *testing.T, data []byte) (path, sourceKey string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "boxart.png")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	return path, fileThumbSourceKey(path, info)
 }
 
 func solidPNG(t *testing.T, dim int, c color.RGBA) []byte {
@@ -82,8 +92,8 @@ func TestHandleMediaImage_ColdRestartServesRecordedThumbWithoutOriginal(t *testi
 	row := makeMediaFullRow(501, 5010)
 	cache := newMemThumbCache()
 	installThumbCache(t, cache)
-	ref := mediaRefParam{System: row.System.SystemID, Path: row.Path}
-	setMediaThumbCacheForTest(t, cache, ref, row.System.SystemID, coverTestBoxart, 256, []byte("thumb"), "image/webp")
+	sourcePath, sourceKey := writeCoverSource(t, []byte("original"))
+	setMediaThumbCacheForTest(t, cache, sourceKey, 256, []byte("thumb"), "image/webp")
 
 	semTouched := false
 	mediaImageBeforeSemAcquire = func() { semTouched = true }
@@ -98,6 +108,8 @@ func TestHandleMediaImage_ColdRestartServesRecordedThumbWithoutOriginal(t *testi
 		SystemID:          row.System.SystemID,
 		Path:              row.Path,
 		TypeTag:           coverTestBoxart,
+		SourceKey:         sourceKey,
+		SourcePath:        sourcePath,
 		AvailableTypeTags: []string{coverTestBoxart, "property:image-screenshot"},
 	}, true, nil).Once()
 
@@ -125,14 +137,14 @@ func TestHandleMediaImage_ColdRestartByMediaID(t *testing.T) {
 	row := makeMediaFullRow(502, 5020)
 	cache := newMemThumbCache()
 	installThumbCache(t, cache)
-	id := row.DBID
-	ref := mediaRefParam{MediaID: &id}
-	setMediaThumbCacheForTest(t, cache, ref, row.System.SystemID, coverTestBoxart, 128, []byte("by-id"), "image/webp")
+	sourcePath, sourceKey := writeCoverSource(t, []byte("original"))
+	setMediaThumbCacheForTest(t, cache, sourceKey, 128, []byte("by-id"), "image/webp")
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaCoverThumb", mock.Anything, row.DBID).Return(database.MediaCoverThumb{
 		MediaDBID: row.DBID, SystemID: row.System.SystemID, Path: row.Path,
-		TypeTag: coverTestBoxart, AvailableTypeTags: []string{coverTestBoxart},
+		TypeTag: coverTestBoxart, SourceKey: sourceKey, SourcePath: sourcePath,
+		AvailableTypeTags: []string{coverTestBoxart},
 	}, true, nil).Once()
 
 	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId":502,"maxSize":100}`))
@@ -144,6 +156,63 @@ func TestHandleMediaImage_ColdRestartByMediaID(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// A recorded cover whose file was replaced in place, or whose type now
+// resolves to another file, is not served from the record: the full lookup
+// reads the current file and rebuilds the thumbnail.
+func TestHandleMediaImage_RecordedSourceChangedTakesFullPath(t *testing.T) {
+	tests := []struct {
+		modify func(t *testing.T, thumb *database.MediaCoverThumb)
+		name   string
+	}{
+		{name: "replaced in place", modify: func(t *testing.T, thumb *database.MediaCoverThumb) {
+			later := time.Now().Add(time.Hour)
+			require.NoError(t, os.Chtimes(thumb.SourcePath, later, later))
+		}},
+		{name: "other file wins", modify: func(_ *testing.T, thumb *database.MediaCoverThumb) {
+			thumb.SourcePath = filepath.Join(filepath.Dir(thumb.SourcePath), "other.png")
+		}},
+		{name: "blob wins", modify: func(_ *testing.T, thumb *database.MediaCoverThumb) {
+			thumb.SourcePath = ""
+		}},
+		{name: "recorded before source keys", modify: func(_ *testing.T, thumb *database.MediaCoverThumb) {
+			thumb.SourceKey = ""
+		}},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mediaImageNoImages.clear()
+			row := makeMediaFullRow(int64(510+i), int64(5100+i))
+			cache := newMemThumbCache()
+			installThumbCache(t, cache)
+			sourcePath, sourceKey := writeCoverSource(t, []byte("original"))
+			setMediaThumbCacheForTest(t, cache, sourceKey, 256, []byte("stale-thumb"), "image/webp")
+			thumb := database.MediaCoverThumb{
+				MediaDBID: row.DBID, SystemID: row.System.SystemID, Path: row.Path,
+				TypeTag: coverTestBoxart, SourceKey: sourceKey, SourcePath: sourcePath,
+				AvailableTypeTags: []string{coverTestBoxart},
+			}
+			tt.modify(t, &thumb)
+
+			mockDB := testhelpers.NewMockMediaDBI()
+			expectMediaImageResolve(mockDB, row)
+			mockDB.On("GetMediaCoverThumb", mock.Anything, row.DBID).Return(thumb, true, nil).Once()
+			mockDB.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{
+				{TypeTag: coverTestBoxart, ContentType: "image/png", Binary: solidPNG(t, 8, color.RGBA{A: 0xff})},
+			}, nil).Once()
+			mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+				Return([]database.MediaProperty{}, nil).Once()
+
+			env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
+			result, err := HandleMediaImage(env)
+			require.NoError(t, err)
+			resp, ok := result.(models.MediaImageResponse)
+			require.True(t, ok)
+			assert.NotEqual(t, base64.StdEncoding.EncodeToString([]byte("stale-thumb")), resp.Data)
+			mockDB.AssertExpectations(t)
+		})
+	}
+}
+
 // A record resolved under other preferences is not trusted when a type the
 // request prefers is available: the full lookup decides.
 func TestHandleMediaImage_RecordedTypeConflictingWithPrefsTakesFullPath(t *testing.T) {
@@ -151,15 +220,14 @@ func TestHandleMediaImage_RecordedTypeConflictingWithPrefsTakesFullPath(t *testi
 	row := makeMediaFullRow(503, 5030)
 	cache := newMemThumbCache()
 	installThumbCache(t, cache)
-	ref := mediaRefParam{System: row.System.SystemID, Path: row.Path}
-	setMediaThumbCacheForTest(
-		t, cache, ref, row.System.SystemID, coverTestBoxart, 256, []byte("boxart-thumb"), "image/webp",
-	)
+	sourcePath, sourceKey := writeCoverSource(t, []byte("original"))
+	setMediaThumbCacheForTest(t, cache, sourceKey, 256, []byte("boxart-thumb"), "image/webp")
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaCoverThumb", mock.Anything, row.DBID).Return(database.MediaCoverThumb{
 		MediaDBID: row.DBID, SystemID: row.System.SystemID, Path: row.Path, TypeTag: coverTestBoxart,
+		SourceKey: sourceKey, SourcePath: sourcePath,
 		AvailableTypeTags: []string{coverTestBoxart, "property:image-screenshot"},
 	}, true, nil).Once()
 	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{
@@ -221,7 +289,9 @@ func TestHandleMediaImage_RecordsCoverTypeAndColor(t *testing.T) {
 		{TypeTag: coverTestBoxart, ContentType: "image/png", Binary: blob},
 	}, nil).Once()
 	want := uint32(0x2080c0)
-	mockDB.On("PutMediaCoverThumb", mock.Anything, row.DBID, coverTestBoxart, &want).Return(nil).Once()
+	mockDB.On(
+		"PutMediaCoverThumb", mock.Anything, row.DBID, coverTestBoxart, dataThumbSourceKey("image/png", blob), &want,
+	).Return(nil).Once()
 
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
 	_, err := HandleMediaImage(env)
@@ -242,12 +312,15 @@ func TestHandleMediaImage_SingleTypeRequestDoesNotRecordCover(t *testing.T) {
 		{TypeTag: "property:image-screenshot", ContentType: "image/png", Binary: solidPNG(t, 8, color.RGBA{A: 0xff})},
 	}, nil).Once()
 	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).Return([]database.MediaProperty{}, nil).Once()
-	mockDB.On("PutMediaCoverThumb", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockDB.On("PutMediaCoverThumb", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
 
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 64, "imageTypes": ["screenshot"]`))
 	_, err := HandleMediaImage(env)
 	require.NoError(t, err)
-	mockDB.AssertNotCalled(t, "PutMediaCoverThumb", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(
+		t, "PutMediaCoverThumb", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
 }
 
 // Up to the lookup semaphore's capacity, lookups run at the same time.
@@ -303,7 +376,7 @@ func TestMediaThumbCache_ResizeConcurrencyFollowsPlatform(t *testing.T) {
 		pl.On("Settings").Return(platforms.Settings{
 			DataDir: t.TempDir(), HostManagedPaths: true, ResourceConstrained: constrained,
 		})
-		cache := newMediaThumbCacheWithFS(pl, afero.NewMemMapFs())
+		cache := newMediaThumbCacheWithFS(pl, nil, afero.NewMemMapFs())
 		want := mediaImageResizeConcurrency
 		if constrained {
 			want = mediaImageResizeConcurrencyConstrained
@@ -318,8 +391,8 @@ func TestMediaThumbCache_ResizeConcurrencyFollowsPlatform(t *testing.T) {
 func TestReapStaleVersions_KeepsTemporaryFilesNewerThanCache(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()
-	live := filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir())
-	systemDir := filepath.Join(live, thumbSystemDirName("SNES"))
+	live := filepath.Join("images", "thumbs", mediaThumbCacheVersionDir())
+	systemDir := filepath.Join(live, "ab")
 	require.NoError(t, fs.MkdirAll(systemDir, 0o750))
 	createdAt := time.Now()
 	oldTmp := filepath.Join(systemDir, ".thumb-old.tmp")
@@ -329,7 +402,7 @@ func TestReapStaleVersions_KeepsTemporaryFilesNewerThanCache(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, newTmp, []byte("new"), 0o600))
 	require.NoError(t, fs.Chtimes(newTmp, createdAt.Add(time.Second), createdAt.Add(time.Second)))
 
-	cache := &mediaThumbCache{fs: fs, dir: live, resolvedTypes: make(map[string]resolvedThumb), createdAt: createdAt}
+	cache := &mediaThumbCache{fs: fs, dir: live, resolved: make(map[string]resolvedThumb), createdAt: createdAt}
 	cache.reapStaleVersions()
 
 	oldExists, err := afero.Exists(fs, oldTmp)
@@ -344,17 +417,27 @@ func TestInitMediaThumbCache_UsableBeforeReapFinishes(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir(), HostManagedPaths: true})
-	InitMediaThumbCache(pl)
+	waitReap := InitMediaThumbCache(pl, nil)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 	cache := mediaThumbCachePointer.Load()
 	require.NotNil(t, cache)
 	exists, err := afero.DirExists(cache.fs, cache.dir)
 	require.NoError(t, err)
 	assert.True(t, exists, "the live directory exists as soon as Init returns")
+	waited := make(chan struct{})
+	go func() {
+		waitReap()
+		close(waited)
+	}()
 	select {
-	case <-cache.reapDone:
+	case <-waited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("background reap did not finish")
+	}
+	select {
+	case <-cache.reapDone:
+	default:
+		t.Fatal("the wait returned before the reap finished")
 	}
 }
 
@@ -411,4 +494,83 @@ func TestMediaCoverColorsIgnoresLookupFailure(t *testing.T) {
 	assert.Nil(t, mediaCoverColors(t.Context(), mockDB, []int64{0, 3}))
 	assert.Nil(t, mediaCoverColors(t.Context(), nil, []int64{3}))
 	assert.Equal(t, "#000001", formatCoverColor(1))
+}
+
+func mediaImageResponseData(t *testing.T, result any) []byte {
+	t.Helper()
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	data, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	return data
+}
+
+// A media DBID freed by an index and reused for other media must not serve the
+// old media's cover: thumbnails are named after their source, so the new row's
+// different artwork is a different file.
+func TestHandleMediaImage_ReusedMediaIDGetsItsOwnCover(t *testing.T) {
+	mediaImageNoImages.clear()
+	row := makeMediaFullRow(520, 5200)
+	installThumbCache(t, newMemThumbCache())
+	request := func(blob []byte) []byte {
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaImageResolve(mockDB, row)
+		mockDB.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{}, nil).Once()
+		mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).Return([]database.MediaProperty{
+			{TypeTag: coverTestBoxart, ContentType: "image/png", Binary: blob},
+		}, nil).Once()
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`)))
+		require.NoError(t, err)
+		return mediaImageResponseData(t, result)
+	}
+
+	red := request(solidPNG(t, 300, color.RGBA{R: 0xff, A: 0xff}))
+	InvalidateMediaThumbMemo()
+	blue := request(solidPNG(t, 300, color.RGBA{B: 0xff, A: 0xff}))
+
+	assert.NotEqual(t, red, blue, "the reused row's own artwork is served")
+}
+
+// An index or a rebuilt database leaves a file-backed cover's source alone, so
+// its thumbnail is served from the cache without being built again, under the
+// same row and under a new DBID alike.
+func TestHandleMediaImage_UnchangedFileCoverSurvivesReindex(t *testing.T) {
+	mediaImageNoImages.clear()
+	cache := newMemThumbCache()
+	installThumbCache(t, cache)
+	sourcePath, sourceKey := writeCoverSource(t, solidPNG(t, 300, color.RGBA{G: 0xff, A: 0xff}))
+	request := func(row *database.MediaFullRow) []byte {
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaImageResolve(mockDB, row)
+		mockDB.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{}, nil).Once()
+		mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).Return([]database.MediaProperty{
+			{TypeTag: coverTestBoxart, ContentType: "image/png", Text: sourcePath},
+		}, nil).Once()
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`)))
+		require.NoError(t, err)
+		return mediaImageResponseData(t, result)
+	}
+
+	row := makeMediaFullRow(530, 5300)
+	built := request(row)
+	cachedPath, _, found := cache.lookupPath(sourceKey, 256)
+	require.True(t, found)
+	assert.Equal(t, built, mustReadFile(t, cache.fs, cachedPath))
+	// Mark the cached file: a rebuild would overwrite it.
+	require.NoError(t, afero.WriteFile(cache.fs, cachedPath, []byte("kept"), 0o600))
+
+	InvalidateMediaThumbMemo()
+	assert.Equal(t, []byte("kept"), request(row), "a reindex keeps the thumbnail")
+
+	InvalidateMediaThumbMemo()
+	rebuilt := makeMediaFullRow(931, 9310)
+	rebuilt.Path = row.Path
+	assert.Equal(t, []byte("kept"), request(rebuilt), "a rebuilt database keeps the thumbnail")
+}
+
+func mustReadFile(t *testing.T, fs afero.Fs, path string) []byte {
+	t.Helper()
+	data, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	return data
 }

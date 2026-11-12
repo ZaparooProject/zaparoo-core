@@ -25,10 +25,13 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +84,7 @@ func TestRunTrackedProcess_InvalidCommand(t *testing.T) {
 		pl.consoleManager.mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test", trackedExit{})
 
 	// Should get an error from starting invalid command
 	require.Error(t, err)
@@ -116,7 +119,7 @@ func TestRunTrackedProcess_QuickExit(t *testing.T) {
 		pl.consoleManager.mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test", trackedExit{})
 
 	// Should start successfully
 	require.NoError(t, err)
@@ -156,7 +159,7 @@ func TestRunTrackedProcess_CancelledContext(t *testing.T) {
 		mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test", trackedExit{})
 
 	// Should start successfully
 	require.NoError(t, err)
@@ -302,4 +305,141 @@ func TestConsoleManager_ErrorPropagation(t *testing.T) {
 			}
 		})
 	}
+}
+
+type exitTestPlatform struct {
+	pl      *Platform
+	media   *models.ActiveMedia
+	cleared int
+	mu      syncutil.Mutex
+}
+
+func newExitTestPlatform(launcherID string) *exitTestPlatform {
+	et := &exitTestPlatform{media: &models.ActiveMedia{LauncherID: launcherID}}
+	et.pl = &Platform{
+		consoleManager: newConsoleManager(&Platform{}),
+		activeMedia: func() *models.ActiveMedia {
+			et.mu.Lock()
+			defer et.mu.Unlock()
+			return et.media
+		},
+		setActiveMedia: func(m *models.ActiveMedia) {
+			et.mu.Lock()
+			defer et.mu.Unlock()
+			if m == nil {
+				et.cleared++
+				et.media = nil
+			}
+		},
+	}
+	return et
+}
+
+func (et *exitTestPlatform) clearedCount() int {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+	return et.cleared
+}
+
+func (et *exitTestPlatform) waitUntrackedAfter(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		et.pl.processMu.RLock()
+		defer et.pl.processMu.RUnlock()
+		return et.pl.trackedProcess == nil
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestRunTrackedProcess_NaturalExitClearsMedia(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		{"clean exit", "true", nil},
+		{"crash exit", "false", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			et := newExitTestPlatform("GenericVideo")
+			cmd := exec.CommandContext(context.Background(), tc.cmd, tc.args...) //nolint:gosec // fixed test commands
+			_, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{launcherID: "GenericVideo"})
+			require.NoError(t, err)
+			et.waitUntrackedAfter(t)
+			assert.Equal(t, 1, et.clearedCount())
+		})
+	}
+}
+
+func TestRunTrackedProcess_NaturalExitLeavesOtherLauncherMedia(t *testing.T) {
+	et := newExitTestPlatform("Other")
+	cmd := exec.CommandContext(context.Background(), "true")
+	_, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{launcherID: "GenericVideo"})
+	require.NoError(t, err)
+	et.waitUntrackedAfter(t)
+	assert.Zero(t, et.clearedCount())
+}
+
+func TestRunTrackedProcess_StoppedByCoreDoesNotClearMedia(t *testing.T) {
+	et := newExitTestPlatform("GenericVideo")
+	finished := make(chan struct{}, 1)
+	cmd := exec.CommandContext(context.Background(), "sleep", "10")
+	proc, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{
+		launcherID:    "GenericVideo",
+		mediaFinished: func() { finished <- struct{}{} },
+	})
+	require.NoError(t, err)
+	et.pl.processMu.Lock()
+	et.pl.stopRequestedProc = proc
+	et.pl.processMu.Unlock()
+	require.NoError(t, proc.Signal(syscall.SIGTERM))
+	et.waitUntrackedAfter(t)
+	assert.Zero(t, et.clearedCount())
+	select {
+	case <-finished:
+		t.Fatal("mediaFinished called for a Core-initiated stop")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRunTrackedProcess_MediaFinishedOnlyOnCleanExit(t *testing.T) {
+	t.Run("clean exit finishes instead of clearing", func(t *testing.T) {
+		et := newExitTestPlatform("GenericVideo")
+		finished := make(chan struct{}, 1)
+		cmd := exec.CommandContext(context.Background(), "true")
+		_, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{
+			launcherID:    "GenericVideo",
+			mediaFinished: func() { finished <- struct{}{} },
+		})
+		require.NoError(t, err)
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatal("mediaFinished not called")
+		}
+		assert.Zero(t, et.clearedCount(), "Core clears media itself when finished")
+	})
+
+	t.Run("failed exit clears without finishing", func(t *testing.T) {
+		et := newExitTestPlatform("GenericVideo")
+		finished := make(chan struct{}, 1)
+		cmd := exec.CommandContext(context.Background(), "false")
+		_, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{
+			launcherID:    "GenericVideo",
+			mediaFinished: func() { finished <- struct{}{} },
+		})
+		require.NoError(t, err)
+		et.waitUntrackedAfter(t)
+		assert.Equal(t, 1, et.clearedCount())
+		assert.Empty(t, finished)
+	})
+}
+
+func TestStopActiveLauncher_WatcherDoesNotClearMediaAgain(t *testing.T) {
+	et := newExitTestPlatform("GenericVideo")
+	cmd := exec.CommandContext(context.Background(), "sleep", "10")
+	proc, err := runTrackedProcess(et.pl, cmd, func() {}, "test", trackedExit{launcherID: "GenericVideo"})
+	require.NoError(t, err)
+	require.NoError(t, et.pl.StopActiveLauncher(platforms.StopForPreemption))
+	assert.False(t, et.pl.isTrackedProcess(proc))
+	assert.Equal(t, 1, et.clearedCount(), "only the stop path clears media, not the exit watcher")
 }

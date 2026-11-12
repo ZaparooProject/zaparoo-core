@@ -1484,3 +1484,66 @@ media_dirs = ["/userdata/roms/movies"]
 	assert.Equal(t, []string{".mp4", ".mkv"}, moviesLauncher.Extensions,
 		"Extensions should be enriched via filepath.Base() fallback")
 }
+
+// A game ES started after a stop that landed too early has no media published
+// for it, and the stop that follows for it must still act.
+func TestStopHasTarget(t *testing.T) {
+	t.Parallel()
+
+	media := models.NewActiveMedia("NES", "NES", "/userdata/roms/nes/game.nes", "Game", "NES")
+
+	assert.True(t, stopHasTarget(media, false, false, false), "published media")
+	assert.True(t, stopHasTarget(nil, true, false, false), "Kodi")
+	assert.True(t, stopHasTarget(nil, false, true, false), "tracked process")
+	assert.True(t, stopHasTarget(nil, false, false, true), "game the tracker saw, unpublished")
+	assert.False(t, stopHasTarget(nil, false, false, false), "nothing running")
+}
+
+// Batocera, 2026-10-26: its EmulationStation has no doom system, so a WAD
+// indexed from a doom folder could not be started; and prboom.wad, PrBoom's
+// own data, was indexed as the game Doom.
+func TestLaunchersDoom(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	p := &Platform{}
+	var doom []platforms.Launcher
+	for _, l := range p.Launchers(cfg) {
+		assert.NotContains(t, l.Folders, "doom", "Batocera has no doom system")
+		if l.SystemID == systemdefs.SystemDoom {
+			doom = append(doom, l)
+		}
+	}
+	require.NotEmpty(t, doom)
+	for _, l := range doom {
+		assert.Contains(t, l.ScanExcludes, "prboom.wad", l.Folders)
+	}
+}
+
+// Batocera, 2026-10-26: launch.random:DOS fell back to PC and launched
+// retrotrivia/videoplayer.py, one of the PyGame game's modules.
+func TestDropPyGameModules(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(string(filepath.Separator), "userdata", "roms", "pygame")
+	results := []platforms.ScanResult{
+		{Path: filepath.Join(root, "retrotrivia", "retrotrivia.pygame")},
+		{Path: filepath.Join(root, "retrotrivia", "videoplayer.py")},
+		{Path: filepath.Join(root, "retrotrivia", "questions.py")},
+		{Path: filepath.Join(root, "pygun", "pygun.pygame")},
+		{Path: filepath.Join(root, "snake", "snake.py")},
+	}
+
+	kept := dropPyGameModules(results)
+
+	paths := make([]string, 0, len(kept))
+	for _, r := range kept {
+		paths = append(paths, r.Path)
+	}
+	assert.Equal(t, []string{
+		filepath.Join(root, "retrotrivia", "retrotrivia.pygame"),
+		filepath.Join(root, "pygun", "pygun.pygame"),
+		filepath.Join(root, "snake", "snake.py"),
+	}, paths, "a .py game with no .pygame beside it stays")
+}

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,7 @@ import (
 )
 
 const deckColumns = `DBID, DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-	PlaylistID`
+	PlaylistID, Saved, OwnerName, CoverFile, ImageURL, CoverPending`
 
 const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID, Scripts, Metadata,
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
@@ -68,20 +69,30 @@ func (db *UserDB) CreateDeck(deck *database.Deck) error {
 // GetDeck returns a deck with its items in position order, both read from
 // the same snapshot.
 func (db *UserDB) GetDeck(deckID string) (*database.Deck, error) {
-	conn := db.sql.Load()
-	if conn == nil {
+	pool := db.sql.Load()
+	if pool == nil {
 		return nil, ErrNullSQL
 	}
-	tx, err := conn.BeginTx(db.ctx, nil)
+	// The pool begins every transaction IMMEDIATE, which would make this read
+	// queue on the write lock behind any writer for up to the busy timeout.
+	// A deferred transaction on a pinned connection still reads the deck and
+	// its items from one snapshot without waiting on writers.
+	conn, err := pool.Conn(db.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin deck read: %w", err)
 	}
+	defer func() { _ = conn.Close() }()
+	if _, err = conn.ExecContext(db.ctx, "BEGIN DEFERRED"); err != nil {
+		return nil, fmt.Errorf("failed to begin deck read: %w", err)
+	}
 	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		if _, rollbackErr := conn.ExecContext(context.WithoutCancel(db.ctx), "ROLLBACK"); rollbackErr != nil {
 			log.Warn().Err(rollbackErr).Msg("failed to end deck read")
+			// A connection still inside a transaction must not go back to the pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}()
-	return sqlGetDeckWithItems(db.ctx, tx, deckID)
+	return sqlGetDeckWithItems(db.ctx, conn, deckID)
 }
 
 // ListDecks returns every deck without items, most recently updated first,
@@ -94,10 +105,10 @@ func (db *UserDB) ListDecks() ([]database.Deck, error) {
 }
 
 // UpdateDeck edits a deck in one transaction. It loads the deck with its
-// items, lets edit change the deck's Name, Description, Metadata and Items,
-// and stores those fields; edit's other changes are ignored. An item that
-// still carries the DBID of one of the deck's items keeps that row, so its ID
-// and creation time survive the edit. Any other item is inserted, and rows no
+// items, lets edit change the deck's Name, Description, Metadata, Items,
+// CoverFile and CoverPending, and stores those fields; edit's other changes
+// are ignored. An item that still carries the DBID of one of the deck's items
+// keeps that row, so its ID and creation time survive the edit. Any other item is inserted, and rows no
 // item kept are deleted. Positions follow list order from one. When edit
 // fails, or leaves more than DeckMaxItems items, nothing is written. Returns
 // the deck as stored.
@@ -124,9 +135,11 @@ func (db *UserDB) UpdateDeck(deckID string, edit func(deck *database.Deck) error
 		}
 		deck.UpdatedAt = now
 		if _, execErr := tx.ExecContext(ctx, `
-			update Decks set Name = ?, Description = ?, Metadata = ?, UpdatedAt = ?
+			update Decks set Name = ?, Description = ?, Metadata = ?, CoverFile = ?, CoverPending = ?,
+				UpdatedAt = ?
 			where DBID = ?;`,
-			deck.Name, deck.Description, string(deck.Metadata), now, deck.DBID); execErr != nil {
+			deck.Name, deck.Description, string(deck.Metadata), deck.CoverFile, deck.CoverPending,
+			now, deck.DBID); execErr != nil {
 			return false, fmt.Errorf("failed to update deck: %w", execErr)
 		}
 		if saveErr := sqlSaveDeckItems(ctx, tx, deck.DBID, stored, deck.Items, now); saveErr != nil {
@@ -194,7 +207,11 @@ func refuseLockedDeck(ctx context.Context, tx *sql.Tx, deckID string) error {
 
 // UpsertRemoteDeck inserts or fully replaces a deck that arrived from
 // elsewhere (a ZapLink fetch or a sync pull), keeping the stored DBID and
-// creation time. The deck's ID is normalized first. A cached copy of somebody
+// creation time, and whether the copy is saved and by whom, which only
+// SetDeckSaved changes on a stored deck; an inserted deck takes them from
+// deck. The arriving ImageURL is stored, and a different one replaces the
+// cover stored here unless a cover change made here is still waiting to be
+// sent. The deck's ID is normalized first. A cached copy of somebody
 // else's deck never overwrites an owned deck of the same ID (ErrDeckOwned),
 // so a tap on your own deck's ZapLink opens the editable local copy. A deck
 // fails with ErrDeckItemLimit past DeckMaxItems.
@@ -242,10 +259,15 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 			adoptRemoteDeckItemRows(stored, deck.Items)
 			if _, execErr := tx.ExecContext(ctx, `
 				update Decks set Name = ?, Description = ?, Owned = ?, Metadata = ?, SourceURL = ?,
-					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?
+					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?,
+					Saved = case when ? then 0 else Saved end,
+					OwnerName = case when ? then '' else OwnerName end,
+					CoverFile = case when CoverPending = '' and ImageURL != ? then '' else CoverFile end,
+					ImageURL = ?
 				where DBID = ?;`,
 				deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-				deck.PlaylistID, now, now, existing.DBID); execErr != nil {
+				deck.PlaylistID, now, now, deck.Owned, deck.Owned, deck.ImageURL, deck.ImageURL,
+				existing.DBID); execErr != nil {
 				return false, fmt.Errorf("failed to update remote deck: %w", execErr)
 			}
 		}
@@ -262,8 +284,10 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 // The copy is known by deck.SourceURL alone: a link fetched before updates its
 // stored copy, and any other link gets a deck ID minted on this device, so
 // nothing the source serves can name, replace or hide another deck. At most
-// maxCopies fetched decks are kept; past that the ones fetched longest ago
-// are removed and reported, so their tags can be cleared.
+// maxCopies fetched decks are kept besides saved ones; past that the unsaved
+// ones fetched longest ago are removed and reported, so their tags can be
+// cleared. A new copy is stored saved when deck.Saved is set, so storing a
+// saved deck never makes room by removing another copy.
 func (db *UserDB) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (database.FetchedDeckResult, error) {
 	var result database.FetchedDeckResult
 	if db.sql.Load() == nil {
@@ -329,7 +353,7 @@ func sqlFetchedDecksBeyond(
 	ctx context.Context, q deckQueryable, keep int,
 ) (dbids []int64, deckIDs []string, err error) {
 	rows, err := q.QueryContext(ctx, `
-		select DBID, DeckID from Decks where Owned = 0 and SourceURL != ''
+		select DBID, DeckID from Decks where Owned = 0 and Saved = 0 and SourceURL != ''
 		order by FetchedAt desc, DBID desc limit -1 offset ?;`, keep)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query fetched decks: %w", err)
@@ -388,7 +412,7 @@ func (db *UserDB) touchUnchangedRemoteDeck(deck *database.Deck) (bool, error) {
 func sameRemoteDeck(stored, arriving *database.Deck) bool {
 	if stored.Name != arriving.Name || stored.Description != arriving.Description ||
 		stored.SourceURL != arriving.SourceURL || stored.Owned != arriving.Owned ||
-		stored.PlaylistID != arriving.PlaylistID ||
+		stored.PlaylistID != arriving.PlaylistID || stored.ImageURL != arriving.ImageURL ||
 		!bytes.Equal(stored.Metadata, arriving.Metadata) ||
 		len(stored.Items) != len(arriving.Items) {
 		return false
@@ -477,12 +501,127 @@ func (db *UserDB) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnc
 	return nil
 }
 
+// SettleDeckCoverPush records what the account answered to a cover change
+// pushed for a deck: the image it now holds. The pending change is cleared
+// only when it is still the one that was pushed, the same pending kind and
+// the same cover file, so a cover changed here while the push was in flight
+// is sent next time. Fails with ErrDeckNotFound when no deck holds deckID.
+func (db *UserDB) SettleDeckCoverPush(deckID, pushedPending, pushedCoverFile, imageURL string) error {
+	conn := db.sql.Load()
+	if conn == nil {
+		return ErrNullSQL
+	}
+	res, err := conn.ExecContext(db.ctx, `
+		update Decks set ImageURL = ?,
+			Metadata = case when ? = ? and CoverPending = ? and CoverFile = ? and json_valid(Metadata)
+				then json_remove(Metadata, '$.image_url') else Metadata end,
+			CoverPending = case when CoverPending = ? and CoverFile = ? then '' else CoverPending end
+		where DeckID = ?;`, imageURL,
+		pushedPending, database.DeckCoverPendingRemove, pushedPending, pushedCoverFile,
+		pushedPending, pushedCoverFile, deckID)
+	if err != nil {
+		return fmt.Errorf("failed to settle deck cover push: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count settled decks: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", database.ErrDeckNotFound, deckID)
+	}
+	return nil
+}
+
+// DiscardDeckCover drops a deck's cover change made here in favor of the
+// image the account holds, as when the account locked the deck: the local
+// cover and the pending change are cleared and imageURL becomes the deck's
+// image. Fails with ErrDeckNotFound when no deck holds deckID.
+func (db *UserDB) DiscardDeckCover(deckID, imageURL string) error {
+	conn := db.sql.Load()
+	if conn == nil {
+		return ErrNullSQL
+	}
+	res, err := conn.ExecContext(db.ctx, `
+		update Decks set ImageURL = ?, CoverFile = '', CoverPending = '' where DeckID = ?;`, imageURL, deckID)
+	if err != nil {
+		return fmt.Errorf("failed to discard deck cover: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count discarded deck covers: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", database.ErrDeckNotFound, deckID)
+	}
+	return nil
+}
+
+// FindDeckItemsByAnchor returns, by deck ID, the items whose local file is
+// exactly systemID and path, in position order.
+func (db *UserDB) FindDeckItemsByAnchor(systemID, path string) (map[string][]int64, error) {
+	conn := db.sql.Load()
+	if conn == nil {
+		return nil, ErrNullSQL
+	}
+	// Anchors are stored canonical; match any spelling of the same path.
+	path = pathutil.CanonicalMediaPath(path)
+	rows, err := conn.QueryContext(db.ctx, `
+		select Decks.DeckID, DeckItems.DBID from DeckItems
+		join Decks on Decks.DBID = DeckItems.DeckDBID
+		where DeckItems.Path = ? and DeckItems.SystemID = ? and DeckItems.Path != ''
+		order by Decks.DBID, DeckItems.Position;`, path, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deck items by file: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string][]int64)
+	for rows.Next() {
+		var deckID string
+		var itemID int64
+		if scanErr := rows.Scan(&deckID, &itemID); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan deck item by file: %w", scanErr)
+		}
+		out[deckID] = append(out[deckID], itemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate deck items by file: %w", err)
+	}
+	return out, nil
+}
+
 // CountOwnedDecks returns how many decks this device owns.
 func (db *UserDB) CountOwnedDecks() (int, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 	return sqlCountOwnedDecks(db.ctx, db.sql.Load())
+}
+
+// SetDeckSaved marks a deck kept from a link as saved by the linked account,
+// or no longer saved, and records the name the account gave for its owner.
+// An owned deck is never saved and fails with ErrDeckOwned. Fails with
+// ErrDeckNotFound when no deck holds deckID.
+func (db *UserDB) SetDeckSaved(deckID string, saved bool, ownerName string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return db.deckTx(func(ctx context.Context, tx *sql.Tx, _ int64) (bool, error) {
+		deck, err := sqlGetDeck(ctx, tx, deckID)
+		if err != nil {
+			return false, err
+		}
+		if deck.Owned {
+			return false, database.ErrDeckOwned
+		}
+		if deck.Saved == saved && deck.OwnerName == ownerName {
+			return false, nil
+		}
+		if _, err = tx.ExecContext(ctx, `update Decks set Saved = ?, OwnerName = ? where DBID = ?;`,
+			saved, ownerName, deck.DBID); err != nil {
+			return false, fmt.Errorf("failed to set deck saved: %w", err)
+		}
+		return true, nil
+	})
 }
 
 // deckTx runs fn in one transaction. The transaction opens with the write
@@ -534,16 +673,26 @@ func sqlCountOwnedDecks(ctx context.Context, q deckQueryable) (int, error) {
 func sqlInsertDeck(ctx context.Context, q deckQueryable, deck *database.Deck) error {
 	err := q.QueryRowContext(ctx, `
 		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
-			PlaylistID)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			PlaylistID, Saved, OwnerName, CoverFile, ImageURL, CoverPending)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		returning DBID;`,
 		deck.DeckID, deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID,
+		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID, deck.Saved && !deck.Owned,
+		ownerNameUnlessOwned(deck), deck.CoverFile, deck.ImageURL, deck.CoverPending,
 	).Scan(&deck.DBID)
 	if err != nil {
 		return fmt.Errorf("failed to insert deck: %w", err)
 	}
 	return nil
+}
+
+// ownerNameUnlessOwned is the owner name a deck is inserted with: only a
+// saved copy of somebody else's deck has one.
+func ownerNameUnlessOwned(deck *database.Deck) string {
+	if deck.Owned || !deck.Saved {
+		return ""
+	}
+	return deck.OwnerName
 }
 
 // sqlSaveDeckItems makes items the item list of the deck whose rows are
@@ -652,6 +801,7 @@ func scanDeck(scan func(dest ...any) error) (*database.Deck, error) {
 	if err := scan(
 		&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
 		&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
+		&deck.Saved, &deck.OwnerName, &deck.CoverFile, &deck.ImageURL, &deck.CoverPending,
 	); err != nil {
 		return nil, err
 	}
@@ -703,7 +853,8 @@ func sqlListDecks(ctx context.Context, q deckQueryable) ([]database.Deck, error)
 		var metadata string
 		if scanErr := rows.Scan(
 			&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
-			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID, &deck.ItemCount,
+			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
+			&deck.Saved, &deck.OwnerName, &deck.CoverFile, &deck.ImageURL, &deck.CoverPending, &deck.ItemCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan deck: %w", scanErr)
 		}

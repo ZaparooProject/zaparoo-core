@@ -278,3 +278,19 @@ func TestMediaUserReconcilerRun(t *testing.T) {
 		t.Fatal("Run did not return after its context ended")
 	}
 }
+
+// A flag write that was killed before its projection leaves its own marker,
+// which a new reconciler treats as a request.
+func TestMediaUserReconcilerPicksUpInterruptedFlagWrite(t *testing.T) {
+	t.Parallel()
+	f := newReconcilerFixture(t)
+	require.NoError(t, f.db.UserDB.SetDeviceState(database.DeviceStateKeyMediaUserFlagWrite, "1"))
+	require.True(t, f.favoriteProjected(t))
+
+	assert.True(t, newMediaUserReconciler(f.db).reconcilePending(context.Background()))
+
+	assert.False(t, f.favoriteProjected(t), "the stale favorite is removed")
+	_, found, err := f.db.UserDB.GetDeviceState(database.DeviceStateKeyMediaUserFlagWrite)
+	require.NoError(t, err)
+	assert.False(t, found)
+}

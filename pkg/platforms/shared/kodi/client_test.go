@@ -1542,6 +1542,65 @@ func TestClient_PlayPause_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, 1, int(params["playerid"].(float64)))
 }
 
+func TestClient_SetPaused_SendsExplicitPlayState(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		paused   bool
+		wantPlay bool
+	}{
+		{"pause sends play false", true, false},
+		{"resume sends play true", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var receivedPayloads []map[string]any
+			server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+				receivedPayloads = append(receivedPayloads, payload)
+				if payload["method"] == "Player.GetActivePlayers" {
+					return map[string]any{
+						"jsonrpc": "2.0",
+						"id":      payload["id"],
+						"result":  []any{map[string]any{"playerid": 1, "type": "video"}},
+					}
+				}
+				return map[string]any{"jsonrpc": "2.0", "id": payload["id"], "result": map[string]any{"speed": 0}}
+			})
+			defer server.Close()
+
+			client := kodi.NewClient(nil)
+			client.SetURL(server.URL)
+
+			require.NoError(t, client.SetPaused(context.Background(), tt.paused))
+
+			require.Len(t, receivedPayloads, 2)
+			assert.Equal(t, "Player.PlayPause", receivedPayloads[1]["method"])
+			params, ok := receivedPayloads[1]["params"].(map[string]any)
+			require.True(t, ok)
+			assert.InDelta(t, 1, params["playerid"], 0)
+			assert.Equal(t, tt.wantPlay, params["play"])
+		})
+	}
+}
+
+func TestClient_SetPaused_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{"jsonrpc": "2.0", "id": payload["id"], "result": []any{}}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.SetPaused(context.Background(), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
 func TestClient_PlayPause_NoActivePlayers(t *testing.T) {
 	t.Parallel()
 
@@ -1812,4 +1871,91 @@ func TestClient_GoTo_Previous_MakesCorrectAPICall(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1, int(params["playerid"].(float64)))
 	assert.Equal(t, "previous", params["to"])
+}
+
+func TestClient_GetSongs_FiltersByAlbumAndArtist(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		fetch      func(kodi.KodiClient) ([]kodi.Song, error)
+		wantFilter map[string]any
+		name       string
+	}{
+		{
+			name: "album",
+			fetch: func(c kodi.KodiClient) ([]kodi.Song, error) {
+				return c.GetAlbumSongs(context.Background(), 17)
+			},
+			wantFilter: map[string]any{"albumid": float64(17)},
+		},
+		{
+			name: "artist",
+			fetch: func(c kodi.KodiClient) ([]kodi.Song, error) {
+				return c.GetArtistSongs(context.Background(), 9)
+			},
+			wantFilter: map[string]any{"artistid": float64(9)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var receivedPayload map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+					http.Error(w, "Bad request", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      receivedPayload["id"],
+					"result": map[string]any{
+						"songs": []map[string]any{{"songid": 5, "label": "Song"}},
+					},
+				})
+			}))
+			defer server.Close()
+
+			client := kodi.NewClient(nil)
+			client.SetURL(server.URL)
+
+			songs, err := tt.fetch(client)
+			require.NoError(t, err)
+			require.Len(t, songs, 1)
+			assert.Equal(t, "AudioLibrary.GetSongs", receivedPayload["method"])
+			params, ok := receivedPayload["params"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantFilter, params["filter"])
+		})
+	}
+}
+
+func TestClient_GetSongs_SendsNoFilterForWholeLibrary(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      receivedPayload["id"],
+			"result":  map[string]any{"songs": []map[string]any{}},
+		})
+	}))
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	_, err := client.GetSongs(context.Background())
+	require.NoError(t, err)
+	params, ok := receivedPayload["params"].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, params, "filter")
 }

@@ -109,6 +109,7 @@ func TestContract_SearchResults(t *testing.T) {
 
 	relPath := "SNES/Chrono Trigger.sfc"
 	nextCursor := "cursor-1"
+	versionCount := 3
 	response := models.SearchResults{
 		Total: 1,
 		Pagination: &models.PaginationInfo{
@@ -117,7 +118,7 @@ func TestContract_SearchResults(t *testing.T) {
 		Results: []models.SearchResultMedia{{
 			Name: "Chrono Trigger", Path: "/roms/SNES/Chrono Trigger.sfc",
 			ZapScript: "**launch:/roms/SNES/Chrono Trigger.sfc", RelPath: &relPath,
-			MediaID: 42, HasCover: true,
+			MediaID: 42, TitleID: 7, VersionCount: &versionCount, HasCover: true,
 			System: models.System{
 				ID: "SNES", Name: "Super Nintendo", Category: "Console",
 				Categories: []string{"Console", "Favorite Systems"},
@@ -136,7 +137,7 @@ func TestContract_SearchResults(t *testing.T) {
 			"name": "Chrono Trigger", "path": "/roms/SNES/Chrono Trigger.sfc",
 			"zap_script": "**launch:/roms/SNES/Chrono Trigger.sfc",
 			"relative_path": "SNES/Chrono Trigger.sfc",
-			"media_id": 42, "has_cover": true,
+			"media_id": 42, "title_id": 7, "version_count": 3, "has_cover": true,
 			"system": {
 				"id": "SNES", "name": "Super Nintendo", "category": "Console",
 				"categories": ["Console", "Favorite Systems"]

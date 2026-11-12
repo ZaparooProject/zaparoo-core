@@ -63,6 +63,9 @@ func restoreScriptTestHooks(t *testing.T) {
 	oldStartCommand := startScriptCommand
 	oldRunHiddenCommand := runHiddenScriptCommand
 	oldKillHiddenProcessGroup := killHiddenScriptProcessGroup
+	oldActiveCoreName := scriptActiveCoreName
+	oldFPGAActive := scriptFPGAActive
+	oldReturnToMenu := scriptReturnToMenu
 	t.Cleanup(func() {
 		checkScriptActive = oldCheckScriptActive
 		getScriptConsoleManager = oldGetConsoleManager
@@ -71,6 +74,9 @@ func restoreScriptTestHooks(t *testing.T) {
 		startScriptCommand = oldStartCommand
 		runHiddenScriptCommand = oldRunHiddenCommand
 		killHiddenScriptProcessGroup = oldKillHiddenProcessGroup
+		scriptActiveCoreName = oldActiveCoreName
+		scriptFPGAActive = oldFPGAActive
+		scriptReturnToMenu = oldReturnToMenu
 	})
 }
 
@@ -266,7 +272,7 @@ func TestRunScript_VisibleLaunchOriginIsLiteral(t *testing.T) {
 
 	// Everything from the export up to the cd line is the launch origin.
 	start := strings.Index(launcher, "export "+launchOriginEnv+"=")
-	end := strings.Index(launcher, "\ncd $(dirname")
+	end := strings.Index(launcher, "\ncd \"$(dirname")
 	require.NotEqual(t, -1, start)
 	require.Greater(t, end, start)
 	export := launcher[start:end]

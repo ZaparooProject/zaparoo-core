@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/rs/zerolog"
@@ -120,6 +121,16 @@ func TestLogClientCommandError(t *testing.T) {
 		{
 			name:          "wrapped connection refused logs at warn",
 			err:           fmt.Errorf("dial failed: %w", syscall.ECONNREFUSED),
+			expectedLevel: "warn",
+		},
+		{
+			name:          "service starting logs at warn",
+			err:           fmt.Errorf("failed to dial websocket (HTTP status 503): %w", client.ErrServiceUnavailable),
+			expectedLevel: "warn",
+		},
+		{
+			name:          "service restarting logs at warn",
+			err:           fmt.Errorf("read: %w", syscall.ECONNRESET),
 			expectedLevel: "warn",
 		},
 		{

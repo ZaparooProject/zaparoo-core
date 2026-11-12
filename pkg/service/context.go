@@ -21,11 +21,14 @@ package service
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/autoadvance"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlistmemory"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
@@ -64,4 +67,14 @@ type ServiceContext struct {
 	LaunchGuardCancel   chan struct{}
 	ResolvedLaunchGuard chan *resolvedLaunchConfirmation
 	BackgroundWG        *sync.WaitGroup
+	AutoAdvance         *autoadvance.Engine
+	// PlaylistMemory remembers where playlists were left and which were
+	// open. Nil remembers nothing.
+	PlaylistMemory *playlistmemory.Memory
+	// Positions keeps the position of long native audio tracks. Nil keeps
+	// nothing.
+	Positions *playlistmemory.PositionTracker
+	// musicAutoplay starts the restored background playlist on the first
+	// start of a boot. Nil when it is off.
+	musicAutoplay atomic.Pointer[musicAutoplay]
 }

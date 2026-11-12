@@ -28,7 +28,6 @@ package arcadenames
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	_ "embed"
 	"regexp"
 	"slices"
@@ -36,10 +35,11 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/zstdembed"
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed names.tsv.gz
+//go:embed names.tsv.zst
 var embedded []byte
 
 // Entry is one set's catalog record.
@@ -57,7 +57,7 @@ var (
 
 func load() {
 	entries = make(map[string]Entry)
-	zr, err := gzip.NewReader(bytes.NewReader(embedded))
+	zr, err := zstdembed.NewReader(bytes.NewReader(embedded))
 	if err != nil {
 		log.Error().Err(err).Msg("arcade names catalog unreadable")
 		return

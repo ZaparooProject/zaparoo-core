@@ -43,6 +43,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -905,7 +906,7 @@ func (s *Service) startService() {
 
 	result, err := s.start()
 	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
+		log.WithLevel(api.StartupFailureLevel(err)).Err(err).Msg("error starting service")
 
 		if pidErr := s.removePidFile(); pidErr != nil {
 			log.Error().Err(pidErr).Msg("error removing pid file")
@@ -1104,10 +1105,16 @@ func (s *Service) waitForServicePidFile(expectedPID int, timeout time.Duration) 
 	}
 }
 
+// maxServiceStderrSize is the size past which the next start moves the
+// service stderr capture aside instead of appending to it.
+const maxServiceStderrSize = 1 << 20
+
 // openServiceStderr opens the file the service process's stdout and stderr are
 // pointed at. It appends and stamps each start, because the interesting case is
 // a service that keeps dying and the previous crash is worth keeping. It lives
 // in LogDir so the log-download and upload paths can ship it with the log.
+// Outside MiSTer LogDir is persistent storage, so once the file passes
+// maxServiceStderrSize it is moved over the single previous generation.
 func (s *Service) openServiceStderr() (*os.File, error) {
 	logDir := s.pl.Settings().LogDir
 	if logDir == "" {
@@ -1116,6 +1123,13 @@ func (s *Service) openServiceStderr() (*os.File, error) {
 		return nil, errors.New("no log directory configured")
 	}
 	path := filepath.Join(logDir, config.StderrFile)
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Size() > maxServiceStderrSize {
+		// On failure keep appending: losing the cap is better than losing the
+		// crash output the file holds.
+		if err := os.Rename(path, filepath.Join(logDir, config.StderrPreviousFile)); err != nil {
+			log.Warn().Err(err).Msg("error rotating service stderr file")
+		}
+	}
 	//nolint:gosec // Path is derived from the configured temp directory and fixed filename.
 	f, err := os.OpenFile(
 		path,
@@ -1474,6 +1488,16 @@ func apiPortHeld(addr string, probeTimeout time.Duration) bool {
 }
 
 func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Duration) error {
+	return waitForPortRelease(cfg, timeout, pollInterval, apiPortHeld)
+}
+
+// waitForPortRelease polls held until no API address is held or timeout passes.
+// Each probe is given no longer than the time left before the deadline.
+func waitForPortRelease(
+	cfg *config.Instance,
+	timeout, pollInterval time.Duration,
+	held func(addr string, probeTimeout time.Duration) bool,
+) error {
 	if cfg == nil || cfg.APIPort() == 0 {
 		return nil
 	}
@@ -1483,14 +1507,14 @@ func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Dura
 	for {
 		probeTimeout := min(apiPortProbeTimeout, max(time.Until(deadline), apiPortMinProbeTimeout))
 
-		held := false
+		stillHeld := false
 		for _, addr := range addrs {
-			if apiPortHeld(addr, probeTimeout) {
-				held = true
+			if held(addr, probeTimeout) {
+				stillHeld = true
 				break
 			}
 		}
-		if !held {
+		if !stillHeld {
 			return nil
 		}
 

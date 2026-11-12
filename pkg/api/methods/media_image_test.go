@@ -23,9 +23,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	byteorder "encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -41,10 +43,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/wuffspng"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -137,63 +141,58 @@ func fillMediaImageSem() (release func()) {
 func setMediaThumbCacheForTest(
 	t testing.TB,
 	cache *mediaThumbCache,
-	ref mediaRefParam,
-	system string,
-	typeTag string,
+	sourceKey string,
 	maxSize int,
 	data []byte,
 	contentType string,
-) {
+) string {
 	t.Helper()
-	_, err := cache.set(ref, system, typeTag, maxSize, data, contentType)
+	path, err := cache.set(sourceKey, maxSize, data, contentType)
 	require.NoError(t, err)
+	return path
 }
 
-func TestMediaThumbCache_GetSetAndWipe(t *testing.T) {
+func newTestThumbCache(fs afero.Fs, dir string) *mediaThumbCache {
+	return &mediaThumbCache{fs: fs, dir: dir, resolved: make(map[string]resolvedThumb)}
+}
+
+func TestMediaThumbCache_GetSet(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
+	cache := newTestThumbCache(fs, filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
+	key := "f:10:20:/media/boxart/mario.png"
 
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found := cache.get(key, 100)
 	assert.False(t, found)
 
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 100, []byte("png-data"), "image/png")
-	data, contentType, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	path := setMediaThumbCacheForTest(t, cache, key, 100, []byte("png-data"), "image/png")
+	data, contentType, found := cache.get(key, 100)
 	require.True(t, found)
 	assert.Equal(t, []byte("png-data"), data)
 	assert.Equal(t, "image/png", contentType)
 
-	entries, err := afero.ReadDir(fs, cache.systemDir("SNES"))
+	entries, err := afero.ReadDir(fs, filepath.Dir(path))
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "atomic write must not leave a temporary file")
 
-	cache.wipe()
-	_, _, found = cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found = cache.get(key, 128)
+	assert.False(t, found, "each size tier is its own file")
+	_, _, found = cache.get("f:10:21:/media/boxart/mario.png", 100)
+	assert.False(t, found, "a changed source is a different file")
+	_, _, found = cache.get("", 100)
 	assert.False(t, found)
+	_, err = cache.set("", 100, []byte("png-data"), "image/png")
+	require.Error(t, err)
 }
 
 func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
 	t.Parallel()
 
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
-
-	_, err := cache.set(ref, "SNES", "property:image-boxart", 100, []byte("not an image"), "text/plain")
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
+	_, err := cache.set("d:abc", 100, []byte("not an image"), "text/plain")
 	require.Error(t, err)
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
+	_, _, found := cache.get("d:abc", 100)
 	assert.False(t, found)
 }
 
@@ -201,10 +200,7 @@ func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewOsFs()
-	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
+	cache := newTestThumbCache(fs, filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()))
 	require.NoError(t, fs.MkdirAll(cache.dir, 0o750))
 	inside := filepath.Join(cache.dir, "inside.webp")
 	require.NoError(t, afero.WriteFile(fs, inside, []byte("inside"), 0o600))
@@ -228,100 +224,50 @@ func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
 	assert.False(t, relativeCache.isSafeLocalPath(filepath.Join("relative", "image.webp")))
 }
 
-func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	thumbs := filepath.Join("cache", "thumbs")
-	dir := filepath.Join(thumbs, mediaThumbCacheVersionDir())
-	cache := &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]resolvedThumb)}
-	mediaThumbCachePointer.Store(cache)
-	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
-
-	mediaID := int64(1)
-	ref := mediaRefParam{MediaID: &mediaID}
-	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 512, []byte("webp-bytes"), "image/webp")
-	cache.setResolvedThumb(ref, nil, 512, "SNES", "property:image-boxart")
-	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 512)
-	require.True(t, found)
-
-	WipeMediaThumbCache(nil)
-
-	// The live dir keeps its deterministic name (stable across restarts) rather
-	// than rolling to a new generation directory.
-	live := mediaThumbCachePointer.Load()
-	require.NotNil(t, live)
-	assert.Equal(t, dir, live.dir)
-
-	// Cached contents and the resolved-type memo are cleared.
-	_, _, found = cache.get(ref, "SNES", "property:image-boxart", 512)
-	assert.False(t, found)
-	_, memoOK := cache.getResolvedThumb(ref, nil, 512)
-	assert.False(t, memoOK)
-
-	// No moved-aside stale directory is left behind (removal is synchronous).
-	entries, err := afero.ReadDir(fs, thumbs)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	assert.Equal(t, []string{mediaThumbCacheVersionDir()}, names)
-}
-
-func TestWipeMediaThumbCacheSystems_PreservesOtherSystems(t *testing.T) {
+func TestMediaThumbCache_MemoIsBounded(t *testing.T) {
 	t.Parallel()
 
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+	cache := newTestThumbCache(afero.NewMemMapFs(), "cache")
+	for i := range mediaThumbMemoMax + 10 {
+		id := int64(i)
+		cache.setResolvedThumb(mediaRefParam{MediaID: &id}, nil, 256, resolvedThumb{system: "SNES"})
 	}
-	snesID, genesisID := int64(1), int64(2)
-	snesRef := mediaRefParam{MediaID: &snesID}
-	genesisRef := mediaRefParam{MediaID: &genesisID}
-	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 512, []byte("snes"), "image/webp")
-	setMediaThumbCacheForTest(
-		t, cache, genesisRef, "Genesis", "property:image-boxart", 512, []byte("genesis"), "image/webp",
-	)
-	cache.setResolvedThumb(snesRef, nil, 512, "SNES", "property:image-boxart")
-	cache.setResolvedThumb(genesisRef, nil, 512, "Genesis", "property:image-boxart")
+	assert.Len(t, cache.resolved, mediaThumbMemoMax)
+}
 
-	cache.wipeSystems([]string{"SNES", "SNES"})
-
-	_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 512)
-	assert.False(t, found)
-	_, memoOK := cache.getResolvedThumb(snesRef, nil, 512)
-	assert.False(t, memoOK)
-	data, _, found := cache.get(genesisRef, "Genesis", "property:image-boxart", 512)
-	assert.True(t, found)
-	assert.Equal(t, []byte("genesis"), data)
-	_, memoOK = cache.getResolvedThumb(genesisRef, nil, 512)
-	assert.True(t, memoOK)
+// seedThumbMemo stores one cached file and memo entry per system.
+func seedThumbMemo(t *testing.T, cache *mediaThumbCache, systems ...string) map[string]mediaRefParam {
+	t.Helper()
+	refs := make(map[string]mediaRefParam, len(systems))
+	for i, system := range systems {
+		id := int64(i + 1)
+		ref := mediaRefParam{MediaID: &id}
+		key := "f:1:1:/" + system + ".png"
+		path := setMediaThumbCacheForTest(t, cache, key, 256, []byte(system), "image/webp")
+		cache.setResolvedThumb(ref, nil, 256, resolvedThumb{
+			system: system, typeTag: "property:image-boxart", path: path, contentType: "image/webp",
+		})
+		refs[system] = ref
+	}
+	return refs
 }
 
 func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	cache := &mediaThumbCache{
-		fs: fs, dir: filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
-	}
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+	refs := seedThumbMemo(t, cache, "SNES", "Genesis")
 
-	snesID, genesisID := int64(1), int64(2)
-	snesRef := mediaRefParam{MediaID: &snesID}
-	genesisRef := mediaRefParam{MediaID: &genesisID}
-	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
-	setMediaThumbCacheForTest(
-		t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
-	)
+	invalidateIndexedThumbnails([]systemdefs.System{{ID: "SNES"}}, false)
 
-	invalidateIndexedThumbnails(nil, []systemdefs.System{{ID: "SNES"}}, false)
-
-	_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
-	assert.False(t, found)
-	_, _, found = cache.get(genesisRef, "Genesis", "property:image-boxart", 256)
-	assert.True(t, found)
+	_, memoOK := cache.getResolvedThumb(refs["SNES"], nil, 256)
+	assert.False(t, memoOK, "the indexed system is resolved again")
+	_, memoOK = cache.getResolvedThumb(refs["Genesis"], nil, 256)
+	assert.True(t, memoOK, "other systems stay memoized")
+	for _, system := range []string{"SNES", "Genesis"} {
+		_, _, found := cache.get("f:1:1:/"+system+".png", 256)
+		assert.True(t, found, "cached files are kept for %s", system)
+	}
 }
 
 func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
@@ -337,30 +283,21 @@ func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fs := afero.NewMemMapFs()
-			cache := &mediaThumbCache{
-				fs: fs, dir: filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
-				resolvedTypes: make(map[string]resolvedThumb),
-			}
+			cache := newTestThumbCache(
+				afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()),
+			)
 			mediaThumbCachePointer.Store(cache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+			refs := seedThumbMemo(t, cache, "SNES", "Genesis")
 
-			snesID, genesisID := int64(1), int64(2)
-			snesRef := mediaRefParam{MediaID: &snesID}
-			genesisRef := mediaRefParam{MediaID: &genesisID}
-			setMediaThumbCacheForTest(
-				t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp",
-			)
-			setMediaThumbCacheForTest(
-				t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
-			)
+			invalidateIndexedThumbnails(tt.systems, tt.rebuild)
 
-			invalidateIndexedThumbnails(nil, tt.systems, tt.rebuild)
-
-			_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
-			assert.False(t, found)
-			_, _, found = cache.get(genesisRef, "Genesis", "property:image-boxart", 256)
-			assert.False(t, found)
+			for system, ref := range refs {
+				_, memoOK := cache.getResolvedThumb(ref, nil, 256)
+				assert.False(t, memoOK, "%s is resolved again", system)
+				_, _, found := cache.get("f:1:1:/"+system+".png", 256)
+				assert.True(t, found, "cached files are kept for %s", system)
+			}
 		})
 	}
 }
@@ -369,14 +306,15 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	thumbs := filepath.Join("cache", "thumbs")
+	thumbs := filepath.Join("images", "thumbs")
 	// Leftovers from older builds and prior versions, plus a crash-abandoned
 	// moved-aside wipe directory.
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "current"), 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(thumbs, "current", "old.png"), []byte("x"), 0o600))
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "gen-3"), 0o750))
 	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v1"), 0o750))
-	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, mediaThumbCacheVersionDir()+".stale7"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v2"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v2.stale7"), 0o750))
 
 	// The current-version dir already has content that must be preserved — a
 	// version bump invalidates other versions, but restarting on the same
@@ -384,12 +322,12 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	live := filepath.Join(thumbs, mediaThumbCacheVersionDir())
 	require.NoError(t, fs.MkdirAll(live, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(live, "keep.webp"), []byte("y"), 0o600))
-	systemDir := filepath.Join(live, thumbSystemDirName("SNES"))
-	require.NoError(t, fs.MkdirAll(systemDir, 0o750))
-	tmpPath := filepath.Join(systemDir, ".thumb-abandoned.tmp")
+	shardDir := filepath.Join(live, "ab")
+	require.NoError(t, fs.MkdirAll(shardDir, 0o750))
+	tmpPath := filepath.Join(shardDir, ".thumb-abandoned.tmp")
 	require.NoError(t, afero.WriteFile(fs, tmpPath, []byte("partial"), 0o600))
 
-	cache := &mediaThumbCache{fs: fs, dir: live, resolvedTypes: make(map[string]resolvedThumb)}
+	cache := newTestThumbCache(fs, live)
 	cache.reapStaleVersions()
 
 	entries, err := afero.ReadDir(fs, thumbs)
@@ -406,6 +344,177 @@ func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	tmpExists, err := afero.Exists(fs, tmpPath)
 	require.NoError(t, err)
 	assert.False(t, tmpExists, "abandoned atomic-write temporary files must be reaped")
+}
+
+// newReapTestCache returns a cache whose files are written with the fake
+// clock's current time as their mtime.
+func newReapTestCache(t *testing.T, maxBytes int64) (*mediaThumbCache, *clockwork.FakeClock) {
+	t.Helper()
+	clock := clockwork.NewFakeClockAt(time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC))
+	cache := newTestThumbCache(afero.NewMemMapFs(), filepath.Join("images", "thumbs", mediaThumbCacheVersionDir()))
+	cache.clock = clock
+	cache.maxBytes.Store(maxBytes)
+	return cache, clock
+}
+
+func writeReapTestFile(t *testing.T, cache *mediaThumbCache, key string, size int, modTime time.Time) string {
+	t.Helper()
+	path := setMediaThumbCacheForTest(t, cache, key, 256, bytes.Repeat([]byte{1}, size), "image/webp")
+	require.NoError(t, cache.fs.Chtimes(path, modTime, modTime))
+	return path
+}
+
+func thumbFileExists(t *testing.T, cache *mediaThumbCache, path string) bool {
+	t.Helper()
+	exists, err := afero.Exists(cache.fs, path)
+	require.NoError(t, err)
+	return exists
+}
+
+func TestReapOrphans_KeepsEverythingUnderTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	old := writeReapTestFile(t, cache, "d:old", 400, clock.Now().Add(-30*24*time.Hour))
+	newer := writeReapTestFile(t, cache, "d:new", 400, clock.Now().Add(-48*time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	assert.True(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, newer))
+}
+
+func TestReapOrphans_RemovesLeastRecentlyUsedPastTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	now := clock.Now()
+	oldest := writeReapTestFile(t, cache, "d:oldest", 300, now.Add(-10*24*time.Hour))
+	older := writeReapTestFile(t, cache, "d:older", 300, now.Add(-5*24*time.Hour))
+	old := writeReapTestFile(t, cache, "d:old", 300, now.Add(-2*24*time.Hour))
+	recent := writeReapTestFile(t, cache, "d:recent", 300, now.Add(-time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	// 1200 bytes against a 1000-byte cap trims to at most 800: the two least
+	// recently used files go, and nothing else is touched.
+	assert.False(t, thumbFileExists(t, cache, oldest))
+	assert.False(t, thumbFileExists(t, cache, older))
+	assert.True(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, recent))
+}
+
+func TestReapOrphans_NeverRemovesRecentlyUsedFiles(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	now := clock.Now()
+	old := writeReapTestFile(t, cache, "d:old", 300, now.Add(-2*24*time.Hour))
+	recent := writeReapTestFile(t, cache, "d:recent", 300, now.Add(-time.Hour))
+
+	cache.reapOrphans(context.Background())
+
+	assert.False(t, thumbFileExists(t, cache, old))
+	assert.True(t, thumbFileExists(t, cache, recent), "a file used within a day may still be read by a client")
+}
+
+func TestReapOrphans_RemovesAbandonedTemporaryFiles(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1<<20)
+	now := clock.Now()
+	shard := filepath.Join(cache.dir, "ab")
+	require.NoError(t, cache.fs.MkdirAll(shard, 0o750))
+	abandoned := filepath.Join(shard, ".thumb-abandoned.tmp")
+	live := filepath.Join(shard, ".thumb-live.tmp")
+	for path, modTime := range map[string]time.Time{
+		abandoned: now.Add(-2 * time.Hour),
+		live:      now.Add(-time.Minute),
+	} {
+		require.NoError(t, afero.WriteFile(cache.fs, path, []byte("partial"), 0o600))
+		require.NoError(t, cache.fs.Chtimes(path, modTime, modTime))
+	}
+
+	cache.reapOrphans(context.Background())
+
+	assert.False(t, thumbFileExists(t, cache, abandoned))
+	assert.True(t, thumbFileExists(t, cache, live), "a write in progress keeps its temporary file")
+}
+
+func TestReapOrphans_StopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	old := writeReapTestFile(t, cache, "d:old", 300, clock.Now().Add(-10*24*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cache.reapOrphans(ctx)
+
+	assert.True(t, thumbFileExists(t, cache, old))
+}
+
+// A hit marks a file as used so the reaper keeps it, writing at most once a day.
+func TestMediaThumbCache_HitRefreshesStaleModTime(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1<<20)
+	now := clock.Now()
+	stale := writeReapTestFile(t, cache, "d:stale", 10, now.Add(-2*24*time.Hour))
+	fresh := writeReapTestFile(t, cache, "d:fresh", 10, now.Add(-time.Hour))
+
+	_, _, found := cache.lookupPath("d:stale", 256)
+	require.True(t, found)
+	_, _, found = cache.lookupPath("d:fresh", 256)
+	require.True(t, found)
+
+	info, err := cache.fs.Stat(stale)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(now))
+	info, err = cache.fs.Stat(fresh)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(now.Add(-time.Hour)), "a recently used file is not rewritten")
+}
+
+func TestRequestReap_RunsAtMostOncePerInterval(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	first := writeReapTestFile(t, cache, "d:first", 300, clock.Now().Add(-10*24*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	defer cache.stopReaps(cancel)
+
+	cache.requestReap(mediaThumbReapInterval)
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, first))
+
+	second := writeReapTestFile(t, cache, "d:second", 300, clock.Now().Add(-10*24*time.Hour))
+	cache.requestReap(mediaThumbReapInterval)
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, second), "a reap within the interval is skipped")
+
+	clock.Advance(mediaThumbReapInterval)
+	cache.requestReap(mediaThumbReapInterval)
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, second))
+}
+
+func TestRequestReap_NoopWithoutStartedCache(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 100)
+	old := writeReapTestFile(t, cache, "d:old", 300, clock.Now().Add(-10*24*time.Hour))
+	cache.requestReap(mediaThumbReapInterval)
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	cache.stopReaps(cancel)
+	cache.requestReap(mediaThumbReapInterval)
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old), "a stopped cache starts no reaps")
 }
 
 func TestSnapThumbMaxSize(t *testing.T) {
@@ -461,7 +570,7 @@ func TestResizeImageIfNeeded_TransparentImageOutputsWebPWithAlpha(t *testing.T) 
 	assert.True(t, imageHasTransparency(decoded), "alpha must survive the lossy webp encode")
 }
 
-func TestResizeImageIfNeeded_OpaqueImageOutputsWebP(t *testing.T) {
+func TestResizeImageIfNeeded_OpaqueImageOutputsJPEG(t *testing.T) {
 	t.Parallel()
 
 	const dim = 64
@@ -476,9 +585,9 @@ func TestResizeImageIfNeeded_OpaqueImageOutputsWebP(t *testing.T) {
 	require.NoError(t, png.Encode(&in, src))
 
 	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 16)
-	require.Equal(t, "image/webp", contentType)
+	require.Equal(t, "image/jpeg", contentType)
 
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, 16, decoded.Bounds().Dx())
 	assert.Equal(t, 16, decoded.Bounds().Dy())
@@ -496,24 +605,25 @@ func TestResizeImageIfNeeded_DecodesWebPSource(t *testing.T) {
 			src.Set(x, y, color.RGBA{R: 10, G: 200, B: 90, A: 255})
 		}
 	}
-	webpBytes, _, err := encodeResizedImage(src)
+	webpBytes, _, err := encodeWebPImage(src)
 	require.NoError(t, err)
 
 	resized, contentType := resizeImageIfNeeded(webpBytes, "image/webp", 16)
-	require.Equal(t, "image/webp", contentType)
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.Equal(t, "image/jpeg", contentType)
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, 16, decoded.Bounds().Dx())
 }
 
-func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
+func TestResizeImageIfNeeded_FitsTierReencodes(t *testing.T) {
 	t.Parallel()
 
-	// Source already fits the requested tier (no downscale), but must still be
-	// re-encoded to WebP at native dimensions so a request snapped to a tier at
-	// or above native size gets the format win. High-frequency content that PNG
-	// cannot compress but lossy WebP can guarantees the WebP comes out smaller.
-	const dim = 64
+	// Source already fits the requested tier (no downscale) but is too large to
+	// pass through, so it must still be re-encoded at native dimensions: a
+	// request snapped to a tier at or above native size gets the format win.
+	// High-frequency content that PNG cannot compress but a lossy encode can
+	// guarantees the re-encode comes out smaller.
+	const dim = 250
 	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
 	for y := range dim {
 		for x := range dim {
@@ -528,13 +638,175 @@ func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
 	var in bytes.Buffer
 	require.NoError(t, png.Encode(&in, src))
 
-	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 128)
-	require.Equal(t, "image/webp", contentType)
-	assert.Less(t, len(resized), in.Len(), "lossy webp should beat the high-entropy png")
-	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.Greater(t, in.Len(), thumbPassthroughMaxBytes, "source must be past the passthrough limit")
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/png", 256)
+	require.Equal(t, "image/jpeg", contentType)
+	assert.NotNil(t, avgColor)
+	assert.Less(t, len(resized), in.Len(), "a lossy encode should beat the high-entropy png")
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, dim, decoded.Bounds().Dx(), "native dimensions preserved when no downscale")
 	assert.Equal(t, dim, decoded.Bounds().Dy())
+}
+
+// noisyTestImage is high-frequency content, which PNG cannot compress and
+// lossy WebP can, so an encode of it is always smaller than its PNG.
+func noisyTestImage(dim int) *image.RGBA {
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{
+				R: uint8((x*53 ^ y*97) & 0xff),
+				G: uint8((x*131 + y*29) & 0xff),
+				B: uint8((x*17 ^ y*191) & 0xff),
+				A: 255,
+			})
+		}
+	}
+	return src
+}
+
+// A small source that already fits is handed back as it is: on ARM32 the
+// WebP encode was nearly the whole request and saved a few kilobytes.
+func TestResizeImageWithColor_SmallSourceThatFitsSkipsEncode(t *testing.T) {
+	t.Parallel()
+
+	// The PNG here is one WebP would shrink, so it is the size rule and not
+	// the "WebP no smaller" rule that keeps the original.
+	src := noisyTestImage(64)
+	var pngBytes, jpegBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, src))
+	require.NoError(t, jpeg.Encode(&jpegBytes, src, &jpeg.Options{Quality: 90}))
+	webpBytes, webpType, err := encodeWebPImage(src)
+	require.NoError(t, err)
+	require.Less(t, len(webpBytes), pngBytes.Len())
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		maxSize     int
+	}{
+		{name: "jpeg below the box", contentType: "image/jpeg", binary: jpegBytes.Bytes(), maxSize: 128},
+		{name: "jpeg exactly the box", contentType: "image/jpeg", binary: jpegBytes.Bytes(), maxSize: 64},
+		{name: "png", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: 128},
+		{name: "webp", contentType: webpType, binary: webpBytes, maxSize: 128},
+		{name: "jpeg with no content type", contentType: "", binary: jpegBytes.Bytes(), maxSize: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.LessOrEqual(t, len(tt.binary), thumbPassthroughMaxBytes)
+
+			resized, contentType, avgColor := resizeImageWithColor(tt.binary, tt.contentType, tt.maxSize)
+			assert.Equal(t, tt.binary, resized, "original bytes returned unchanged")
+			assert.Equal(t, tt.contentType, contentType)
+			require.NotNil(t, avgColor, "the colour still comes from the decoded frame")
+			assert.Equal(t, *averageImageColor(mustDecodeResizable(t, tt.binary, tt.contentType)), *avgColor)
+		})
+	}
+}
+
+func mustDecodeResizable(t *testing.T, binary []byte, contentType string) image.Image {
+	t.Helper()
+	img, err := decodeResizableImage(binary, contentType)
+	require.NoError(t, err)
+	return img
+}
+
+func TestResizeImageWithColor_SmallSourceNeedingDownscaleStillEncodes(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	require.NoError(t, jpeg.Encode(&in, noisyTestImage(64), &jpeg.Options{Quality: 90}))
+	require.LessOrEqual(t, in.Len(), thumbPassthroughMaxBytes)
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/jpeg", 32)
+	require.Equal(t, "image/jpeg", contentType)
+	assert.NotNil(t, avgColor)
+	decoded, err := jpeg.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, 32, decoded.Bounds().Dx())
+	assert.Equal(t, 32, decoded.Bounds().Dy())
+}
+
+// The thumbnail cache names files by format. A source whose declared type it
+// cannot store would miss the cache on every request if passed through, so it
+// keeps going through the encode.
+func TestResizeImageWithColor_SmallSourceTheCacheCannotStoreStillEncodes(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, noisyTestImage(64)))
+	require.LessOrEqual(t, in.Len(), thumbPassthroughMaxBytes)
+	require.Empty(t, thumbCacheExtension("application/octet-stream", in.Bytes()))
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "application/octet-stream", 128)
+	assert.Equal(t, "image/jpeg", contentType)
+	assert.NotNil(t, avgColor)
+	assert.Less(t, len(resized), in.Len())
+}
+
+// A passed-through original lands in the thumbnail cache under its own
+// format, and both deliveries serve it back as that format, cold and warm.
+func TestHandleMediaImage_SmallSourceThatFitsIsCachedInItsOwnFormat(t *testing.T) {
+	// Not parallel: installs process-wide thumbnail cache pointer.
+	cache := &mediaThumbCache{
+		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	var blob bytes.Buffer
+	require.NoError(t, jpeg.Encode(&blob, noisyTestImage(64), &jpeg.Options{Quality: 90}))
+	require.LessOrEqual(t, blob.Len(), thumbPassthroughMaxBytes)
+
+	row := makeMediaFullRow(9101, 9110)
+	mockDB := testhelpers.NewMockMediaDBI()
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/jpeg", Binary: blob.Bytes()},
+		}, nil)
+
+	result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	)))
+	require.NoError(t, err)
+	cold, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, mediaImageDeliveryPath, cold.Delivery)
+	assert.Equal(t, "image/jpeg", cold.ContentType)
+	assert.Equal(t, ".jpg", filepath.Ext(cold.LocalPath))
+	assert.True(t, cache.isSafeLocalPath(cold.LocalPath))
+	stored, err := afero.ReadFile(cache.fs, cold.LocalPath)
+	require.NoError(t, err)
+	assert.Equal(t, blob.Bytes(), stored, "the original is stored, not a re-encode")
+
+	// Warm, from the cache alone: a strict mock fails on any database call.
+	strictDB := testhelpers.NewMockMediaDBI()
+	result, err = HandleMediaImage(makeMediaImageEnv(t, strictDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	)))
+	require.NoError(t, err)
+	warm, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, cold.LocalPath, warm.LocalPath)
+	assert.Equal(t, "image/jpeg", warm.ContentType)
+
+	result, err = HandleMediaImage(makeMediaImageEnv(t, strictDB, mediaImageParams(row, `"maxSize": 256`)))
+	require.NoError(t, err)
+	inline, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/jpeg", inline.ContentType)
+	data, err := base64.StdEncoding.DecodeString(inline.Data)
+	require.NoError(t, err)
+	assert.Equal(t, blob.Bytes(), data)
+	strictDB.AssertExpectations(t)
 }
 
 func TestResizeImageIfNeeded_KeepsOriginalWhenWebPNotSmaller(t *testing.T) {
@@ -603,7 +875,7 @@ func TestDecodeResizableImage(t *testing.T) {
 	require.NoError(t, png.Encode(&pngBytes, src))
 	var jpegBytes bytes.Buffer
 	require.NoError(t, jpeg.Encode(&jpegBytes, src, nil))
-	webpBytes, _, err := encodeResizedImage(src)
+	webpBytes, _, err := encodeWebPImage(src)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -853,19 +1125,404 @@ func TestHandleMediaImage_CollapsedDirectoryPrefersFolderArtwork(t *testing.T) {
 	})
 }
 
+// directoryMediaRefFixture is a multi-disc folder whose browse entry launches
+// its second disc.
+type directoryMediaRefFixture struct {
+	disc1, disc2  *database.MediaFullRow
+	directoryPath string
+	system        database.System
+}
+
+func newDirectoryMediaRefFixture() directoryMediaRefFixture {
+	directoryPath := filepath.Join("games", "Chrono Cross (USA)")
+	system := database.System{DBID: 100, SystemID: "PSX", Name: "PSX"}
+	title := database.MediaTitle{DBID: 30, Name: "Chrono Cross"}
+	disc := func(id int64, n int) *database.MediaFullRow {
+		return &database.MediaFullRow{
+			Media: database.Media{
+				DBID: id, Path: filepath.Join(directoryPath, fmt.Sprintf("Chrono Cross (USA) (Disc %d).cue", n)),
+			},
+			Title:  title,
+			System: system,
+		}
+	}
+	return directoryMediaRefFixture{
+		system: system, directoryPath: directoryPath, disc1: disc(20, 1), disc2: disc(21, 2),
+	}
+}
+
+func (f directoryMediaRefFixture) request(disc *database.MediaFullRow, extra string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"mediaId":%d,"system":%q,"path":%q%s}`,
+		disc.DBID, f.system.SystemID, f.directoryPath, extra))
+}
+
+func expectMediaByID(mockDB *testhelpers.MockMediaDBI, disc *database.MediaFullRow) {
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{disc.DBID}).
+		Return(map[int64]database.MediaFullRow{disc.DBID: *disc}, nil)
+}
+
+func writeShadedPNG(t *testing.T, name string, shade uint8) (imagePath string, data []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: shade, A: 255})
+	require.NoError(t, png.Encode(&buf, img))
+	imagePath = filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(imagePath, buf.Bytes(), 0o600))
+	return imagePath, buf.Bytes()
+}
+
+func decodeMediaImageData(t *testing.T, result any) (typeTag string, data []byte) {
+	t.Helper()
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	data, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	return resp.TypeTag, data
+}
+
+// A multi-disc folder's entry launches the disc last played from it. Asked for
+// with that disc's mediaId, the folder's image follows the disc instead of
+// resolving the path to the first disc.
+func TestHandleMediaImage_DirectoryMediaRef(t *testing.T) {
+	// Not parallel: resets process-wide no-image cache.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	f := newDirectoryMediaRefFixture()
+	folderPath, folderData := writeShadedPNG(t, "folder.png", 10)
+	disc1Path, disc1Data := writeShadedPNG(t, "disc1.png", 100)
+	disc2Path, disc2Data := writeShadedPNG(t, "disc2.png", 200)
+	titlePath, titleData := writeShadedPNG(t, "title.png", 250)
+	request := f.request(f.disc2, `,"imageTypes":["boxart","image"]`)
+
+	t.Run("folder artwork wins", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: folderPath}}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		typeTag, data := decodeMediaImageData(t, result)
+		assert.Equal(t, "property:image-image", typeTag)
+		assert.Equal(t, folderData, data)
+		mockDB.AssertNotCalled(t, "GetMediaProperties", mock.Anything, mock.Anything)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("given disc artwork, not the first disc's", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: disc2Path}}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		typeTag, data := decodeMediaImageData(t, result)
+		assert.Equal(t, "property:image-boxart", typeTag)
+		assert.Equal(t, disc2Data, data)
+		mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, mock.Anything, mock.Anything)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("given disc's title artwork", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: titlePath}}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		_, data := decodeMediaImageData(t, result)
+		assert.Equal(t, titleData, data)
+		mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, mock.Anything, mock.Anything)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("first disc artwork is the last fallback", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc1.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: disc1Path}}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		_, data := decodeMediaImageData(t, result)
+		assert.Equal(t, disc1Data, data)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("no image anywhere is per disc", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		mockDB.AssertExpectations(t)
+
+		// The cached miss for disc 2 does not answer for disc 1.
+		mockDB = testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc1)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: disc1Path}}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB,
+			f.request(f.disc1, `,"imageTypes":["boxart","image"]`)))
+		require.NoError(t, err)
+		_, data := decodeMediaImageData(t, result)
+		assert.Equal(t, disc1Data, data)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("missing folder artwork file is not cached as no image", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		missing := filepath.Join(t.TempDir(), "gone.png")
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: missing}}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		ref, _, err := parseMediaImageRequest(request)
+		require.NoError(t, err)
+		cached, _ := mediaImageNoImages.get(mediaImageNoImageRequestKey(ref, imagePrefs(nil, ref.ImageTypes)))
+		assert.False(t, cached, "a restored folder artwork file must be found on the next request")
+		mockDB.AssertExpectations(t)
+	})
+
+	// expectDisc2Miss sets up a request for disc 2 that finds no folder, disc
+	// or title artwork, so the path fallback runs next.
+	expectDisc2Miss := func(mockDB *testhelpers.MockMediaDBI) {
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc2.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc2.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), nil)
+	}
+
+	t.Run("path resolving to the given disc is not loaded twice", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc2.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc2.DBID).Return(f.disc2, nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		mockDB.AssertNumberOfCalls(t, "GetMediaProperties", 1)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("no artwork on either disc names the given disc", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return(&f.disc1.Media, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+		assert.Equal(t, f.disc2.Path, noImage.path)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("database error in the path fallback is returned, not cached", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectDisc2Miss(mockDB)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+			Return((*database.Media)(nil), assert.AnError)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+		var noImage *mediaImageNotFoundError
+		require.NotErrorAs(t, err, &noImage)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("database errors are returned", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{f.disc2.DBID}).
+			Return(map[int64]database.MediaFullRow(nil), assert.AnError)
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+
+		mockDB = testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, f.disc2)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty(nil), assert.AnError)
+		_, err = HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.ErrorIs(t, err, assert.AnError)
+		mockDB.AssertNotCalled(t, "GetMediaProperties", mock.Anything, mock.Anything)
+	})
+
+	t.Run("media outside the path is rejected", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		other := makeMediaFullRow(40, 41)
+		other.System = f.system
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, other)
+
+		_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, f.request(other, "")))
+		require.ErrorContains(t, err, "media not in path")
+		mockDB.AssertNotCalled(t, "GetDirectoryProperties", mock.Anything, mock.Anything, mock.Anything)
+		mockDB.AssertExpectations(t)
+	})
+}
+
+// A path request whose folder artwork file is missing keeps its final
+// no-image result out of the no-image cache, so the restored file is found.
+func TestHandleMediaImage_DirectoryPathMissingFolderArtworkNotCached(t *testing.T) {
+	// Not parallel: resets process-wide no-image cache.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	f := newDirectoryMediaRefFixture()
+	missing := filepath.Join(t.TempDir(), "gone.png")
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("FindSystemBySystemID", f.system.SystemID).Return(f.system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, f.system.DBID, f.directoryPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+		Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: missing}}, nil)
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, f.system.DBID, f.directoryPath).
+		Return(&f.disc1.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, f.disc1.DBID).Return(f.disc1, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, f.disc1.DBID).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, f.disc1.Title.DBID).
+		Return([]database.MediaProperty{}, nil)
+
+	request := json.RawMessage(fmt.Sprintf(`{"system":%q,"path":%q}`, f.system.SystemID, f.directoryPath))
+	_, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+	var noImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &noImage)
+	cached, _ := mediaImageNoImages.get(mediaImageNoImagePathKey(f.system.SystemID, f.directoryPath, defaultImageTypes))
+	assert.False(t, cached)
+	mockDB.AssertExpectations(t)
+}
+
+// The resolved-thumbnail memo keys a directory media ref by its disc, so
+// switching the disc a folder launches switches the thumbnail served.
+func TestHandleMediaImage_DirectoryMediaRefThumbMemoFollowsDisc(t *testing.T) {
+	// Not parallel: installs the process-wide thumb cache pointer.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+	cache := &mediaThumbCache{
+		fs:       afero.NewMemMapFs(),
+		dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	f := newDirectoryMediaRefFixture()
+	disc1Path, disc1Data := writeShadedPNG(t, "disc1.png", 100)
+	disc2Path, disc2Data := writeShadedPNG(t, "disc2.png", 200)
+
+	for _, tc := range []struct {
+		disc     *database.MediaFullRow
+		artPath  string
+		expected []byte
+	}{
+		{disc: f.disc1, artPath: disc1Path, expected: disc1Data},
+		{disc: f.disc2, artPath: disc2Path, expected: disc2Data},
+	} {
+		mockDB := testhelpers.NewMockMediaDBI()
+		expectMediaByID(mockDB, tc.disc)
+		mockDB.On("GetDirectoryProperties", mock.Anything, f.system.DBID, f.directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, tc.disc.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: tc.artPath}}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, tc.disc.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB,
+			f.request(tc.disc, `,"imageTypes":["boxart"],"maxSize":256`)))
+		require.NoError(t, err)
+		_, data := decodeMediaImageData(t, result)
+		assert.Equal(t, tc.expected, data)
+		mockDB.AssertExpectations(t)
+	}
+	assert.Len(t, cache.resolved, 2)
+}
+
 func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	fs := afero.NewMemMapFs()
 	cache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs:       fs,
+		dir:      filepath.Join("images", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
 	// A high-entropy source larger than the snapped tier (256), so the handler
-	// both downscales it and re-encodes to a smaller WebP than the source PNG.
+	// both downscales it and re-encodes to a smaller JPEG than the source PNG.
 	const dim = 300
 	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
 	for y := range dim {
@@ -891,20 +1548,20 @@ func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blob.Bytes()},
 		}, nil)
 
-	// First request: loads the original, resizes to a 256px WebP, caches it.
+	// First request: loads the original, resizes to a 256px JPEG, caches it.
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, "image/webp", resp.ContentType)
+	assert.Equal(t, "image/jpeg", resp.ContentType)
 	assert.Equal(t, "property:image-boxart", resp.TypeTag)
 	firstData, err := base64.StdEncoding.DecodeString(resp.Data)
 	require.NoError(t, err)
-	decoded, err := webp.Decode(bytes.NewReader(firstData))
+	decoded, err := jpeg.Decode(bytes.NewReader(firstData))
 	require.NoError(t, err)
 	assert.Equal(t, 256, decoded.Bounds().Dx(), "downscaled to the snapped tier")
-	assert.Less(t, len(firstData), blob.Len(), "resized webp is smaller than the source png")
+	assert.Less(t, len(firstData), blob.Len(), "resized jpeg is smaller than the source png")
 
 	// Second request: the pre-semaphore fast path must serve it from the disk
 	// thumb cache and the resolved-type memo without touching the database. A
@@ -933,7 +1590,7 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 	// Not parallel: installs process-wide thumbnail cache pointer.
 	cache := &mediaThumbCache{
 		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -976,9 +1633,9 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 func TestHandleMediaImage_LocalPathCacheWriteFailureFallsBackInline(t *testing.T) {
 	// Not parallel: installs process-wide thumbnail cache pointer.
 	cache := &mediaThumbCache{
-		fs:            afero.NewReadOnlyFs(afero.NewMemMapFs()),
-		dir:           filepath.Join(string(filepath.Separator), "cache", mediaThumbCacheVersionDir()),
-		resolvedTypes: make(map[string]resolvedThumb),
+		fs:       afero.NewReadOnlyFs(afero.NewMemMapFs()),
+		dir:      filepath.Join(string(filepath.Separator), "cache", mediaThumbCacheVersionDir()),
+		resolved: make(map[string]resolvedThumb),
 	}
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
@@ -1845,4 +2502,88 @@ func TestHandleMediaImage_OversizedBlobReturnsClientError(t *testing.T) {
 	require.ErrorAs(t, err, &clientErr)
 	assert.Contains(t, err.Error(), "image blob too large")
 	mockDB.AssertExpectations(t)
+}
+
+// The reaper counts what a file takes on disk, which for a small thumbnail is
+// a whole cluster, not its few bytes.
+func TestThumbFileDiskBytes_FallsBackToSize(t *testing.T) {
+	t.Parallel()
+
+	memInfo, err := afero.NewMemMapFs().Stat(".")
+	require.NoError(t, err)
+	assert.Equal(t, memInfo.Size(), thumbFileDiskBytes(memInfo, 0), "without an allocation to read the size stands in")
+}
+
+// Writing thumbnails past the cap reaps the cache without waiting for an index
+// or scrape, and at most once an hour while recently used files hold it over.
+func TestNoteWritten_ReapsOncePastTheCap(t *testing.T) {
+	t.Parallel()
+
+	cache, clock := newReapTestCache(t, 1000)
+	old := writeReapTestFile(t, cache, "d:old", 600, clock.Now().Add(-10*24*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.reapCtx = ctx
+	defer cache.stopReaps(cancel)
+
+	setMediaThumbCacheForTest(t, cache, "d:new", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, old), "under the cap nothing is reaped")
+
+	setMediaThumbCacheForTest(t, cache, "d:newer", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, old), "passing the cap reaps the least recently used file")
+
+	again := writeReapTestFile(t, cache, "d:again", 600, clock.Now().Add(-10*24*time.Hour))
+	cache.reapWG.Wait()
+	assert.True(t, thumbFileExists(t, cache, again), "a second pass within the hour is not walked")
+
+	clock.Advance(mediaThumbCapReapInterval)
+	setMediaThumbCacheForTest(t, cache, "d:last", 256, bytes.Repeat([]byte{1}, 300), "image/webp")
+	cache.reapWG.Wait()
+	assert.False(t, thumbFileExists(t, cache, again))
+}
+
+// PNG covers decode through Wuffs, and a PNG it rejects still gets
+// image/png's verdict.
+func TestDecodeResizableImage_PNGUsesWuffs(t *testing.T) {
+	t.Parallel()
+
+	var valid bytes.Buffer
+	require.NoError(t, png.Encode(&valid, noisyTestImage(16)))
+	img, err := decodeResizableImage(valid.Bytes(), "image/png")
+	require.NoError(t, err)
+	if _, wuffsErr := wuffspng.Decode(valid.Bytes()); !errors.Is(wuffsErr, wuffspng.ErrUnavailable) {
+		assert.IsType(t, &image.RGBA{}, img, "decoded by Wuffs")
+	}
+
+	corrupt := bytes.Clone(valid.Bytes())
+	corrupt[len(corrupt)-20] ^= 0xff
+	_, err = decodeResizableImage(corrupt, "image/png")
+	require.Error(t, err, "both decoders reject a corrupt PNG")
+}
+
+// pngWithDimensions is a valid 1x1 PNG whose header declares another size.
+func pngWithDimensions(t *testing.T, width, height uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))))
+	data := buf.Bytes()
+	const ihdr = 8 // after the signature: length, "IHDR", 13 bytes of data, CRC
+	byteorder.BigEndian.PutUint32(data[ihdr+8:], width)
+	byteorder.BigEndian.PutUint32(data[ihdr+12:], height)
+	byteorder.BigEndian.PutUint32(data[ihdr+8+13:], crc32.ChecksumIEEE(data[ihdr+4:ihdr+8+13]))
+	return data
+}
+
+// A small file declaring a huge frame is refused before any decoder
+// allocates it.
+func TestDecodeResizableImage_RejectsOversizedFrames(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeResizableImage(pngWithDimensions(t, 4097, 4096), "image/png")
+	require.ErrorContains(t, err, "pixel limit")
+
+	_, err = decodeResizableImage(pngWithDimensions(t, 4096, 4096), "image/png")
+	require.Error(t, err, "a 1x1 body does not fill the declared frame")
+	assert.NotContains(t, err.Error(), "pixel limit", "a frame at the limit is let through to the decoder")
 }

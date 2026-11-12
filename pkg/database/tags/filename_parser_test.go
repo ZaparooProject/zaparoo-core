@@ -2637,9 +2637,49 @@ func TestParseTitleFromFilename_SceneReleases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ParseTitleFromFilename(tt.input, false)
+			got := ParseTitleFromFilenameForMedia(tt.input, false, slugs.MediaTypeMovie)
 			assert.Equal(t, tt.expected, got, "Title parsing mismatch")
 		})
+	}
+}
+
+// All-caps game names, such as a cartridge header dumped by the Operator
+// bridge, end in the same "-WORD" shape as a scene release group. Stripping it
+// cut "F-ZERO" to "F" and "SUPER MARIO ALL-STARS" to "SUPER MARIO ALL".
+func TestParseTitleFromFilename_GamesKeepTrailingUppercaseHyphenWord(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input    string
+		expected string
+		slug     string
+	}{
+		{input: "SUPER MARIO ALL-STARS.sfc", expected: "SUPER MARIO ALL-STARS", slug: "supermarioallstars"},
+		{input: "F-ZERO.sfc", expected: "F-ZERO", slug: "fzero"},
+		{input: "X-MEN.md", expected: "X-MEN", slug: "xmen"},
+		{input: "STREET FIGHTER II-TURBO.sfc", expected: "STREET FIGHTER II-TURBO", slug: "streetfighter2turbo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			for _, mediaType := range []slugs.MediaType{"", slugs.MediaTypeGame} {
+				title := ParseTitleFromFilenameForMedia(tt.input, false, mediaType)
+				assert.Equal(t, tt.expected, title)
+				assert.Equal(t, tt.slug, slugs.Slugify(slugs.MediaTypeGame, title))
+			}
+			assert.Equal(t, tt.expected, ParseTitleFromFilename(tt.input, false))
+			assert.Equal(t, tt.expected, ParseDisplayTitleFromFilename(tt.input, false))
+		})
+	}
+}
+
+func TestParseTitleFromFilename_VideoStripsReleaseGroup(t *testing.T) {
+	t.Parallel()
+
+	for _, mediaType := range []slugs.MediaType{slugs.MediaTypeMovie, slugs.MediaTypeTVShow, slugs.MediaTypeVideo} {
+		assert.Equal(t, "Movie Title", ParseTitleFromFilenameForMedia("Movie Title-GROUP.mkv", false, mediaType),
+			"media type %s", mediaType)
 	}
 }
 
@@ -3037,10 +3077,18 @@ func TestStripSceneArtifacts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := stripSceneArtifacts(tt.input)
+			got := stripSceneArtifacts(tt.input, true)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+func TestStripSceneArtifacts_KeepsReleaseGroupShapeWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "SUPER MARIO ALL-STARS", stripSceneArtifacts("SUPER MARIO ALL-STARS", false))
+	assert.Equal(t, "Movie 2020    -GROUP", stripSceneArtifacts("Movie 2020 1080p BluRay-GROUP", false),
+		"other scene artifacts are still stripped")
 }
 
 func TestParseCommaSeparatedTags(t *testing.T) {

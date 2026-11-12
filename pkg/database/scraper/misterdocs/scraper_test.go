@@ -106,7 +106,7 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 		},
 	)).Return(nil).Once()
 
-	platformScraper := NewPlatformScraper()
+	platformScraper := NewPlatformScraper(nil)
 	ch := make(chan scraper.ScrapeUpdate, 8)
 	err := platformScraper.Scrape(
 		context.Background(), nil, pl, fs, &database.Database{MediaDB: mediaDB},
@@ -121,6 +121,9 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 	require.NotEmpty(t, updates)
 	assert.True(t, updates[len(updates)-1].Done)
 	assert.Equal(t, 1, updates[len(updates)-1].Matched)
+	assert.Equal(t, updates[len(updates)-1].Processed, updates[len(updates)-1].Total,
+		"a finished run reports its total, not zero")
+	assert.Positive(t, updates[len(updates)-1].Total)
 	mediaDB.AssertExpectations(t)
 	pl.AssertExpectations(t)
 }
@@ -128,13 +131,21 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 func TestPlatformScraper_ValidatesDependenciesAndIndexLookup(t *testing.T) {
 	t.Parallel()
 
-	platformScraper := NewPlatformScraper()
+	platformScraper := NewPlatformScraper(nil)
 	ch := make(chan scraper.ScrapeUpdate, 1)
 	err := platformScraper.Scrape(
 		context.Background(), nil, nil, afero.NewMemMapFs(), &database.Database{},
 		scraper.ScrapeOptions{}, nil, ch,
 	)
 	require.ErrorContains(t, err, "platform and media database are required")
+
+	err = platformScraper.Scrape(
+		context.Background(), nil, nil, afero.NewMemMapFs(), &database.Database{},
+		scraper.ScrapeOptions{FillMissing: true, Force: true}, nil, ch,
+	)
+	require.ErrorContains(t, err, "fill-missing and force are mutually exclusive")
+	assert.True(t, platformScraper.SupportsFillMissing)
+	assert.True(t, platformScraper.AutoScrapeAllLaunchers)
 
 	pl := mocks.NewMockPlatform()
 	pl.On("RootDirs", assertmock.Anything).Return([]string{}).Once()
@@ -428,6 +439,20 @@ func TestIsStaleDocsProperty_RestrictsCleanupScope(t *testing.T) {
 		{
 			name: "stale manual", text: filepath.ToSlash(manualPath),
 			typeTag: tags.PropertyTypeTag(tags.TagPropertyManual), want: true,
+		},
+		{
+			name:    "stale screenshot",
+			text:    filepath.ToSlash(filepath.Join(docsRoot, "SNES", "Screenshots", "Game.png")),
+			typeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot), want: true,
+		},
+		{
+			name:    "stale title screen",
+			text:    filepath.ToSlash(filepath.Join(docsRoot, "SNES", "Titles", "Game.png")),
+			typeTag: tags.PropertyTypeTag(tags.TagPropertyImageTitleshot), want: true,
+		},
+		{
+			name: "screenshot type in the box folder", text: filepath.ToSlash(artworkPath),
+			typeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
 		},
 	}
 	for _, tt := range tests {
@@ -792,8 +817,9 @@ func TestLoadSystem_FilteredIndexMatchesFullIndex(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	want := buildPendingWrites(newSystemIndex(titles, media), records, "run", &scraper.UnmappedValues{})
-	got := buildPendingWrites(load.idx, records, "run", &scraper.UnmappedValues{})
+	opts := scraper.ScrapeOptions{RunID: "run"}
+	want := buildPendingWrites(newSystemIndex(titles, media), records, opts, &scraper.UnmappedValues{})
+	got := buildPendingWrites(load.idx, records, opts, &scraper.UnmappedValues{})
 	require.NotEmpty(t, want.Targets)
 	assert.Equal(t, want, got)
 

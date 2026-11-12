@@ -6,9 +6,10 @@ Current scraper implementations:
 
 - `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
-- `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
+- `mister-docs` imports locally installed MiSTer Downloader artwork, screenshots, title screens, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 - `mister-arcade` imports the MiSTer arcade catalog's metadata onto indexed `.mra` rows, keyed by the MAME set name declared inside each descriptor. It is registered on MiSTer and MiSTeX, reads the catalog those platforms already cache and embed, and runs automatically after arcade indexing.
-- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept under Core's data directory, `libretro-thumbnails/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
+- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept in the image folder (`[media] image_dir`, `images` under Core's data directory by default) as `libretro/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties holding a path relative to that folder, `images://libretro/<playlist>/<kind>/<name>.png`, so the folder can be moved by changing the setting. Core never copies or moves images when the setting changes: copy the folder yourself, or let a fill-missing run download what is absent. A PNG dropped into a `<kind>` folder is matched like a downloaded one. Before each download the run checks the image folder's free space and stops, reporting the reason in the scrape status, when less than 500 MB would be left. Older versions kept these files in `libretro-thumbnails/` under the data directory; Core moves that folder into the image folder once on startup when the two share a filesystem, and leaves it in place otherwise. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
+- `gamedatabase` fills in game facts from an embedded copy of [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase): genre, players, controls, save and add-on hardware, franchise, ports, compilation contents, release year, developer and publisher. It matches console titles by title slug and arcade sets by MAME set name, never by file hash, needs no network, and runs automatically after indexing. It is registered on every platform.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
 ## Code Layout
@@ -23,6 +24,9 @@ Current scraper implementations:
 | `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
 | `pkg/database/scraper/misterarcade/` | MiSTer arcade catalog reader, field mapping, and control-vocabulary normalisation |
 | `pkg/database/scraper/mra/` | Shared MiSTer arcade descriptor set-name reader |
+| `pkg/database/scraper/gamedatabase/` | GameDataBase tag grammar, vocabulary tables, title and set-name matching, and write mapping |
+| `pkg/database/gamedatabase/` | Embedded GameDataBase bundles, one per platform, and their streaming reader |
+| `scripts/gamedatabase/` | Generator for the embedded bundles from a pinned upstream commit |
 | `pkg/platforms/mister/arcade_scraper.go` | MiSTer/MiSTeX catalog and set-name-cache adapters for `mister-arcade` |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
@@ -47,13 +51,23 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 ### Ordinary Jobs After Indexing
 
-A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in; the remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+
+Index jobs run in each scraper's `AutoScrapeOrder`, lowest first, then by scraper ID. They only fill what is missing, so the order decides which source keeps a single-valued field two of them offer:
+
+| Order | Constant | Scrapers |
+|---|---|---|
+| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, the Android apps scraper: sources that describe this device's own library |
+| 200 | `scraper.AutoOrderCatalog` | `gamedatabase`: a general catalog matched by name |
+| 300 | `scraper.AutoOrderDocuments` | `mister-docs`: documents and artwork that also carry some game facts |
+
+On MiSTer that is `mister-arcade`, then `gamedatabase`, then `mister-docs`. The order is read from the registered scrapers each time jobs are queued, never stored with a job, and jobs already waiting are sorted together with new ones: a job left from an earlier index cannot run ahead of a scraper that should precede it. Jobs a user requested keep their order and run before index jobs.
 
 The sequence is **index → existing optimization → ordinary scraping**. Successful indexing persists eligible jobs before its final notification. The existing service recovery watcher starts them after optimization releases its write lease; there is no separate automatic-job worker. All jobs use the same scrape pauser, gameplay throttling, progress notifications and executor.
 
 The config-backed operation record holds one current job and an ordered pending list, bounded to 64 total jobs. Identical pending scopes/policies are deduplicated. A new manual request receives a conflict rather than overwriting pending work. Versioned records carry authoritative status; legacy records are readable and upgraded when resumed. Unknown versions fail closed.
 
-Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
+Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work; `mister-docs` writes no run markers on a run over whole systems and restarts the system it was on, which its batched fill-missing writes make cheap. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
 
 Indexing is only a trigger, not a durable parent workflow: use `media.scrape.cancel` after indexing finishes, not `media.generate.cancel`. A crash between successful indexing and queue persistence can require another index or manual request. Once accepted into the queue, a job survives restart.
 
@@ -61,7 +75,21 @@ Indexing is only a trigger, not a durable parent workflow: use `media.scrape.can
 
 Index-triggered jobs only fill missing metadata. A property is missing when no row of that type exists—not when its text is empty or its artwork file has disappeared. Existing exclusive tag values remain; additive tags may gain values. Nothing is automatically replaced or deleted.
 
-These checks and inserts share the existing single/batch scrape transaction. Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+These checks and inserts share the existing single/batch scrape transaction. A batch is written with multi-row statements under either policy: a fill-missing batch reads which rows already hold a value for each exclusive tag type once, inserts tag links with `INSERT OR IGNORE` and properties with `ON CONFLICT DO NOTHING`, and stores what the one-target-at-a-time policy stores for the same targets in the same order (the first target to offer a shared title's field wins it). Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+
+### Unchanged Systems
+
+A fill-missing run reconsiders a system only when something it depends on moved. Every scraper that runs after an index (`mister-docs`, `mister-arcade`, `gamedatabase`, PinUP Popper and the Android apps scraper) stores a fingerprint per system in `DBConfig` (`ScrapeFingerprint:<scraper>:<system>`) when they complete it, on any run over whole systems. It joins the state of the scraper's source with the system's library revision.
+
+The library revision (`LibraryRevision:<system>` in `DBConfig`, read with `MediaDBI.LibraryRevision`) is a counter the index reconcile bumps, in its own transaction, when it inserted or renamed a title, inserted or changed a media row, flagged media missing, or added or removed a tag link for that system. Indexing a system whose files did not change leaves it where it was. Reading it is one keyed lookup, which matters on SD-card storage where even an index-only count of a large system takes minutes at background priority.
+
+For `mister-docs` the source state is one listing of names per pack folder serving the system: each TSV's size and modification time, plus the count of the other files and a digest of their names. For `mister-arcade` it is a digest of the catalog. For `gamedatabase` it is the upstream commit the embedded data was built from and the bundles that serve the system, which only a new build of Core changes. For PinUP Popper it is Popper's own library as read from its database, plus a listing digest of every emulator's screen folders. The Android apps scraper has no source state: icons come from the host per package and fill-missing never replaces one already stored, so it compares the library revision alone, and it does not record a system in which the host could not supply an icon, so that system is tried again. An index-triggered run that finds the stored fingerprint unchanged reports the system and moves on without parsing a pack, reading a media row or writing anything.
+
+A manual or force run never consults the fingerprint and always does the full work, then stores a fresh one. That is also the way out when a source changed in a way the fingerprint cannot see, or when another tool removed metadata the scraper had filled. Truncating a system, or the whole database, deletes the fingerprints of the rows it removes, so rebuilt rows are always scraped again.
+
+### Post-Write Work
+
+Title disambiguation reads only media-level tags of the types in `database.ZapScriptTagTypes`, so a write recomputes it only for the titles of targets that carry such a tag. A batch of artwork, title metadata and sentinels recomputes nothing. Each batch logs where its time went (`begin`, `duration` for its statements, `commit`, `change_tracking`, `disambiguation`) with its row counts at debug level, and `scraper.ApplyTargets`, the write loop `mister-docs`, `mister-arcade` and PinUP Popper share, logs how long a system's batches spent waiting on the pauser against writing.
 
 ## Scoped Runs
 
@@ -109,8 +137,8 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 | Storage | Scope | Current normal `gamelist.xml` use |
 |---|---|---|
 | `MediaTags` | ROM-level variant metadata | region, lang, scraper sentinel |
-| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise) |
-| `MediaTitleProperties` | Title-level shared static content | description, XML game ID |
+| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise), multigame (compilation classification) |
+| `MediaTitleProperties` | Title-level shared static content | description, XML game ID, GameDataBase identity and raw compilation member IDs |
 | `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
 
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
@@ -129,6 +157,7 @@ Company names are the only free text because they are the only values that canno
 
 What this means for a scraper:
 
+- **Keep identifiers out of user-facing tags.** External catalog IDs and file hashes belong in properties, not identity tag types. GameDataBase stores title identity in `property:gamedatabase-id` and compilation member IDs as a JSON string array in `property:gamedatabase-contains`. Members retain raw source spelling and order, with duplicates removed and malformed IDs reported and dropped. No game-name vocabulary or alias mapping is maintained for membership. The user-facing classification remains `multigame:compilation`; individual members are not tags.
 - **Map or drop.** A scraper maps its source's wording onto an existing canonical value, through a table in its package or a shared lookup (`tags.LookupRegionWord`, `LookupLanguageWord`, `LookupArcadeBoard`, `LookupFranchise`). A source value with no mapping is dropped, never stored as it was written. Genres follow the GameDataBase taxonomy (`shmup:v`, `action:platformer`, `parlor:pinball`), series are `search:franchise:<name>`, and boards are `arcadeboard:<vendor>:<board>`.
 - **Say what was dropped.** Record each dropped value with `scraper.UnmappedValues.Note` and call `LogSummary` once at the end of a run. The summary is logged at info with counts and examples per tag type, so the mapping tables can be grown from what real sources contain.
 - **No labels on shared values.** A closed or format value is one row shared by every title that carries it, so it has no per-source display name. Only free-text tags keep the source's spelling as a label (`t-and-e-soft` labelled `T&E Soft`).
@@ -136,7 +165,7 @@ What this means for a scraper:
 
 MediaDB enforces the rules on every write path — scrape writes, `UpsertMediaTags`/`UpsertMediaTitleTags`, the scanner's staging, user flags and deck membership, and the legacy `InsertTag`/`InsertTagType` — so a value that slips past a scraper is refused and logged at warn rather than stored. When the vocabulary changes between releases, the next index run's seeding pass removes stored types and values the new rules refuse, together with every link to them (`sqlPruneOffVocabularyTags`).
 
-Each scraper's tests call `scrapertest.RequireValidWrite` on every write they build, and the MiSTer arcade catalog tests fail when the pinned catalog snapshot holds a category, platform or series that nothing maps, so refreshing the snapshot forces the new values to be curated.
+Each scraper's tests call `scrapertest.RequireValidWrite` on every write they build, and the MiSTer arcade catalog tests fail when the pinned catalog snapshot holds a category, platform or series that nothing maps, so refreshing the snapshot forces the new values to be curated. The `gamedatabase` tests do the same against the whole embedded dataset.
 
 Property rows are keyed by entity and property type tag. Re-scraping the same property type updates the row in place and preserves row DBID.
 
@@ -198,6 +227,27 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 | `manual` | `MediaProperties: property:manual` | PDF path |
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
+
+### Media Subfolders
+
+Both the `gamelist.xml` filesystem fallback and `media-folder` search these subfolders of `<systemRootPath>/media/`, in order, for each image type. Folder names match case-insensitively, and each file is tried as `.png`, `.jpg`, `.jpeg`, then `.webp`. The list is `ArtworkDirCandidates` in `pkg/platforms/shared/esmedia/artwork.go`.
+
+| `media.image` type | Property | Subfolders searched |
+| :-- | :-- | :-- |
+| `image` | `property:image-image` | `image`, `images`, `miximages`, `custom` |
+| `boxart` | `property:image-boxart` | `boxart`, `boxart2d`, `box2d`, `boxart2dfront`, `box2dfront`, `cover`, `covers`, `boxarts`, `box`, `named_boxarts` |
+| `boxart3d` | `property:image-boxart3d` | `boxart3d`, `3dbox`, `3dboxes` |
+| `boxartside` | `property:image-boxartside` | `boxart2dside` |
+| `boxartback` | `property:image-boxartback` | `boxart2dback`, `backcover`, `backcovers` |
+| `screenshot` | `property:image-screenshot` | `screenshot`, `screenshots`, `snap`, `snaps`, `named_snaps` |
+| `thumbnail` | `property:image-thumbnail` | `thumbnail`, `thumbnails`, `box2dfront`, `boxart2dfront`, `supporttexture` |
+| `marquee` | `property:image-marquee` | `marquee`, `marquees` |
+| `wheel` | `property:image-wheel` | `wheel`, `wheels`, `logo`, `logos` |
+| `fanart` | `property:image-fanart` | `fanart`, `fanarts` |
+| `titleshot` | `property:image-titleshot` | `titleshot`, `titleshots`, `titlescreen`, `titlescreens`, `screenshottitle`, `title`, `titles`, `named_titles` |
+| `map` | `property:image-map` | `map`, `maps` |
+
+A directory's own `image` artwork is searched in `folders` and `folder` before the `image` subfolders above. Those two are only used for directories, never for a game file.
 
 ### Directory Entries
 
@@ -312,11 +362,14 @@ Game manuals can be selected through Update All's **Game Manuals (EN)** settings
 Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots, and also probes `/media/usb6` and `/media/usb7`, which artwork packs may be installed to but MiSTer's games-folder list does not reach. It recognizes content by installed format rather than repository name, following the [MiSTer Artwork Pack format](https://github.com/chipster6502/MiSTer_artwork_pack/blob/main/PACK_FORMAT.md):
 
 - Artwork: `docs/<System>/Artwork/` holding one `<key>.jpg` per game, normally with an `index.tsv` beside them that maps every known dump to its key. `<System>` is the MiSTer `games/` folder name. A directory with images and no index still resolves games filed under their exact key.
+- Screenshots and title screens: `docs/<System>/Screenshots/` and `docs/<System>/Titles/`, separate packs in the same layout with one `<key>.png` per game and an `index.tsv` of their own. Each folder is resolved independently, since the keys that carry a file differ between packs.
 - Optional title metadata: `gameinfo.tsv` beside the images. Games it lists without an image still receive their metadata.
 - Optional description: `synopsis_<lang>.tsv` beside the images. Which languages a pack ships varies per system, so Core reads whichever files exist and picks the first match from `media.default_langs`, then English, then the first available language.
 - Manuals: direct PDF files in a child directory whose name contains `manual`, for example `docs/SNES/Manuals/` or `docs/NES/Famicom Disk System Manuals/`.
 
-This format-based discovery means future compatible databases need no Core update. Run `mister-docs` again after Downloader installs or updates content. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art/manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
+Every pack ships the same `gameinfo.tsv` and synopsis files, so Core reads them from one image folder per system: `Artwork/` when it is installed, otherwise `Screenshots/`, otherwise `Titles/`.
+
+This format-based discovery means future compatible databases need no Core update. A fill-missing `mister-docs` run is queued after every successful index for the systems that were indexed, so newly installed packs are picked up by the next index; it only adds properties a game does not have yet, and it leaves a system alone when neither its packs nor its indexed rows changed since the last completed run (see [Unchanged Systems](#unchanged-systems)). Run `mister-docs` by hand after Downloader installs or updates content to import it sooner or to replace what is stored. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art, screenshot, title-screen and manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
 
 Metadata files are treated as untrusted input. Core bounds their size and record count, rejects symlink/path escapes and non-regular assets, skips ambiguous matches, and continues past malformed optional sources where possible.
 
@@ -333,7 +386,9 @@ CRC and size columns are not used because hashing every installed ROM would impo
 
 | Source | Destination |
 |---|---|
-| Artwork image | `property:image-boxart` at media scope for exact matches, title scope for unique slug fallback |
+| `Artwork/` image | `property:image-boxart` at media scope for exact matches, title scope for unique slug fallback |
+| `Screenshots/` image | `property:image-screenshot`, same scopes |
+| `Titles/` image | `property:image-titleshot`, same scopes |
 | `gameinfo.tsv` year | title tag `year` |
 | `gameinfo.tsv` genre | title tags `genre`, through the shared ScreenScraper genre table; a hierarchy such as `Shoot'em Up / Vertical` writes both `shmup:v` and `shmup` |
 | `gameinfo.tsv` developer | title tag `developer` |
@@ -442,6 +497,7 @@ go test ./pkg/database/scraper/...
 go test ./pkg/database/mediadb/ -run 'Scrape|Property|Blob|Sentinel|MediaImage'
 go test ./pkg/api/methods/ -run 'Scrape|MediaImage|MediaMeta'
 go test ./pkg/platforms/mister/ -run 'Arcade'
+go test ./pkg/database/gamedatabase/ ./scripts/gamedatabase/
 ```
 
 ## MiSTer Arcade Catalog Behavior
@@ -523,6 +579,60 @@ in practice:
 - `region` is additive, so a row whose filename states a territory can gain the catalog's broader value beside it.
   On the same corpus 43 rows ended up carrying `world` next to a specific territory, because the catalog describes
   the romset's release while the filename describes which dump this is.
+
+## GameDataBase Behavior
+
+`pkg/database/gamedatabase` embeds [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase) (CC BY 4.0), the dataset Core's tag vocabulary is modelled on. `scripts/gamedatabase` builds it from a checkout of the upstream commit pinned in the script: it keeps each row's title, title screen, ID, region, release date, developer, publisher and tags, drops the native-script title and file-hash columns, merges the eight arcade manufacturer files into one bundle, and writes one zstd-compressed tab-separated bundle per platform plus `data/VERSION`. Refreshing the data is a change to the pinned commit and the regenerated files. A scrape decodes only the bundles of the system it is on.
+
+### Systems
+
+| Bundle | Systems |
+|---|---|
+| `nes`, `fds`, `sufami`, `virtualboy`, `pcfx`, `mastersystem`, `megacd`, `sega32x`, `saturn`, `laseractive` | `NES`, `FDS`, `Sufami`, `VirtualBoy`, `PCFX`, `MasterSystem`, `MegaCD`, `Sega32X`, `Saturn`, `LaserActive` |
+| `snes` and `satellaview` | `SNES`, `SNESMSU1` |
+| `n64` and `n64dd` | `Nintendo64` |
+| `gameboy`, then `gameboycolor` | `Gameboy`, `Gameboy2P`, `SuperGameboy`, `SGBMSU1` |
+| `gameboycolor`, then `gameboy` | `GameboyColor` |
+| `gba` | `GBA`, `GBA2P` |
+| `pcengine` | `TurboGrafx16`, `SuperGrafx` |
+| `pcenginecd` | `TurboGrafx16CD` |
+| `sg1000` | `SG1000`, `Multivision` |
+| `megadrive` | `Genesis`, `GenesisMSU`, `GenesisPlus` |
+| `gamegear` | `GameGear`, `GameGear2P` |
+| `neogeopocket` | `NeoGeoPocket`, `NeoGeoPocketColor` |
+| `arcade` | every system `arcadenames.IsArcadeSystem` accepts |
+
+A bundle listed after "then" is read only for titles the system's own bundles did not match: a Game Boy Color folder also holds Game Boy cartridges.
+
+### Matching
+
+Console titles are matched on slug. Each row's title and title-screen name go through the same filename-title parser and slug pipeline the indexer uses, and a row is kept when one of its keys equals a library title's slug. Upstream writes Japanese long vowels with macrons ("Bishōjo") where dump names spell them out ("Bishoujo"), so each name is also keyed with its long vowels spelled out, and the row's ID, which is upstream's own spelled-out form of the title, is a key too. One title usually has several rows, one per regional release, so the scraper picks one:
+
+1. Rows that are not the original retail release (`#unfinished`, `#unlicensed`, `#alt`, `#reboxed`, `#rerelease`) are passed over when an original row exists.
+2. Rows for a region the title's own files carry are kept. When the files carry exactly one region, that settles the region.
+3. Otherwise the first region in `[media] default_regions` that any remaining row has is used.
+4. If the rows left are releases of more than one game (different upstream IDs), the title is skipped: a slug two games share does not say which one the library holds.
+5. The earliest release wins, a fully dated one before a bare year in the same year, then upstream row order.
+
+Arcade files are matched on MAME set name: the archive's own name, or for a MiSTer `.mra` the set name inside it, read through the platform's set-name cache when it has one. A set match names one release outright, so no region choice is made. An arcade file with no set match falls back to the title match above.
+
+Every present file of a matched title gets the scraper's sentinel. The first, in path order, carries the title's tags.
+
+### Field Mapping
+
+A tag `#type:sub>child` becomes the Core value `sub:child` of the same type. Values Core names differently (`valueRenames`), upstream mistakes with one obvious reading (`tokenRecoveries`, `valueRecoveries`, `idRecoveries`) and mistakes without one (the skip lists) are tables in `gamedatabase/vocabulary.go`. `TestEveryEmbeddedValueIsCovered` reads every embedded row against them: a refresh that brings a value Core lacks fails until the value is added to the vocabulary or listed, and a table entry the data no longer needs fails too.
+
+| GameDataBase | Destination | Notes |
+|---|---|---|
+| `ID` | `MediaTitleProperties: gamedatabase-id` | The game a title is, shared by its regional releases and its releases on other platforms. Invalid dataset IDs are dropped |
+| Release date | `MediaTitleTags: year` | Exclusive. The year the date opens with |
+| Developer, Publisher | `MediaTitleTags: developer`, `publisher`, `credit` | Cells join several companies with `/`. The first takes the role; the rest are stored as `credit` |
+| `#genre` | `MediaTitleTags: genre` | The family beside the genre (`sports` and `sports:tennis`) |
+| `#players`, `#input`, `#addon`, `#embedded`, `#save`, `#compatibility`, `#based`, `#search`, `#port` | `MediaTitleTags` of the same type | Additive |
+| `#arcadeboard` | `MediaTitleTags: arcadeboard` | Exclusive. The first value, the most specific upstream gives |
+| `#compilation:id:id` | `MediaTitleTags: multigame:compilation`, `MediaTitleProperties: gamedatabase-contains` | JSON array of unique raw member IDs in source order. Malformed IDs are reported and dropped |
+| `#mamerom:parent>set` | `MediaProperties: mame-setname`, `MediaTags: mameparent` | On the file the set matched. A parent set gets no `mameparent` |
+| Region, `#lang`, `#rev`, `#set`, `#alt`, `#disc`, `#unfinished`, `#unlicensed`, `#reboxed`, `#rerelease` | not imported | They describe one release or dump. A title match cannot know which one a file is; the filename parser can |
 
 ## PinUP Popper Behavior
 

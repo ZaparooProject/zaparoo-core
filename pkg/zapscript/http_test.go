@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -31,11 +32,21 @@ import (
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// waitForHTTPCommands makes the test wait for the requests its HTTP commands
+// sent before it ends, so none outlives it and logs into a later test.
+func waitForHTTPCommands(t *testing.T) {
+	t.Helper()
+	t.Cleanup(httpCmdRequests.Wait)
+}
 
 func TestRedactURL(t *testing.T) {
 	t.Parallel()
@@ -102,6 +113,7 @@ func TestRedactURL(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -135,6 +147,7 @@ func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AppliesBasicAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -171,6 +184,7 @@ func TestCmdHTTPGet_AppliesBasicAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_NoAuthWhenNotConfigured(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -201,6 +215,7 @@ func TestCmdHTTPGet_NoAuthWhenNotConfigured(t *testing.T) {
 }
 
 func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
+	waitForHTTPCommands(t)
 	type requestCapture struct {
 		headers     http.Header
 		contentType string
@@ -245,6 +260,7 @@ func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
 }
 
 func TestCmdHTTPGet_AllowListEmpty_AllAllowed(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -296,6 +312,7 @@ allow_http = ['https://example\.com/.*']`))
 }
 
 func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -347,6 +364,7 @@ allow_http = ['https://example\.com/.*']`))
 }
 
 func TestCmdHTTPPost_AllowListPermits(t *testing.T) {
+	waitForHTTPCommands(t)
 	received := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received <- struct{}{}
@@ -432,6 +450,117 @@ func TestCmdHTTPPost_ArgValidation(t *testing.T) {
 			}
 			_, err := cmdHTTPPost(nil, env)
 			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+type lockedBuffer struct {
+	buf bytes.Buffer
+	mu  syncutil.Mutex
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p) //nolint:wrapcheck // test writer
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// The URL and the network behind it are the user's, so an endpoint that is
+// down was reported to Sentry on every scan of the card that called it.
+func TestCmdHTTPUnreachableURLIsNotReported(t *testing.T) {
+	// Serial: captures the package-global logger.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	unreachable := server.URL + "/hook"
+	server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	for _, tc := range []struct {
+		run  func(platforms.CmdEnv) (platforms.CmdResult, error)
+		name string
+		cmd  string
+		msg  string
+		args []string
+	}{
+		{
+			name: "get", cmd: gozapscript.ZapScriptCmdHTTPGet, args: []string{unreachable}, msg: "getting url",
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPGet(nil, env) },
+		},
+		{
+			name: "post", cmd: gozapscript.ZapScriptCmdHTTPPost,
+			args: []string{unreachable, "application/json", "{}"}, msg: "error posting to url",
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPPost(nil, env) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output lockedBuffer
+			original := log.Logger
+			log.Logger = zerolog.New(&output)
+			t.Cleanup(func() { log.Logger = original })
+			waitForHTTPCommands(t)
+
+			_, err := tc.run(platforms.CmdEnv{
+				Cfg: &config.Instance{},
+				Cmd: gozapscript.Command{Name: tc.cmd, Args: tc.args},
+			})
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				return strings.Contains(output.String(), tc.msg)
+			}, 5*time.Second, 10*time.Millisecond)
+			assert.Contains(t, output.String(), `"level":"warn"`)
+			assert.NotContains(t, output.String(), `"level":"error"`)
+		})
+	}
+}
+
+// A URL that cannot be made into a request is the user's script; it is
+// logged as a warning, not reported as a fault.
+func TestCmdHTTPInvalidURLIsNotReported(t *testing.T) {
+	// Serial: captures the package-global logger.
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	for _, tc := range []struct {
+		run  func(platforms.CmdEnv) (platforms.CmdResult, error)
+		name string
+		cmd  string
+		args []string
+	}{
+		{
+			name: "get", cmd: gozapscript.ZapScriptCmdHTTPGet, args: []string{"http://[::1"},
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPGet(nil, env) },
+		},
+		{
+			name: "post", cmd: gozapscript.ZapScriptCmdHTTPPost, args: []string{"http://[::1", "text/plain", "x"},
+			run: func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdHTTPPost(nil, env) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output lockedBuffer
+			original := log.Logger
+			log.Logger = zerolog.New(&output)
+			t.Cleanup(func() { log.Logger = original })
+			waitForHTTPCommands(t)
+
+			_, err := tc.run(platforms.CmdEnv{
+				Cfg: &config.Instance{},
+				Cmd: gozapscript.Command{Name: tc.cmd, Args: tc.args},
+			})
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				return strings.Contains(output.String(), "creating request for url")
+			}, 5*time.Second, 10*time.Millisecond)
+			assert.Contains(t, output.String(), `"level":"warn"`)
+			assert.NotContains(t, output.String(), `"level":"error"`)
 		})
 	}
 }

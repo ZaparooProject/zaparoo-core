@@ -29,6 +29,7 @@ import (
 	"os/exec"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
@@ -41,7 +42,7 @@ func NewWebBrowserLauncher() platforms.Launcher {
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			//nolint:gosec // G204: launcher's purpose is to execute content
 			cmd := exec.CommandContext(context.Background(), "xdg-open", path)
-			err := cmd.Start()
+			err := command.StartAndReap(cmd)
 			if err != nil {
 				return nil, fmt.Errorf("failed to open URL in browser: %w", err)
 			}

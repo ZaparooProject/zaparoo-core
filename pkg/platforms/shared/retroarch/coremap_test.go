@@ -170,3 +170,34 @@ func TestCoreDefinitionsReturnsCopy(t *testing.T) {
 	}
 	assert.Equal(t, original, coreDefinitions[0].DefaultCore)
 }
+
+func TestPrBoomLaunchesDoomOnEveryProfile(t *testing.T) {
+	t.Parallel()
+
+	for _, profile := range []Profile{ProfileApplianceARM, ProfileDesktop, ProfileAndroid} {
+		var systems []string
+		for _, launch := range CoreLaunches(profile) {
+			if launch.Core == "prboom_libretro.so" {
+				systems = append(systems, launch.SystemID)
+			}
+		}
+		assert.Equal(t, []string{systemdefs.SystemDoom}, systems, "profile %s", profile)
+	}
+}
+
+// Steam Deck, 2026-10-26: WADs in ~/ROMs/doom, where ES-DE and EmuDeck keep
+// them, were never indexed, and PrBoom's own prboom.wad was indexed as a game.
+func TestPrBoomScansDoomFolderAndSkipsItsEngineFile(t *testing.T) {
+	t.Parallel()
+
+	for _, launch := range CoreLaunches(ProfileDesktop) {
+		if launch.Core != "prboom_libretro.so" {
+			continue
+		}
+		assert.Equal(t, []string{"prboom", "doom"}, launch.Folders)
+		launcher := NewLauncher(Options{}, launch)
+		assert.Contains(t, launcher.ScanExcludes, "prboom.wad")
+		return
+	}
+	t.Fatal("no PrBoom launcher on the desktop profile")
+}

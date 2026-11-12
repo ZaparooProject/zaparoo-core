@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // pmsetPercentRe matches the complete charge field pmset prints on a battery
@@ -118,4 +119,64 @@ func parsePmsetPercent(line string) (int, bool) {
 		return 0, false
 	}
 	return percent, true
+}
+
+// pmsetRemainingRe matches the estimate pmset prints while discharging, as in
+// "3:32 remaining".
+var pmsetRemainingRe = regexp.MustCompile(`(\d{1,3}):(\d{2}) remaining`)
+
+// pmsetBatteryIDRe matches the name pmset gives a battery, as in
+// "-InternalBattery-0".
+var pmsetBatteryIDRe = regexp.MustCompile(`^-(\S+)`)
+
+// parsePmsetDetail reads every present battery from the output of
+// `pmset -g batt`, keeping the charge level while on AC power.
+func parsePmsetDetail(output string) Detail {
+	var (
+		batteries []Battery
+		external  bool
+	)
+	for line := range strings.SplitSeq(output, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Now drawing from"):
+			if strings.Contains(line, "'AC Power'") {
+				external = true
+			}
+		case strings.Contains(line, "present: true"):
+			batteries = append(batteries, parsePmsetBattery(line, len(batteries)))
+		}
+	}
+	return summarize(batteries, external)
+}
+
+func parsePmsetBattery(line string, index int) Battery {
+	battery := Battery{ID: "battery" + strconv.Itoa(index)}
+	if match := pmsetBatteryIDRe.FindStringSubmatch(line); match != nil {
+		battery.ID = match[1]
+	}
+	if percent, ok := parsePmsetPercent(line); ok {
+		battery.Percent = &percent
+	}
+	switch {
+	case strings.Contains(line, "; not charging"):
+		battery.State = ChargeNotCharging
+	case strings.Contains(line, "; discharging"):
+		battery.State = ChargeDischarging
+	case strings.Contains(line, "; charging"):
+		battery.State = ChargeCharging
+	case strings.Contains(line, "; charged"):
+		battery.State = ChargeFull
+	}
+	if battery.State != ChargeDischarging {
+		return battery
+	}
+	if match := pmsetRemainingRe.FindStringSubmatch(line); match != nil {
+		hours, hoursErr := strconv.Atoi(match[1])
+		minutes, minutesErr := strconv.Atoi(match[2])
+		if hoursErr == nil && minutesErr == nil && minutes < 60 {
+			battery.TimeRemaining = time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+		}
+	}
+	return battery
 }

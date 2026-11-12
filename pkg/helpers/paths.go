@@ -293,6 +293,7 @@ type launcherPrecomp struct {
 	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
 	skipInternalSymlinks  bool     // skip symlinks whose target is inside this launcher's roots
 	scanDuplicates        bool     // launcher opted into indexing its own alias trees
+	linkInternalSymlinks  bool     // index internal symlinks as links to their target's row
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -302,6 +303,9 @@ type LauncherMatcher struct {
 	cfg             *config.Instance
 	normFolderCache map[string]string
 	precomp         map[string]*launcherPrecomp
+	// launchers, when set, replaces the global launcher cache as the list
+	// PathToLaunchers matches against.
+	launchers       []platforms.Launcher
 	scanDuplicates  map[string]bool
 	normDataDir     string
 	normMediaPrefix string
@@ -385,6 +389,7 @@ func newLauncherPrecomp(
 	}
 	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks && !scanDuplicates
 	lp.scanDuplicates = scanDuplicates
+	lp.linkInternalSymlinks = l.ScanSkipInternalSymlinks && scanDuplicates
 
 	return lp
 }
@@ -392,7 +397,23 @@ func newLauncherPrecomp(
 // NewLauncherMatcher creates a matcher with pre-normalized root dirs and folder paths.
 // Call once before a file walk and reuse for all files to avoid redundant normalization.
 func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMatcher {
-	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	return buildLauncherMatcher(cfg, pl, GlobalLauncherCache.GetAllLaunchers())
+}
+
+// NewLauncherMatcherForLaunchers is NewLauncherMatcher over an explicit
+// launcher list. PathToLaunchers and ForDirectory then match against that
+// list instead of the global launcher cache.
+func NewLauncherMatcherForLaunchers(
+	cfg *config.Instance, pl platforms.Platform, launchers []platforms.Launcher,
+) *LauncherMatcher {
+	m := buildLauncherMatcher(cfg, pl, launchers)
+	m.launchers = launchers
+	return m
+}
+
+func buildLauncherMatcher(
+	cfg *config.Instance, pl platforms.Platform, allLaunchers []platforms.Launcher,
+) *LauncherMatcher {
 	needsRoots := false
 	needsDataDir := false
 	for i := range allLaunchers {
@@ -530,9 +551,31 @@ func scanExcludeSubject(path, normPath string) string {
 	return normPath
 }
 
+// hasExtension reports whether lowerPath ends in any of exts, compared without
+// case.
+func hasExtension(lowerPath string, exts []string) bool {
+	for _, ext := range exts {
+		if ext != "" && strings.HasSuffix(lowerPath, strings.ToLower(ext)) {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchSystemFileForScan returns true if path matches a launcher for the given
 // system and is not blocked by that launcher's scan-only exclude patterns.
 func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
+	return m.matchScanFile(systemID, path, false)
+}
+
+// MatchSystemArchiveEntryForScan is MatchSystemFileForScan for a path naming
+// an entry inside an archive. It also skips launchers that list the entry's
+// extension in NoArchiveExtensions.
+func (m *LauncherMatcher) MatchSystemArchiveEntryForScan(systemID, path string) bool {
+	return m.matchScanFile(systemID, path, true)
+}
+
+func (m *LauncherMatcher) matchScanFile(systemID, path string, inArchive bool) bool {
 	lowerPath := strings.ToLower(path)
 	normPath := NormalizePathForComparison(path)
 
@@ -543,6 +586,10 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 	for i := range launchers {
 		launcher := &launchers[i]
 		if !m.pathIsLauncher(launcher, path, lowerPath, normPath) {
+			continue
+		}
+		if inArchive && hasExtension(lowerPath, launcher.NoArchiveExtensions) {
+			matchedExcluded = true
 			continue
 		}
 		if m.pathIsExcludedFromScan(launcher, excludeSubject) {
@@ -695,6 +742,56 @@ func (m *LauncherMatcher) ShouldSkipBrokenScanSymlink(
 	return !exists, nil
 }
 
+// ScanDuplicateLinkTarget returns the absolute path a symlink points at when
+// the link is an alias the launcher would have skipped, but indexes because it
+// opted into scan_duplicates. Such a row is the same media as its target's, so
+// the index links the two and scrape data follows the target. Only launchers
+// declaring ScanSkipInternalSymlinks qualify, and the target must lie inside
+// the launcher's own folders. readTarget is only called once such a launcher
+// owns the link, so every ordinary scan pays nothing.
+func (m *LauncherMatcher) ScanDuplicateLinkTarget(
+	systemID, linkPath string,
+	readTarget func() (string, error),
+) (target string, linked bool, err error) {
+	if len(m.scanDuplicates) == 0 {
+		return "", false, nil
+	}
+
+	normLink := NormalizePathForComparison(linkPath)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	var candidateRoots []string
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.launcherPaths(launcher)
+		if !lc.linkInternalSymlinks {
+			continue
+		}
+		if lc.ownsPath(normLink) {
+			candidateRoots = append(candidateRoots, lc.rootPairs...)
+			candidateRoots = append(candidateRoots, lc.absFolders...)
+		}
+	}
+	if len(candidateRoots) == 0 {
+		return "", false, nil
+	}
+
+	raw, err := readTarget()
+	if err != nil {
+		return "", false, err
+	}
+	resolved := resolveSymlinkTargetLexically(linkPath, raw)
+	normTarget := NormalizePathForComparison(resolved)
+	for _, root := range candidateRoots {
+		if normTarget != root && pathHasPrefixNormalized(normTarget, root) {
+			return resolved, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // scanDuplicatesCoversLink reports whether a launcher scanning duplicates owns
 // the given path. The empty-map check keeps this free for every setup without
 // the opt-in, which is the only reason it can sit in the walk's symlink branch.
@@ -719,6 +816,19 @@ func (m *LauncherMatcher) scanDuplicatesCoversLink(systemID, linkPath string) bo
 				if normLink != root && pathHasPrefixNormalized(normLink, root) {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+// ownsPath reports whether a normalized path lies strictly inside one of the
+// launcher's folders.
+func (lp *launcherPrecomp) ownsPath(normPath string) bool {
+	for _, roots := range [][]string{lp.rootPairs, lp.absFolders} {
+		for _, root := range roots {
+			if normPath != root && pathHasPrefixNormalized(normPath, root) {
+				return true
 			}
 		}
 	}
@@ -814,7 +924,15 @@ func (m *LauncherMatcher) pathIsLauncher(
 	}
 
 	lc := m.launcherPaths(l)
+	return m.folderAllows(l, lc, path, normPath) && m.fileAllows(l, lc, path, lp)
+}
 
+// folderAllows reports whether path sits where l accepts media: inside one of
+// its folders under a root, an absolute folder, a source root folder or the
+// data dir media folder. A launcher with no folders accepts any location.
+func (m *LauncherMatcher) folderAllows(
+	l *platforms.Launcher, lc *launcherPrecomp, path, normPath string,
+) bool {
 	sourceRel, isSource := sourceRelativePath(path)
 	if isSource && len(l.Folders) > 0 && !inAnyFolder(sourceRel, lc.relFolders) {
 		log.Trace().
@@ -856,7 +974,12 @@ func (m *LauncherMatcher) pathIsLauncher(
 			return false
 		}
 	}
+	return true
+}
 
+// fileAllows reports whether l accepts the file itself, by extension or its
+// Test function. lp is path lowercased.
+func (m *LauncherMatcher) fileAllows(l *platforms.Launcher, lc *launcherPrecomp, path, lp string) bool {
 	if len(lc.extensions) > 0 {
 		for _, e := range lc.extensions {
 			if strings.HasSuffix(lp, e) {
@@ -878,6 +1001,99 @@ func (m *LauncherMatcher) pathIsLauncher(
 		return l.Test(m.cfg, path)
 	}
 	return false
+}
+
+// DirLauncherMatcher matches files below one directory. Whether a launcher's
+// folders allow a location depends only on the directory, so it is decided
+// once for the directory, and each file then only checks extensions and Test
+// functions. Results are the same as LauncherMatcher.PathToLaunchers for any
+// path below the directory.
+type DirLauncherMatcher struct {
+	m       *LauncherMatcher
+	entries []dirLauncherEntry
+}
+
+type dirLauncherEntry struct {
+	launcher *platforms.Launcher
+	lc       *launcherPrecomp
+	// full marks a launcher whose scheme check the directory cannot settle,
+	// so each file runs the whole match.
+	full bool
+	// scheme marks a launcher whose scheme the directory already matches.
+	scheme bool
+}
+
+// ForDirectory returns a matcher for the files below dir.
+func (m *LauncherMatcher) ForDirectory(dir string) *DirLauncherMatcher {
+	allLaunchers := m.launchers
+	if allLaunchers == nil {
+		allLaunchers = GlobalLauncherCache.GetAllLaunchers()
+	}
+	lowerDir := strings.ToLower(dir)
+	normDir := NormalizePathForComparison(dir)
+	d := &DirLauncherMatcher{m: m}
+	for i := range allLaunchers {
+		l := &allLaunchers[i]
+		decided, matched := true, false
+		for _, scheme := range l.Schemes {
+			prefix := scheme + ":"
+			if len(lowerDir) < len(prefix) {
+				decided = false
+				break
+			}
+			if strings.HasPrefix(lowerDir, prefix) {
+				matched = true
+				break
+			}
+		}
+		switch {
+		case !decided:
+			d.entries = append(d.entries, dirLauncherEntry{launcher: l, full: true})
+		case matched:
+			d.entries = append(d.entries, dirLauncherEntry{launcher: l, scheme: true})
+		default:
+			lc := m.launcherPaths(l)
+			if m.folderAllows(l, lc, dir, normDir) {
+				d.entries = append(d.entries, dirLauncherEntry{launcher: l, lc: lc})
+			}
+		}
+	}
+	return d
+}
+
+// BestLauncher returns the launcher that would be inferred for path, a file
+// below the matcher's directory: the most specific match, as FindLauncher
+// picks it. It reports false when no launcher matches, and does not log the
+// miss.
+func (d *DirLauncherMatcher) BestLauncher(path string) (platforms.Launcher, bool) {
+	if path == "" {
+		return platforms.Launcher{}, false
+	}
+	lp := strings.ToLower(path)
+	if base := filepath.Base(lp); base != "" && base[0] == '.' {
+		return platforms.Launcher{}, false
+	}
+	var matches []platforms.Launcher
+	for i := range d.entries {
+		e := &d.entries[i]
+		var ok bool
+		switch {
+		case e.full:
+			ok = d.m.pathIsLauncher(e.launcher, path, lp, NormalizePathForComparison(path))
+		case e.scheme:
+			ok = e.launcher.Test == nil || e.launcher.Test(d.m.cfg, path)
+		default:
+			ok = d.m.fileAllows(e.launcher, e.lc, path, lp)
+		}
+		if ok {
+			matches = append(matches, *e.launcher)
+		}
+	}
+	if len(matches) == 0 {
+		return platforms.Launcher{}, false
+	}
+	best, _ := mostSpecificLauncher(matches)
+	return matches[best], true
 }
 
 // PathToLaunchers is a reverse lookup to match a given path against all
@@ -902,7 +1118,10 @@ func (m *LauncherMatcher) PathToLaunchers(path string) []platforms.Launcher {
 	var launchers []platforms.Launcher
 	lowerPath := strings.ToLower(path)
 	normPath := NormalizePathForComparison(path)
-	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	allLaunchers := m.launchers
+	if allLaunchers == nil {
+		allLaunchers = GlobalLauncherCache.GetAllLaunchers()
+	}
 	for i := range allLaunchers {
 		if m.pathIsLauncher(&allLaunchers[i], path, lowerPath, normPath) {
 			launchers = append(launchers, allLaunchers[i])

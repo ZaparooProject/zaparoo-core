@@ -73,6 +73,9 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from Mappings;
 	delete from Clients;
 	delete from RemoteCommands;
+	delete from PlaylistMemory;
+	delete from OpenPlaylists;
+	delete from MediaPositions;
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
@@ -703,6 +706,28 @@ func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
 	result, err := db.ExecContext(ctx, `DELETE FROM Inbox;`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete all inbox messages: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
+
+func sqlPruneInboxMessages(
+	ctx context.Context, db *sql.DB, cutoff, reliableFrom time.Time, keep int,
+) (int64, error) {
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM Inbox
+		WHERE (CreatedAt < ? AND CreatedAt >= ?)
+		   OR DBID NOT IN (
+			SELECT DBID FROM Inbox ORDER BY CreatedAt DESC, DBID DESC LIMIT ?
+		   );
+	`, cutoff.Unix(), reliableFrom.Unix(), keep)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune inbox messages: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
