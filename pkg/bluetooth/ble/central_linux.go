@@ -391,8 +391,18 @@ func (d *device) Address() string { return d.address }
 func (d *device) Disconnected() <-chan struct{} { return d.disconnected }
 
 // Connect connects and waits until bluetoothd has resolved the device's
-// services, so Characteristic can find them.
+// services, so Characteristic can find them. A device that fails to connect
+// is finished: nothing else would ever end its watch, and the caller finds
+// the device again for the next attempt.
 func (d *device) Connect(ctx context.Context) error {
+	if err := d.connectAndResolve(ctx); err != nil {
+		d.drop()
+		return err
+	}
+	return nil
+}
+
+func (d *device) connectAndResolve(ctx context.Context) error {
 	changes, unsubscribe := d.a.signals.subscribe(func(sig *dbus.Signal) bool {
 		return sig.Path == d.path && sig.Name == signalPropertiesChanged
 	})
@@ -438,8 +448,13 @@ func (d *device) Connect(ctx context.Context) error {
 
 var errDisconnected = errors.New("bluetooth: device disconnected")
 
+// Disconnect asks bluetoothd to drop the link and ends the device's watch
+// whatever the answer. bluetoothd reports no change for a link that was
+// never up, so waiting for one would leave the watch running for good.
 func (d *device) Disconnect(ctx context.Context) error {
-	return d.a.call(ctx, d.obj, deviceIface+".Disconnect")
+	err := d.a.call(ctx, d.obj, deviceIface+".Disconnect")
+	d.drop()
+	return err
 }
 
 // Characteristic finds a characteristic by service and characteristic UUID

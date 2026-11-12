@@ -133,8 +133,9 @@ type readEvent interface {
 // readRequest is a GattReadRequest.
 type readRequest interface {
 	offset() (uint32, error)
-	// respondWithValue answers with value. It fails only when the value
-	// could not be prepared, in which case nothing was sent.
+	// respondWithValue answers with value. It fails when the value could
+	// not be prepared or Windows refused the answer; either way the client
+	// has no value and is still owed a reply.
 	respondWithValue(value []byte) error
 	respondWithError(code byte) error
 	release()

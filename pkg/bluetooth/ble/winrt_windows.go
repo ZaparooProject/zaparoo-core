@@ -708,7 +708,9 @@ func (r *winrtReadRequest) respondWithValue(value []byte) error {
 		return err
 	}
 	defer buf.Release()
-	_ = r.req.RespondWithValue(buf)
+	if err := r.req.RespondWithValue(buf); err != nil {
+		return fmt.Errorf("respond with value: %w", err)
+	}
 	return nil
 }
 

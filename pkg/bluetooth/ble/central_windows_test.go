@@ -404,21 +404,28 @@ func TestConnectionStatusReportsDisconnect(t *testing.T) {
 	require.NoError(t, d.Disconnect(context.Background()))
 }
 
+// A failed Connect leaves nothing held: the caller finds the device again
+// for its next attempt and never comes back to this one.
 func TestConnectFailures(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		target        error
-		le            *fakeLEDevice
-		name          string
-		sessionClosed bool
+		target error
+		le     *fakeLEDevice
+		name   string
+		// session and watched say how far Connect got before failing, which
+		// is what it then has to give back.
+		session bool
+		watched bool
 	}{
 		{name: "session", le: &fakeLEDevice{sessionErr: errFake}, target: errFake},
-		{name: "watch", le: &fakeLEDevice{watchErr: errFake}, target: errFake, sessionClosed: true},
-		{name: "discover", le: &fakeLEDevice{discoverErr: errFake}, target: errFake},
+		{name: "watch", le: &fakeLEDevice{watchErr: errFake}, target: errFake, session: true},
+		{name: "discover", le: &fakeLEDevice{discoverErr: errFake}, target: errFake, session: true, watched: true},
 		{
-			name:   "unreachable",
-			le:     &fakeLEDevice{discoverStatus: gatt.GattCommunicationStatusUnreachable},
-			target: errDisconnected,
+			name:    "unreachable",
+			le:      &fakeLEDevice{discoverStatus: gatt.GattCommunicationStatusUnreachable},
+			target:  errDisconnected,
+			session: true,
+			watched: true,
 		},
 	}
 	for _, tt := range tests {
@@ -428,9 +435,24 @@ func TestConnectFailures(t *testing.T) {
 			err := d.Connect(context.Background())
 			require.ErrorIs(t, err, tt.target)
 			require.ErrorContains(t, err, "connect "+testDeviceAddr)
-			if tt.sessionClosed {
+
+			select {
+			case <-d.Disconnected():
+			default:
+				require.FailNow(t, "a failed connect did not end the device")
+			}
+			assert.Equal(t, int32(1), tt.le.closed.Load())
+			if tt.session {
 				assert.Equal(t, int32(1), tt.le.session.closed.Load())
 			}
+			if tt.watched {
+				assert.Equal(t, int32(1), tt.le.statusEvent.removed.Load())
+				assert.Equal(t, 1, tt.le.statusEvent.released.count())
+			}
+
+			// Releasing it again, as a caller may, frees nothing twice.
+			require.NoError(t, d.Disconnect(context.Background()))
+			assert.Equal(t, int32(1), tt.le.closed.Load())
 		})
 	}
 }
@@ -438,9 +460,16 @@ func TestConnectFailures(t *testing.T) {
 func TestConnectProtocolError(t *testing.T) {
 	t.Parallel()
 	le := &fakeLEDevice{discoverStatus: gatt.GattCommunicationStatusProtocolError}
-	err := newDevice(le, testDeviceAddr).Connect(context.Background())
+	d := newDevice(le, testDeviceAddr)
+	err := d.Connect(context.Background())
 	require.ErrorContains(t, err, "gatt status")
 	require.NotErrorIs(t, err, errDisconnected)
+
+	<-d.Disconnected()
+	assert.Equal(t, int32(1), le.statusEvent.removed.Load())
+	assert.Equal(t, 1, le.statusEvent.released.count())
+	assert.Equal(t, int32(1), le.session.closed.Load())
+	assert.Equal(t, int32(1), le.closed.Load())
 }
 
 func TestCharacteristicLookup(t *testing.T) {

@@ -209,8 +209,10 @@ func (r *Reader) run(ctx context.Context, central ble.Central, done chan<- struc
 
 		r.readLoop(ctx, iq, dev, values)
 		r.setLinked(false)
+		// The device is released however the link ended: one that dropped
+		// on its own still holds what the adapter keeps for it.
+		r.disconnect(dev)
 		if ctx.Err() != nil {
-			r.disconnect(dev)
 			return
 		}
 		r.linkLost(ctx, iq)
@@ -224,6 +226,7 @@ func (r *Reader) connect(ctx context.Context, central ble.Central) (ble.Device, 
 		return nil, nil, fmt.Errorf("find: %w", err)
 	}
 	if connectErr := dev.Connect(ctx); connectErr != nil {
+		r.disconnect(dev)
 		return nil, nil, fmt.Errorf("connect: %w", connectErr)
 	}
 

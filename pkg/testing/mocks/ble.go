@@ -313,10 +313,11 @@ type FakeDevice struct {
 	disconnected chan struct{}
 	Addr         string
 	// Name is the local name the device advertises to a scan.
-	Name      string
-	dropOnce  sync.Once
-	mu        syncutil.Mutex
-	connected bool
+	Name        string
+	disconnects int
+	dropOnce    sync.Once
+	mu          syncutil.Mutex
+	connected   bool
 }
 
 func NewFakeDevice(address string) *FakeDevice {
@@ -360,9 +361,17 @@ func (d *FakeDevice) Connected() bool {
 func (d *FakeDevice) Disconnect(_ context.Context) error {
 	d.mu.Lock()
 	d.connected = false
+	d.disconnects++
 	d.mu.Unlock()
 	d.Drop()
 	return nil
+}
+
+// Disconnects returns how many times Disconnect was called.
+func (d *FakeDevice) Disconnects() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.disconnects
 }
 
 func (d *FakeDevice) Characteristic(serviceUUID, charUUID string) (ble.RemoteCharacteristic, error) {

@@ -123,12 +123,18 @@ type fakeBluez struct {
 	// agents receives each agent made the default.
 	agents chan appRegistration
 	mu     syncutil.Mutex
-	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
-	// when the controller cannot advertise.
-	refuseAdvert bool
 	// discoveryBusy is how many StartDiscovery calls are still refused
 	// because an earlier session is winding down.
 	discoveryBusy int
+	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
+	// when the controller cannot advertise.
+	refuseAdvert bool
+	// refuseConnect makes the device's Connect fail the way bluetoothd does
+	// for a device that is switched off.
+	refuseConnect bool
+	// refusePower makes bluetoothd reject a change to the adapter's Powered,
+	// as it does when the radio is blocked.
+	refusePower bool
 }
 
 type appRegistration struct {
@@ -265,6 +271,10 @@ type fakeDevice struct{ f *fakeBluez }
 func (d *fakeDevice) Connect() *dbus.Error {
 	d.f.record("Connect")
 	d.f.mu.Lock()
+	if d.f.refuseConnect {
+		d.f.mu.Unlock()
+		return dbus.MakeFailedError(errors.New("le-connection-abort-by-local"))
+	}
 	d.f.objects[fakeServicePath] = map[string]map[string]dbus.Variant{
 		gattServiceIface: {"UUID": dbus.MakeVariant(fakeServiceUUID), "Primary": dbus.MakeVariant(true)},
 	}
@@ -279,7 +289,10 @@ func (d *fakeDevice) Connect() *dbus.Error {
 
 func (d *fakeDevice) Disconnect() *dbus.Error {
 	d.f.record("Disconnect")
-	setFakeProp(d.f.deviceProp, deviceIface, "Connected", false)
+	// bluetoothd announces a change only when the link was up.
+	if up, ok := d.f.deviceProp.GetMust(deviceIface, "Connected").(bool); ok && up {
+		setFakeProp(d.f.deviceProp, deviceIface, "Connected", false)
+	}
 	return nil
 }
 
@@ -342,8 +355,15 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 		advPaths: make(chan appRegistration, 1),
 	}
 	adapterSpec := prop.Map{adapterIface: {
-		"Address":  {Value: "00:11:22:33:44:55", Emit: prop.EmitConst},
-		"Powered":  {Value: true, Writable: true, Emit: prop.EmitTrue},
+		"Address": {Value: "00:11:22:33:44:55", Emit: prop.EmitConst},
+		"Powered": {Value: true, Writable: true, Emit: prop.EmitTrue, Callback: func(*prop.Change) *dbus.Error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.refusePower {
+				return dbus.MakeFailedError(errors.New("blocked through rfkill"))
+			}
+			return nil
+		}},
 		"Pairable": {Value: false, Writable: true, Emit: prop.EmitTrue},
 		"Roles":    {Value: []string{"central", "peripheral", "central-peripheral"}, Emit: prop.EmitConst},
 	}}
@@ -815,6 +835,84 @@ func TestIntegration_CentralScansReadsAndReportsMTU(t *testing.T) {
 	case <-time.After(integrationWait):
 		t.Fatal("device removal was not noticed")
 	}
+}
+
+// knownFakeDevice makes bluetoothd know the fake device, so Find returns it
+// without a scan.
+func knownFakeDevice(t *testing.T, fake *fakeBluez, central Central) Device {
+	t.Helper()
+	fake.mu.Lock()
+	fake.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
+		deviceIface: {"Address": dbus.MakeVariant(fakeDeviceAddr)},
+	}
+	fake.mu.Unlock()
+	dev, err := central.Find(t.Context(), fakeDeviceAddr)
+	require.NoError(t, err)
+	return dev
+}
+
+// Every Find hands out a device with its own watch on the bus, and
+// bluetoothd reports nothing for a link that never came up, so a device that
+// fails to connect has to end that watch itself.
+func TestIntegration_CentralReleasesDeviceThatFailedToConnect(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	central, err := adapter.Central()
+	require.NoError(t, err)
+
+	fake.mu.Lock()
+	fake.refuseConnect = true
+	fake.mu.Unlock()
+	dev := knownFakeDevice(t, fake, central)
+	require.Error(t, dev.Connect(t.Context()))
+	fake.expectCall(t, "Connect")
+	select {
+	case <-dev.Disconnected():
+	case <-time.After(integrationWait):
+		t.Fatal("a device that failed to connect was not released")
+	}
+}
+
+// Disconnecting a device that never connected changes nothing bluetoothd
+// would report, so Disconnect ends the watch without waiting to be told.
+func TestIntegration_CentralReleasesDeviceOnDisconnect(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	central, err := adapter.Central()
+	require.NoError(t, err)
+
+	dev := knownFakeDevice(t, fake, central)
+	require.NoError(t, dev.Disconnect(t.Context()))
+	fake.expectCall(t, "Disconnect")
+	select {
+	case <-dev.Disconnected():
+	case <-time.After(integrationWait):
+		t.Fatal("a disconnected device was not released")
+	}
+}
+
+// Powering on is only attempted when asked for, and an adapter that stays
+// off is reported rather than handed back as if it were usable.
+func TestIntegration_OpenFailsWhenPowerOnIsRefused(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	fake.mu.Lock()
+	fake.objects[fakeAdapterPath][adapterIface]["Powered"] = dbus.MakeVariant(false)
+	fake.refusePower = true
+	fake.mu.Unlock()
+
+	_, err := Open(t.Context(), WithBusAddress(addr), WithPowerOn())
+	require.ErrorIs(t, err, ErrPoweredOff)
+	require.ErrorContains(t, err, "power on")
 }
 
 // waitGone fails unless the adapter is given up.

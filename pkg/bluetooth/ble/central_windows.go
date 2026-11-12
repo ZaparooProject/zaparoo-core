@@ -246,8 +246,18 @@ func (d *device) drop() {
 }
 
 // Connect asks Windows to hold a connection to the device and discovers its
-// services, which is what actually brings the link up.
+// services, which is what actually brings the link up. A device that fails
+// to connect is released on the spot: the caller finds the device again for
+// the next attempt, and nothing else would free what this one holds.
 func (d *device) Connect(ctx context.Context) error {
+	if err := d.openAndDiscover(ctx); err != nil {
+		_ = d.Disconnect(ctx)
+		return err
+	}
+	return nil
+}
+
+func (d *device) openAndDiscover(ctx context.Context) error {
 	session, err := d.dev.openSession(ctx)
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", d.address, err)

@@ -211,6 +211,20 @@ func TestFailedConnectRetriesAtAFlatInterval(t *testing.T) {
 	}
 }
 
+// Each attempt finds the device afresh, so one that refused the connection
+// is released rather than left holding what the adapter keeps for it.
+func TestFailedConnectReleasesTheDevice(t *testing.T) {
+	t.Parallel()
+
+	rig := newTestRig(t)
+	rig.addDevice()
+	rig.device.ConnectErr = errors.New("connection refused")
+	rig.open(t)
+
+	require.Eventually(t, func() bool { return rig.device.Disconnects() == 1 },
+		testTimeout, 5*time.Millisecond)
+}
+
 // The reader manager stops receiving scans before it closes its readers, so
 // Close must not wait on a scan nobody will take.
 func TestCloseWhileAScanIsUndelivered(t *testing.T) {
@@ -333,6 +347,21 @@ func TestLinkLossWithoutTokenIsQuiet(t *testing.T) {
 	require.Eventually(t, func() bool { return strings.Contains(rig.reader.Info(), "searching") },
 		testTimeout, 10*time.Millisecond)
 	rig.noScan(t)
+}
+
+// A link that dropped on its own is released like one the reader closed.
+func TestLinkLossReleasesTheDevice(t *testing.T) {
+	t.Parallel()
+
+	rig := newTestRig(t)
+	rig.addDevice()
+	rig.open(t)
+	rig.waitLinked(t)
+	require.Zero(t, rig.device.Disconnects())
+
+	rig.device.Drop()
+	require.Eventually(t, func() bool { return rig.device.Disconnects() > 0 },
+		testTimeout, 5*time.Millisecond)
 }
 
 func TestCloseReleasesEverything(t *testing.T) {

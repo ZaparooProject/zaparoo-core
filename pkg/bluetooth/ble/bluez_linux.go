@@ -191,7 +191,7 @@ func (a *adapter) selectAdapter(ctx context.Context, powerOn bool) error {
 		}
 		log.Info().Str("adapter", string(a.path)).Msg("bluetooth adapter is powered off, powering on")
 		if err := a.setProperty(ctx, a.obj, adapterIface, "Powered", true); err != nil {
-			log.Warn().Err(err).Msg("failed to power on bluetooth adapter")
+			return fmt.Errorf("%w: power on: %w", ErrPoweredOff, err)
 		}
 	}
 	return nil
