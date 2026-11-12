@@ -25,11 +25,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -269,15 +272,33 @@ func (d *fakeDevice) Connect() *dbus.Error {
 		gattCharIface: {"UUID": dbus.MakeVariant(fakeCharUUID), "Service": dbus.MakeVariant(fakeServicePath)},
 	}
 	d.f.mu.Unlock()
-	d.f.deviceProp.SetMust(deviceIface, "Connected", true)
-	d.f.deviceProp.SetMust(deviceIface, "ServicesResolved", true)
+	setFakeProp(d.f.deviceProp, deviceIface, "Connected", true)
+	setFakeProp(d.f.deviceProp, deviceIface, "ServicesResolved", true)
 	return nil
 }
 
 func (d *fakeDevice) Disconnect() *dbus.Error {
 	d.f.record("Disconnect")
-	d.f.deviceProp.SetMust(deviceIface, "Connected", false)
+	setFakeProp(d.f.deviceProp, deviceIface, "Connected", false)
 	return nil
+}
+
+// setFakeProp changes a property from a method Core calls. Core can still be
+// acting on a peer while a test tears its bus down, as when it drops one that
+// stalled, and a change signal that can no longer be sent is not a failure.
+func setFakeProp(props *prop.Properties, iface, name string, value any) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		err, ok := r.(error)
+		if ok && (errors.Is(err, dbus.ErrClosed) || errors.Is(err, syscall.EPIPE) || errors.Is(err, net.ErrClosed)) {
+			return
+		}
+		panic(r)
+	}()
+	props.SetMust(iface, name, value)
 }
 
 // fakeChar implements org.bluez.GattCharacteristic1 for the device's TX.
