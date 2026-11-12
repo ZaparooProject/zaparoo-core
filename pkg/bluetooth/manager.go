@@ -102,6 +102,11 @@ type Manager struct {
 	unavailableReported bool
 	roleReported        bool
 	readerReported      bool
+	// waitingForRadio is set when an open adapter turned out to have no
+	// usable radio behind it, and cleared once one stays up. Opening such
+	// an adapter again proves nothing, so until then it does not count as
+	// the radio being back.
+	waitingForRadio bool
 	// advertisingPaused is applied to every peripheral handed out.
 	advertisingPaused bool
 	started           bool
@@ -245,7 +250,7 @@ func (m *Manager) run(ctx context.Context) {
 			m.retries--
 			m.tick(ctx)
 		case <-gone:
-			if m.lost() {
+			if retryNow, _ := m.lost(); retryNow {
 				m.tick(ctx)
 			}
 		}
@@ -255,22 +260,51 @@ func (m *Manager) run(ctx context.Context) {
 // lost closes an adapter that went away. One that had been working is worth
 // getting back quickly, so it arms the quick retries; one that failed as
 // soon as it was opened counts as a failure and waits for the watch
-// interval. It reports which.
-func (m *Manager) lost() (retryNow bool) {
+// interval. One that says it has no usable radio is neither: like an adapter
+// that is absent when opened, it is waited for at the watch interval for as
+// long as it takes. It reports whether to try again at once, and whether the
+// radio is what was missing.
+func (m *Manager) lost() (retryNow, noRadio bool) {
 	m.mu.Lock()
+	cause := goneCause(m.adapter)
+	noRadio = radioUnusable(cause)
 	stable := m.clock.Since(m.openedAt) >= stableAfter
-	m.flapping = !stable
+	// The line that reports the missing radio covers the opening and
+	// closing that found it out, so those stay quiet too.
+	m.flapping = !stable || noRadio
 	if stable {
 		m.failures = 0
 	}
+	switch {
+	case noRadio:
+		m.waitingForRadio = true
+	case stable:
+		m.waitingForRadio = false
+		m.absentReported = false
+	}
 	m.mu.Unlock()
 	m.closeAdapter("adapter went away")
-	if stable {
+	switch {
+	case noRadio:
+		m.retries = 0
+		m.resetFailures()
+		m.reportAbsent(cause)
+		return false, true
+	case stable:
 		m.retries = lossRetryAttempts
-	} else {
+	default:
 		m.failed(errors.New("adapter went away straight after opening"))
 	}
-	return stable
+	return stable, false
+}
+
+// goneCause returns why an adapter went away, where it can say.
+func goneCause(adapter ble.Adapter) error {
+	gc, ok := adapter.(ble.GoneCauser)
+	if !ok {
+		return nil
+	}
+	return gc.GoneCause() //nolint:wrapcheck // passed on unchanged to be classified
 }
 
 // failed counts one failed attempt and gives up after maxFailures.
@@ -317,6 +351,20 @@ func absent(err error) bool {
 		errors.Is(err, ble.ErrUnavailable)
 }
 
+// radioUnusable reports whether an adapter that opened was lost because it
+// has no radio that can serve, and not because something broke. That is the
+// absent errors and, here only, an unsupported role. An adapter that reports
+// its cause is one that could not say what its radio does when it was
+// opened: Windows reports a radio that is switched off and one that cannot
+// advertise the same way, and opening it again would never show that the
+// radio had been swapped for a capable one, so giving up on it would last
+// until Core restarts. It is checked at the watch interval instead. An
+// adapter that knows its roles when opened still counts a missing one as a
+// failure in tick.
+func radioUnusable(cause error) bool {
+	return absent(cause) || errors.Is(cause, ble.ErrRoleUnsupported)
+}
+
 // readerConfigured reports whether a Bluetooth LE reader is set up to
 // connect.
 func (m *Manager) readerConfigured() bool {
@@ -355,7 +403,11 @@ func (m *Manager) tick(ctx context.Context) {
 	if current != nil {
 		select {
 		case <-current.Gone():
-			m.lost()
+			if _, noRadio := m.lost(); noRadio {
+				// Opening again now would only find the same; the next
+				// interval looks.
+				return
+			}
 		default:
 			if m.readerConfigured() && !ble.SupportsRole(current.Roles(), roleCentralPeripheral) {
 				// A reader added while the transport was serving takes the
@@ -366,7 +418,16 @@ func (m *Manager) tick(ctx context.Context) {
 			if m.clock.Since(openedAt) >= stableAfter {
 				m.mu.Lock()
 				m.failures = 0
+				radioBack := m.waitingForRadio
+				m.waitingForRadio = false
+				if radioBack {
+					m.absentReported = false
+				}
 				m.mu.Unlock()
+				if radioBack {
+					log.Info().Str("adapter", current.Address()).
+						Msg("bluetooth is usable again, app transport running")
+				}
 			}
 			return
 		}
@@ -393,13 +454,19 @@ func (m *Manager) tick(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
-	m.absentReported = false
+	if !m.waitingForRadio {
+		m.absentReported = false
+	}
 	m.mu.Unlock()
 
 	if m.givenUp() {
-		// Opening only reads the adapter's properties; it is how a given-up
-		// manager notices the adapter going away and coming back, which
-		// shows up above as absent.
+		// A given-up manager still opens the adapter every interval, only
+		// to look. Where opening reads the adapter's properties, a radio
+		// that went away and came back shows up above as absent, which
+		// earns a fresh start. An adapter that opens with no radio behind
+		// it never shows that here, so giving up on one lasts until the
+		// setting changes; its missing radio is caught in lost instead and
+		// does not count towards giving up.
 		_ = adapter.Close()
 		return
 	}

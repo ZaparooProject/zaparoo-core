@@ -206,10 +206,13 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	p.mu.Unlock()
 	defer p.reset()
 
+	// Publishing and advertising are where Windows first says whether there
+	// is a radio and what it can do, so the error goes with the adapter for
+	// its owner to tell a missing radio from a broken one.
 	provider, cleanup, err := p.publish(ctx, &app.Services[0])
 	if err != nil {
 		if ctx.Err() == nil {
-			p.a.markGone()
+			p.a.markGone(err)
 		}
 		return err
 	}
@@ -217,7 +220,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 
 	if err := p.advertise(ctx, provider); err != nil {
 		if ctx.Err() == nil {
-			p.a.markGone()
+			p.a.markGone(err)
 		}
 		return err
 	}
@@ -253,7 +256,9 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 			stoppedFor++
 			if stoppedFor >= advertiseStoppedSeconds {
 				log.Warn().Err(statusErr).Int32("status", int32(status)).Msg("bluetooth advertising stopped")
-				p.a.markGone()
+				p.a.markGone(fmt.Errorf(
+					"%w: advertising stopped (status %d); the radio was switched off or removed",
+					ErrUnavailable, status))
 				return nil
 			}
 		}

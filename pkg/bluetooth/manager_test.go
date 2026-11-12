@@ -20,17 +20,23 @@
 package bluetooth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -364,6 +370,12 @@ func managerGaveUp(m *Manager) func() bool {
 	return m.givenUp
 }
 
+func (m *Manager) openedAtForTest() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.openedAt
+}
+
 // A switched-off adapter is left alone and waited for, however long it
 // stays off, and never counts towards giving up.
 func TestManager_PoweredOffIsWaitedForNotCountedAsFailure(t *testing.T) {
@@ -487,6 +499,189 @@ func TestManager_PeripheralRoleMissingIsGivenUp(t *testing.T) {
 
 	tickUntil(t, clock, managerGaveUp(m))
 	assert.False(t, m.Serving())
+}
+
+// goneOnServe builds a manager over adapters that always open and find out
+// what is wrong only when they are served, as the Windows one does. The
+// first failing adapters go away with cause as soon as they are handed out;
+// later ones work.
+func goneOnServe(
+	t *testing.T, clock *clockwork.FakeClock, failing int32, cause error,
+) (m *Manager, opens *atomic.Int32, rec *peripheralRecorder) {
+	t.Helper()
+	opens = &atomic.Int32{}
+	rec = &peripheralRecorder{}
+	var current atomic.Pointer[mocks.FakeAdapter]
+	m = newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
+		opens.Add(1)
+		a := mocks.NewFakeAdapter(ble.RolePeripheral)
+		current.Store(a)
+		return a, nil
+	})
+	m.OnPeripheral(func(p ble.Peripheral) {
+		if rec.calls.Load() < failing {
+			current.Load().MarkGoneBecause(cause)
+		}
+		rec.fn(p)
+	})
+	return m, opens, rec
+}
+
+// An adapter that opens and then says it has no usable radio is waited for
+// like one that is absent when opened: however often it happens it never
+// counts towards giving up, it is only tried again at the watch interval,
+// and the transport is served once a radio is there.
+func TestManager_LostForWantOfARadioIsWaitedFor(t *testing.T) {
+	t.Parallel()
+
+	for _, cause := range []error{
+		ble.ErrNoAdapter, ble.ErrUnavailable, ble.ErrPoweredOff, ble.ErrRoleUnsupported,
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			const failing = maxFailures + 3
+			clock := clockwork.NewFakeClock()
+			m, opens, rec := goneOnServe(t, clock, failing, fmt.Errorf("%w: create gatt service", cause))
+			m.Start()
+			defer m.Stop()
+
+			require.Eventually(t, func() bool { return rec.calls.Load() == 1 && !m.Serving() },
+				eventually, 10*time.Millisecond)
+			// Only the ticker is waiting; no retry timer was armed.
+			require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+			time.Sleep(50 * time.Millisecond)
+			assert.Equal(t, int32(1), opens.Load(), "no reopen before the interval")
+
+			tickUntil(t, clock, func() bool { return rec.calls.Load() == failing+1 })
+			assert.Equal(t, int32(failing+1), opens.Load(), "one attempt per watch interval")
+			assert.False(t, managerGaveUp(m)())
+			assert.True(t, m.Serving())
+		})
+	}
+}
+
+// lookCountingAdapter counts how often the manager asks for its roles. With
+// a reader configured the manager asks on every look at an open adapter,
+// which lets a test wait for a tick to have been handled.
+type lookCountingAdapter struct {
+	*mocks.FakeAdapter
+	looks atomic.Int32
+}
+
+func (a *lookCountingAdapter) Roles() []ble.Role {
+	a.looks.Add(1)
+	return a.FakeAdapter.Roles()
+}
+
+// A working adapter whose radio is then switched off is not chased with the
+// quick retries: nothing will bring the radio back but the user.
+func TestManager_WorkingAdapterLostForWantOfARadioWaitsForTheInterval(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfig(t, true)
+	withBLEReader(t, cfg)
+	roles := []ble.Role{ble.RoleCentral, ble.RolePeripheral, roleCentralPeripheral}
+	first := &lookCountingAdapter{FakeAdapter: mocks.NewFakeAdapter(roles...)}
+	var opens atomic.Int32
+	clock := clockwork.NewFakeClock()
+	m := newManagerWith(cfg, clock, func(context.Context) (ble.Adapter, error) {
+		if opens.Add(1) == 1 {
+			return first, nil
+		}
+		return mocks.NewFakeAdapter(roles...), nil
+	})
+	var rec peripheralRecorder
+	m.OnPeripheral(rec.fn)
+	m.Start()
+	defer m.Stop()
+	require.Eventually(t, func() bool { return rec.calls.Load() == 1 }, eventually, 10*time.Millisecond)
+
+	// Long enough open to count as working. Each tick is waited for, so
+	// none is left over to reopen the adapter after it is lost.
+	for clock.Since(m.openedAtForTest()) < stableAfter {
+		looks := first.looks.Load()
+		advance(t, clock)
+		require.Eventually(t, func() bool { return first.looks.Load() > looks }, eventually, time.Millisecond)
+	}
+	require.Equal(t, int32(1), opens.Load())
+
+	first.MarkGoneBecause(fmt.Errorf("%w: advertising stopped", ble.ErrUnavailable))
+	require.Eventually(t, first.Closed, eventually, 10*time.Millisecond)
+	// Only the ticker is waiting; no retry timer was armed.
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), opens.Load(), "no reopen before the interval")
+
+	tickUntil(t, clock, func() bool { return rec.calls.Load() == 2 })
+	assert.True(t, m.Serving())
+}
+
+// An adapter that goes away for any other reason straight after opening is
+// still a failure, and is given up after maxFailures of them.
+func TestManager_LostForAnotherReasonIsGivenUp(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	m, opens, rec := goneOnServe(t, clock, maxFailures+3, errors.New("create gatt service: controller fault"))
+	m.Start()
+	defer m.Stop()
+
+	tickUntil(t, clock, managerGaveUp(m))
+	assert.Equal(t, int32(maxFailures), opens.Load())
+	assert.Equal(t, int32(maxFailures), rec.calls.Load())
+
+	// Given up: later adapters are opened to look at and not served.
+	tickUntil(t, clock, func() bool { return opens.Load() >= maxFailures+2 })
+	assert.Equal(t, int32(maxFailures), rec.calls.Load())
+	assert.True(t, managerGaveUp(m)())
+	assert.False(t, m.Serving())
+}
+
+// lockedBuffer is a log sink the watch loop can write while the test reads.
+type lockedBuffer struct {
+	buf bytes.Buffer
+	mu  syncutil.Mutex
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p) //nolint:wrapcheck // test sink
+}
+
+func (b *lockedBuffer) count(substr string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), substr)
+}
+
+// A radio that stays missing is reported once, not on every interval, and
+// neither is each look that found it still missing.
+//
+//nolint:paralleltest // replaces the global logger
+func TestManager_LostForWantOfARadioIsReportedOnce(t *testing.T) {
+	var out lockedBuffer
+	original := log.Logger
+	log.Logger = zerolog.New(&out).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger = original })
+
+	const failing = maxFailures + 3
+	clock := clockwork.NewFakeClock()
+	m, _, rec := goneOnServe(t, clock, failing, fmt.Errorf("%w: create gatt service", ble.ErrNoAdapter))
+	m.Start()
+	defer m.Stop()
+
+	tickUntil(t, clock, func() bool { return rec.calls.Load() == failing && !m.Serving() })
+	assert.Equal(t, 1, out.count("bluetooth unavailable, will keep checking"))
+	assert.Equal(t, 1, out.count("bluetooth adapter ready"))
+	assert.Equal(t, 0, out.count("closing bluetooth adapter"))
+
+	// The radio shows up and stays: that is said, and a later loss is
+	// reported afresh.
+	tickUntil(t, clock, func() bool { return out.count("bluetooth is usable again") == 1 })
+	assert.True(t, m.Serving())
+	assert.Equal(t, 1, out.count("bluetooth unavailable, will keep checking"))
 }
 
 // Pausing advertising reaches the current peripheral and every later one.

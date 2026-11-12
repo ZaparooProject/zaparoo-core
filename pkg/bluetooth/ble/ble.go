@@ -170,6 +170,17 @@ type KeyReloader interface {
 	ReloadLongTermKeys(ctx context.Context) (int, error)
 }
 
+// GoneCauser is implemented by adapters that can open without a usable
+// radio and only find that out when a role is used. On Windows that is
+// every adapter, so its owner cannot tell a missing radio from a broken one
+// by whether Open worked.
+type GoneCauser interface {
+	// GoneCause returns why Gone was closed, wrapping one of this package's
+	// errors where the reason is known. It is nil while the adapter is
+	// still there, after an ordinary Close, and when nothing is known.
+	GoneCause() error
+}
+
 // Bonder is implemented by peripherals that can let a phone bond while
 // Core's own pairing is open.
 type Bonder interface {

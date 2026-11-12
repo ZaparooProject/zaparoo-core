@@ -322,6 +322,68 @@ func TestServeServiceCreationFailures(t *testing.T) {
 	}
 }
 
+// A Serve that finds no usable radio leaves the adapter gone with the
+// reason, since on Windows that is the only place a missing radio shows.
+func TestServeFailureLeavesTheCauseWithTheAdapter(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		target error
+		setup  func(*fakeHost)
+		name   string
+	}{
+		{
+			name:   "no radio",
+			setup:  func(h *fakeHost) { h.providerCode = bluetooth.BluetoothErrorRadioNotAvailable },
+			target: ErrNoAdapter,
+		},
+		{
+			name:   "disabled",
+			setup:  func(h *fakeHost) { h.providerCode = bluetooth.BluetoothErrorDisabledByUser },
+			target: ErrUnavailable,
+		},
+		{
+			name:   "not supported",
+			setup:  func(h *fakeHost) { h.providerCode = bluetooth.BluetoothErrorNotSupported },
+			target: ErrRoleUnsupported,
+		},
+		{
+			name:   "advertising refused",
+			setup:  func(h *fakeHost) { h.provider.startErr = ErrRoleUnsupported },
+			target: ErrRoleUnsupported,
+		},
+		{
+			name:   "call fails",
+			setup:  func(h *fakeHost) { h.providerErr = errFake },
+			target: errFake,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			host := newFakeHost()
+			tt.setup(host)
+			s := startServe(t, host)
+			require.ErrorIs(t, s.wait(t), tt.target)
+			require.True(t, isGone(s.a))
+			require.ErrorIs(t, s.a.GoneCause(), tt.target)
+		})
+	}
+}
+
+// A failure that is not about the radio must not read as a missing one.
+func TestServeFailureCauseIsNotMistakenForAMissingRadio(t *testing.T) {
+	t.Parallel()
+	host := newFakeHost()
+	host.providerErr = errFake
+	s := startServe(t, host)
+	require.ErrorIs(t, s.wait(t), errFake)
+	cause := s.a.GoneCause()
+	require.Error(t, cause)
+	for _, target := range []error{ErrNoAdapter, ErrUnavailable, ErrPoweredOff, ErrRoleUnsupported} {
+		require.NotErrorIs(t, cause, target)
+	}
+}
+
 func TestServeCharacteristicFailureUndoesEarlierOnes(t *testing.T) {
 	t.Parallel()
 	host := newFakeHost()
@@ -451,6 +513,7 @@ func TestAdvertiseTimesOut(t *testing.T) {
 				case <-s.done:
 					require.ErrorIs(t, s.err, tt.target)
 					assert.True(t, isGone(s.a))
+					require.ErrorIs(t, s.a.GoneCause(), tt.target)
 				}
 				break
 			}
@@ -491,6 +554,7 @@ func TestServeGivesUpAfterAdvertisingStaysStopped(t *testing.T) {
 	tick(t, s, stopped)
 	require.NoError(t, s.wait(t))
 	assert.True(t, isGone(s.a))
+	require.ErrorIs(t, s.a.GoneCause(), ErrUnavailable, "advertising that stops is the radio going away")
 	assert.Equal(t, int32(1), host.provider.stops.Load())
 }
 

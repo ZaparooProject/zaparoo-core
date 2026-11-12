@@ -197,10 +197,13 @@ type gattCharacteristic interface {
 // hold: it always works on the system's default radio, and says whether
 // there is one, and what it can do, only when a role is actually used.
 type adapter struct {
-	host     winHost
-	clock    clockwork.Clock
-	gone     chan struct{}
-	goneOnce sync.Once
+	host  winHost
+	clock clockwork.Clock
+	gone  chan struct{}
+	// goneCause is why gone was closed. It is written once, before gone is
+	// closed, and only read after.
+	goneCause error
+	goneOnce  sync.Once
 }
 
 func newAdapter(host winHost, clock clockwork.Clock) *adapter {
@@ -227,12 +230,27 @@ func (a *adapter) Peripheral() (Peripheral, error) { return newPeripheral(a), ni
 
 func (a *adapter) Central() (Central, error) { return &central{a: a}, nil }
 
-func (a *adapter) markGone() {
-	a.goneOnce.Do(func() { close(a.gone) })
+// GoneCause implements GoneCauser.
+func (a *adapter) GoneCause() error {
+	select {
+	case <-a.gone:
+		return a.goneCause
+	default:
+		return nil
+	}
+}
+
+// markGone gives the adapter up. cause is what went wrong, or nil when
+// nothing did; only the first call's cause is kept.
+func (a *adapter) markGone(cause error) {
+	a.goneOnce.Do(func() {
+		a.goneCause = cause
+		close(a.gone)
+	})
 }
 
 func (a *adapter) Close() error {
-	a.markGone()
+	a.markGone(nil)
 	return nil
 }
 

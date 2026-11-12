@@ -92,6 +92,22 @@ func TestAdapter(t *testing.T) {
 	require.NoError(t, a.Close())
 	require.NoError(t, a.Close())
 	<-a.Gone()
+	require.NoError(t, a.GoneCause(), "closing is not a failure")
+}
+
+func TestAdapterKeepsTheFirstGoneCause(t *testing.T) {
+	t.Parallel()
+	a, _ := newTestAdapter(newFakeHost())
+	require.NoError(t, a.GoneCause())
+
+	a.markGone(bluetoothError("op", bluetooth.BluetoothErrorRadioNotAvailable))
+	a.markGone(errFake)
+	require.NoError(t, a.Close())
+	<-a.Gone()
+	require.ErrorIs(t, a.GoneCause(), ErrNoAdapter)
+
+	var causer GoneCauser = a
+	require.ErrorIs(t, causer.GoneCause(), ErrNoAdapter)
 }
 
 func TestOpenUsesTheRuntime(t *testing.T) {

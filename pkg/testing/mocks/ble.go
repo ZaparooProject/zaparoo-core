@@ -33,6 +33,7 @@ type FakeAdapter struct {
 	Periph   *FakePeripheral
 	Cent     *FakeCentral
 	gone     chan struct{}
+	cause    error
 	Addr     string
 	RoleList []ble.Role
 	goneOnce sync.Once
@@ -73,7 +74,25 @@ func (a *FakeAdapter) Gone() <-chan struct{} { return a.gone }
 
 // MarkGone simulates the adapter being unplugged.
 func (a *FakeAdapter) MarkGone() {
-	a.goneOnce.Do(func() { close(a.gone) })
+	a.MarkGoneBecause(nil)
+}
+
+// MarkGoneBecause simulates an adapter that found out why it cannot be
+// used, as the Windows one does when a role is first used.
+func (a *FakeAdapter) MarkGoneBecause(cause error) {
+	a.goneOnce.Do(func() {
+		a.mu.Lock()
+		a.cause = cause
+		a.mu.Unlock()
+		close(a.gone)
+	})
+}
+
+// GoneCause implements ble.GoneCauser.
+func (a *FakeAdapter) GoneCause() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cause
 }
 
 func (a *FakeAdapter) Close() error {
