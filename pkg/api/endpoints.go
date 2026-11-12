@@ -21,33 +21,29 @@ package api
 
 import (
 	"net"
-	"strings"
 )
 
 // networkAddresses returns what device.endpoints reports as the LAN
-// addresses of the network API. reachable is false when the API only
-// listens on a listener the host supplied, such as a Unix socket. An API
-// bound to one address answers there alone, and one bound to loopback is
-// not on the network at all.
-func networkAddresses(listenAddr string, reachable bool, localIPs LocalIPsProvider) func() []string {
+// addresses of the network API. bound is the address the network-facing
+// listener actually holds, or nil when the API only listens on a listener
+// the host supplied, such as a Unix socket. The configured address is not
+// consulted: a hostname in it resolved to one address when the listener was
+// bound, and that address is the only one that answers. An API bound to
+// every interface is reported at each local IP, one bound to a single
+// address there alone, and one bound to loopback is not on the network.
+func networkAddresses(bound net.Addr, localIPs LocalIPsProvider) func() []string {
 	return func() []string {
-		if !reachable {
+		tcp, ok := bound.(*net.TCPAddr)
+		if !ok || tcp == nil {
 			return nil
 		}
-		host, _, err := net.SplitHostPort(listenAddr)
-		if err != nil {
-			host = ""
-		}
-		host = strings.Trim(host, "[]")
-		if strings.EqualFold(host, "localhost") {
+		switch {
+		case tcp.IP == nil || tcp.IP.IsUnspecified():
+			return localIPs()
+		case tcp.IP.IsLoopback():
 			return nil
+		default:
+			return []string{tcp.IP.String()}
 		}
-		if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
-			if ip.IsLoopback() {
-				return nil
-			}
-			return []string{ip.String()}
-		}
-		return localIPs()
 	}
 }

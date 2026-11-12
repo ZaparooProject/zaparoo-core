@@ -534,22 +534,23 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 		resp.endQueue()
 	}
 
+	if !resp.pong && !resp.result.ShouldReply {
+		return
+	}
+
+	// A pong is a write like any other, so it waits its turn as well.
+	if waiter, ok := d.session.(writableWaiter); ok {
+		// A failed wait means the session is closing; the write below
+		// reports that through the usual path.
+		_ = waiter.WaitWritable(d.ctx)
+	}
+
 	if resp.pong {
 		if err := writePong(frameWriter(d.session, resp.cs), resp.cs); err != nil {
 			logWSWriteError(err, "sending pong")
 			closeSession(d.session)
 		}
 		return
-	}
-
-	if !resp.result.ShouldReply {
-		return
-	}
-
-	if waiter, ok := d.session.(writableWaiter); ok {
-		// A failed wait means the session is closing; the write below
-		// reports that through the usual path.
-		_ = waiter.WaitWritable(d.ctx)
 	}
 
 	// The send helpers time marshaling and enqueueing separately. Melody's Write

@@ -2478,15 +2478,26 @@ func StartWithListener(
 		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
 	}
 
+	// The address remote clients reach the API at is the one actually bound,
+	// which a listener the host supplied for itself is not.
+	var networkAddr net.Addr
+	switch {
+	case networkListener != nil:
+		networkAddr = networkListener.Addr()
+	case opts.Listener == nil:
+		networkAddr = listener.Addr()
+	}
+	// The Bluetooth transport is built further down, once everything it
+	// shares with the other transports exists, and before anything can
+	// call the method.
+	var bleServing func() bool
 	endpoints := methods.DeviceEndpoints{
-		Port: port,
-		Name: func() string { return discovery.ResolveInstanceName(cfg) },
-		Addresses: networkAddresses(
-			listenAddr, opts.Listener == nil || networkListener != nil, localIPsProvider,
-		),
+		Port:      port,
+		Name:      func() string { return discovery.ResolveInstanceName(cfg) },
+		Addresses: networkAddresses(networkAddr, localIPsProvider),
 	}
 	if opts.Bluetooth != nil {
-		endpoints.BLE = opts.Bluetooth.Serving
+		endpoints.BLE = func() bool { return bleServing != nil && bleServing() }
 	}
 	if err := methodMap.AddMethod(models.MethodDeviceEndpoints,
 		methods.HandleDeviceEndpoints(endpoints), false); err != nil {
@@ -2518,6 +2529,7 @@ func StartWithListener(
 			pairing:     pairingMgr,
 			notifBroker: notifBroker,
 		})
+		bleServing = bt.isServing
 		bt.unregister = opts.Bluetooth.OnPeripheral(bt.serve)
 		defer bt.stop()
 	}

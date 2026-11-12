@@ -71,7 +71,13 @@ type bleTransport struct {
 	// every stack can drop a link, and a client that keeps writing after
 	// being told its session is over would otherwise get a new session,
 	// and a new closing notice, for every chunk.
-	refused     map[string]time.Time
+	refused map[string]time.Time
+	// left holds, for each peer with a session, the tags of the sessions it
+	// has given up on over this connection. A chunk carrying one of them is
+	// a straggler; a chunk carrying any other tag starts a new session. It
+	// lives and dies with the peer's session, and holds bleLeftTags tags at
+	// most because the peer picks them.
+	left        map[string]map[uint16]struct{}
 	peripheral  ble.Peripheral
 	serveCancel context.CancelFunc
 	// unregister detaches serve from the bluetooth manager on stop.
@@ -98,6 +104,7 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 		pairLimiter:      rate.NewLimiter(bleTransportPairingRate, bleTransportPairingBurst),
 		sessions:         make(map[string]*bleSession),
 		refused:          make(map[string]time.Time),
+		left:             make(map[string]map[uint16]struct{}),
 		bondKick:         make(chan struct{}, 1),
 	}
 	t.ctx, t.cancel = context.WithCancel(d.core.st.GetContext())
@@ -231,6 +238,17 @@ func (t *bleTransport) serveWithRetries(ctx context.Context, p ble.Peripheral, a
 	}
 }
 
+// isServing reports whether the API is being served over Bluetooth right
+// now. Holding a peripheral is not enough: after bleServeAttempts failures
+// the transport stops trying until the adapter changes, and until then no
+// client can reach it. It is true from the moment an attempt starts, since
+// a peripheral does not say when it has finished registering.
+func (t *bleTransport) isServing() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.serving != nil && !t.stopped
+}
+
 // logServeErr logs a serve failure, quietly when it repeats the last one.
 func (t *bleTransport) logServeErr(err error) {
 	t.mu.Lock()
@@ -323,13 +341,57 @@ func (t *bleTransport) refuse(peer ble.Peer) {
 	t.refused[peer.Path] = t.clock.Now()
 }
 
-// forget removes a session from the table once it has closed.
+// forget removes a session from the table once it has closed. A session
+// that was replaced is no longer in it, and the tags its connection has left
+// stay with the replacement.
 func (t *bleTransport) forget(s *bleSession) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.sessions[s.peer.Path] == s {
 		delete(t.sessions, s.peer.Path)
+		delete(t.left, s.peer.Path)
 	}
+}
+
+// current returns the peer's session, if it has one.
+func (t *bleTransport) current(peer ble.Peer) *bleSession {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessions[peer.Path]
+}
+
+// restart handles a data chunk whose tag is not the tag of old, the session
+// it reached. A tag the connection has not used before means the client has
+// given up on old and started over, whichever of the new session's chunks
+// this is: old is replaced and the new session returned with started true.
+// When another chunk already replaced old, that replacement is returned. A
+// tag the connection has already left is a straggler and gets nil. full
+// reports that the connection has changed tag too often to keep track of.
+func (t *bleTransport) restart(peer ble.Peer, old *bleSession, tag uint16) (next *bleSession, started, full bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cur := t.sessions[peer.Path]; cur != old {
+		return cur, false, false
+	}
+	if t.stopped || t.peripheral == nil {
+		return nil, false, false
+	}
+	left := t.left[peer.Path]
+	if _, ok := left[tag]; ok {
+		return nil, false, false
+	}
+	if len(left) >= bleLeftTags {
+		return nil, false, true
+	}
+	if left == nil {
+		left = make(map[uint16]struct{})
+		t.left[peer.Path] = left
+	}
+	left[old.supersede()] = struct{}{}
+	next = newBLESession(t, peer, t.peripheral)
+	next.useTag(tag)
+	t.sessions[peer.Path] = next
+	return next, true, false
 }
 
 // OnWrite implements ble.PeripheralHandler: every write to RX is a chunk.
@@ -338,14 +400,44 @@ func (t *bleTransport) OnWrite(peer ble.Peer, charUUID string, value []byte, mtu
 		return
 	}
 	s := t.sessionFor(peer)
-	if s == nil || !s.handleChunk(value, mtu) {
+	if s == nil {
 		return
 	}
-	// The client is still connected and wants a clean start, so there is
-	// no farewell and no disconnect.
-	s.shutdownWith("client started a new session", false)
-	if s = t.sessionFor(peer); s != nil {
-		s.handleChunk(value, mtu)
+	h, payload, err := apigatt.ParseChunk(value)
+	if err != nil {
+		s.framingError(err)
+		return
+	}
+	// Each turn hands the chunk to a session it has not been to, and a
+	// connection only gets so many, so this ends.
+	for s != nil {
+		switch s.handleChunk(h, payload, mtu) {
+		case bleChunkHandled:
+			return
+		case bleChunkSuperseded:
+			// Only to a session that already exists: this chunk was
+			// overtaken by the one that started it.
+			s = t.current(peer)
+		case bleChunkOtherTag:
+			next, started, full := t.restart(peer, s, h.Tag)
+			switch {
+			case full:
+				// Failing closed: with no room to remember another tag,
+				// a later straggler could not be told from a new session.
+				s.shutdown("too many sessions on one connection")
+			case started:
+				// The client is still connected and wants a clean start,
+				// so there is no farewell and no disconnect.
+				s.shutdownWith("client started a new session", false)
+				// Outside the lock: the device monitor is not the
+				// transport's to hold up.
+				notificationClientConnected(t.core.st)
+			case next == nil:
+				log.Debug().Str("peer", peer.Address).Uint16("tag", h.Tag).
+					Msg("bluetooth chunk for another session dropped")
+			}
+			s = next
+		}
 	}
 }
 
@@ -376,6 +468,7 @@ func (t *bleTransport) OnDisconnect(peer ble.Peer) {
 	t.mu.Lock()
 	s := t.sessions[peer.Path]
 	delete(t.refused, peer.Path)
+	delete(t.left, peer.Path)
 	t.mu.Unlock()
 	if s != nil {
 		s.shutdownWith("client disconnected", false)
@@ -389,7 +482,11 @@ func (t *bleTransport) broadcast(notifs <-chan models.Notification) {
 		select {
 		case <-t.ctx.Done():
 			return
-		case notif := <-notifs:
+		case notif, ok := <-notifs:
+			if !ok {
+				// The broker stopped and closed the channel.
+				return
+			}
 			// Most devices never have a BLE client, so look before
 			// spending a marshal on every notification.
 			t.mu.Lock()

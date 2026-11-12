@@ -58,6 +58,13 @@ const (
 	// bleRefuseFor is how long a peer whose session Core ended is ignored
 	// if it is never seen to disconnect.
 	bleRefuseFor = 30 * time.Second
+	// bleLeftTags is how many times one connection may start a new session
+	// under a new tag. The app does it once, between pairing and its
+	// encrypted session. Each tag left behind is remembered so its late
+	// chunks are not taken for another new session, and the peer picks the
+	// tags, so the memory is bounded: a connection that reaches the bound
+	// has its session ended and must reconnect to start again.
+	bleLeftTags = 8
 	// bleServeAttempts is how many times in a row serving on one adapter
 	// may fail before the transport waits for the adapter to change. The
 	// wait between attempts starts at bleServeRetryDelay and doubles.
@@ -159,6 +166,9 @@ type bleSession struct {
 	tagSet bool
 	state  bleAuthState
 	closed bool
+	// superseded is set once the client has started another session on
+	// this connection, so chunks that still reach this one are passed on.
+	superseded bool
 }
 
 func newBLESession(t *bleTransport, peer ble.Peer, p ble.Peripheral) *bleSession {
@@ -186,27 +196,60 @@ func newBLESession(t *bleTransport, peer ble.Peer, p ble.Peripheral) *bleSession
 	return s
 }
 
+// useTag fixes the session's tag before any chunk reaches it. A session the
+// client started by changing tag must not take its tag from whichever chunk
+// arrives first, which may be a straggler from the one before.
+func (s *bleSession) useTag(tag uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tag = tag
+	s.tagSet = true
+}
+
+// supersede marks the session as replaced by another on the same
+// connection, and reports its tag. The transport calls it as it puts the
+// replacement in the table, so a chunk that finds this session closed can
+// always tell that it has somewhere else to go.
+func (s *bleSession) supersede() (tag uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.superseded = true
+	return s.tag
+}
+
 // clientID names the session the way RemoteAddr names a WebSocket client.
 func (s *bleSession) clientID() string {
 	return "ble:" + s.peer.Address
 }
 
+// bleChunkResult is what became of a chunk handed to a session.
+type bleChunkResult uint8
+
+const (
+	// bleChunkHandled: the session consumed or dropped the chunk.
+	bleChunkHandled bleChunkResult = iota
+	// bleChunkOtherTag: a data chunk for a session other than this one. The
+	// transport decides whether it starts a new session or is a straggler.
+	bleChunkOtherTag
+	// bleChunkSuperseded: the client started a new session on this
+	// connection before the chunk got here, so it belongs to that one.
+	bleChunkSuperseded
+)
+
 // handleChunk consumes one write to the RX characteristic. BlueZ delivers
 // each write on its own goroutine, so calls arrive in any order; the
-// sequence number in the chunk is what orders them. It reports true, having
-// consumed nothing, when the chunk starts a new session: the client has
-// given up on this one and opened another on the same connection.
-func (s *bleSession) handleChunk(chunk []byte, mtu int) (restart bool) {
-	h, payload, err := apigatt.ParseChunk(chunk)
-	if err != nil {
-		s.framingError(err)
-		return false
-	}
-
+// sequence number in the chunk is what orders them. Anything but
+// bleChunkHandled means nothing was consumed and the transport has to find
+// the chunk its session.
+func (s *bleSession) handleChunk(h apigatt.Header, payload []byte, mtu int) bleChunkResult {
 	s.mu.Lock()
 	if s.closed {
+		superseded := s.superseded
 		s.mu.Unlock()
-		return false
+		if superseded {
+			return bleChunkSuperseded
+		}
+		return bleChunkHandled
 	}
 	if mtu > 0 {
 		s.mtu = mtu
@@ -217,12 +260,14 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) (restart bool) {
 	}
 	if h.Tag != s.tag {
 		s.mu.Unlock()
-		if h.First && !h.Ack && h.Seq == 0 {
-			return true
+		if !h.Ack {
+			return bleChunkOtherTag
 		}
-		// A straggler from a session the client has already left.
-		log.Debug().Str("peer", s.peer.Address).Uint16("tag", h.Tag).Msg("bluetooth chunk for another session dropped")
-		return false
+		// An acknowledgement never starts a session: it is a straggler
+		// from one the client has already left.
+		log.Debug().Str("peer", s.peer.Address).Uint16("tag", h.Tag).
+			Msg("bluetooth acknowledgement for another session dropped")
+		return bleChunkHandled
 	}
 	if h.Ack {
 		// An acknowledgement may only move forward, and only over chunks
@@ -235,15 +280,15 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) (restart bool) {
 		}
 		s.mu.Unlock()
 		if stale {
-			return false
+			return bleChunkHandled
 		}
 		if !valid {
 			s.framingError(fmt.Errorf("%w: acknowledgement of chunk %d never sent", apigatt.ErrSequence, h.Seq))
-			return false
+			return bleChunkHandled
 		}
 		signal(s.acks)
 		s.touchIdle()
-		return false
+		return bleChunkHandled
 	}
 	msgs, err := s.reasm.Push(h, payload)
 	s.watchGapLocked()
@@ -261,14 +306,14 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) (restart bool) {
 
 	if err != nil {
 		s.framingError(err)
-		return false
+		return bleChunkHandled
 	}
 	if !queued {
 		s.shutdown("inbound queue overflow")
-		return false
+		return bleChunkHandled
 	}
 	s.touchIdle()
-	return false
+	return bleChunkHandled
 }
 
 // watchGapLocked starts, restarts or stops the timer that gives up on a

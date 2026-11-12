@@ -20,6 +20,7 @@
 package api
 
 import (
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,26 +30,30 @@ func TestNetworkAddresses(t *testing.T) {
 	t.Parallel()
 
 	lan := func() []string { return []string{"192.168.1.20", "10.0.0.5"} }
+	tcp := func(ip string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(ip), Port: 7497} }
 	tests := []struct {
-		name      string
-		listen    string
-		want      []string
-		reachable bool
+		bound net.Addr
+		name  string
+		want  []string
 	}{
-		{name: "all interfaces", listen: ":7497", reachable: true, want: []string{"192.168.1.20", "10.0.0.5"}},
-		{name: "unspecified IPv4", listen: "0.0.0.0:7497", reachable: true, want: []string{"192.168.1.20", "10.0.0.5"}},
-		{name: "unspecified IPv6", listen: "[::]:7497", reachable: true, want: []string{"192.168.1.20", "10.0.0.5"}},
-		{name: "no port", listen: "", reachable: true, want: []string{"192.168.1.20", "10.0.0.5"}},
-		{name: "one address", listen: "192.168.1.20:7497", reachable: true, want: []string{"192.168.1.20"}},
-		{name: "loopback", listen: "127.0.0.1:7497", reachable: true},
-		{name: "IPv6 loopback", listen: "[::1]:7497", reachable: true},
-		{name: "localhost", listen: "LocalHost:7497", reachable: true},
-		{name: "not on the network", listen: ":7497"},
+		{name: "all interfaces", bound: &net.TCPAddr{Port: 7497}, want: []string{"192.168.1.20", "10.0.0.5"}},
+		{name: "unspecified IPv4", bound: tcp("0.0.0.0"), want: []string{"192.168.1.20", "10.0.0.5"}},
+		{name: "unspecified IPv6", bound: tcp("::"), want: []string{"192.168.1.20", "10.0.0.5"}},
+		{name: "one address", bound: tcp("192.168.1.20"), want: []string{"192.168.1.20"}},
+		{name: "one IPv6 address", bound: tcp("fd00::20"), want: []string{"fd00::20"}},
+		{name: "loopback", bound: tcp("127.0.0.1")},
+		{name: "IPv6 loopback", bound: tcp("::1")},
+		// A hostname in api_listen binds whatever it resolved to, so the
+		// bound address is what counts, not the name.
+		{name: "hostname bound to loopback", bound: tcp("127.0.1.1")},
+		{name: "hostname bound to one address", bound: tcp("10.0.0.5"), want: []string{"10.0.0.5"}},
+		{name: "unix socket", bound: &net.UnixAddr{Name: "/run/zaparoo/api.sock", Net: "unix"}},
+		{name: "not on the network"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, networkAddresses(tt.listen, tt.reachable, lan)())
+			assert.Equal(t, tt.want, networkAddresses(tt.bound, lan)())
 		})
 	}
 }

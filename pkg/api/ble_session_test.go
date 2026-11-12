@@ -585,6 +585,28 @@ func TestBLETransport_BroadcastsThroughBroker(t *testing.T) {
 	pending.expectNothing(t)
 }
 
+// The broker closes its subscribers' channels when it stops, and a closed
+// channel yields empty notifications for as long as it is read.
+func TestBLETransport_StopsBroadcastingWhenBrokerStops(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	source := make(chan models.Notification)
+	b := broker.NewBroker(t.Context(), source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	rig := newBLETestRig(t, bleTestRigOptions{
+		methodMap: versionMethodMap(t), encGateway: first.gateway, notifBroker: b,
+	})
+	authed := rig.client("77:88:99:AA:BB:CC", 2, 185)
+	authed.authenticate(t, first)
+
+	b.Stop()
+
+	authed.expectNothing(t)
+}
+
 func TestBLESession_UnsupportedVersionIsAnswered(t *testing.T) {
 	t.Parallel()
 
@@ -843,6 +865,132 @@ func TestBLESession_NewTagStartsANewSession(t *testing.T) {
 	assert.Equal(t, models.NewNumberID(1), resp.ID)
 	assert.NotSame(t, oldSession, client.session())
 	old.expectNothing(t)
+}
+
+// BlueZ hands every write to its own goroutine, so the first chunk of the new
+// session to arrive need not be the first one sent. Whichever it is starts
+// the session, and the reassembler holds it until the ones before it arrive.
+func TestBLESession_NewTagStartsANewSessionFromAnyChunk(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	old := rig.client("11:22:33:44:55:66", 7, 185)
+	old.openPending(t)
+	oldSession := old.session()
+	require.NotNil(t, oldSession)
+
+	client := rig.client("11:22:33:44:55:66", 8, apigatt.DefaultMTU)
+	chunks := client.chunks(t, first.binary(t))
+	require.Greater(t, len(chunks), 2)
+	client.write(chunks[1])
+	client.write(chunks[0])
+	for _, chunk := range chunks[2:] {
+		client.write(chunk)
+	}
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
+	assert.NotSame(t, oldSession, client.session())
+	old.expectNothing(t)
+}
+
+// The same with every chunk of the new session racing the others, so some
+// reach the old session before it is replaced and some as it closes.
+func TestBLESession_NewTagStartsANewSessionFromRacingChunks(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	old := rig.client("11:22:33:44:55:66", 7, 185)
+	old.openPending(t)
+	require.NotNil(t, old.session())
+
+	client := rig.client("11:22:33:44:55:66", 8, apigatt.DefaultMTU)
+	chunks := client.chunks(t, first.binary(t))
+	require.Greater(t, len(chunks), 2)
+	var wg sync.WaitGroup
+	for i := len(chunks) - 1; i >= 0; i-- {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.write(chunks[i])
+		}()
+	}
+	wg.Wait()
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
+	old.expectNothing(t)
+}
+
+// Once the client has moved to a new tag, a late chunk carrying the old one
+// is a straggler, even one shaped like the start of a session.
+func TestBLESession_StragglerForALeftTagIsDropped(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	old := rig.client("11:22:33:44:55:66", 7, 185)
+	old.openPending(t)
+
+	client := rig.client("11:22:33:44:55:66", 8, 185)
+	client.authenticate(t, first)
+	s := client.session()
+	require.NotNil(t, s)
+
+	straggler := rig.client("11:22:33:44:55:66", 7, 185)
+	straggler.send(t, []byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
+	straggler.expectNothing(t)
+	assert.Same(t, s, client.session())
+
+	// The session it was aimed at carries on.
+	client.send(t, first.secrets.encryptSubsequentBinary(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":2}`), 1))
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 1), &resp))
+	assert.Equal(t, models.NewNumberID(2), resp.ID)
+}
+
+// The peer picks the tags, so Core only remembers so many left behind. A
+// connection that runs out is ended rather than allowed to reuse one.
+func TestBLESession_TooManyNewSessionsEndsTheConnection(t *testing.T) {
+	t.Parallel()
+
+	const address = "11:22:33:44:55:66"
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	tag := uint16(1)
+	last := rig.client(address, tag, 185)
+	last.openPending(t)
+	for range bleLeftTags {
+		before := last.session()
+		tag++
+		last = rig.client(address, tag, 185)
+		last.openPending(t)
+		require.NotNil(t, last.session())
+		require.NotSame(t, before, last.session())
+	}
+
+	over := rig.client(address, tag+1, 185)
+	over.openPending(t)
+	last.expectSessionClosed(t)
+	last.waitClosed(t)
+
+	// Neither an old tag nor a new one gets back in on this connection.
+	rig.client(address, 1, 185).openPending(t)
+	rig.client(address, tag+2, 185).openPending(t)
+	assert.Nil(t, last.session())
+
+	// Reconnecting starts the count again.
+	rig.peripheral.Handler().OnDisconnect(last.peer)
+	again := rig.client(address, 1, 185)
+	again.openPending(t)
+	assert.NotNil(t, again.session())
+	rig.transport.mu.Lock()
+	defer rig.transport.mu.Unlock()
+	assert.Empty(t, rig.transport.left[again.peer.Path])
 }
 
 // Acknowledgements are written one after another but BlueZ hands each to its
@@ -1297,9 +1445,15 @@ func TestBLETransport_StopsRetryingAfterRepeatedFailures(t *testing.T) {
 	clock.Advance(time.Hour)
 	assert.Never(t, func() bool { return peripheral.Serves() > bleServeAttempts },
 		50*time.Millisecond, 5*time.Millisecond)
+	// It still holds the peripheral, but nothing is being served on it.
+	require.Eventually(t, func() bool { return !transport.isServing() }, bleTestTimeout, 5*time.Millisecond)
 
 	// A new adapter starts over.
 	replacement := mocks.NewFakePeripheral()
 	transport.serve(replacement)
 	require.Eventually(t, func() bool { return replacement.Handler() != nil }, bleTestTimeout, 5*time.Millisecond)
+	assert.True(t, transport.isServing())
+
+	transport.stop()
+	assert.False(t, transport.isServing())
 }

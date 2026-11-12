@@ -84,6 +84,53 @@ func (f *fakeSessionWriter) waitClosed(t *testing.T) {
 	}
 }
 
+// backedUpSessionWriter is a fakeSessionWriter on a slow link: it reports
+// each wait for room and holds it until released.
+type backedUpSessionWriter struct {
+	*fakeSessionWriter
+	waiting chan struct{}
+	release chan struct{}
+}
+
+func (b *backedUpSessionWriter) WaitWritable(ctx context.Context) error {
+	select {
+	case b.waiting <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// A pong adds to the backlog like any reply, so it is held back with them.
+func TestSessionDispatcherPongWaitsForAWritableSession(t *testing.T) {
+	t.Parallel()
+
+	writer := &backedUpSessionWriter{
+		fakeSessionWriter: newFakeSessionWriter(),
+		waiting:           make(chan struct{}),
+		release:           make(chan struct{}),
+	}
+	d := newSessionDispatcher(t.Context(), writer, nil)
+	defer d.close()
+
+	require.NoError(t, d.enqueuePong(nil, nil))
+	select {
+	case <-writer.waiting:
+	case <-writer.writes:
+		t.Fatal("pong written without waiting for room")
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatcher never handled the pong")
+	}
+
+	close(writer.release)
+	assert.Equal(t, []byte("pong"), writer.waitWrite(t))
+}
+
 func TestSessionDispatcherWritesThroughSessionWriter(t *testing.T) {
 	t.Parallel()
 
