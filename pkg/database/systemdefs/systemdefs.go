@@ -293,6 +293,10 @@ const (
 	SystemZX81                   = "ZX81"
 	SystemZXSpectrum             = "ZXSpectrum"
 	SystemZXNext                 = "ZXNext"
+	SystemEXL100                 = "EXL100"
+	SystemP2000T                 = "P2000T"
+	SystemVG5000                 = "VG5000"
+	SystemZMachine               = "ZMachine"
 	SystemAtariST                = "AtariST"
 	SystemColecoAdam             = "ColecoAdam"
 	SystemFM7                    = "FM7"
@@ -1459,6 +1463,22 @@ var Systems = map[string]System{
 	SystemZXNext: {
 		ID:    SystemZXNext,
 		Slugs: []string{"zxspectrumnext", "spectrumnext"},
+	},
+	SystemEXL100: {
+		ID:    SystemEXL100,
+		Slugs: []string{"exelvisionexl100", "exeltel"},
+	},
+	SystemP2000T: {
+		ID:    SystemP2000T,
+		Slugs: []string{"philipsp2000t", "p2000"},
+	},
+	SystemVG5000: {
+		ID:    SystemVG5000,
+		Slugs: []string{"philipsvg5000"},
+	},
+	SystemZMachine: {
+		ID:    SystemZMachine,
+		Slugs: []string{"infocom", "zcode"},
 	},
 	SystemCommodorePlus4: {
 		ID:      SystemCommodorePlus4,

@@ -1,331 +1,298 @@
 //go:build linux && !android
 
-/*
-Zaparoo Core
-Copyright (C) 2024, 2025 Callan Barrett
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-This file is part of Zaparoo Core.
-
-Zaparoo Core is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-Zaparoo Core is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-*/
-
+// Package recalbox implements Recalbox. Games are launched through
+// EmulationStation's UDP command port so ES stays in charge of emulator
+// configuration, and followed through the state file ES rewrites on every
+// event.
 package recalbox
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
+	"syscall"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/adrg/xdg"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
+const (
+	// InstallDir holds the binary, config, database and logs on the share
+	// partition, which Recalbox upgrades keep.
+	InstallDir = "/recalbox/share/system/zaparoo"
+	// ServiceBinaryDir is on tmpfs, which can execute files.
+	ServiceBinaryDir = "/tmp/zaparoo-bin"
+	// romsRoot is the internal ROM folder.
+	romsRoot = "/recalbox/share/roms"
+	// shareInitRomsRoot holds the ROMs Recalbox ships, which ES lists too.
+	shareInitRomsRoot = "/recalbox/share_init/roms"
+	// externalsRoot is where Recalbox mounts USB drives.
+	externalsRoot = "/recalbox/share/externals"
+)
+
+// Platform implements platforms.Platform for Recalbox.
 type Platform struct {
-	activeMedia    func() *models.ActiveMedia
+	lastStart      time.Time
+	serviceCtx     context.Context
+	fs             afero.Fs
+	clock          clockwork.Clock
+	changed        chan struct{}
+	signal         func(pid int, sig syscall.Signal) error
 	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	// completedProcess is the last tracked process that exited while still
-	// tracked, so only its own waiter may clear media.
-	completedProcess *os.Process
-	processDone      chan struct{}
-	processMu        syncutil.RWMutex
-	waitClaimed      bool
+	subscribe      func(ctx context.Context, onEvent func())
+	cancel         context.CancelFunc
+	wake           chan struct{}
+	*linuxbase.Base
+	activeMedia func() *models.ActiveMedia
+	observed    esState
+	procDir     string
+	lastKey     string
+	gamePath    string
+	commandAddr string
+	generation  uint64
+	stateMu     syncutil.Mutex
+	refreshMu   syncutil.Mutex
+	startMu     syncutil.Mutex
+	seenState   bool
 }
 
-func (*Platform) ID() string {
-	return platformids.Recalbox
+// NewPlatform creates a Recalbox platform.
+func NewPlatform() *Platform {
+	return &Platform{
+		Base:        linuxbase.NewBase(platformids.Recalbox),
+		fs:          afero.NewOsFs(),
+		clock:       clockwork.NewRealClock(),
+		signal:      killProcess,
+		subscribe:   subscribeESEvents,
+		wake:        make(chan struct{}, 1),
+		changed:     make(chan struct{}),
+		commandAddr: esCommandAddr,
+		procDir:     procRoot,
+	}
 }
 
+// SupportedReaders returns the standard Linux reader set.
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	allReaders := []readers.Reader{
-		pn532.NewReader(cfg),
-		ccid.NewReader(cfg),
-		libnfc.NewACR122Reader(cfg),
-		libnfc.NewLegacyUARTReader(cfg),
-		libnfc.NewLegacyI2CReader(cfg),
-		file.NewReader(cfg),
-		simpleserial.NewReader(cfg),
-		simpleserialble.NewReader(cfg),
-		rs232barcode.NewReader(cfg),
-		opticaldrive.NewReader(cfg),
-		mqtt.NewReader(cfg),
-		externaldrive.NewReader(cfg),
-		tty2oled.NewReader(cfg, p),
-	}
-
-	var enabled []readers.Reader
-	for _, r := range allReaders {
-		metadata := r.Metadata()
-		driver := config.DriverInfo{
-			ID:                metadata.ID,
-			DefaultEnabled:    metadata.DefaultEnabled,
-			DefaultAutoDetect: metadata.DefaultAutoDetect,
-		}
-		if cfg.IsReaderEnabled(driver, config.ReaderEnableContextCandidate) {
-			enabled = append(enabled, r)
-		}
-	}
-	return enabled
+	return linuxbase.SupportedReaders(cfg, p)
 }
 
-func (*Platform) StartPre(_ *config.Instance) error {
-	return nil
-}
-
-func (p *Platform) StartPost(
-	_ context.Context,
-	_ *config.Instance,
-	_ platforms.LauncherContextManager,
-	activeMedia func() *models.ActiveMedia,
-	setActiveMedia func(*models.ActiveMedia),
-	_ *database.Database,
-	_ *idle.Scheduler,
-) error {
-	p.activeMedia = activeMedia
-	p.setActiveMedia = setActiveMedia
-	return nil
-}
-
-func (*Platform) Stop() error {
-	return nil
-}
-
-func (p *Platform) SetTrackedProcess(proc *os.Process) {
-	p.processMu.Lock()
-	defer p.processMu.Unlock()
-	p.trackedProcess = proc
-	p.completedProcess = nil
-	p.waitClaimed = false
-	if proc == nil {
-		p.processDone = nil
-	} else {
-		p.processDone = make(chan struct{})
-	}
-}
-
-// WaitTrackedProcess waits for and reaps proc. It returns an error when proc is
-// no longer the tracked process, for example after Core stopped it.
-func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
-	p.processMu.Lock()
-	if proc == nil || p.trackedProcess != proc {
-		p.processMu.Unlock()
-		return errors.New("process is no longer tracked")
-	}
-	done := p.processDone
-	if p.waitClaimed {
-		p.processMu.Unlock()
-		<-done
-		return nil
-	}
-	p.waitClaimed = true
-	p.processMu.Unlock()
-
-	_, err := proc.Wait()
-
-	p.processMu.Lock()
-	if p.trackedProcess == proc {
-		p.trackedProcess = nil
-		p.completedProcess = proc
-		p.processDone = nil
-		p.waitClaimed = false
-	}
-	p.processMu.Unlock()
-	close(done)
-
-	if err != nil {
-		return fmt.Errorf("wait for tracked process: %w", err)
-	}
-	return nil
-}
-
-// ClearTrackedProcessMedia clears active media only if proc exited without a
-// newer process being tracked, so a late exit never clears a newer launch.
-func (p *Platform) ClearTrackedProcessMedia(proc *os.Process) bool {
-	p.processMu.Lock()
-	if p.completedProcess != proc || p.trackedProcess != nil {
-		p.processMu.Unlock()
-		return false
-	}
-	p.completedProcess = nil
-	p.processMu.Unlock()
-
-	if p.setActiveMedia != nil {
-		p.setActiveMedia(nil)
-	}
-	return true
-}
-
-func (*Platform) ScanHook(_ *tokens.Token) error {
-	return nil
-}
-
-func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return cfg.IndexRoots()
-}
-
+// Settings keeps everything in InstallDir.
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
-		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
-		TempDir:    filepath.Join(os.TempDir(), config.AppName),
-		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
-		ZipsAsDirs: false,
+		DataDir:   InstallDir,
+		ConfigDir: InstallDir,
+		LogDir:    filepath.Join(InstallDir, config.LogsDir),
+		TempDir:   filepath.Join(os.TempDir(), config.AppName),
 	}
 }
 
-func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
-	// Kill tracked process if it exists
-	p.processMu.Lock()
-	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
-			log.Warn().Err(err).Msg("failed to kill tracked process")
-		} else {
-			log.Debug().Msg("killed tracked process")
+// ServiceBinaryDir is where the service runs from. The share is FAT mounted
+// without exec bits, so the binary is copied to tmpfs first.
+func (*Platform) ServiceBinaryDir() string {
+	return ServiceBinaryDir
+}
+
+// romRoots lists the folders EmulationStation reads systems from, in its
+// order: the stock ROMs, the share, then each external drive's first ROM
+// layout (recalbox/roms, roms, or the drive itself).
+func (p *Platform) romRoots() []string {
+	var roots []string
+	for _, dir := range []string{shareInitRomsRoot, romsRoot} {
+		if p.isDir(dir) {
+			roots = append(roots, dir)
 		}
-		p.trackedProcess = nil
-		p.processDone = nil
-		p.waitClaimed = false
 	}
-	p.completedProcess = nil
-	p.processMu.Unlock()
+	drives, err := afero.ReadDir(p.fs, externalsRoot)
+	if err != nil {
+		return roots
+	}
+	for _, drive := range drives {
+		if !drive.IsDir() {
+			continue
+		}
+		mount := filepath.Join(externalsRoot, drive.Name())
+		root := mount
+		for _, inner := range []string{filepath.Join("recalbox", "roms"), "roms"} {
+			if p.isDir(filepath.Join(mount, inner)) {
+				root = filepath.Join(mount, inner)
+				break
+			}
+		}
+		roots = append(roots, root)
+	}
+	return roots
+}
 
-	p.setActiveMedia(nil)
+func (p *Platform) isDir(path string) bool {
+	info, err := p.fs.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// RootDirs returns configured index roots plus the folders ES reads ROMs from.
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	roots := slices.Clone(cfg.IndexRoots())
+	roots = append(roots, p.romRoots()...)
+	seen := make(map[string]struct{}, len(roots))
+	result := make([]string, 0, len(roots))
+	for _, r := range roots {
+		r = filepath.Clean(r)
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		result = append(result, r)
+	}
+	return result
+}
+
+// StartPost starts following EmulationStation events.
+func (p *Platform) StartPost(
+	ctx context.Context,
+	cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
+	scheduler *idle.Scheduler,
+) error {
+	//nolint:wrapcheck // Pass-through to base implementation
+	if err := p.Base.StartPost(ctx, cfg, launcherManager, activeMedia, setActiveMedia, db, scheduler); err != nil {
+		return err
+	}
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
+
+	trackCtx, cancel := context.WithCancel(ctx)
+	p.stateMu.Lock()
+	p.serviceCtx = trackCtx
+	p.cancel = cancel
+	p.stateMu.Unlock()
+	go p.track(trackCtx)
 	return nil
 }
 
-func (*Platform) ReturnToMenu() error {
-	// No menu concept on this platform
-	return nil
+// Stop ends event tracking. A running game is left to ES.
+func (p *Platform) Stop() error {
+	p.stateMu.Lock()
+	cancel := p.cancel
+	p.cancel = nil
+	p.stateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.Base.Stop()
 }
 
-func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return errors.New("launching systems is not supported")
+func (p *Platform) ctx() context.Context {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	if p.serviceCtx != nil {
+		return p.serviceCtx
+	}
+	return context.Background()
 }
 
+// StopActiveLauncher stops the running game, whether Core or ES started it.
+// Active media stays set when the game could not be stopped.
+func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
+	if err := p.stopGame(); err != nil {
+		return err
+	}
+	p.forgetGame()
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.Base.StopActiveLauncher(intent)
+}
+
+// ReturnToMenu stops the running game, which returns to ES.
+func (p *Platform) ReturnToMenu() error {
+	return p.StopActiveLauncher(platforms.StopForMenu)
+}
+
+// LaunchMedia launches media with the platform's launchers.
 func (p *Platform) LaunchMedia(
-	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+	cfg *config.Instance,
+	path string,
+	launcher *platforms.Launcher,
+	db *database.Database,
 	opts *platforms.LaunchOptions,
 ) error {
-	log.Info().Msgf("launch media: %s", path)
-
-	if launcher == nil {
-		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
-		if err != nil {
-			return fmt.Errorf("launch media: error finding launcher: %w", err)
-		}
-		launcher = &foundLauncher
-	}
-
-	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := platforms.DoLaunch(&platforms.LaunchParams{
-		Config:         cfg,
-		Platform:       p,
-		SetActiveMedia: p.setActiveMedia,
-		Launcher:       launcher,
-		Path:           path,
-		DB:             db,
-		Options:        opts,
-	}, helpers.GetPathName)
-	if err != nil {
-		return fmt.Errorf("launch media: error launching: %w", err)
-	}
-
-	return nil
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.Base.LaunchMedia(cfg, path, launcher, db, opts, p)
 }
 
-func (*Platform) KeyboardPress(_ string) error {
-	return nil
-}
-
-func (*Platform) GamepadPress(_ string) error {
-	return nil
-}
-
-func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
-	return platforms.CmdResult{}, platforms.ErrNotSupported
-}
-
-func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
-	return "", false
-}
-
+// Launchers returns one launcher per Recalbox system Zaparoo knows, plus
+// custom and generic launchers.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := []platforms.Launcher{
-		{
-			ID:            "Generic",
-			Extensions:    []string{".sh"},
-			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := command.StartAndReap(exec.CommandContext(context.Background(), path))
-				if err != nil {
-					return nil, fmt.Errorf("failed to start command: %w", err)
+	builtIn := p.esLaunchers()
+	builtIn = append(builtIn, launchers.NewGenericLauncher())
+	return helpers.CombineLaunchers(cfg, p, builtIn)
+}
+
+func (p *Platform) esLaunchers() []platforms.Launcher {
+	systems, err := loadSystems(p.fs)
+	if err != nil {
+		log.Warn().Err(err).Msg("cannot read Recalbox system list, no system launchers")
+		return nil
+	}
+	sort.SliceStable(systems, func(i, j int) bool { return systems[i].Name < systems[j].Name })
+
+	result := make([]platforms.Launcher, 0, len(systems))
+	byID := map[string]int{}
+	for i := range systems {
+		sys := &systems[i]
+		info, ok := lookupSystem(sys.Name)
+		if !ok {
+			log.Debug().Str("system", sys.Name).Msg("Recalbox system has no Zaparoo mapping")
+			continue
+		}
+		folder := sys.folder()
+		if folder == "" {
+			log.Debug().Str("system", sys.Name).Msg("Recalbox system has no usable ROM folder")
+			continue
+		}
+		id := info.GetLauncherID()
+		exts := sys.extensions(info)
+		if at, seen := byID[id]; seen {
+			l := &result[at]
+			if !slices.Contains(l.Folders, folder) {
+				l.Folders = append(l.Folders, folder)
+			}
+			for _, ext := range exts {
+				if !slices.Contains(l.Extensions, ext) {
+					l.Extensions = append(l.Extensions, ext)
 				}
-				return nil, nil //nolint:nilnil // Command launches don't return a process handle
-			},
-		},
+			}
+			continue
+		}
+		byID[id] = len(result)
+		result = append(result, platforms.Launcher{
+			ID:         id,
+			SystemID:   info.SystemID,
+			Folders:    []string{folder},
+			Extensions: slices.Clone(exts),
+			Lifecycle:  platforms.LifecycleExternal,
+			Launch:     p.launchGame,
+		})
 	}
-
-	return helpers.CombineLaunchers(cfg, p, launchers)
-}
-
-func (*Platform) ConsoleManager() platforms.ConsoleManager {
-	return platforms.NoOpConsoleManager{}
-}
-
-func (*Platform) ManagedByPackageManager() bool {
-	return false
-}
-
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	gamelist := gamelistxml.NewPlatformScraper()
-	media := localmedia.NewPlatformScraper()
-	thumbnails := libretrothumbs.NewPlatformScraper()
-	catalog := gamedatabase.NewPlatformScraper(nil)
-	return map[string]platforms.Scraper{
-		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
-	}
+	return result
 }

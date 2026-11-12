@@ -25,7 +25,7 @@ verified 1:1 per core, never per system) because most Android cores use
 Version 2 (2026-09-30) moved the system→core assignment and its precedence
 order out of this file's row order and into
 [`pkg/platforms/shared/retroarch`](../../shared/retroarch) (`CoreLaunches(
-ProfileAndroid)`), the package Linux/SteamOS/Bazzite/ChimeraOS/ZapOS already
+ProfileAndroid)`), the package Linux/SteamOS/Bazzite/ChimeraOS/Zaparoo Firmware already
 share for the same job - `androidCoreAlternates` there, not this file, is
 where to add a system's extra core candidates or move one's rank. This file
 now supplies only what that package has no reason to know: each profile's

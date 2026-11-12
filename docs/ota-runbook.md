@@ -222,8 +222,9 @@ still apply.
 ### Platform support
 
 Raw-binary automatic installation is intended for non-package-managed Windows,
-Linux, SteamOS, Bazzite, ChimeraOS, ReplayOS, RetroPie, Recalbox, ZapOS, MiSTeX,
-LibreELEC, MiSTer and Batocera installs that pass platform preflight.
+Linux, SteamOS, Bazzite, ChimeraOS, ReplayOS, RetroPie, Recalbox, Zaparoo Firmware,
+MiSTeX, LibreELEC, ROCKNIX, AmberELEC, Knulli, ArkOS, muOS, MiSTer and Batocera
+installs that pass platform preflight.
 
 - Windows must be able to create/remove an install-directory probe and open the
   target for rename. Protected installer-owned locations remain on the Windows

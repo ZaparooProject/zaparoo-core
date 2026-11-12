@@ -215,9 +215,14 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.ChimeraOS,
 		platformids.Windows,
 		platformids.Mac,
-		platformids.ZapOS,
+		platformids.Firmware,
 		platformids.Recalbox,
 		platformids.RetroPie,
+		platformids.Knulli,
+		platformids.ROCKNIX,
+		platformids.AmberELEC,
+		platformids.ArkOS,
+		platformids.MuOS,
 		"future-platform",
 	} {
 		assert.False(t, LegacyEnabled(platformID), platformID)

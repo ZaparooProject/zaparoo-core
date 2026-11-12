@@ -1,0 +1,40 @@
+[Unit]
+Description=Zaparoo Core
+Documentation=https://zaparoo.org/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@WORKDIR@
+ExecStart=@EXEC@ -daemon
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+# Core exits 78 when starting again cannot help, currently a user database
+# written by a newer build than the one installed. Retrying that every five
+# seconds buries the explanation under copies of itself; failing here leaves it
+# readable in systemctl status. See docs/ota-runbook.md.
+RestartPreventExitStatus=78
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Scheduling: always yield to the emulator
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Security
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

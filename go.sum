@@ -39,8 +39,8 @@ github.com/RoaringBitmap/roaring/v2 v2.30.0 h1:1sD4xsCenNd9n/gOWaExCWanP9WTyiNuq
 github.com/RoaringBitmap/roaring/v2 v2.30.0/go.mod h1:BZufmFbox589n3j5eOmyTaLSGXbRLc2LmQvjKjzSEGU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
-github.com/ZaparooProject/expr v0.0.0-20261104080414-1ac911627a96 h1:68wogorm2Mc+Wu/CzcTiwOUQQc+Bdz0RUpPko7l6if4=
-github.com/ZaparooProject/expr v0.0.0-20261104080414-1ac911627a96/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
+github.com/ZaparooProject/expr v0.0.0-20261111065210-1b1726c0f9e5 h1:aEOmP52Y7F4gVnblk1jCkeCoTuwtdBY02zPf77wOlmo=
+github.com/ZaparooProject/expr v0.0.0-20261111065210-1b1726c0f9e5/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
 github.com/ZaparooProject/go-gameid v0.2.0 h1:nYDxozhwsJXacdh/lwHOJofz4SlA609WKTD38UOQy+0=
 github.com/ZaparooProject/go-gameid v0.2.0/go.mod h1:gPQg1jQ4jgkguOJeKUiIqZeucz0GsSR67UQ/JOgYUDI=
 github.com/ZaparooProject/go-pn532 v0.26.1 h1:XVt4W5/nJEeTPxCisPbUL6pIctHUglHwPXIX+u7N6Xw=

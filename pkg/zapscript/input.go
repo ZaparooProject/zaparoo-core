@@ -55,7 +55,8 @@ func defaultInputMode(platformID string) string {
 	switch platformID {
 	case platformids.Mister, platformids.Mistex, platformids.Batocera,
 		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
-		platformids.ReplayOS:
+		platformids.ReplayOS, platformids.Knulli, platformids.ROCKNIX,
+		platformids.AmberELEC, platformids.ArkOS, platformids.MuOS:
 		return config.InputModeUnrestricted
 	default:
 		return config.InputModeCombos

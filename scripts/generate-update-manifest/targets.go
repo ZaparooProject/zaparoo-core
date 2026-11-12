@@ -53,21 +53,28 @@ func expectedTargets() []target {
 		platform string
 		arches   []string
 	}{
+		{platform: "amberelec", arches: []string{"arm64"}},
+		{platform: "arkos", arches: []string{"arm64"}},
 		{platform: "batocera", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "bazzite", arches: []string{"amd64", "arm64"}},
 		{platform: "chimeraos", arches: []string{"amd64", "arm64"}},
+		{platform: "firmware", arches: []string{"arm64"}},
+		{platform: "knulli", arches: []string{"arm", "arm64"}},
 		{platform: "libreelec", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "linux", arches: []string{"amd64", "arm64"}},
 		{platform: "mac", arches: []string{"amd64", "arm64"}},
 		{platform: "mister", arches: []string{"arm"}},
 		{platform: "mistex", arches: []string{"arm64"}},
+		{platform: "muos", arches: []string{"arm64"}},
+		{platform: "recalbox", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "replayos", arches: []string{"arm64"}},
+		{platform: "retropie", arches: []string{"amd64", "arm", "arm64"}},
+		{platform: "rocknix", arches: []string{"amd64", "arm64"}},
 		{platform: "steamos", arches: []string{"amd64"}},
 		{platform: "windows", arches: []string{"386", "amd64", "arm64"}},
-		{platform: "zapos", arches: []string{"arm64"}},
 	}
 
-	targets := make([]target, 0, 24)
+	targets := make([]target, 0, 40)
 	for _, pair := range pairs {
 		for _, arch := range pair.arches {
 			ext := "tar.gz"

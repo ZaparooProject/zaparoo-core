@@ -22,6 +22,7 @@ package autoadvance
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,6 +310,28 @@ func withInput() rigOption {
 	return func(cfg *Config, r *rig) {
 		r.input = newFakeInput()
 		cfg.Input = r.input
+	}
+}
+
+// hookClock runs a hook, once, the next time the engine reads the time.
+type hookClock struct {
+	*clockwork.FakeClock
+	hook atomic.Pointer[func()]
+}
+
+func (c *hookClock) Now() time.Time {
+	if fn := c.hook.Swap(nil); fn != nil {
+		(*fn)()
+	}
+	return c.FakeClock.Now()
+}
+
+// withClockHook gives the engine a clock that runs a hook armed through the
+// returned clock on its next read.
+func withClockHook(hc **hookClock) rigOption {
+	return func(cfg *Config, r *rig) {
+		*hc = &hookClock{FakeClock: r.clock}
+		cfg.Clock = *hc
 	}
 }
 
