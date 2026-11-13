@@ -232,6 +232,16 @@ detect_linux_distro() {
         return
     fi
 
+    if echo "${NAME:-}" | grep -qi "lakka"; then
+        echo "lakka"
+        return
+    fi
+
+    if echo "${NAME:-} ${ID:-}" | grep -qi "armada"; then
+        echo "armada"
+        return
+    fi
+
     # Return the ID (e.g., "ubuntu", "fedora", "steamos", "bazzite", "chimeraos")
     echo "${ID:-generic}"
 }
@@ -265,6 +275,9 @@ detect_arch() {
             ;;
         armv7l)
             echo "arm"
+            ;;
+        armv6l)
+            abort "ARMv6 devices (Raspberry Pi Zero and Pi 1) are not supported. Use a Raspberry Pi Zero 2 W, Pi 2 or newer."
             ;;
         *)
             abort "Unsupported architecture: ${arch}"
@@ -1331,7 +1344,7 @@ install_linux_generic() {
             install_steamos_transaction
             return 0
             ;;
-        bazzite|chimeraos)
+        bazzite|chimeraos|armada)
             warn "Immutable filesystem detected (${distro})"
             warn "Installation will be user-local only"
             build="${distro}"
@@ -1342,6 +1355,10 @@ install_linux_generic() {
             ;;
         amberelec)
             install_appliance amberelec "AmberELEC" /storage/zaparoo/zaparoo
+            return 0
+            ;;
+        lakka)
+            install_appliance lakka "Lakka" /storage/zaparoo/zaparoo
             return 0
             ;;
         knulli)

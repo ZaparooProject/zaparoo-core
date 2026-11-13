@@ -257,3 +257,36 @@ func TestWriteSummary_Verify(t *testing.T) {
 	assert.Contains(t, string(data), "| Installable selections | 66 |")
 	assert.NotContains(t, string(data), "checksums.txt size")
 }
+
+// The first beta with the new platforms is promoted while stable is still a
+// release built before them.
+func TestVerifySelectionMatrix_StableBeforeNewTargets(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	m := newTestManifest(t,
+		[]string{"v2.22.1", "v2.23.0-beta.1"},
+		[]string{channelStable, channelBeta})
+	stable := findRelease(m, "v2.22.1")
+	require.NotNil(t, stable)
+	withoutNewTargets(t, stable, "2.22.1")
+	writeManifestFor(t, fs, m, "manifest.yaml")
+
+	_, err := verifySelectionMatrix(fs, "manifest.yaml")
+	require.NoError(t, err)
+}
+
+func TestVerifySelectionMatrix_NewTargetsRequiredOnceBuilt(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	m := newTestManifest(t, []string{"v2.23.0"}, []string{channelStable})
+	rel := findRelease(m, "v2.23.0")
+	require.NotNil(t, rel)
+	withoutNewTargets(t, rel, "2.23.0")
+	writeManifestFor(t, fs, m, "manifest.yaml")
+
+	_, err := verifySelectionMatrix(fs, "manifest.yaml")
+	require.ErrorIs(t, err, errSelectionMatrix)
+	assert.Contains(t, err.Error(), "v2.23.0: no archive for")
+}

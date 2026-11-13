@@ -223,6 +223,8 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.AmberELEC,
 		platformids.ArkOS,
 		platformids.MuOS,
+		platformids.Armada,
+		platformids.Lakka,
 		"future-platform",
 	} {
 		assert.False(t, LegacyEnabled(platformID), platformID)

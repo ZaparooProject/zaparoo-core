@@ -179,11 +179,13 @@ func buildTargets() []struct{ platform, goarch, ext string } {
 	}{
 		{platform: "amberelec", arches: []string{"arm64"}},
 		{platform: "arkos", arches: []string{"arm64"}},
+		{platform: "armada", arches: []string{"arm64"}},
 		{platform: "batocera", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "bazzite", arches: []string{"amd64", "arm64"}},
 		{platform: "chimeraos", arches: []string{"amd64", "arm64"}},
 		{platform: "firmware", arches: []string{"arm64"}},
 		{platform: "knulli", arches: []string{"arm", "arm64"}},
+		{platform: "lakka", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "libreelec", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "linux", arches: []string{"amd64", "arm64"}},
 		{platform: "mac", arches: []string{"amd64", "arm64"}},

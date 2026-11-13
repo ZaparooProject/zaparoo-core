@@ -61,7 +61,7 @@ var nativeStandaloneDefs = []standaloneDef{
 	},
 	{
 		id: "PCSX2", systemID: systemdefs.SystemPS2, flatpakID: "net.pcsx2.PCSX2",
-		executables: []string{"pcsx2-qt", "pcsx2"}, appImagePrefixes: []string{"pcsx2-Qt", "PCSX2"},
+		executables: []string{"pcsx2-qt", "pcsx2"}, appImagePrefixes: []string{"pcsx2-Qt", "PCSX2", "ARMSX2"},
 		folder: "ps2", scan: true, args: batchArgs("-fullscreen", "-batch"),
 	},
 	{
@@ -86,13 +86,13 @@ var nativeStandaloneDefs = []standaloneDef{
 	{
 		id: "DuckStation", systemID: systemdefs.SystemPSX, flatpakID: "org.duckstation.DuckStation",
 		executables: []string{"duckstation-qt", "duckstation"}, appImagePrefixes: []string{"DuckStation"},
-		folder: "psx", args: batchArgs("-batch", "-fullscreen"),
+		folder: "psx", scan: true, args: batchArgs("-batch", "-fullscreen"),
 	},
 	{
 		id: "PPSSPP", systemID: systemdefs.SystemPSP, flatpakID: "org.ppsspp.PPSSPP",
 		executables:      []string{"PPSSPPSDL", "PPSSPPQt", "ppsspp-qt", "ppsspp"},
 		appImagePrefixes: []string{"PPSSPP"},
-		folder:           "psp", args: batchArgs("--fullscreen"),
+		folder:           "psp", scan: true, args: batchArgs("--fullscreen"),
 	},
 	{
 		id: "DolphinGameCube", systemID: systemdefs.SystemGameCube, flatpakID: "org.DolphinEmu.dolphin-emu",
@@ -107,7 +107,7 @@ var nativeStandaloneDefs = []standaloneDef{
 	{
 		id: "MelonDS", systemID: systemdefs.SystemNDS, flatpakID: "net.kuribo64.melonDS",
 		executables: []string{"melonDS"}, appImagePrefixes: []string{"melonDS"},
-		folder: "nds", args: batchArgs("--fullscreen"),
+		folder: "nds", scan: true, args: batchArgs("--fullscreen"),
 	},
 	{
 		id: "ScummVMStandalone", systemID: systemdefs.SystemScummVM, flatpakID: "org.scummvm.ScummVM",

@@ -110,8 +110,33 @@ func AttachPlainESDEScanners(cfg *config.Instance, options Options, catalog []pl
 	configurePlainESDEScanners(cfg, &options, catalog)
 }
 
+// AttachPlainESDEScannersForRoots is AttachPlainESDEScanners for the roots a
+// platform indexes, which can be a default ROM folder when no index roots are
+// configured.
+func AttachPlainESDEScannersForRoots(
+	cfg *config.Instance,
+	options Options,
+	catalog []platforms.Launcher,
+	roots []string,
+) {
+	options.normalize()
+	attachPlainESDEScannersToRoots(cfg, &options, catalog, roots)
+}
+
 func configurePlainESDEScanners(cfg *config.Instance, options *Options, catalog []platforms.Launcher) {
-	if cfg == nil || len(cfg.IndexRoots()) == 0 {
+	if cfg == nil {
+		return
+	}
+	attachPlainESDEScannersToRoots(cfg, options, catalog, cfg.IndexRoots())
+}
+
+func attachPlainESDEScannersToRoots(
+	cfg *config.Instance,
+	options *Options,
+	catalog []platforms.Launcher,
+	roots []string,
+) {
+	if cfg == nil || len(roots) == 0 {
 		return
 	}
 	gamelistsPath := filepath.Join(options.HomeDir, "ES-DE", "gamelists")
@@ -132,7 +157,7 @@ func configurePlainESDEScanners(cfg *config.Instance, options *Options, catalog 
 		if folder == "" {
 			continue
 		}
-		launcher.Scanner = plainESDEScanner(cfg.IndexRoots(), gamelistsPath, folder)
+		launcher.Scanner = plainESDEScanner(roots, gamelistsPath, folder)
 		attached[launcher.SystemID] = struct{}{}
 	}
 }
