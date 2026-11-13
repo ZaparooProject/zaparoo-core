@@ -396,6 +396,78 @@ func TestManagerRunRemoteDeltaTooLargeFallsBackToFull(t *testing.T) {
 	assert.False(t, env.Manager.coordinator.RemoteDeltaUnsupported())
 }
 
+func TestManagerRunRemoteDeltaRefusalsForTheFilesKeepDeltaOn(t *testing.T) {
+	cases := []struct {
+		sentinel error
+		code     string
+		deltas   int
+	}{
+		// A changed file is re-read and the run retried once, as for a
+		// full commit, so the delta is sent twice.
+		{code: "integrity_mismatch", sentinel: errRemoteIntegrityRetry, deltas: 2},
+		{code: "backup_too_large", sentinel: errRemoteBackupTooLarge, deltas: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			env, server := newDeltaTestEnv(t)
+			runRemoteDeltaTest(t, &env)
+			server.set(func(s *deltaTestServer) {
+				s.deltaStatus, s.deltaCode = http.StatusBadRequest, tc.code
+			})
+			writeTestFile(t, deltaTestSavePath(&env), "changed-save-data\n")
+
+			_, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeScheduled)
+
+			require.ErrorIs(t, err, tc.sentinel)
+			full, delta := server.counts()
+			assert.Equal(t, tc.deltas, delta)
+			assert.Equal(t, 1, full, "a full commit of the same files would be refused too")
+			assert.False(t, env.Manager.coordinator.RemoteDeltaUnsupported())
+
+			server.set(func(s *deltaTestServer) { s.deltaStatus, s.deltaCode = 0, "" })
+			runRemoteDeltaTest(t, &env)
+			full, delta = server.counts()
+			assert.Equal(t, tc.deltas+1, delta, "the next run sends a delta again")
+			assert.Equal(t, 1, full)
+		})
+	}
+}
+
+func TestCommitRemoteDeltaLeavesAnEmptyRunToTheFullCommit(t *testing.T) {
+	env, server := newDeltaTestEnv(t)
+	runRemoteDeltaTest(t, &env)
+	client, err := env.Manager.newRemoteClient()
+	require.NoError(t, err)
+	base := env.Manager.remoteDeltaBase(client, server.deviceID)
+	require.NotNil(t, base)
+
+	_, done, err := env.Manager.commitRemoteDelta(
+		context.Background(), client, RemoteBackupTypeScheduled, nil, base, nil,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, done, "the server refuses a delta that leaves no files")
+	_, delta := server.counts()
+	assert.Zero(t, delta)
+	assert.False(t, env.Manager.coordinator.RemoteDeltaUnsupported())
+}
+
+func TestManagerRunRemoteOtherBadRequestDisablesDelta(t *testing.T) {
+	env, server := newDeltaTestEnv(t)
+	runRemoteDeltaTest(t, &env)
+	server.set(func(s *deltaTestServer) {
+		s.deltaStatus, s.deltaCode = http.StatusBadRequest, "bad_request"
+	})
+	writeTestFile(t, deltaTestSavePath(&env), "changed-save-data\n")
+
+	runRemoteDeltaTest(t, &env)
+
+	full, delta := server.counts()
+	assert.Equal(t, 1, delta)
+	assert.Equal(t, 2, full)
+	assert.True(t, env.Manager.coordinator.RemoteDeltaUnsupported())
+}
+
 func TestManagerRunRemoteUnsupportedDeltaIsDisabledForTheRun(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

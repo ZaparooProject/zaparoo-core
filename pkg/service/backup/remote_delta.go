@@ -328,6 +328,11 @@ func (m *Manager) commitRemoteDelta(
 			return RemoteRunInfo{}, false, nil
 		}
 	}
+	if len(files) == 0 {
+		// The server refuses a delta that leaves no files. The full commit
+		// path handles an empty run as it always has.
+		return RemoteRunInfo{}, false, nil
+	}
 
 	backup := base.Backup
 	list := RemoteListInfo{
@@ -422,10 +427,17 @@ func (m *Manager) sendRemoteDelta(
 // endpoint, and any other rejection of the request means the two sides
 // disagree about it: both stop delta commits for the rest of this process
 // run, so they are tried again after the next start.
+//
+// A file that changed during the run or a snapshot over the file limit is
+// returned as is: a full commit of the same files would be refused the same
+// way, and neither says anything about the delta endpoint.
 func (m *Manager) remoteDeltaNeedsFullCommit(err error) bool {
 	if errors.Is(err, errRemoteMissingObjects) {
 		// The full commit path uploads the objects again and retries.
 		return true
+	}
+	if errors.Is(err, errRemoteIntegrityRetry) || errors.Is(err, errRemoteBackupTooLarge) {
+		return false
 	}
 	apiErr, ok := AsAPIError(err)
 	if !ok {
