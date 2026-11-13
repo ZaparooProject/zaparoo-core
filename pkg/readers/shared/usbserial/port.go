@@ -46,6 +46,12 @@ const (
 	defaultPacket = 64
 	// resetDrainReads bounds the packets ResetInputBuffer discards.
 	resetDrainReads = 64
+	// settleTime is how long an adapter must have been plugged in before it
+	// is taken. The first time one is plugged in after boot the kernel has
+	// to load its driver, and until that binds, the adapter looks the same
+	// as one with no driver at all. Claiming it then would shut the kernel
+	// driver out until it is plugged in again.
+	settleTime = 3 * time.Second
 )
 
 // opener finds and opens adapters. The default one uses the host's sysfs and
@@ -81,7 +87,7 @@ func List() ([]PortInfo, error) {
 	if !supported {
 		return nil, nil
 	}
-	return defaultOpener().sys.list()
+	return defaultOpener().list()
 }
 
 // Exists reports whether a supported adapter is plugged in at path, whether
@@ -116,6 +122,23 @@ func DeviceNode(path string) string {
 	return t.node()
 }
 
+func (o opener) list() ([]PortInfo, error) {
+	return o.sys.list(o.settled)
+}
+
+// settled reports whether an adapter has been plugged in for settleTime. Its
+// usbfs node is created when it is plugged in, so the node's time is when that
+// was. Without a usable time the adapter counts as settled, as waiting could
+// then never end.
+func (o opener) settled(t *target) bool {
+	info, err := o.sys.fs.Stat(t.node())
+	if err != nil {
+		return true
+	}
+	age := o.clock.Since(info.ModTime())
+	return age < 0 || age >= settleTime
+}
+
 func (o opener) open(path string, mode *serial.Mode) (*Port, error) {
 	sysName, err := parsePath(path)
 	if err != nil {
@@ -131,6 +154,9 @@ func (o opener) open(path string, mode *serial.Mode) (*Port, error) {
 	}
 	if t.driver != "" {
 		return nil, fmt.Errorf("%w: %s is bound to %q", ErrDriverBound, path, t.driver)
+	}
+	if !o.settled(t) {
+		return nil, fmt.Errorf("%w: %s", ErrSettling, path)
 	}
 
 	dev, err := o.openDevice(t.node(), t.iface.number)

@@ -51,6 +51,10 @@ var (
 	// ErrDriverBound is returned when a kernel driver or another program
 	// already has the adapter. The driver is never detached.
 	ErrDriverBound = errors.New("USB serial adapter is bound to a driver")
+	// ErrSettling is returned for an adapter plugged in moments ago. The
+	// kernel may still be loading a driver for it, so it is left alone for
+	// a few seconds first.
+	ErrSettling = errors.New("USB serial adapter was only just plugged in")
 	// ErrClosed is returned by operations on a closed port.
 	ErrClosed = errors.New("usbserial port is closed")
 	// ErrDeviceGone is returned once the adapter has been unplugged. It

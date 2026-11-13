@@ -153,8 +153,9 @@ func (s sysfs) info(t *target) PortInfo {
 }
 
 // list returns every supported adapter whose serial interface no driver is
-// bound to, sorted by path.
-func (s sysfs) list() ([]PortInfo, error) {
+// bound to, sorted by path. A non-nil ready leaves out the adapters it
+// refuses.
+func (s sysfs) list(ready func(*target) bool) ([]PortInfo, error) {
 	entries, err := afero.ReadDir(s.fs, sysfsUSBDevices)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", sysfsUSBDevices, err)
@@ -167,7 +168,7 @@ func (s sysfs) list() ([]PortInfo, error) {
 			continue
 		}
 		t, err := s.lookup(entry.Name())
-		if err != nil || t.driver != "" {
+		if err != nil || t.driver != "" || (ready != nil && !ready(t)) {
 			continue
 		}
 		infos = append(infos, s.info(t))

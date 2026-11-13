@@ -137,6 +137,69 @@ func TestOpenRefusals(t *testing.T) {
 	assert.Empty(t, dev.takeCalls())
 }
 
+// setNodeTime gives the adapter a usbfs node last changed at when, which on a
+// real system is when it was plugged in.
+func setNodeTime(t *testing.T, rig *portRig, node string, when time.Time) {
+	t.Helper()
+	fs := rig.o.sys.fs
+	require.NoError(t, afero.WriteFile(fs, node, nil, 0o600))
+	require.NoError(t, fs.Chtimes(node, when, when))
+}
+
+// A kernel driver that is still loading has not bound the adapter yet, so one
+// plugged in a moment ago is left alone until the driver has had its chance.
+func TestNewAdapterIsLeftToSettle(t *testing.T) {
+	t.Parallel()
+	const node = "/dev/bus/usb/001/005"
+	dev := ch34xDevice(0x31, false)
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5}, dev)
+	setNodeTime(t, rig, node, rig.clock.Now())
+
+	for _, wait := range []time.Duration{0, settleTime - time.Millisecond} {
+		rig.clock.Advance(wait)
+		infos, err := rig.o.list()
+		require.NoError(t, err)
+		assert.Empty(t, infos, "listed too soon after plug-in")
+		_, err = rig.o.open("usbserial:1-2", nil)
+		require.ErrorIs(t, err, ErrSettling)
+	}
+	assert.Empty(t, rig.nodes, "a settling adapter is not opened")
+	assert.Empty(t, dev.takeCalls())
+
+	rig.clock.Advance(time.Millisecond)
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "usbserial:1-2", infos[0].Path)
+	p, err := rig.o.open("usbserial:1-2", nil)
+	require.NoError(t, err)
+	require.NoError(t, p.Close())
+	assert.Equal(t, []string{node}, rig.nodes)
+}
+
+// The wait only applies when the plug-in time is known and in the past: a
+// missing node or a clock that has moved backwards must not hide an adapter
+// for good.
+func TestSettleNeedsAKnownPlugInTime(t *testing.T) {
+	t.Parallel()
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5},
+		ch34xDevice(0x31, false))
+
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "no usbfs node to read a time from")
+
+	setNodeTime(t, rig, "/dev/bus/usb/001/005", rig.clock.Now().Add(time.Hour))
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "node time is in the future")
+
+	setNodeTime(t, rig, "/dev/bus/usb/001/005", rig.clock.Now().Add(-time.Hour))
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "plugged in long ago")
+}
+
 func TestOpenFailuresCloseDevice(t *testing.T) {
 	t.Parallel()
 	failing := []*fakeDevice{
