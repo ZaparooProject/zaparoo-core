@@ -268,7 +268,9 @@ func TestInstallFailures(t *testing.T) {
 
 	t.Run("unit directory", func(t *testing.T) {
 		t.Parallel()
-		fs := afero.NewReadOnlyFs(afero.NewMemMapFs())
+		base := afero.NewMemMapFs()
+		withConfig(t, base)
+		fs := afero.NewReadOnlyFs(base)
 		inst := &Installer{FS: fs, Exec: newExec(t), Unit: testUnit, Executable: exe}
 		require.ErrorContains(t, inst.Install(context.Background()), "create systemd unit directory")
 	})
@@ -276,6 +278,7 @@ func TestInstallFailures(t *testing.T) {
 	t.Run("unit file", func(t *testing.T) {
 		t.Parallel()
 		fs := newFaultFs()
+		withConfig(t, fs)
 		fs.failCreate = true
 		inst := &Installer{FS: fs, Exec: newExec(t), Unit: testUnit, Executable: exe}
 		require.ErrorContains(t, inst.Install(context.Background()), "write service file")
@@ -285,7 +288,9 @@ func TestInstallFailures(t *testing.T) {
 		t.Parallel()
 		exec := newExec(t)
 		expectSystemctl(exec, boom, "daemon-reload")
-		inst := &Installer{FS: afero.NewMemMapFs(), Exec: exec, Unit: testUnit, Executable: exe}
+		fs := afero.NewMemMapFs()
+		withConfig(t, fs)
+		inst := &Installer{FS: fs, Exec: exec, Unit: testUnit, Executable: exe}
 		err := inst.Install(context.Background())
 		require.ErrorIs(t, err, boom)
 		require.ErrorContains(t, err, "systemctl daemon-reload")
@@ -296,17 +301,20 @@ func TestInstallFailures(t *testing.T) {
 		exec := newExec(t)
 		expectSystemctl(exec, nil, "daemon-reload")
 		expectSystemctl(exec, boom, "enable", serviceName)
-		inst := &Installer{FS: afero.NewMemMapFs(), Exec: exec, Unit: testUnit, Executable: exe}
+		fs := afero.NewMemMapFs()
+		withConfig(t, fs)
+		inst := &Installer{FS: fs, Exec: exec, Unit: testUnit, Executable: exe}
 		require.ErrorContains(t, inst.Install(context.Background()), "systemctl enable "+serviceName)
 	})
 
 	t.Run("network commands", func(t *testing.T) {
 		t.Parallel()
-		exec := newExec(t)
-		expectSystemctl(exec, nil, "daemon-reload")
-		expectSystemctl(exec, nil, "enable", serviceName)
-		inst := &Installer{FS: afero.NewMemMapFs(), Exec: exec, Unit: testUnit, Executable: exe}
+		fs := afero.NewMemMapFs()
+		inst := &Installer{FS: fs, Exec: newExec(t), Unit: testUnit, Executable: exe}
 		require.ErrorContains(t, inst.Install(context.Background()), "read retroarch default config")
+		exists, err := afero.Exists(fs, UnitPath)
+		require.NoError(t, err)
+		assert.False(t, exists, "nothing is installed when the port cannot be decided on")
 	})
 
 	t.Run("uninstall remove", func(t *testing.T) {

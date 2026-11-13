@@ -103,6 +103,7 @@ func TestServiceFileHasPlaceholders(t *testing.T) {
 	assert.Contains(t, serviceFile, "ExecStart=@ZAPAROO_BIN@ -daemon")
 	assert.Contains(t, serviceFile, "WorkingDirectory=@ZAPAROO_DIR@")
 	assert.Contains(t, serviceFile, "RestartPreventExitStatus=78")
+	assert.Contains(t, serviceFile, "\n@ZAPAROO_PORT_LOCK@\n")
 }
 
 func TestRun_InstallWritesUnitAndEnablesNetworkCommands(t *testing.T) {
@@ -124,7 +125,10 @@ func TestRun_InstallWritesUnitAndEnablesNetworkCommands(t *testing.T) {
 	assert.True(t, lakka.NetworkCommandsEnabled(string(cfg)))
 	assert.Contains(t, string(cfg), "video_fullscreen = \"true\"", "other settings kept")
 
+	assert.Contains(t, string(unit), "ExecStartPre=-/bin/sh -c 'iptables -w -C INPUT -p udp --dport 55355 ! -i lo")
+
 	assert.Equal(t, []string{
+		"iptables -w -C INPUT -p udp --dport 55355 ! -i lo -j DROP",
 		"systemctl daemon-reload",
 		"systemctl enable zaparoo.service",
 		"systemctl stop retroarch.service",
@@ -146,6 +150,8 @@ func TestInstallService_Failures(t *testing.T) {
 	})
 	t.Run("systemctl fails", func(t *testing.T) {
 		env := fakeInstall(t)
+		require.NoError(t, afero.WriteFile(env.fs, lakka.RetroArchConfigPath,
+			[]byte("network_cmd_enable = \"true\"\n"), 0o644))
 		env.exec.failOn = "systemctl daemon-reload"
 		err := installService()
 		require.ErrorContains(t, err, "error installing service")

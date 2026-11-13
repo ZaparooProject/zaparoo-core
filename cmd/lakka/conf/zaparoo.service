@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 Environment=HOME=/storage
 WorkingDirectory=@ZAPAROO_DIR@
+@ZAPAROO_PORT_LOCK@
 ExecStart=@ZAPAROO_BIN@ -daemon
 Restart=on-failure
 RestartSec=5s
