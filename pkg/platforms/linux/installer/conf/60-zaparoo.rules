@@ -4,6 +4,9 @@ SUBSYSTEMS=="usb", ATTRS{idProduct}=="7523", ATTRS{idVendor}=="1a86", MODE="0660
 # Allow user access to CH34x and PL2303 USB serial adapters, which Zaparoo
 # talks to directly when the kernel has no driver for them
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5523|7522|7523", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2184", ATTR{idProduct}=="0057", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="4348", ATTR{idProduct}=="5523", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="9986", ATTR{idProduct}=="7523", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="067b", ATTR{idProduct}=="2303|2304|23a3|23b3|23c3|23d3|23e3|23f3", MODE="0660", TAG+="uaccess"
 
 # Allow user access to PN532Killer USB UART readers

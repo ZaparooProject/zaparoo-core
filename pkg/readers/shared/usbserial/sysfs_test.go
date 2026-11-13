@@ -142,7 +142,7 @@ func TestSysfsList(t *testing.T) {
 	})
 	writeFile(t, fs, filepath.Join(sysfsUSBDevices, "usb1", "descriptors"), string(ch340Descriptors()))
 
-	infos, err := sysfs{fs: fs}.list()
+	infos, err := sysfs{fs: fs}.list(nil)
 	require.NoError(t, err)
 	assert.Equal(t, []PortInfo{
 		{
@@ -156,7 +156,7 @@ func TestSysfsList(t *testing.T) {
 	}, infos)
 	assert.Equal(t, "1A86:7523", infos[1].VIDPID())
 
-	_, err = sysfs{fs: afero.NewMemMapFs()}.list()
+	_, err = sysfs{fs: afero.NewMemMapFs()}.list(nil)
 	require.Error(t, err)
 }
 
@@ -196,9 +196,17 @@ func TestPaths(t *testing.T) {
 
 func TestSupportedChip(t *testing.T) {
 	t.Parallel()
-	for _, pid := range ch34xProducts {
-		kind, ok := supportedChip(vendorWCH, pid)
-		assert.True(t, ok)
+	ch34x := [][2]uint16{
+		{0x1a86, 0x5523},
+		{0x1a86, 0x7522},
+		{0x1a86, 0x7523},
+		{0x2184, 0x0057},
+		{0x4348, 0x5523},
+		{0x9986, 0x7523},
+	}
+	for _, id := range ch34x {
+		kind, ok := supportedChip(id[0], id[1])
+		assert.True(t, ok, "%04x:%04x", id[0], id[1])
 		assert.Equal(t, chipCH34x, kind)
 	}
 	for _, pid := range pl2303Products {
@@ -206,7 +214,17 @@ func TestSupportedChip(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, chipPL2303, kind)
 	}
-	ids := [][2]uint16{{vendorWCH, 0x55D3}, {vendorWCH, 0x7524}, {vendorProlific, 0x0611}, {0x0403, 0x6001}}
+	ids := [][2]uint16{
+		{vendorWCH, 0x55D3},
+		{vendorWCH, 0x7524},
+		{vendorProlific, 0x0611},
+		{0x0403, 0x6001},
+		// A supported product ID under another chip's vendor ID is not a match.
+		{0x4348, 0x7523},
+		{0x9986, 0x5523},
+		{0x2184, 0x7523},
+		{vendorWCH, 0x0057},
+	}
 	for _, id := range ids {
 		_, ok := supportedChip(id[0], id[1])
 		assert.False(t, ok, "%04x:%04x", id[0], id[1])

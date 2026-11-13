@@ -64,9 +64,23 @@ func (k chipKind) String() string {
 	}
 }
 
-// ch34xProducts are the WCH product IDs of single-port CH340/CH341 chips.
-// CH343, CH9102 and other WCH chips speak a different protocol.
-var ch34xProducts = []uint16{0x5523, 0x7522, 0x7523}
+// usbID is a USB vendor and product ID.
+type usbID struct {
+	vendor  uint16
+	product uint16
+}
+
+// ch34xDevices are the single-port CH340/CH341 chips, under WCH's vendor ID
+// and the other IDs the same chip is sold with. CH343, CH9102 and other WCH
+// chips speak a different protocol.
+var ch34xDevices = []usbID{
+	{vendorWCH, 0x5523},
+	{vendorWCH, 0x7522},
+	{vendorWCH, 0x7523},
+	{0x2184, 0x0057},
+	{0x4348, 0x5523},
+	{0x9986, 0x7523},
+}
 
 // pl2303Products are Prolific's own PL2303 product IDs. Prolific makes other
 // USB devices too, so the vendor ID alone is not enough.
@@ -75,7 +89,7 @@ var pl2303Products = []uint16{0x2303, 0x2304, 0x23a3, 0x23b3, 0x23c3, 0x23d3, 0x
 // supportedChip returns the chip family of a supported adapter.
 func supportedChip(vendor, product uint16) (chipKind, bool) {
 	switch {
-	case vendor == vendorWCH && slices.Contains(ch34xProducts, product):
+	case slices.Contains(ch34xDevices, usbID{vendor: vendor, product: product}):
 		return chipCH34x, true
 	case vendor == vendorProlific && slices.Contains(pl2303Products, product):
 		return chipPL2303, true
