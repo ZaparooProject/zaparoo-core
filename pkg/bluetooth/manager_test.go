@@ -366,6 +366,23 @@ func tickUntil(t *testing.T, clock *clockwork.FakeClock, cond func() bool) {
 	require.Eventually(t, cond, eventually, 10*time.Millisecond)
 }
 
+// failUntilGivenUp ticks a freshly started manager whose every attempt fails
+// until it gives up. Each failure is counted before the next tick: the fake
+// ticker is always armed, so ticking while a slow attempt is still running
+// would queue a tick that makes one attempt too many.
+func failUntilGivenUp(t *testing.T, clock *clockwork.FakeClock, m *Manager) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		require.Eventually(t, func() bool { return m.failuresForTest() == attempt },
+			eventually, time.Millisecond)
+		if attempt == maxFailures {
+			break
+		}
+		advance(t, clock)
+	}
+	require.True(t, m.givenUp())
+}
+
 func managerGaveUp(m *Manager) func() bool {
 	return m.givenUp
 }
@@ -435,17 +452,7 @@ func TestManager_GivesUpAfterRepeatedFailures(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	// Each failed attempt is counted before the next tick, so a slow attempt
-	// never lets a queued tick add an extra one.
-	for attempt := 1; ; attempt++ {
-		require.Eventually(t, func() bool { return m.failuresForTest() == attempt },
-			eventually, time.Millisecond)
-		if attempt == maxFailures {
-			break
-		}
-		advance(t, clock)
-	}
-	assert.True(t, managerGaveUp(m)())
+	failUntilGivenUp(t, clock, m)
 	assert.Equal(t, int32(maxFailures), opens.Load())
 
 	// Given up: a working adapter is opened to look at, closed, not served.
@@ -643,7 +650,7 @@ func TestManager_LostForAnotherReasonIsGivenUp(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	tickUntil(t, clock, managerGaveUp(m))
+	failUntilGivenUp(t, clock, m)
 	assert.Equal(t, int32(maxFailures), opens.Load())
 	assert.Equal(t, int32(maxFailures), rec.calls.Load())
 
