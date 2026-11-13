@@ -114,17 +114,20 @@ func TestSupervisorStopsOnCleanExit(t *testing.T) {
 
 func TestSupervisorRunsOnce(t *testing.T) {
 	r := newSupervisorRun(t, 0)
-	sleeper := filepath.Join(r.dir, "zaparoo-sleep")
-	sleepBin, err := exec.LookPath("sleep")
-	require.NoError(t, err)
-	require.NoError(t, os.Symlink(sleepBin, sleeper))
 
+	// Stands in for a running supervisor: a shell with "zaparoo" on its
+	// command line that stays alive, reading a pipe nothing writes to. It
+	// is not a renamed copy of another program, because a multi-call
+	// coreutils build refuses to run under a name it does not know.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	running := exec.CommandContext(ctx, sleeper, "60") //nolint:gosec // test-created symlink to sleep
+	running := exec.CommandContext(ctx, "/bin/sh", "-c", "read -r _", "zaparoo-supervisor")
+	stdin, err := running.StdinPipe()
+	require.NoError(t, err)
 	require.NoError(t, running.Start())
 	defer func() {
 		cancel()
+		_ = stdin.Close()
 		_ = running.Wait()
 	}()
 	require.NoError(t, os.WriteFile(r.pidFile, []byte(strconv.Itoa(running.Process.Pid)), 0o600))
