@@ -370,6 +370,12 @@ func managerGaveUp(m *Manager) func() bool {
 	return m.givenUp
 }
 
+func (m *Manager) failuresForTest() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failures
+}
+
 func (m *Manager) openedAtForTest() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -429,12 +435,22 @@ func TestManager_GivesUpAfterRepeatedFailures(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	tickUntil(t, clock, managerGaveUp(m))
+	// Each failed attempt is counted before the next tick, so a slow attempt
+	// never lets a queued tick add an extra one.
+	for attempt := 1; ; attempt++ {
+		require.Eventually(t, func() bool { return m.failuresForTest() == attempt },
+			eventually, time.Millisecond)
+		if attempt == maxFailures {
+			break
+		}
+		advance(t, clock)
+	}
+	assert.True(t, managerGaveUp(m)())
 	assert.Equal(t, int32(maxFailures), opens.Load())
 
 	// Given up: a working adapter is opened to look at, closed, not served.
 	mode.Store(1)
-	tickUntil(t, clock, func() bool { return len(adapters) == 1 })
+	tickUntil(t, clock, func() bool { return len(adapters) >= 1 })
 	seen := <-adapters
 	require.Eventually(t, seen.Closed, eventually, 10*time.Millisecond)
 	assert.Equal(t, int32(0), rec.calls.Load())
