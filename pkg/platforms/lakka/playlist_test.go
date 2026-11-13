@@ -124,6 +124,14 @@ func TestPlaylistTarget(t *testing.T) {
 		},
 		{in: "/storage/roms/snes/#1 Hits.sfc", path: "/storage/roms/snes/#1 Hits.sfc", ok: true},
 		{in: "/storage/roms/snes/../snes/Game.sfc", path: "/storage/roms/snes/Game.sfc", ok: true},
+		// Lower-casing these names changes their byte length, so the archive
+		// suffix has to be found in the path as written.
+		{
+			in:   "/storage/roms/snes/\u0130\u0130\u0130\u0130.zip#\u0130.sfc",
+			path: "/storage/roms/snes/\u0130\u0130\u0130\u0130.zip", inner: "\u0130.sfc", ok: true,
+		},
+		{in: "/\u023a\u023a\u023a\u023a.zip#", path: "/\u023a\u023a\u023a\u023a.zip", ok: true},
+		{in: "/\u212a\u212a\u212a\u212a.ZIP#a.sfc", path: "/\u212a\u212a\u212a\u212a.ZIP", inner: "a.sfc", ok: true},
 		{in: "roms/Game.sfc"},
 		{in: ""},
 		{in: "/"},
@@ -440,6 +448,7 @@ func FuzzParsePlaylist(f *testing.F) {
 	f.Add([]byte("/storage/roms/a.sfc\nA\nDETECT\nDETECT\nDETECT\nSony - PlayStation.lpl\n"))
 	f.Add([]byte(`{"items":[1,"x",null,{"path":7}]}`))
 	f.Add([]byte("\xef\xbb\xbf{"))
+	f.Add([]byte(`{"items":[{"path":"/\u023a\u023a\u023a\u023a.zip#"}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		pl, err := parsePlaylist(data)
 		if err != nil {

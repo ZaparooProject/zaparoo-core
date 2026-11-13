@@ -188,9 +188,8 @@ func playlistTarget(entryPath string) (path, inner string, ok bool) {
 	if entryPath == "" || !filepath.IsAbs(entryPath) {
 		return "", "", false
 	}
-	lower := strings.ToLower(entryPath)
 	for _, ext := range []string{".zip#", ".7z#"} {
-		if i := strings.Index(lower, ext); i >= 0 {
+		if i := indexASCIIFold(entryPath, ext); i >= 0 {
 			cut := i + len(ext) - 1
 			inner = entryPath[cut+1:]
 			entryPath = entryPath[:cut]
@@ -202,6 +201,18 @@ func playlistTarget(entryPath string) (path, inner string, ok bool) {
 		return "", "", false
 	}
 	return path, inner, true
+}
+
+// indexASCIIFold returns the byte offset of the first match of substr in s,
+// ignoring ASCII case. The offset is into s as written; lower-casing s first
+// would move it, as some letters change byte length with their case.
+func indexASCIIFold(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len(substr)], substr) {
+			return i
+		}
+	}
+	return -1
 }
 
 // playlistItem is a playlist entry resolved to a Core system and the path the
