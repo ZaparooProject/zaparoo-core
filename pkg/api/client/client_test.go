@@ -120,18 +120,39 @@ func parseServerPort(t *testing.T, server *httptest.Server) int {
 	return port
 }
 
-// unusedPort returns port 0, which cannot have a listening TCP service.
-// unusedPort returns a port nothing listens on. Port 0 cannot stand in: only
-// Linux refuses a connection to it, while macOS and Windows fail the dial with
-// an address error instead.
+// unusedPort returns a port nothing listens on, held for the rest of the test.
+// Port 0 cannot stand in: only Linux refuses a connection to it, while macOS
+// and Windows fail the dial with an address error instead. A port taken from a
+// closed listener cannot either: a parallel test's server can be given it.
+// The port is the local end of an open connection, so a dial to it is refused
+// and the OS will not hand it to another listener until the test ends.
 func unusedPort(t *testing.T) int {
 	t.Helper()
 	var lc net.ListenConfig
 	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			close(accepted)
+			return
+		}
+		accepted <- conn
+	}()
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(context.Background(), "tcp", listener.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		if peer, ok := <-accepted; ok {
+			_ = peer.Close()
+		}
+	})
+	tcpAddr, ok := conn.LocalAddr().(*net.TCPAddr)
 	require.True(t, ok)
-	require.NoError(t, listener.Close())
 	return tcpAddr.Port
 }
 
