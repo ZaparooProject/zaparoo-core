@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,15 +40,9 @@ import (
 func TestIsConnectionRefused(t *testing.T) {
 	t.Parallel()
 
-	var lc net.ListenConfig
-	listener, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	require.NoError(t, listener.Close())
-
 	var dialer net.Dialer
-	_, dialErr := dialer.DialContext(t.Context(), "tcp", addr)
-	require.Error(t, dialErr, "nothing should be listening on a closed port")
+	_, dialErr := dialer.DialContext(t.Context(), "tcp", refusingAddr(t))
+	require.Error(t, dialErr, "nothing is listening on a bound socket")
 	assert.True(t, isConnectionRefused(dialErr), "a real refused dial must be recognised")
 
 	// Wrapped the way the callers wrap it, since that is how it arrives.
@@ -54,4 +50,21 @@ func TestIsConnectionRefused(t *testing.T) {
 
 	assert.False(t, isConnectionRefused(errors.New("something else")))
 	assert.False(t, isConnectionRefused(nil))
+}
+
+// refusingAddr returns a loopback address that refuses connections for the
+// rest of the test. The port is bound but never listened on, so nothing else
+// can take it; a port that is listened on and then closed can be handed to
+// another test before the dial reaches it.
+func refusingAddr(t *testing.T) string {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	require.NoError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}))
+	bound, err := syscall.Getsockname(fd)
+	require.NoError(t, err)
+	inet4, ok := bound.(*syscall.SockaddrInet4)
+	require.True(t, ok)
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(inet4.Port))
 }
