@@ -22,14 +22,11 @@ package rs232barcode
 import (
 	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
@@ -43,6 +40,7 @@ const maxBufferSize = 8192 // 8KB limit (QR Code v40 max: ~7KB numeric, ~4.3KB a
 type Reader struct {
 	port        serialport.SerialPort
 	portFactory serialport.SerialPortFactory
+	checkExists func(path string) error
 	cfg         *config.Instance
 	device      config.ReadersConnect
 	path        string
@@ -55,6 +53,7 @@ func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
 		cfg:         cfg,
 		portFactory: serialport.DefaultSerialPortFactory,
+		checkExists: serialport.CheckExists,
 	}
 }
 
@@ -104,10 +103,8 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 
 	path := device.Path
 
-	if runtime.GOOS != "windows" {
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("failed to stat device path %s: %w", path, err)
-		}
+	if err := r.checkExists(path); err != nil {
+		return err //nolint:wrapcheck // CheckExists names the path
 	}
 
 	log.Debug().Msgf("opening RS232 barcode reader: %s", path)
@@ -239,7 +236,7 @@ func (r *Reader) Path() string {
 }
 
 func (r *Reader) ReaderID() string {
-	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(r.path), r.device.ConnectionString())
+	return r.identity.ID(r.Metadata().ID, serialport.TopologyPath(r.path), r.device.ConnectionString())
 }
 
 func (r *Reader) Connected() bool {

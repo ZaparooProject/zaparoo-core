@@ -241,7 +241,14 @@ func TestTerminateTree(t *testing.T) {
 	go func() { done <- game.Wait() }()
 
 	p.terminateTree(game.Process.Pid)
-	require.Error(t, <-done, "the shell was signalled")
+	// How the shell ends is not checked. Its child is signalled first, so
+	// the shell's wait can return and the shell exit cleanly before its
+	// own signal arrives.
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shell was still running after its tree was terminated")
+	}
 }
 
 func TestTerminateTree_KillsChildThatOutlivesWrapper(t *testing.T) {
@@ -269,9 +276,15 @@ func TestTerminateTree_KillsChildThatOutlivesWrapper(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	child, err := process.NewProcess(int32(childPid)) //nolint:gosec // PID fits in int32
 	require.NoError(t, err)
-	// Wait until the child has exec'd sleep with SIGTERM ignored.
+	// Wait until the child has exec'd sleep with SIGTERM ignored. A process
+	// handle keeps the first name it reads, so each look takes a new one;
+	// otherwise a look before the exec would see the shell's name for good.
 	require.Eventually(t, func() bool {
-		name, nameErr := child.Name()
+		fresh, freshErr := process.NewProcess(int32(childPid)) //nolint:gosec // PID fits in int32
+		if freshErr != nil {
+			return false
+		}
+		name, nameErr := fresh.Name()
 		return nameErr == nil && name == "sleep"
 	}, 5*time.Second, 10*time.Millisecond)
 

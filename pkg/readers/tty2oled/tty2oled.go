@@ -38,6 +38,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -55,7 +57,13 @@ type pictureNameProvider interface {
 
 // Reader represents a tty2oled display reader
 type Reader struct {
-	port                  serial.Port
+	port serial.Port
+	// openPort, listSerialPorts and listUSBSerial default to
+	// serialport.OpenPort, helpers.GetSerialDeviceList and usbserial.List
+	// when nil.
+	openPort              func(path string, mode *serial.Mode) (serial.Port, error)
+	listSerialPorts       func() ([]string, error)
+	listUSBSerial         func() ([]usbserial.PortInfo, error)
 	platform              platforms.Platform
 	healthCheckCtx        context.Context
 	operationWorkerCtx    context.Context
@@ -283,7 +291,7 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, _ rea
 	}
 
 	// Open serial port with proper configuration
-	port, err := serial.Open(r.path, &serial.Mode{
+	port, err := r.portOpener()(r.path, &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
 		Parity:   serial.NoParity,
@@ -399,12 +407,44 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+// portOpener returns the function that opens serial ports.
+func (r *Reader) portOpener() func(path string, mode *serial.Mode) (serial.Port, error) {
+	if r.openPort != nil {
+		return r.openPort
+	}
+	return serialport.OpenPort
+}
+
+// usbSerialPorts returns the paths of USB serial adapters no kernel driver
+// has, which the userspace driver serves.
+func (r *Reader) usbSerialPorts() []string {
+	list := r.listUSBSerial
+	if list == nil {
+		list = usbserial.List
+	}
+	infos, err := list()
+	if err != nil {
+		log.Debug().Err(err).Msg("tty2oled: failed to list USB serial adapters")
+		return nil
+	}
+	paths := make([]string, 0, len(infos))
+	for i := range infos {
+		paths = append(paths, infos[i].Path)
+	}
+	return paths
+}
+
 func (r *Reader) Detect(connected []string) string {
-	ports, err := helpers.GetSerialDeviceList()
+	listSerial := r.listSerialPorts
+	if listSerial == nil {
+		listSerial = helpers.GetSerialDeviceList
+	}
+	ports, err := listSerial()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get serial ports")
 		return ""
 	}
+	ports = append(ports, r.usbSerialPorts()...)
 
 	log.Trace().Int("port_count", len(ports)).Msg("tty2oled: checking serial ports")
 
@@ -487,7 +527,7 @@ func (*Reader) Capabilities() []readers.Capability {
 
 func (r *Reader) ReaderID() string {
 	path := r.getDevicePath()
-	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(path), path)
+	return r.identity.ID(r.Metadata().ID, serialport.TopologyPath(path), path)
 }
 
 func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {
@@ -963,7 +1003,9 @@ func (r *Reader) sendPictureDataRaw(picturePath string) error {
 }
 
 // detectDevice attempts to detect a tty2oled device by sending CMDHWINF and waiting for a response
-func (*Reader) detectDevice(portName string) bool {
+func (r *Reader) detectDevice(portName string) bool {
+	openPort := r.portOpener()
+
 	// Add overall timeout for device detection to prevent hanging autodetection
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -976,7 +1018,7 @@ func (*Reader) detectDevice(portName string) bool {
 
 	go func() {
 		// Open serial port for detection
-		port, err := serial.Open(portName, &serial.Mode{
+		port, err := openPort(portName, &serial.Mode{
 			BaudRate: 115200,
 			DataBits: 8,
 			Parity:   serial.NoParity,

@@ -16,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -123,14 +124,32 @@ func testFrontend(t *testing.T, addr string) (*frontend, *mocks.MockCommandExecu
 	return f, exec, clock
 }
 
-// closedAddr is a local UDP port nothing listens on.
+// closedAddr is a local UDP port that refuses datagrams for the rest of the
+// test. The port belongs to a socket connected to another peer, so the kernel
+// turns everyone else away the same as it does for a port nothing has, and no
+// parallel test's fake RetroArch can be given the port in the meantime, as
+// happened when it was opened and closed again.
 func closedAddr(t *testing.T) string {
 	t.Helper()
-	conn, err := (&net.ListenConfig{}).ListenPacket(context.Background(), "udp", "127.0.0.1:0")
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", "127.0.0.1:1")
 	require.NoError(t, err)
-	addr := conn.LocalAddr().String()
-	require.NoError(t, conn.Close())
-	return addr
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn.LocalAddr().String()
+}
+
+func TestClosedAddrStaysClosed(t *testing.T) {
+	t.Parallel()
+	addr := closedAddr(t)
+
+	_, err := (&net.ListenConfig{}).ListenPacket(context.Background(), "udp", addr)
+	require.Error(t, err, "the port cannot be handed to anything else")
+
+	f, _, _ := testFrontend(t, addr)
+	f.queryTimeout = 5 * time.Second
+	start := time.Now()
+	_, err = f.status(context.Background())
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second, "refused at once, not left to time out")
 }
 
 // drive advances the fake clock whenever the code under test waits on it,

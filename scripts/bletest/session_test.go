@@ -39,9 +39,13 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	want := &credentials{DeviceID: "dev", AuthToken: "tok", PairingKey: "a2V5"}
 	require.NoError(t, want.save(path))
 
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "credentials are private to the operator")
+	// Windows has no permission bits to check: it reports every writable
+	// file as 0666 whatever mode it was created with.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "credentials are private to the operator")
+	}
 
 	got, err := loadCredentials(path)
 	require.NoError(t, err)
