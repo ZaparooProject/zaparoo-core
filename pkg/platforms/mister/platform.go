@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,6 +49,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -134,13 +136,18 @@ type Platform struct {
 	// holding its activity lease; nil means probe the lease file. Tests
 	// replace it.
 	uiFrontendRunning func() bool
-	coreLoads         coreLoadStops
-	lastLauncher      platforms.Launcher
+	// uiReloadWait replaces frontendReloadWait; tests shorten it.
+	uiReloadWait *time.Duration
+	coreLoads    coreLoadStops
+	lastLauncher platforms.Launcher
 	shared.InputManager
-	arcadeCardLaunch    arcadeCardLaunchCache
-	stopIntent          platforms.StopIntent
-	processMu           syncutil.RWMutex
-	platformMu          syncutil.Mutex
+	arcadeCardLaunch arcadeCardLaunchCache
+	stopIntent       platforms.StopIntent
+	processMu        syncutil.RWMutex
+	platformMu       syncutil.Mutex
+	// uiAbandonedPID is the orphaned status file pid HandOffUI last gave up
+	// waiting on.
+	uiAbandonedPID      atomic.Int64
 	trackedProcessGroup bool
 }
 
@@ -208,6 +215,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		file.NewReader(cfg),
 		newOperatorReader(cfg, p.fs),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),

@@ -316,7 +316,7 @@ None.
 
 Choice IDs are presentation-safe. Executable ZapScript and private choice values remain inside Core.
 
-On MiSTer, Main_MiSTer records in `/tmp/zaparoo/frontend_status.json` whether the Zaparoo frontend runs in place of the stock menu. While it does, Core shows no UI event through its own menu widgets and leaves every event to API clients, as long as the frontend is running or a game is; at the menu before the frontend has started, the widgets show it as before. An event raised while a game runs, which the widgets would have ended the game to show, instead returns to the menu so Main starts the frontend, and stays open for at least 60 seconds from then, or for its own timeout when that is longer. Events the widgets never show over a running game, such as the auto-advance switch countdown, are unchanged. When the file is missing, unreadable, reports the frontend inactive, or names a Main process that is no longer running (a stock Main started in its place), Core shows events as before.
+On MiSTer, Main_MiSTer records in `/tmp/zaparoo/frontend_status.json` whether the Zaparoo frontend runs in place of the stock menu. While it does, Core shows no UI event through its own menu widgets and leaves every event to API clients, including at the menu before the frontend has started, as when a game has just exited and Main is still loading the menu: such an event stays open for at least 60 seconds for the frontend to start and show it, or for its own timeout when that is longer. An event raised while a game runs, which the widgets would have ended the game to show, instead returns to the menu so Main starts the frontend, and stays open for at least 60 seconds from then, or for its own timeout when that is longer. Events the widgets never show over a running game, such as the auto-advance switch countdown, are unchanged. Main starts a new process on every core load and names it in the file shortly after, so when the file names a Main process that is no longer running, Core rereads it for up to 5 seconds before deciding. If it still names that process (a stock Main started in its place), Core shows events as before, without waiting again until the file changes. When the file is missing, unreadable or reports the frontend inactive, Core shows events as before.
 
 #### Example
 
@@ -404,6 +404,43 @@ Top-level `confirm` remains launch-guard-specific for compatibility. It cannot c
 | id      | string | Yes      | Resolved event ID. |
 | outcome | string | Yes      | `confirmed`, `selected`, `dismissed`, `timed_out`, `completed`, `superseded`, or `cancelled`. |
 | choiceId | string | No     | Selected opaque choice ID for `selected`. |
+
+### ui.shown
+
+**Access:** Localhost or any authenticated client.
+
+Reports that a client has put the active UI event on screen. The first report for an event restarts its expiry at the event's full timeout from now, so time spent waiting for the client to start does not count against the person answering it, and publishes the new `expiresAt` through `ui.changed`. A first report within a second of the event opening keeps the current expiry. Repeated reports for the same event are accepted and change nothing. An event the host renderer presents counts as shown without a report.
+
+Clients should send it once per event, when the event first becomes visible.
+
+#### Parameters
+
+| Key | Type   | Required | Description |
+| :-- | :----- | :------- | :---------- |
+| id  | string | Yes      | Active event ID. |
+
+Returns `null` when accepted. Returns client error for stale event ID or expired event.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-shown-1",
+  "method": "ui.shown",
+  "params": {
+    "id": "56969e9c-f863-4cc8-9c2c-d7512bf10d4d"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-shown-1",
+  "result": null
+}
+```
 
 ## Tokens
 
@@ -3269,6 +3306,7 @@ None.
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
 | encryption                | boolean                                   | Yes      | Whether paired encryption is required for remote WebSocket connections. Localhost remains exempt. |
+| bleEnabled                | boolean                                   | Yes      | Whether the API is also served over [Bluetooth LE](./#bluetooth-le). Defaults to true.         |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 | launcherPreference        | string[]                                  | Yes      | Global launcher preference (`[launchers] preference`), in order. Each entry is a launcher ID or group name. When a launch names no launcher and the system has no `systemDefaults` launcher, the first entry with an available launcher for the media's system is used. Empty when unset. |
@@ -3332,6 +3370,7 @@ None.
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
     "encryption": false,
+    "bleEnabled": true,
     "readersConnect": [],
     "systemDefaults": [
       {
@@ -3373,6 +3412,7 @@ An object containing any of the following optional keys:
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
 | encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
+| bleEnabled                | boolean                                   | No       | Serve the API over [Bluetooth LE](./#bluetooth-le) as well. Takes effect within about fifteen seconds without a restart. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). Fields the API does not carry, such as `pause_on_launch`, are kept, including on an `Audio` entry the list leaves out. |
 | launcherPreference        | string[]                                  | No       | Replace the global launcher preference list, keeping its order. `[]` clears it. Each entry must match a known launcher ID or group (case-insensitive), unless it is already in the current list. |
@@ -6705,6 +6745,56 @@ On Windows, controllers are read through XInput: at most four, with no name or I
     },
     "time": { "clockReliable": true, "timezone": "Australia/Perth", "utcOffset": 28800 },
     "system": { "hostname": "steamdeck", "platform": "steamos", "os": "linux", "arch": "amd64", "model": "Jupiter" }
+  }
+}
+```
+
+### device.endpoints
+
+**Access:** Localhost or any authenticated client.
+
+Query where else the API can be reached. A client connected over [Bluetooth LE](index.md#bluetooth-le) calls this after authenticating to find the network API, and moves to it when it can open an encrypted WebSocket session there, which also proves it reached the same device. A client connected over the network uses `ble` to learn whether it can fall back to Bluetooth LE.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type     | Required | Description                                                                                                                        |
+| :-------- | :------- | :------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| deviceId  | string   | Yes      | Core's device ID, the same one network discovery publishes. Match records of one device found over different transports with it. |
+| name      | string   | Yes      | The name the device goes by, the same one network discovery publishes.                                                             |
+| scheme    | string   | Yes      | WebSocket scheme of the network API. Always `ws`.                                                                                  |
+| addresses | string[] | Yes      | LAN addresses the network API answers on. Empty when it only listens on loopback or on a socket the host supplied.                |
+| port      | number   | Yes      | Port of the network API.                                                                                                           |
+| ble       | boolean  | Yes      | Whether the API is currently served over Bluetooth LE.                                                                             |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7d1b2c3e-2f90-4b8e-9a52-1e0f6c4d8a21",
+  "method": "device.endpoints"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7d1b2c3e-2f90-4b8e-9a52-1e0f6c4d8a21",
+  "result": {
+    "deviceId": "3f6c1e2a-9b4d-4c8e-a1f2-5d7e9b0c4a36",
+    "name": "MiSTer",
+    "scheme": "ws",
+    "addresses": ["192.168.1.40"],
+    "port": 7497,
+    "ble": true
   }
 }
 ```

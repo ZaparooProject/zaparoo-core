@@ -99,6 +99,7 @@ type GamelistXMLScraper struct {
 	// unmapped collects the source values this run had no tag mapping for.
 	unmapped           scraper.UnmappedValues
 	externalAssetRoots []string
+	gamelistDirs       []string
 	maxGamelistBytes   int64
 	matchArcadeSets    bool
 }
@@ -248,10 +249,28 @@ func externalAssetRootsForPlatform(cfg *config.Instance, pl platforms.Platform) 
 	}
 }
 
+// Option adjusts a scraper built by [NewPlatformScraper].
+type Option func(*GamelistXMLScraper)
+
+// WithGamelistDirs adds folders that hold one <system folder>/gamelist.xml
+// per system, checked in order when a ROM folder has no gamelist.xml of its
+// own. This is EmulationStation's fallback; RetroPie keeps its lists in
+// ~/.emulationstation/gamelists. Absolute and ~/ asset paths may point
+// anywhere under each folder's parent, where ES keeps downloaded media.
+func WithGamelistDirs(dirs ...string) Option {
+	return func(g *GamelistXMLScraper) {
+		for _, dir := range dirs {
+			dir = filepath.Clean(dir)
+			g.gamelistDirs = append(g.gamelistDirs, dir)
+			g.externalAssetRoots = append(g.externalAssetRoots, filepath.Dir(dir))
+		}
+	}
+}
+
 // NewPlatformScraper returns a [platforms.Scraper] backed by EmulationStation
 // gamelist.xml files. Systems are resolved at scrape time from the platform
 // and media database; no state is captured at construction.
-func NewPlatformScraper() platforms.Scraper {
+func NewPlatformScraper(options ...Option) platforms.Scraper {
 	return platforms.Scraper{
 		ID:                 "gamelist.xml",
 		Name:               "ES gamelist.xml",
@@ -278,6 +297,9 @@ func NewPlatformScraper() platforms.Scraper {
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				maxGamelistBytes:   maxGamelistBytesForPlatform(pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
+			}
+			for _, option := range options {
+				option(s)
 			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
 			return nil
@@ -535,6 +557,26 @@ func (p *parsedGamelistSystem) dropCompanionGames() {
 	}
 }
 
+// findGamelist returns the gamelist EmulationStation reads for a ROM folder:
+// its own gamelist.xml, else the first one in the configured gamelist dirs.
+func (g *GamelistXMLScraper) findGamelist(rootPath string) (path string, found bool, err error) {
+	candidates := make([]string, 0, 1+len(g.gamelistDirs))
+	candidates = append(candidates, filepath.Join(rootPath, "gamelist.xml"))
+	for _, dir := range g.gamelistDirs {
+		candidates = append(candidates, filepath.Join(dir, filepath.Base(rootPath), "gamelist.xml"))
+	}
+	for _, candidate := range candidates {
+		exists, existsErr := afero.Exists(g.filesystem(), candidate)
+		if existsErr != nil {
+			return candidate, false, fmt.Errorf("checking for gamelist %s: %w", candidate, existsErr)
+		}
+		if exists {
+			return candidate, true, nil
+		}
+	}
+	return candidates[0], false, nil
+}
+
 func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
@@ -547,8 +589,7 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 		default:
 		}
 
-		gamelistPath := filepath.Join(rootPath, "gamelist.xml")
-		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+		gamelistPath, exists, statErr := g.findGamelist(rootPath)
 		if statErr != nil {
 			log.Warn().Err(statErr).Str("path", gamelistPath).Msg("gamelistxml: failed to stat gamelist.xml, skipping")
 			parsed.SourceErrors = append(parsed.SourceErrors, &scraper.SourceError{Path: gamelistPath, Err: statErr})

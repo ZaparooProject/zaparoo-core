@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // target is one platform/architecture pair that the release build produces an
@@ -33,6 +35,30 @@ type target struct {
 	Platform string
 	Arch     string
 	Ext      string
+	// Since is the lowest version whose build produces this target, or empty
+	// when every release in the manifest has it.
+	Since string
+}
+
+// newTargetsSince is the first version built with the platforms added after
+// v2.22.1. Its "-0" prerelease sorts below every prerelease of that version,
+// so the first beta already counts.
+const newTargetsSince = "2.23.0-0"
+
+// requiredAt reports whether a release at version must carry this target.
+// Releases from before the target existed, such as the stable release still
+// on its channel when the first beta with a new platform is promoted, or a
+// patch to it, are not held to it. Versions that do not parse are held to
+// every target.
+func (t target) requiredAt(version string) bool {
+	if t.Since == "" {
+		return true
+	}
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return true
+	}
+	return !v.LessThan(semver.MustParse(t.Since))
 }
 
 // zipPlatforms are the platforms whose archives are zip rather than tar.gz,
@@ -51,30 +77,40 @@ var zipPlatforms = map[string]bool{
 func expectedTargets() []target {
 	pairs := []struct {
 		platform string
+		since    string
 		arches   []string
 	}{
+		{platform: "amberelec", since: newTargetsSince, arches: []string{"arm64"}},
+		{platform: "arkos", since: newTargetsSince, arches: []string{"arm64"}},
+		{platform: "armada", since: newTargetsSince, arches: []string{"arm64"}},
 		{platform: "batocera", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "bazzite", arches: []string{"amd64", "arm64"}},
 		{platform: "chimeraos", arches: []string{"amd64", "arm64"}},
+		{platform: "firmware", since: newTargetsSince, arches: []string{"arm64"}},
+		{platform: "knulli", since: newTargetsSince, arches: []string{"arm", "arm64"}},
+		{platform: "lakka", since: newTargetsSince, arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "libreelec", arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "linux", arches: []string{"amd64", "arm64"}},
 		{platform: "mac", arches: []string{"amd64", "arm64"}},
 		{platform: "mister", arches: []string{"arm"}},
 		{platform: "mistex", arches: []string{"arm64"}},
+		{platform: "muos", since: newTargetsSince, arches: []string{"arm64"}},
+		{platform: "recalbox", since: newTargetsSince, arches: []string{"amd64", "arm", "arm64"}},
 		{platform: "replayos", arches: []string{"arm64"}},
+		{platform: "retropie", since: newTargetsSince, arches: []string{"amd64", "arm", "arm64"}},
+		{platform: "rocknix", since: newTargetsSince, arches: []string{"amd64", "arm64"}},
 		{platform: "steamos", arches: []string{"amd64"}},
 		{platform: "windows", arches: []string{"386", "amd64", "arm64"}},
-		{platform: "zapos", arches: []string{"arm64"}},
 	}
 
-	targets := make([]target, 0, 24)
+	targets := make([]target, 0, 40)
 	for _, pair := range pairs {
 		for _, arch := range pair.arches {
 			ext := "tar.gz"
 			if zipPlatforms[pair.platform] {
 				ext = "zip"
 			}
-			targets = append(targets, target{Platform: pair.platform, Arch: arch, Ext: ext})
+			targets = append(targets, target{Platform: pair.platform, Arch: arch, Ext: ext, Since: pair.since})
 		}
 	}
 	sort.Slice(targets, func(i, j int) bool {
@@ -113,6 +149,9 @@ func validateAssetMatrix(rel *release, tag string) error {
 		name := archiveName(t, version)
 		switch present[name] {
 		case 0:
+			if !t.requiredAt(version) {
+				break
+			}
 			missing = append(missing, name)
 		case 1:
 		default:

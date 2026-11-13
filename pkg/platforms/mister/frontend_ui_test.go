@@ -44,6 +44,8 @@ func handoffPlatform(t *testing.T, status string, mediaRunning bool) (p *Platfor
 	}
 	count := 0
 	p = &Platform{fs: fs}
+	noWait := time.Duration(0)
+	p.uiReloadWait = &noWait
 	p.uiFrontendRunning = func() bool { return true }
 	p.uiReturnToMenu = func() error {
 		count++
@@ -61,10 +63,21 @@ func handoffPlatform(t *testing.T, status string, mediaRunning bool) (p *Platfor
 // Main reports the frontend active as soon as it is enabled, before the
 // frontend has started. At the menu, an event only goes to the frontend once
 // it is running; until then the widget shows it.
-func TestHandOffUILeavesEventToWidgetUntilFrontendRuns(t *testing.T) {
+func TestHandOffUIHoldsEventUntilFrontendRuns(t *testing.T) {
 	t.Parallel()
 
 	p, stops := handoffPlatform(t, `{"active":true,"pid":4242}`, false)
+	p.uiFrontendRunning = func() bool { return false }
+	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
+	assert.True(t, handled, "the widget never gets an event the starting frontend will draw")
+	assert.Equal(t, frontendColdStartHold, minOpen, "the event stays open while the frontend starts")
+	assert.Zero(t, *stops, "nothing is running, so nothing is stopped")
+}
+
+func TestHandOffUILeavesEventToWidgetWhenFrontendInactive(t *testing.T) {
+	t.Parallel()
+
+	p, stops := handoffPlatform(t, `{"active":false,"pid":4242}`, false)
 	p.uiFrontendRunning = func() bool { return false }
 	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
 	assert.False(t, handled)
@@ -125,6 +138,66 @@ func TestHandOffUIFallsBackToWidgetWhenMenuReturnFails(t *testing.T) {
 	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
 	assert.False(t, handled)
 	assert.Zero(t, minOpen)
+}
+
+// A game's exit raises its countdown while Main is between processes: the
+// status file still names the old one. The hand-off waits for Main to name
+// the new one instead of giving the event to the widget.
+func TestHandOffUIWaitsForMainToReload(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `{"active":true,"pid":999}`, false)
+	p.uiFrontendRunning = func() bool { return false }
+	wait := 5 * time.Second
+	p.uiReloadWait = &wait
+	go func() {
+		time.Sleep(3 * frontendReloadPoll)
+		_ = afero.WriteFile(p.fs, frontendStatusPath, []byte(`{"active":true,"pid":4242}`), 0o600)
+	}()
+	start := time.Now()
+	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
+	assert.True(t, handled)
+	assert.Equal(t, frontendColdStartHold, minOpen)
+	assert.Less(t, time.Since(start), wait, "it stops waiting once Main is back")
+}
+
+// A status file left by a fork that a stock Main replaced is never
+// rewritten; the wait ends and the widget shows the event.
+func TestHandOffUIGivesUpOnAnOrphanedStatus(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `{"active":true,"pid":999}`, false)
+	wait := 2 * frontendReloadPoll
+	p.uiReloadWait = &wait
+	handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
+	assert.False(t, handled)
+	assert.Zero(t, minOpen)
+}
+
+// Once a wait has given up on an orphaned status, later events for the same
+// pid skip the wait; a rewritten file is waited on again.
+func TestHandOffUIWaitsOnceForAnOrphanedPID(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `{"active":true,"pid":999}`, false)
+	wait := 2 * frontendReloadPoll
+	p.uiReloadWait = &wait
+	event := &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker}
+	handled, _ := p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+
+	wait = time.Minute
+	start := time.Now()
+	handled, _ = p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.Less(t, time.Since(start), frontendReloadPoll, "the same orphaned pid is not waited on again")
+
+	require.NoError(t, afero.WriteFile(p.fs, frontendStatusPath, []byte(`{"active":true,"pid":998}`), 0o600))
+	wait = 2 * frontendReloadPoll
+	start = time.Now()
+	handled, _ = p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.GreaterOrEqual(t, time.Since(start), wait, "a new orphaned pid is waited on")
 }
 
 func TestFrontendActiveRejectsOversizedStatus(t *testing.T) {

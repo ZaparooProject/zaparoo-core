@@ -29,6 +29,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -42,33 +44,81 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/adrg/xdg"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
+)
+
+const (
+	// defaultConfigsDir is RetroPie's configuration root, owned by the
+	// RetroPie user.
+	defaultConfigsDir = "/opt/retropie/configs"
+	runcommandPath    = "/opt/retropie/supplementary/runcommand/runcommand.sh"
+	stateSubdir       = "retropie"
+
+	// gameReadyTimeout covers stopping EmulationStation, runcommand's
+	// launch screen and its key-press window before the game reports.
+	gameReadyTimeout = 45 * time.Second
+	readyInterval    = 250 * time.Millisecond
 )
 
 type Platform struct {
+	fs             afero.Fs
+	procs          procOps
+	clock          clockwork.Clock
+	sendQuit       func(ctx context.Context, addr string) error
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	stopWatcher    func() error
 	trackedProcess *os.Process
 	// completedProcess is the last tracked process that exited while still
 	// tracked, so only its own waiter may clear media.
 	completedProcess *os.Process
 	processDone      chan struct{}
+	configsDir       string
+	homeDir          string
+	stateDir         string
+	romsDir          string
+	run              runEvent
 	processMu        syncutil.RWMutex
+	mu               syncutil.Mutex
 	waitClaimed      bool
+	// awaitingStart is set while a launch from Core waits for runcommand to
+	// report the game.
+	awaitingStart bool
+}
+
+// defaults fills in the real host boundaries for fields a test did not set.
+func (p *Platform) defaults() {
+	if p.fs == nil {
+		p.fs = afero.NewOsFs()
+	}
+	if p.procs == nil {
+		p.procs = procFS{}
+	}
+	if p.clock == nil {
+		p.clock = clockwork.NewRealClock()
+	}
+	if p.sendQuit == nil {
+		p.sendQuit = sendRetroArchQuit
+	}
+	if p.configsDir == "" {
+		p.configsDir = defaultConfigsDir
+	}
+	if p.homeDir == "" {
+		p.homeDir = xdg.Home
+	}
+	if p.stateDir == "" {
+		p.stateDir = filepath.Join(helpers.DataDir(p), stateSubdir)
+	}
+	if p.romsDir == "" {
+		p.romsDir = filepath.Join(p.homeDir, "RetroPie", "roms")
+	}
 }
 
 func (*Platform) ID() string {
@@ -76,37 +126,14 @@ func (*Platform) ID() string {
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	allReaders := []readers.Reader{
-		pn532.NewReader(cfg),
-		ccid.NewReader(cfg),
-		libnfc.NewACR122Reader(cfg),
-		libnfc.NewLegacyUARTReader(cfg),
-		libnfc.NewLegacyI2CReader(cfg),
-		file.NewReader(cfg),
-		simpleserial.NewReader(cfg),
-		rs232barcode.NewReader(cfg),
-		opticaldrive.NewReader(cfg),
-		mqtt.NewReader(cfg),
-		externaldrive.NewReader(cfg),
-		tty2oled.NewReader(cfg, p),
-	}
-
-	var enabled []readers.Reader
-	for _, r := range allReaders {
-		metadata := r.Metadata()
-		driver := config.DriverInfo{
-			ID:                metadata.ID,
-			DefaultEnabled:    metadata.DefaultEnabled,
-			DefaultAutoDetect: metadata.DefaultAutoDetect,
-		}
-		if cfg.IsReaderEnabled(driver, config.ReaderEnableContextCandidate) {
-			enabled = append(enabled, r)
-		}
-	}
-	return enabled
+	return linuxbase.SupportedReaders(cfg, p)
 }
 
-func (*Platform) StartPre(_ *config.Instance) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
+	p.defaults()
+	if err := p.fs.MkdirAll(p.stateDir, 0o750); err != nil {
+		return fmt.Errorf("create %s: %w", p.stateDir, err)
+	}
 	return nil
 }
 
@@ -119,12 +146,30 @@ func (p *Platform) StartPost(
 	_ *database.Database,
 	_ *idle.Scheduler,
 ) error {
+	p.defaults()
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+
+	stop, err := p.startStateWatcher()
+	if err != nil {
+		log.Warn().Err(err).Msg("retropie: game tracking unavailable")
+		return nil
+	}
+	p.stopWatcher = stop
+	if _, ok := readLoopPID(p.fs, p.procs, p.stateDir); !ok {
+		log.Warn().Msg("retropie: the Zaparoo autostart loop is not running; " +
+			"run \"zaparoo -install\" and reboot so games can be launched")
+	}
 	return nil
 }
 
-func (*Platform) Stop() error {
+func (p *Platform) Stop() error {
+	if p.stopWatcher != nil {
+		if err := p.stopWatcher(); err != nil {
+			log.Warn().Err(err).Msg("retropie: error stopping state watcher")
+		}
+		p.stopWatcher = nil
+	}
 	return nil
 }
 
@@ -197,22 +242,29 @@ func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
-func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return cfg.IndexRoots()
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	p.defaults()
+	roots := append(cfg.IndexRoots(), p.romsDir)
+	seen := make(map[string]struct{}, len(roots))
+	result := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		result = append(result, root)
+	}
+	return result
 }
 
 func (*Platform) Settings() platforms.Settings {
-	return platforms.Settings{
-		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
-		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
-		TempDir:    filepath.Join(os.TempDir(), config.AppName),
-		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
-		ZipsAsDirs: false,
-	}
+	return linuxbase.Settings()
 }
 
-func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
-	// Kill tracked process if it exists
+func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
+	p.defaults()
+
 	p.processMu.Lock()
 	if p.trackedProcess != nil {
 		if err := p.trackedProcess.Kill(); err != nil {
@@ -227,24 +279,40 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	p.completedProcess = nil
 	p.processMu.Unlock()
 
-	p.setActiveMedia(nil)
+	if err := p.stopRuncommand(intent); err != nil {
+		return err
+	}
+
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
 	return nil
 }
 
-func (*Platform) ReturnToMenu() error {
-	// No menu concept on this platform
-	return nil
+func (p *Platform) ReturnToMenu() error {
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return errors.New("launching systems is not supported")
+	return platforms.ErrNotSupported
 }
 
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
 ) error {
-	log.Info().Msgf("launch media: %s", path)
+	p.defaults()
+	log.Info().Str("path", path).Msg("launch media")
+
+	// Stopping a game for a new launch asks the autostart loop to wait for
+	// the request instead of starting EmulationStation. The wait ends here
+	// whichever launcher ran, so a launch that is not a RetroPie game never
+	// leaves the loop waiting.
+	defer func() {
+		if err := removeIfExists(p.fs, filepath.Join(p.stateDir, holdFile)); err != nil {
+			log.Warn().Err(err).Msg("retropie: failed to clear launch hold")
+		}
+	}()
 
 	if launcher == nil {
 		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
@@ -254,7 +322,7 @@ func (p *Platform) LaunchMedia(
 		launcher = &foundLauncher
 	}
 
-	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	log.Info().Str("launcher", launcher.ID).Str("path", path).Msg("launch media: using launcher")
 	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
@@ -292,20 +360,45 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := []platforms.Launcher{
-		{
-			ID:            "Generic",
-			Extensions:    []string{".sh"},
-			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := command.StartAndReap(exec.CommandContext(context.Background(), path))
-				if err != nil {
-					return nil, fmt.Errorf("failed to start command: %w", err)
-				}
-				return nil, nil //nolint:nilnil // Command launches don't return a process handle
-			},
-		},
+	p.defaults()
+	folders := make([]string, 0, len(systemMap))
+	for folder := range systemMap {
+		folders = append(folders, folder)
 	}
+	sort.Strings(folders)
+
+	launchers := make([]platforms.Launcher, 0, len(folders)+1)
+	for _, folder := range folders {
+		info := systemMap[folder]
+		launcher := platforms.Launcher{
+			ID:         info.launcherID,
+			SystemID:   info.systemID,
+			Extensions: append([]string(nil), info.extensions...),
+			Folders:    []string{folder},
+			Launch:     p.launcherFunc(folder, info.kind),
+		}
+		// Ports are scripts that may not go through runcommand, so nothing
+		// reports when they start.
+		if info.kind == requestSystem {
+			launcher.WaitForReady = p.waitForGame
+			launcher.ReadyTimeout = func(*models.ActiveMedia) time.Duration { return gameReadyTimeout }
+			launcher.GameRunning = p.gameRunning
+		}
+		launchers = append(launchers, launcher)
+	}
+
+	launchers = append(launchers, platforms.Launcher{
+		ID:            "Generic",
+		Extensions:    []string{".sh"},
+		AllowListOnly: true,
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			err := command.StartAndReap(exec.CommandContext(context.Background(), path))
+			if err != nil {
+				return nil, fmt.Errorf("failed to start command: %w", err)
+			}
+			return nil, nil //nolint:nilnil // Command launches don't return a process handle
+		},
+	})
 
 	return helpers.CombineLaunchers(cfg, p, launchers)
 }
@@ -319,7 +412,12 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	gamelist := gamelistxml.NewPlatformScraper()
+	// ES falls back to these when a ROM folder has no gamelist.xml, and the
+	// ES scraper and Skyscraper write there by default.
+	gamelist := gamelistxml.NewPlatformScraper(gamelistxml.WithGamelistDirs(
+		filepath.Join(xdg.Home, ".emulationstation", "gamelists"),
+		"/etc/emulationstation/gamelists",
+	))
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)

@@ -222,8 +222,9 @@ still apply.
 ### Platform support
 
 Raw-binary automatic installation is intended for non-package-managed Windows,
-Linux, SteamOS, Bazzite, ChimeraOS, ReplayOS, RetroPie, Recalbox, ZapOS, MiSTeX,
-LibreELEC, MiSTer and Batocera installs that pass platform preflight.
+Linux, SteamOS, Bazzite, Armada, ChimeraOS, ReplayOS, RetroPie, Recalbox,
+Lakka, Zaparoo Firmware, MiSTeX, LibreELEC, ROCKNIX, AmberELEC, Knulli, ArkOS,
+muOS, MiSTer and Batocera installs that pass platform preflight.
 
 - Windows must be able to create/remove an install-directory probe and open the
   target for rename. Protected installer-owned locations remain on the Windows
@@ -462,7 +463,9 @@ Every publishing run does the same thing, in this order:
 4. Run the client's own asset selection over the generated manifest, for every
    platform and architecture the build produces. Two archives a device could
    both install fails anywhere in the manifest; a missing archive fails on the
-   newest release in each channel, which is the one devices are offered. This
+   newest release in each channel, which is the one devices are offered, unless
+   that release predates the target's `Since` version in
+   `scripts/generate-update-manifest/targets.go`. This
    runs before the signing key is loaded.
 5. Sign both documents and verify those signatures locally.
 6. Check the publish directory holds those four files and nothing else, and

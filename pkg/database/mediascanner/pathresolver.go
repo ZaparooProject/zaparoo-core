@@ -89,7 +89,9 @@ func (r *pathResolver) readDir(ctx context.Context, path string) ([]os.DirEntry,
 }
 
 // findPath is FindPath with pass-scoped memoization of both directory
-// listings and full resolutions.
+// listings and full resolutions. Unlike FindPath, a path whose exact case does
+// not exist is still resolved by a case-insensitive walk over the memoized
+// listings, so system folders match regardless of on-disk case.
 func (r *pathResolver) findPath(ctx context.Context, path string) (string, error) {
 	r.mu.Lock()
 	if res, ok := r.resolved[path]; ok {
@@ -98,7 +100,7 @@ func (r *pathResolver) findPath(ctx context.Context, path string) (string, error
 	}
 	r.mu.Unlock()
 
-	resolved, err := findPathWithReadDir(ctx, path, r.readDir)
+	resolved, err := findPathWithReadDir(ctx, path, r.readDir, true)
 	if ctx.Err() == nil {
 		r.mu.Lock()
 		r.resolved[path] = resolvedPath{path: resolved, err: err}

@@ -104,6 +104,7 @@ func TestDefaultInputMode(t *testing.T) {
 	for _, id := range []string{
 		platformids.Linux, platformids.Windows, platformids.Mac,
 		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite,
+		platformids.Armada,
 	} {
 		assert.Equal(t, config.InputModeCombos, defaultInputMode(id),
 			"desktop platform %s should default to combos", id)
@@ -112,7 +113,9 @@ func TestDefaultInputMode(t *testing.T) {
 	for _, id := range []string{
 		platformids.Mister, platformids.Mistex, platformids.Batocera,
 		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
-		platformids.ReplayOS,
+		platformids.ReplayOS, platformids.Knulli, platformids.ROCKNIX,
+		platformids.AmberELEC, platformids.ArkOS, platformids.MuOS,
+		platformids.Lakka,
 	} {
 		assert.Equal(t, config.InputModeUnrestricted, defaultInputMode(id),
 			"embedded platform %s should default to unrestricted", id)

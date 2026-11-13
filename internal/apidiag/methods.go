@@ -25,7 +25,7 @@ import "strings"
 // input. The API registration test requires intentional coverage for new methods.
 var knownMethods = func() map[string]struct{} {
 	methods := strings.Fields(`
-launch run confirm ui ui.respond run.script stop tokens media
+launch run confirm ui ui.respond ui.shown run.script stop tokens media
 media.generate media.generate.cancel media.generate.resume media.index
 media.search media.tags media.tags.update media.meta.update media.active
 media.history media.history.latest media.history.top media.lookup media.lookup.candidates
@@ -46,7 +46,7 @@ mappings.update mappings.reload readers readers.write readers.write.cancel versi
 inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings.auth.unlink
 settings.auth.link settings.auth.link.status settings.auth.link.cancel
 update.check update.status update.apply input.keyboard input.gamepad screenshot media.title.parse remote.activity
-device.status device.power.reboot device.power.shutdown device.power.suspend online.status
+device.status device.endpoints device.power.reboot device.power.shutdown device.power.suspend online.status
 device.bluetooth.devices device.bluetooth.scan.start device.bluetooth.scan.stop
 device.bluetooth.pair device.bluetooth.forget
 `)

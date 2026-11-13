@@ -14,20 +14,27 @@ dotenv: [".env"]
 
 includes:
   docker: ./scripts/tasks/docker.yml
+  amberelec: ./scripts/tasks/amberelec.yml
+  arkos: ./scripts/tasks/arkos.yml
+  armada: ./scripts/tasks/armada.yml
   batocera: ./scripts/tasks/batocera.yml
   bazzite: ./scripts/tasks/bazzite.yml
   chimeraos: ./scripts/tasks/chimeraos.yml
+  firmware: ./scripts/tasks/firmware.yml
+  knulli: ./scripts/tasks/knulli.yml
+  lakka: ./scripts/tasks/lakka.yml
   libreelec: ./scripts/tasks/libreelec.yml
   linux: ./scripts/tasks/linux.yml
   mac: ./scripts/tasks/mac.yml
   mister: ./scripts/tasks/mister.yml
   mistex: ./scripts/tasks/mistex.yml
+  muos: ./scripts/tasks/muos.yml
   recalbox: ./scripts/tasks/recalbox.yml
   replayos: ./scripts/tasks/replayos.yml
   retropie: ./scripts/tasks/retropie.yml
+  rocknix: ./scripts/tasks/rocknix.yml
   steamos: ./scripts/tasks/steamos.yml
   windows: ./scripts/tasks/windows.yml
-  zapos: ./scripts/tasks/zapos.yml
   cross-lint: ./scripts/tasks/cross-lint.yml
   zigcc: ./scripts/tasks/zigcc.yml
 

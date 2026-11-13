@@ -55,7 +55,9 @@ func defaultInputMode(platformID string) string {
 	switch platformID {
 	case platformids.Mister, platformids.Mistex, platformids.Batocera,
 		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
-		platformids.ReplayOS:
+		platformids.ReplayOS, platformids.Knulli, platformids.ROCKNIX,
+		platformids.AmberELEC, platformids.ArkOS, platformids.MuOS,
+		platformids.Lakka:
 		return config.InputModeUnrestricted
 	default:
 		return config.InputModeCombos
@@ -65,7 +67,8 @@ func defaultInputMode(platformID string) string {
 func isDesktopPlatform(platformID string) bool {
 	switch platformID {
 	case platformids.Linux, platformids.Windows, platformids.Mac,
-		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite:
+		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite,
+		platformids.Armada:
 		return true
 	default:
 		return false

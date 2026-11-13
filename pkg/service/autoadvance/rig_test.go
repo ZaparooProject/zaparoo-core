@@ -22,6 +22,7 @@ package autoadvance
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,18 +157,37 @@ type fakeUI struct {
 	others   []models.UIEvent
 	requests []*uievents.Request
 	handles  []chan uievents.Result
+	shown    []chan time.Time
 	ctxs     []context.Context
-	mu       syncutil.Mutex
+	// hold is the hand-off hold the prompts opened from now on report;
+	// handedOff marks them left to a client.
+	hold      time.Duration
+	mu        syncutil.Mutex
+	handedOff bool
 }
 
 func (u *fakeUI) Open(ctx context.Context, req *uievents.Request) (*uievents.Handle, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	results := make(chan uievents.Result, 1)
+	shown := make(chan time.Time, 1)
 	u.requests = append(u.requests, req)
 	u.handles = append(u.handles, results)
+	u.shown = append(u.shown, shown)
 	u.ctxs = append(u.ctxs, ctx)
-	return &uievents.Handle{Results: results, ID: "ui"}, nil
+	return &uievents.Handle{
+		Results: results, Shown: shown, ID: "ui",
+		HandedOff: u.handedOff, HandOffHold: u.hold,
+	}, nil
+}
+
+// handOff makes the prompts opened from now on left to a client that has yet
+// to start, held open for hold.
+func (u *fakeUI) handOff(hold time.Duration) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.handedOff = true
+	u.hold = hold
 }
 
 // State reports the events open that are not the engine's own prompts.
@@ -293,6 +313,28 @@ func withInput() rigOption {
 	}
 }
 
+// hookClock runs a hook, once, the next time the engine reads the time.
+type hookClock struct {
+	*clockwork.FakeClock
+	hook atomic.Pointer[func()]
+}
+
+func (c *hookClock) Now() time.Time {
+	if fn := c.hook.Swap(nil); fn != nil {
+		(*fn)()
+	}
+	return c.FakeClock.Now()
+}
+
+// withClockHook gives the engine a clock that runs a hook armed through the
+// returned clock on its next read.
+func withClockHook(hc **hookClock) rigOption {
+	return func(cfg *Config, r *rig) {
+		*hc = &hookClock{FakeClock: r.clock}
+		cfg.Clock = *hc
+	}
+}
+
 func newRig(t *testing.T, opts ...rigOption) *rig {
 	t.Helper()
 	r := &rig{
@@ -401,6 +443,25 @@ func (r *rig) quiet() {
 	r.t.Helper()
 	r.eng.Sync()
 	assert.Empty(r.t, r.host.queued(), "no playlist update expected")
+}
+
+// show reports prompt i on screen now and waits for the engine to restart its
+// countdown from that moment.
+func (r *rig) show(i int) {
+	r.t.Helper()
+	at := r.clock.Now()
+	r.ui.mu.Lock()
+	ch := r.ui.shown[i]
+	r.ui.mu.Unlock()
+	ch <- at
+	require.Eventually(r.t, func() bool {
+		seen := false
+		r.probe(func(e *Engine) {
+			seen = e.cd == nil || (!e.cd.held && e.cd.deadline.Equal(at.Add(e.cd.wait)))
+		})
+		return seen
+	}, 5*time.Second, time.Millisecond)
+	r.eng.Sync()
 }
 
 func engineStarted(pls *playlists.Playlist) *playlists.Playlist {

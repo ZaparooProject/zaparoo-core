@@ -215,6 +215,11 @@ test_verify_core_api_waits_out_a_reported_startup() {
             local url="${*: -1}" calls
             if [[ "${url}" == *"/health" ]]; then
                 calls="$(verify_core_api_health_calls "${counter}")"
+                # Core sends the JSON state only when asked for it.
+                if [[ "$*" != *"Accept: application/json"* ]]; then
+                    printf 'STARTING'
+                    return 0
+                fi
                 if [ "${calls}" -le 40 ]; then
                     printf '{"status":"starting","state":"starting"}'
                 else
@@ -316,9 +321,9 @@ test_steamos_asset_name() {
 
 test_linux_distro_asset_name() {
     local test_distro expected output
-    for test_distro in bazzite chimeraos ubuntu fedora; do
+    for test_distro in bazzite chimeraos armada ubuntu fedora; do
         case "${test_distro}" in
-            bazzite|chimeraos) expected="${test_distro}" ;;
+            bazzite|chimeraos|armada) expected="${test_distro}" ;;
             *) expected="linux" ;;
         esac
         output="$(
@@ -337,6 +342,161 @@ test_linux_distro_asset_name() {
             "${test_distro} release asset"
     done
     pass "select distro-specific Linux release asset"
+}
+
+make_detect_root() {
+    local root="$1"
+    rm -rf "${root}"
+    mkdir -p "${root}/etc"
+}
+
+test_detect_handheld_and_appliance_distros() {
+    local root="${TEST_TMP}/detect-root"
+
+    make_detect_root "${root}"
+    mkdir -p "${root}/opt/muos"
+    printf 'NAME="Debian GNU/Linux"\nID=debian\n' > "${root}/etc/os-release"
+    assert_equal "muos" "$(DETECT_ROOT="${root}" detect_linux_distro)" "muOS marker"
+
+    make_detect_root "${root}"
+    mkdir -p "${root}/usr/share/knulli"
+    : > "${root}/usr/share/knulli/knulli.version"
+    printf 'NAME=Batocera\nID=buildroot\n' > "${root}/etc/os-release"
+    assert_equal "knulli" "$(DETECT_ROOT="${root}" detect_linux_distro)" \
+        "Knulli marker wins over Batocera os-release"
+
+    make_detect_root "${root}"
+    mkdir -p "${root}/recalbox/share"
+    assert_equal "recalbox" "$(DETECT_ROOT="${root}" detect_linux_distro)" "Recalbox marker"
+
+    make_detect_root "${root}"
+    mkdir -p "${root}/opt/retropie"
+    printf 'NAME="Raspbian GNU/Linux"\nID=raspbian\n' > "${root}/etc/os-release"
+    assert_equal "retropie" "$(DETECT_ROOT="${root}" detect_linux_distro)" "RetroPie marker"
+
+    local theme
+    for theme in "ArkOS" "dArkOS"; do
+        make_detect_root "${root}"
+        mkdir -p "${root}/usr/share/plymouth/themes"
+        printf '[script]\ntitle=%s\n' "${theme}" > "${root}/usr/share/plymouth/themes/text.plymouth"
+        printf 'NAME="Ubuntu"\nID=ubuntu\n' > "${root}/etc/os-release"
+        assert_equal "arkos" "$(DETECT_ROOT="${root}" detect_linux_distro)" "${theme} boot theme"
+    done
+
+    make_detect_root "${root}"
+    printf 'OS_NAME="ROCKNIX"\nOS_VERSION="20250101"\n' > "${root}/etc/os-release"
+    assert_equal "rocknix" "$(DETECT_ROOT="${root}" detect_linux_distro)" "ROCKNIX OS_NAME"
+
+    make_detect_root "${root}"
+    printf 'NAME="AmberELEC"\nID="coreelec"\n' > "${root}/etc/os-release"
+    assert_equal "amberelec" "$(DETECT_ROOT="${root}" detect_linux_distro)" \
+        "AmberELEC is not treated as CoreELEC"
+
+    make_detect_root "${root}"
+    printf 'NAME="Lakka"\nID="lakka"\n' > "${root}/etc/os-release"
+    assert_equal "lakka" "$(DETECT_ROOT="${root}" detect_linux_distro)" "Lakka os-release"
+
+    make_detect_root "${root}"
+    printf 'NAME="Armada OS"\nID=armada\n' > "${root}/etc/os-release"
+    assert_equal "armada" "$(DETECT_ROOT="${root}" detect_linux_distro)" "Armada os-release"
+
+    make_detect_root "${root}"
+    printf 'NAME="Ubuntu"\nID=ubuntu\n' > "${root}/etc/os-release"
+    assert_equal "ubuntu" "$(DETECT_ROOT="${root}" detect_linux_distro)" "plain distro"
+
+    pass "detect handheld and appliance distros"
+}
+
+test_appliance_install_dispatch() {
+    local test_distro expected_asset expected_dest output
+    for test_distro in rocknix amberelec lakka knulli arkos muos recalbox retropie; do
+        case "${test_distro}" in
+            rocknix|amberelec|lakka) expected_dest="/storage/zaparoo/zaparoo" ;;
+            knulli) expected_dest="/userdata/system/zaparoo" ;;
+            arkos) expected_dest="/home/ark/.config/zaparoo/zaparoo" ;;
+            muos) expected_dest="/mnt/mmc/MUOS/zaparoo/zaparoo" ;;
+            recalbox) expected_dest="/recalbox/share/system/zaparoo/zaparoo" ;;
+            retropie) expected_dest="${APP_PATH}" ;;
+        esac
+        expected_asset="zaparoo-${test_distro}_arm64-2.21.0.tar.gz"
+        output="$(
+            VERSION="2.21.0"
+            VERSION_TAG="v2.21.0"
+            DRY_RUN=true
+            detect_linux_distro() { echo "${test_distro}"; }
+            detect_arch() { echo arm64; }
+            id() { echo 1000; }
+            install_application() { fail "${test_distro}: generic install_application called"; }
+            install_service() { fail "${test_distro}: generic install_service called"; }
+            install_linux_generic
+        )"
+        assert_contains "${output}" "${expected_asset}" "${test_distro} release asset"
+        assert_contains "${output}" "Would install binary to: ${expected_dest}" \
+            "${test_distro} install path"
+        if [ "${test_distro}" = recalbox ]; then
+            assert_contains "${output}" "Would run: ZAPAROO_APP=${expected_dest} " \
+                "${test_distro} service install"
+            assert_contains "${output}" "Run via SSH: /tmp/zaparoo-bin/zaparoo-start" \
+                "${test_distro} manual run hint"
+        elif [ "${test_distro}" = arkos ]; then
+            assert_contains "${output}" "Would run: sudo ${expected_dest} -install" \
+                "${test_distro} service install"
+        else
+            assert_contains "${output}" "Would run: ${expected_dest} -install" \
+                "${test_distro} service install"
+        fi
+    done
+    pass "dispatch appliance distros to their platform build"
+}
+
+test_recalbox_installs_from_an_executable_copy() {
+    local dest="${TEST_TMP}/recalbox-share/zaparoo/zaparoo"
+    local fake="${TEST_TMP}/recalbox-download/zaparoo"
+    local log="${TEST_TMP}/recalbox-install.log"
+    mkdir -p "$(dirname "${fake}")"
+    # shellcheck disable=SC2016 # expanded by the fake binary
+    printf '#!/bin/sh\necho "$0 $1 app=$ZAPAROO_APP" > %s\n' "${log}" > "${fake}"
+    chmod +x "${fake}"
+    (
+        DRY_RUN=false
+        ZAPAROO_BIN="${fake}"
+        download_and_extract() { :; }
+        install_appliance recalbox "Recalbox" "${dest}"
+    ) >/dev/null
+    assert_equal "${fake} -install app=${dest}" "$(cat "${log}")" \
+        "install runs the downloaded copy and names the share binary"
+    assert_equal "yes" "$([ -f "${dest}" ] && echo yes)" "binary copied to the share"
+    pass "recalbox installs from an executable copy"
+}
+
+test_arkos_installs_service_through_sudo() {
+    local dest="${TEST_TMP}/ark/.config/zaparoo/zaparoo"
+    local fake="${TEST_TMP}/arkos-download/zaparoo"
+    local log="${TEST_TMP}/arkos-install.log"
+    mkdir -p "$(dirname "${fake}")"
+    # shellcheck disable=SC2016 # expanded by the fake binary
+    # shellcheck disable=SC2016 # expanded by the fake binary
+    printf '#!/bin/sh\necho "direct $1" > %s\n' "${log}" > "${fake}"
+    chmod +x "${fake}"
+    (
+        DRY_RUN=false
+        ZAPAROO_BIN="${fake}"
+        download_and_extract() { :; }
+        id() { echo 1000; }
+        run_privileged() { echo "sudo $*" > "${log}"; }
+        install_appliance arkos "ArkOS" "${dest}"
+    ) >/dev/null
+    assert_equal "sudo ${dest} -install" "$(cat "${log}")" "ark installs the system service through sudo"
+    (
+        DRY_RUN=false
+        ZAPAROO_BIN="${fake}"
+        download_and_extract() { :; }
+        id() { echo 0; }
+        run_privileged() { echo "sudo $*" > "${log}"; }
+        install_appliance arkos "ArkOS" "${dest}"
+    ) >/dev/null
+    assert_equal "direct -install" "$(cat "${log}")" "root installs directly"
+    pass "arkos installs the service through sudo"
 }
 
 test_generic_install_stops_and_restarts_service() {
@@ -389,6 +549,33 @@ test_generic_install_stops_and_restarts_service() {
     pass "stop and restart the running service around a generic install"
 }
 
+test_detect_arch_32bit_userland() {
+    local result root
+    root="$(mktemp -d)"
+    mkdir -p "${root}/lib"
+    result="$(uname() { echo aarch64; }; getconf() { echo 32; }; detect_arch)"
+    assert_equal "arm" "${result}" "32-bit getconf on a 64-bit kernel"
+    result="$(uname() { echo aarch64; }; getconf() { echo 64; }; detect_arch)"
+    assert_equal "arm64" "${result}" "64-bit getconf"
+    touch "${root}/lib/ld-linux-armhf.so.3"
+    result="$(uname() { echo aarch64; }; getconf() { return 1; }; DETECT_ROOT="${root}" detect_arch)"
+    assert_equal "arm" "${result}" "armhf loader only, without getconf"
+    touch "${root}/lib/ld-linux-aarch64.so.1"
+    result="$(uname() { echo aarch64; }; getconf() { return 1; }; DETECT_ROOT="${root}" detect_arch)"
+    assert_equal "arm64" "${result}" "aarch64 loader, without getconf"
+    rm -rf "${root}"
+    pass "pick the arm build for a 32-bit userland on a 64-bit kernel"
+}
+
+test_detect_arch_refuses_armv6() {
+    local output
+    if output="$(uname() { echo armv6l; }; detect_arch 2>&1)"; then
+        fail "ARMv6 was accepted as ${output}"
+    fi
+    assert_contains "${output}" "Raspberry Pi Zero and Pi 1" "ARMv6 abort message"
+    pass "refuse ARMv6 devices"
+}
+
 test_semver_comparison() {
     assert_equal "0" "$(semver_compare 2.17.0 2.17.0)" "equal stable versions"
     assert_equal "-1" "$(semver_compare 2.16.9 2.17.0)" "older stable version"
@@ -396,6 +583,12 @@ test_semver_comparison() {
     assert_equal "-1" "$(semver_compare 2.17.0-beta.2 2.17.0)" "prerelease before stable"
     assert_equal "1" "$(semver_compare 2.17.0-beta.10 2.17.0-beta.2)" "numeric prerelease order"
     assert_equal "0" "$(semver_compare 2.17.0+build.1 2.17.0+build.2)" "build metadata ignored"
+    assert_equal "1" "$(semver_compare 2.10.0 2.9.0)" "numeric minor order"
+    assert_equal "-1" "$(semver_compare 2.17.0 10.0.0)" "numeric major order"
+    assert_equal "-1" "$(semver_compare 2.17.0-beta 2.17.0-beta.1)" "shorter prerelease first"
+    assert_equal "-1" "$(semver_compare 2.17.0-1 2.17.0-beta)" "numeric before text prerelease"
+    assert_equal "-1" "$(semver_compare 2.17.0-beta.2 2.17.0-rc.1)" "text prerelease order"
+    assert_equal "1" "$(semver_compare 2.17.0-rc.1 2.17.0-beta.9)" "later text prerelease"
     if semver_compare 46e9fbb7-dev 2.17.0 >/dev/null 2>&1; then
         fail "non-semver development build was compared as a release"
     fi
@@ -417,6 +610,21 @@ test_openssl_version_requirement() {
     fi
     unset -f openssl
     pass "require OpenSSL 3.0 or newer"
+}
+
+test_old_amberelec_gets_its_own_message() {
+    local output
+    output="$(
+        MODE=install
+        openssl() { echo "OpenSSL 1.1.1n 15 Mar 2022"; }
+        require_command() { :; }
+        detect_linux_distro() { echo amberelec; }
+        uname() { echo Linux; }
+        check_requirements 2>&1
+    )" || true
+    assert_contains "${output}" "AmberELEC prerelease" "old AmberELEC abort message"
+    assert_contains "${output}" "/storage/zaparoo/zaparoo -install" "old AmberELEC manual install"
+    pass "tell old AmberELEC releases to update"
 }
 
 test_decky_release_selection() {
@@ -654,6 +862,46 @@ test_status_does_not_mutate_selected_version() {
     pass "keep status checks independent of selected version"
 }
 
+test_muos_extracts_without_tar_gzip() {
+    local fixture="${TEST_TMP}/muos-archive"
+    mkdir -p "${fixture}/src"
+    printf 'binary' > "${fixture}/src/zaparoo"
+    tar -czf "${fixture}/zaparoo.tar.gz" -C "${fixture}/src" zaparoo
+    local output
+    output="$(
+        curl() {
+            local output_path=""
+            while [ $# -gt 0 ]; do
+                if [ "$1" = "-o" ]; then
+                    output_path="$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            cp "${fixture}/zaparoo.tar.gz" "${output_path}"
+        }
+        verify_file_checksum() { return 0; }
+        # BusyBox tar on muOS has no gzip support.
+        tar() {
+            case "$1" in
+                *z*) return 1 ;;
+            esac
+            command tar "$@"
+        }
+        detect_arch() { echo arm64; }
+        VERSION="2.21.0"
+        VERSION_TAG="v2.21.0"
+        DRY_RUN=false
+        TMP_DIR="${fixture}/tmp"
+        mkdir -p "${TMP_DIR}"
+        download_and_extract muos >/dev/null 2>&1
+        cat "${ZAPAROO_BIN}"
+    )"
+    assert_equal "binary" "${output}" "muOS archive extraction"
+    pass "extract muOS archives without tar gzip support"
+}
+
 test_batocera_package_checksum() {
     local pacman_log="${TEST_TMP}/batocera-pacman.log"
     if (
@@ -739,9 +987,16 @@ test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
 test_linux_distro_asset_name
+test_detect_handheld_and_appliance_distros
+test_appliance_install_dispatch
 test_generic_install_stops_and_restarts_service
+test_detect_arch_32bit_userland
+test_detect_arch_refuses_armv6
 test_semver_comparison
 test_openssl_version_requirement
+test_old_amberelec_gets_its_own_message
+test_recalbox_installs_from_an_executable_copy
+test_arkos_installs_service_through_sudo
 test_decky_release_selection
 test_decky_archive_validation
 test_unrecognized_binary_is_not_replaced
@@ -751,6 +1006,7 @@ test_gui_admin_password_is_reused_without_timestamp
 test_steamos_admin_decline_is_remembered
 test_install_hardware_accepts_installed_binary
 test_status_does_not_mutate_selected_version
+test_muos_extracts_without_tar_gzip
 test_batocera_package_checksum
 test_failed_install_removes_integration
 

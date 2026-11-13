@@ -111,4 +111,54 @@ func TestHandleUIRequiresService(t *testing.T) {
 
 	_, err = HandleUIRespond(requests.RequestEnv{})
 	require.ErrorIs(t, err, errUIServiceUnavailable)
+
+	_, err = HandleUIShown(requests.RequestEnv{})
+	require.ErrorIs(t, err, errUIServiceUnavailable)
+}
+
+func TestHandleUIShownMarksEventShown(t *testing.T) {
+	t.Parallel()
+
+	service := events.New(clockwork.NewFakeClock(), nil, nil)
+	handle, err := service.Open(t.Context(), &events.Request{Kind: models.UIEventKindConfirm})
+	require.NoError(t, err)
+
+	params, err := json.Marshal(models.UIShownParams{ID: handle.ID})
+	require.NoError(t, err)
+
+	response, err := HandleUIShown(requests.RequestEnv{UI: service, Params: params})
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, response)
+	select {
+	case <-handle.Shown:
+	default:
+		t.Fatal("the event was not marked shown")
+	}
+
+	response, err = HandleUIShown(requests.RequestEnv{UI: service, Params: params})
+	require.NoError(t, err, "a repeated report is accepted")
+	assert.Equal(t, NoContent{}, response)
+}
+
+func TestHandleUIShownRejectsInvalidParams(t *testing.T) {
+	t.Parallel()
+
+	service := events.New(clockwork.NewFakeClock(), nil, nil)
+	_, err := HandleUIShown(requests.RequestEnv{UI: service, Params: json.RawMessage(`{}`)})
+	require.Error(t, err)
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+}
+
+func TestHandleUIShownRejectsStaleEvent(t *testing.T) {
+	t.Parallel()
+
+	service := events.New(clockwork.NewFakeClock(), nil, nil)
+	_, err := HandleUIShown(requests.RequestEnv{UI: service, Params: json.RawMessage(`{"id":"stale"}`)})
+	require.Error(t, err)
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), "no active UI event")
 }

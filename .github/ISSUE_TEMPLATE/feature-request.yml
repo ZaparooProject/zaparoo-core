@@ -22,6 +22,17 @@ body:
         - Bazzite
         - ChimeraOS
         - LibreELEC/CoreELEC
+        - ReplayOS
+        - Zaparoo Firmware
+        - Recalbox
+        - RetroPie
+        - Lakka
+        - ROCKNIX
+        - Knulli
+        - AmberELEC
+        - ArkOS
+        - muOS
+        - Armada
         - All platforms
       default: 0
     validations:

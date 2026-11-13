@@ -14,3 +14,10 @@ tasks:
       - task: :zigcc:build-linux-arm64
         vars:
           PLATFORM: recalbox
+
+  build-arm:
+    desc: Build Recalbox ARM binary
+    cmds:
+      - task: :zigcc:build-linux-arm
+        vars:
+          PLATFORM: recalbox

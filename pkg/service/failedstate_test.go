@@ -83,6 +83,7 @@ func readHealthState(t *testing.T, port int) string {
 		ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", port), http.NoBody,
 	)
 	require.NoError(t, err)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

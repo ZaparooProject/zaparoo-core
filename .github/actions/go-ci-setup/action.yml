@@ -100,12 +100,14 @@ runs:
     # These two are the only native libraries a Linux build needs: libnfc for
     # the clausecker/nfc binding and libpcsclite for the scard binding. They
     # pull six packages between them, so installing them outright is as quick
-    # as restoring a cache and cannot go stale.
+    # as restoring a cache and cannot go stale. dbus provides the dbus-daemon
+    # the Bluetooth LE integration tests run a private bus on.
     - name: Install system dependencies (Ubuntu)
       if: inputs.os == 'ubuntu'
       shell: bash
       run: |
         sudo apt-get update
         sudo apt-get install --no-install-recommends -y \
+          dbus \
           libnfc-dev \
           libpcsclite-dev

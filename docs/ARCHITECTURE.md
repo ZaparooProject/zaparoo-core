@@ -28,8 +28,9 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Launch endpoint**: `/l/{zapscript}` - GET-based execution for QR codes
 - **Auth**: API keys via `auth.toml`, anonymous access from localhost
 - **Discovery**: mDNS (`_zaparoo._tcp`)
+- **Bluetooth LE** (Linux and Windows, on by default): the same JSON-RPC API and pairing over a GATT service, `pkg/bluetooth` (BlueZ on Linux, WinRT on Windows) + `pkg/api/ble_*.go`. See the "Bluetooth LE" section of `docs/api/index.md`.
 - **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime, global UI, device). See `docs/api/notifications.md`.
-- **Device**: `device.*` methods report and control the machine Core runs on, identically on every platform. `pkg/service/device` reads each section on a schedule only while a WebSocket or SSE client is connected, and publishes `device.changed`, which carries nothing that identifies the device on its network. Each section comes from the generic reader for the operating system in `pkg/helpers/hoststatus`, unless the platform implements the matching optional `platforms.Device*Provider` or `platforms.PowerControlProvider`. System bus calls never start a service that is not already running.
+- **Device**: `device.*` methods report and control the machine Core runs on, identically on every platform. `pkg/service/device` reads each section on a schedule only while a WebSocket, SSE or Bluetooth LE client is connected, and publishes `device.changed`, which carries nothing that identifies the device on its network. Each section comes from the generic reader for the operating system in `pkg/helpers/hoststatus`, unless the platform implements the matching optional `platforms.Device*Provider` or `platforms.PowerControlProvider`. System bus calls never start a service that is not already running.
 - **Full docs**: `docs/api/`
 
 ## Embedding
@@ -54,7 +55,7 @@ Platform UI rendering is optional. MiSTer implements notice, loader, picker, and
 
 Domain owners keep behavior: reader manager owns staged launch-guard token, playlist code owns selected ZapScript action, and installer owns download lifecycle. Public picker choices contain only label and opaque ID. Global events are broadcast to every permitted client and must never carry PINs, passwords, credentials, or other secrets.
 
-Clients consume `ui.changed`, replace local state using newest `revision`, query `ui` after reconnect, and answer through `ui.respond`. Legacy launch-guard `confirm` and token notifications remain supported. Launch-guard confirmation events deliberately skip host rendering so opening a MiSTer widget cannot interrupt active media; existing sound feedback and card re-tap confirmation remain unchanged.
+Clients consume `ui.changed`, replace local state using newest `revision`, query `ui` after reconnect, report an event on screen through `ui.shown`, and answer through `ui.respond`. Legacy launch-guard `confirm` and token notifications remain supported. Launch-guard confirmation events deliberately skip host rendering so opening a MiSTer widget cannot interrupt active media; existing sound feedback and card re-tap confirmation remain unchanged.
 
 ## Database
 
@@ -94,4 +95,4 @@ Device profiles are named buckets of preferences and limits, with no passwords o
 
 ## Reader Auto-Detection
 
-11 reader types: ccid, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, tty2oled
+12 reader types: ccid, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, simpleserialble (Nordic UART Service over Bluetooth LE, manual configuration only), tty2oled

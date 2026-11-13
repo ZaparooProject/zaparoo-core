@@ -109,6 +109,10 @@ type UIRespondParams struct {
 	ChoiceID string           `json:"choiceId,omitempty"`
 }
 
+type UIShownParams struct {
+	ID string `json:"id" validate:"required"`
+}
+
 type RunScriptParams struct {
 	Name      *string                  `json:"name"`
 	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`
@@ -208,6 +212,7 @@ type UpdateSettingsParams struct {
 	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
 	ErrorReporting          *bool     `json:"errorReporting"`
 	Encryption              *bool     `json:"encryption"`
+	BLEEnabled              *bool     `json:"bleEnabled"`
 	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
 	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
 	LibrarySyncEnabled      *bool     `json:"librarySyncEnabled"`

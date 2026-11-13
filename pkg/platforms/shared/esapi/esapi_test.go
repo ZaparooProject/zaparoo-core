@@ -153,8 +153,39 @@ func TestAPIRequest_GetWithDefaultTimeout(t *testing.T) {
 func TestAPIRequest_LocalEmulationStation(t *testing.T) {
 	t.Parallel()
 
-	_, err := APIRequest("/runningGame", "", 200*time.Millisecond)
+	// A refused connection returns at once, so the timeout only caps a
+	// listener that never answers. It must not race the dial itself: on a
+	// loaded runner a short deadline expires first and reports a timeout.
+	_, err := APIRequest("/runningGame", "", 5*time.Second)
 	if err != nil {
 		assert.ErrorIs(t, err, platforms.ErrLauncherUnavailable)
 	}
+}
+
+func TestAPIRequest_StatusCodes(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runningGame":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"msg":"NO GAME RUNNING"}`))
+		case "/forbidden":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	body, err := sendAPIRequest(server.URL, "/runningGame", "", time.Second)
+	require.NoError(t, err, "ES answers 201 when no game runs")
+	assert.Contains(t, string(body), "NO GAME RUNNING")
+
+	_, err = sendAPIRequest(server.URL, "/missing", "", time.Second)
+	require.ErrorIs(t, err, ErrRouteUnsupported)
+
+	_, err = sendAPIRequest(server.URL, "/forbidden", "", time.Second)
+	require.ErrorIs(t, err, ErrUnexpectedStatus)
+	assert.NotErrorIs(t, err, ErrRouteUnsupported)
 }
