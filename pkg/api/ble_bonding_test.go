@@ -193,7 +193,9 @@ func TestBLEBonding_FailedOpenLeavesNoWindow(t *testing.T) {
 
 	_, _, err := harness.mgr.StartPairing("member")
 	require.NoError(t, err)
-	require.Eventually(t, func() bool { return bonder.openCount() == 1 }, bleTestTimeout, 5*time.Millisecond)
+	// The loop may try more than once: it reads the PIN when it starts and
+	// again for the change notice that was already waiting for it.
+	require.Eventually(t, func() bool { return bonder.openCount() >= 1 }, bleTestTimeout, 5*time.Millisecond)
 
 	// keepBond without a window is a no-op.
 	rig.transport.keepBond(ble.Peer{Path: "/org/bluez/hci0/dev_11_22_33_44_55_66"})
