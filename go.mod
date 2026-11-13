@@ -54,7 +54,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8
 	github.com/sasha-s/go-deadlock v0.3.9
-	github.com/schollz/pake/v3 v3.2.0
+	github.com/schollz/pake/v3 v3.2.1
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.12.1
