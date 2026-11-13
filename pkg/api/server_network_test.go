@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -99,6 +100,7 @@ func startNetworkTestServer(
 // startAPITestServer starts one of the arrangements in apiTestArrangement.
 func startAPITestServer(
 	t *testing.T, fs *helpers.FSHelper, listenHost string, port int, arrangement apiTestArrangement,
+	options ...func(*ListenerOptions),
 ) *networkTestServer {
 	t.Helper()
 	dir := t.TempDir()
@@ -148,6 +150,9 @@ func startAPITestServer(
 	if arrangement == apiTestStandalone {
 		require.NoError(t, listener.Close())
 		opts = ListenerOptions{}
+	}
+	for _, option := range options {
+		option(&opts)
 	}
 	go func() {
 		server.done <- StartWithListener(opts, platform, cfg, st, make(chan tokens.Token), nil, db,
@@ -628,7 +633,8 @@ func TestStandaloneLoopbackStaysLocal(t *testing.T) {
 	fs := helpers.NewMemoryFS()
 	server := startAPITestServer(t, fs, "127.0.0.1", 0, apiTestStandalone)
 	require.NoError(t, server.ready)
-	hostPort := net.JoinHostPort("127.0.0.1", strconv.Itoa(server.cfg.APIPort()))
+	apiPort := server.cfg.APIPort()
+	hostPort := net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPort))
 	tcp := &http.Client{Timeout: 2 * time.Second}
 	t.Cleanup(tcp.CloseIdleConnections)
 	networkTestSetConfiguredKeys(t, fs, server, `"`+networkTestConfigKey+`"`)
@@ -642,6 +648,19 @@ func TestStandaloneLoopbackStaysLocal(t *testing.T) {
 	status, reply := networkTestRPC(t, tcp, "http://"+hostPort+"/api/v0.1", "", models.MethodClientsPairStart)
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, reply, "result", "standalone loopback is at the device: %s", reply["error"])
+
+	status, reply = networkTestRPC(t, tcp, "http://"+hostPort+"/api/v0.1", "", models.MethodDeviceEndpoints)
+	assert.Equal(t, http.StatusOK, status)
+	require.Contains(t, reply, "result", "device.endpoints: %s", reply["error"])
+	var endpoints models.DeviceEndpointsResponse
+	require.NoError(t, json.Unmarshal(reply["result"], &endpoints))
+	assert.Equal(t, models.DeviceEndpointsResponse{
+		DeviceID:  server.cfg.DeviceID(),
+		Name:      discovery.ResolveInstanceName(server.cfg),
+		Scheme:    "ws",
+		Addresses: []string{},
+		Port:      apiPort,
+	}, endpoints, "a loopback-only API offers no network address")
 
 	server.cfg.SetEncryptionEnabled(true)
 	_, answered = networkTestWebSocket(t, &websocket.Dialer{HandshakeTimeout: 2 * time.Second},

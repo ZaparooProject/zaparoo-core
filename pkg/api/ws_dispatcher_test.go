@@ -75,7 +75,7 @@ func startPriorityWSServerWithPlatform(
 	m.HandleMessage(handleWSMessage(
 		methodMap, platform, cfg, st, nil, nil,
 		nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, false,
 	))
 
 	mux := http.NewServeMux()

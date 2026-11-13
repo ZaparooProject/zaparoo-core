@@ -215,6 +215,7 @@ const (
 	MethodRemoteActivity              = "remote.activity"
 	MethodOnlineStatus                = "online.status"
 	MethodDeviceStatus                = "device.status"
+	MethodDeviceEndpoints             = "device.endpoints"
 	MethodDevicePowerReboot           = "device.power.reboot"
 	MethodDevicePowerShutdown         = "device.power.shutdown"
 	MethodDevicePowerSuspend          = "device.power.suspend"
