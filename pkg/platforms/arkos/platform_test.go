@@ -269,9 +269,15 @@ func TestTerminateTree_KillsChildThatOutlivesWrapper(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	child, err := process.NewProcess(int32(childPid)) //nolint:gosec // PID fits in int32
 	require.NoError(t, err)
-	// Wait until the child has exec'd sleep with SIGTERM ignored.
+	// Wait until the child has exec'd sleep with SIGTERM ignored. A process
+	// handle keeps the first name it reads, so each look takes a new one;
+	// otherwise a look before the exec would see the shell's name for good.
 	require.Eventually(t, func() bool {
-		name, nameErr := child.Name()
+		fresh, freshErr := process.NewProcess(int32(childPid)) //nolint:gosec // PID fits in int32
+		if freshErr != nil {
+			return false
+		}
+		name, nameErr := fresh.Name()
 		return nameErr == nil && name == "sleep"
 	}, 5*time.Second, 10*time.Millisecond)
 
