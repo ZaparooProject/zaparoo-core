@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -535,7 +536,13 @@ func startServiceWithOptions(
 	)
 	notifBroker.Start()
 
-	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish)
+	// The Bluetooth manager only touches the adapter while the BLE
+	// transport is enabled. It is built here so the device monitor can
+	// pause its advertising while the user scans for or pairs a
+	// controller, and started below so the API can register for it.
+	bleManager := bluetooth.NewManager(cfg)
+
+	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish, bleManager.SetAdvertisingPaused)
 	st.SetDeviceMonitor(deviceMonitor)
 
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
@@ -897,6 +904,8 @@ func startServiceWithOptions(
 
 	discoveryService := discovery.New(cfg)
 
+	bleManager.Start()
+
 	// Set up the idle scheduler before API startup so the in-flight
 	// counter is wired through the very first request.
 	idleSched := idle.New()
@@ -905,7 +914,7 @@ func startServiceWithOptions(
 	apiReady := make(chan error, 1)
 	apiDone := make(chan error, 1)
 	go func() {
-		listenerOptions := api.ListenerOptions{}
+		listenerOptions := api.ListenerOptions{Bluetooth: bleManager}
 		if opts != nil {
 			listenerOptions.Listener = opts.Listener
 			listenerOptions.APIKeys = opts.APIKeys
@@ -926,6 +935,7 @@ func startServiceWithOptions(
 	apiReadyStarted := time.Now()
 	if apiErr := <-apiReady; apiErr != nil {
 		discoveryService.Stop()
+		bleManager.Stop()
 		// Launcher probing uses the platform; let it finish before stopping it.
 		<-launcherCacheDone
 		if stopErr := pl.Stop(); stopErr != nil {
@@ -1215,6 +1225,7 @@ func startServiceWithOptions(
 			terminalErr = fmt.Errorf("API service stopped: %w", apiErr)
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
+		bleManager.Stop()
 		limitsManager.Stop()
 		svc.AutoAdvance.Stop()
 		dataSwap.Stop()

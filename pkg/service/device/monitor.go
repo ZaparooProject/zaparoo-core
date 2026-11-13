@@ -132,6 +132,8 @@ type Options struct {
 	// Readers are the per-section readers, already resolved against the
 	// platform.
 	Readers hoststatus.Readers
+	// OnBluetoothBusy is passed to the Bluetooth manager as its OnBusy.
+	OnBluetoothBusy func(busy bool)
 	// ReadTimeout bounds one section's read. Zero means the default.
 	ReadTimeout time.Duration
 }
@@ -206,6 +208,7 @@ func NewMonitor(opts *Options) *Monitor {
 			Clock:       monitor.clock,
 			Publish:     opts.Publish,
 			Controllers: monitor.lastControllers,
+			OnBusy:      opts.OnBluetoothBusy,
 		})
 	}
 

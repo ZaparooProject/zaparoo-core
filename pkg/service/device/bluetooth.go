@@ -68,6 +68,10 @@ type BluetoothOptions struct {
 	// Controllers returns the connected controllers last read, to match
 	// Bluetooth devices against.
 	Controllers func() []hoststatus.Controller
+	// OnBusy, if set, is told when Core starts and stops using the radio
+	// to scan for or pair a device, so other users of the adapter can step
+	// back meanwhile. It must not block or call back into the manager.
+	OnBusy func(busy bool)
 	// PairTimeout and Debounce are zero for the defaults.
 	PairTimeout time.Duration
 	Debounce    time.Duration
@@ -81,6 +85,7 @@ type Bluetooth struct {
 	clock         clockwork.Clock
 	publish       func(models.Notification)
 	controllers   func() []hoststatus.Controller
+	onBusy        func(bool)
 	base          context.Context
 	stop          context.CancelFunc
 	discovered    map[string]bool
@@ -99,12 +104,20 @@ type Bluetooth struct {
 	// never by anything the stack's change signals run.
 	opMu syncutil.Mutex
 	// flushMu keeps notifications in the order their states were read.
-	flushMu    syncutil.Mutex
+	flushMu syncutil.Mutex
+	// busyMu keeps OnBusy calls in the order the states were read. It is
+	// taken before mu.
+	busyMu     syncutil.Mutex
 	mu         syncutil.Mutex
 	scanning   bool
 	scanAll    bool
 	pairActive bool
 	closed     bool
+	// busyReported is the last value given to onBusy.
+	busyReported bool
+	// starting counts scan and pair requests still being set up, which
+	// hold the radio before scanning or pairActive says so.
+	starting int
 	// attempts counts pair requests accepted since Core started.
 	attempts int
 }
@@ -118,6 +131,7 @@ func NewBluetooth(opts *BluetoothOptions) *Bluetooth {
 		clock:       opts.Clock,
 		publish:     opts.Publish,
 		controllers: opts.Controllers,
+		onBusy:      opts.OnBusy,
 		base:        base,
 		stop:        stop,
 		discovered:  map[string]bool{},
@@ -226,8 +240,42 @@ func (b *Bluetooth) Close() {
 	b.wg.Wait()
 }
 
+// reportBusy tells onBusy when Core starts or stops using the radio. It
+// must not be called with mu held.
+func (b *Bluetooth) reportBusy() {
+	if b.onBusy == nil {
+		return
+	}
+	b.busyMu.Lock()
+	defer b.busyMu.Unlock()
+	b.mu.Lock()
+	busy := !b.closed && (b.scanning || b.pairActive || b.starting > 0)
+	b.mu.Unlock()
+	if busy == b.busyReported {
+		return
+	}
+	b.busyReported = busy
+	b.onBusy(busy)
+}
+
+// holdBusy marks the radio busy while a scan or pairing is being set up.
+// The returned function releases the hold.
+func (b *Bluetooth) holdBusy() func() {
+	b.mu.Lock()
+	b.starting++
+	b.mu.Unlock()
+	b.reportBusy()
+	return func() {
+		b.mu.Lock()
+		b.starting--
+		b.mu.Unlock()
+		b.reportBusy()
+	}
+}
+
 // changed schedules a notification once a burst of changes has settled.
 func (b *Bluetooth) changed() {
+	b.reportBusy()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.clients == 0 || b.closed || b.flushTimer != nil {
@@ -282,6 +330,7 @@ func (b *Bluetooth) flush() {
 }
 
 func (b *Bluetooth) emptyState() models.DeviceBluetoothState {
+	defer b.reportBusy()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// No stack or no adapter means no scan.
@@ -322,6 +371,7 @@ func (b *Bluetooth) State(ctx context.Context) (models.DeviceBluetoothState, err
 		}
 	}
 
+	defer b.reportBusy()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !reading.Discovering && b.scanGen == generation {
@@ -400,6 +450,7 @@ func (b *Bluetooth) StartScan(
 		b.opMu.Unlock()
 		return models.DeviceBluetoothState{}, hoststatus.ErrUnsupported
 	}
+	release := b.holdBusy()
 	err := b.ctl.StartDiscovery(ctx)
 	if err == nil {
 		b.mu.Lock()
@@ -418,6 +469,7 @@ func (b *Bluetooth) StartScan(
 		b.mu.Unlock()
 	}
 	b.opMu.Unlock()
+	release()
 	if err != nil {
 		return models.DeviceBluetoothState{}, err //nolint:wrapcheck // callers branch on hoststatus errors
 	}
@@ -532,6 +584,10 @@ func (b *Bluetooth) Pair(ctx context.Context, address string) (models.DeviceBlue
 		b.opMu.Unlock()
 		return models.DeviceBluetoothState{}, ErrBluetoothBusy
 	}
+	// Held from here until pairActive takes over, so stopping the scan
+	// below does not hand the radio back for a moment.
+	release := b.holdBusy()
+	defer release()
 	reading, err := b.ctl.Read(ctx)
 	if err == nil && !reading.Powered {
 		err = hoststatus.ErrBluetoothNotPowered

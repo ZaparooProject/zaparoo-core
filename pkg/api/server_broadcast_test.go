@@ -146,15 +146,12 @@ func TestBroadcastNotifications_BufferSizeHandlesBurst(t *testing.T) {
 		}
 	}
 
-	// Give time to consume
-	time.Sleep(100 * time.Millisecond)
-
-	mu.Lock()
-	consumed := consumedCount
-	mu.Unlock()
-
 	// All notifications should be consumed
-	assert.Equal(t, burstSize, consumed, "all burst notifications should be consumed")
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return consumedCount == burstSize
+	}, 5*time.Second, time.Millisecond, "all burst notifications should be consumed")
 }
 
 // TestBroadcastNotifications_NoDeadlockUnderLoad verifies the system remains
