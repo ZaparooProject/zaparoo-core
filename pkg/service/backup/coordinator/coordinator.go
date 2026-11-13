@@ -73,6 +73,10 @@ type Coordinator struct {
 	mu              syncutil.Mutex
 	shuttingDown    bool
 	remoteUnlinked  bool
+	// remoteDeltaUnsupported records that the backup server answered a delta
+	// commit as an unknown route. It is never persisted, so the endpoint is
+	// probed again after a restart.
+	remoteDeltaUnsupported bool
 }
 
 type Lease struct {
@@ -201,6 +205,20 @@ func (c *Coordinator) RemoteUnlinked() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.remoteUnlinked
+}
+
+// SetRemoteDeltaUnsupported records whether the backup server lacks the delta
+// commit endpoint for the rest of this process run.
+func (c *Coordinator) SetRemoteDeltaUnsupported(unsupported bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.remoteDeltaUnsupported = unsupported
+}
+
+func (c *Coordinator) RemoteDeltaUnsupported() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.remoteDeltaUnsupported
 }
 
 func (c *Coordinator) Active() (OperationKind, time.Time, bool) {

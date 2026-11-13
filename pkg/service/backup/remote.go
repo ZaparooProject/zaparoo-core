@@ -259,19 +259,22 @@ type remoteListResponse struct {
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
 type remoteBackupResponse struct {
-	CoreVersion   *string                          `json:"core_version,omitempty"`
-	Platform      *string                          `json:"platform,omitempty"`
-	VerifiedAt    *time.Time                       `json:"verified_at,omitempty"`
-	RestoredAt    *time.Time                       `json:"restored_at,omitempty"`
-	SourceDevice  *remoteBackupSourceDevice        `json:"source_device,omitempty"`
-	Categories    map[string]remoteCategorySummary `json:"categories"`
-	Manifest      json.RawMessage                  `json:"manifest,omitempty"`
-	ManifestHash  string                           `json:"manifest_hash"`
-	BackupType    string                           `json:"backup_type"`
-	CreatedAt     time.Time                        `json:"created_at"`
-	ID            string                           `json:"id"`
-	SchemaVersion int                              `json:"schema_version"`
-	SizeBytes     int64                            `json:"size_bytes"`
+	CoreVersion  *string                          `json:"core_version,omitempty"`
+	Platform     *string                          `json:"platform,omitempty"`
+	VerifiedAt   *time.Time                       `json:"verified_at,omitempty"`
+	RestoredAt   *time.Time                       `json:"restored_at,omitempty"`
+	SourceDevice *remoteBackupSourceDevice        `json:"source_device,omitempty"`
+	Categories   map[string]remoteCategorySummary `json:"categories"`
+	Manifest     json.RawMessage                  `json:"manifest,omitempty"`
+	ManifestHash string                           `json:"manifest_hash"`
+	// ManifestRootHash identifies the committed file set as the base of a
+	// later delta commit. Servers without delta commits omit it.
+	ManifestRootHash string    `json:"manifest_root_hash,omitempty"`
+	BackupType       string    `json:"backup_type"`
+	CreatedAt        time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	SchemaVersion    int       `json:"schema_version"`
+	SizeBytes        int64     `json:"size_bytes"`
 	// Deduplicated is set on commit responses whose manifest matched this
 	// existing snapshot: the run succeeded with no changes to store.
 	Deduplicated bool `json:"deduplicated,omitempty"`
@@ -992,7 +995,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
 	}
-	availability, err := m.updateRemoteAvailability(ctx, client)
+	availability, deviceID, err := m.updateRemoteDeviceAvailability(ctx, client)
 	if err != nil {
 		return RemoteRunInfo{}, err
 	}
@@ -1031,6 +1034,15 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	collection.Warnings, err = appendBackupWarnings(collection.Warnings, unreadableWarnings)
 	if err != nil {
 		return RemoteRunInfo{}, err
+	}
+	if base := m.remoteDeltaBase(client, deviceID); base != nil {
+		delta, done, deltaErr := m.commitRemoteDelta(ctx, client, backupType, files, base, collection.Warnings)
+		if deltaErr != nil {
+			return RemoteRunInfo{}, deltaErr
+		}
+		if done {
+			return delta, nil
+		}
 	}
 	missing, err := client.checkMissing(ctx, uniqueHashes(files))
 	if err != nil {
@@ -1116,29 +1128,44 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if listErr != nil {
 		log.Warn().Err(listErr).Msg("failed to refresh remote backup quota after upload")
 	}
+	m.recordRemoteFullCommit(client, deviceID, &backup, files, &list)
 	m.notifyRemoteWarnings(collection.Warnings)
+	return newRemoteRunInfo(&backup, files, collection.Warnings, &uploaded, missingSet, &list), nil
+}
+
+// newRemoteRunInfo summarizes one committed run. missing holds the content
+// hashes the server lacked before this run uploaded them.
+func newRemoteRunInfo(
+	backup *remoteBackupResponse,
+	files []FileRef,
+	warnings []models.BackupWarning,
+	uploaded *uploadResult,
+	missing map[string]struct{},
+	list *RemoteListInfo,
+) RemoteRunInfo {
+	hashes := uniqueHashes(files)
 	uploadedFiles := 0
-	for _, hash := range uniqueHashes(files) {
+	for _, hash := range hashes {
 		if hash == remoteEmptyContentSHA256 {
 			continue
 		}
-		if _, ok := missingSet[hash]; ok {
+		if _, ok := missing[hash]; ok {
 			uploadedFiles++
 		}
 	}
 	return RemoteRunInfo{
-		Backup:            remoteBackupToInfo(&backup),
+		Backup:            remoteBackupToInfo(backup),
 		Categories:        remoteCategorySummaries(files),
-		Warnings:          collection.Warnings,
+		Warnings:          warnings,
 		UploadedFiles:     uploadedFiles,
-		DedupedFiles:      len(uniqueHashes(files)) - uploadedFiles,
+		DedupedFiles:      len(hashes) - uploadedFiles,
 		SkippedFiles:      len(uploaded.skipped) + len(uploaded.quotaSkipped),
 		UploadedPacks:     uploaded.packs,
 		UploadedBytes:     uploaded.bytesUploaded,
 		StorageUsedBytes:  list.StorageUsedBytes,
 		StorageQuotaBytes: list.StorageQuotaBytes,
 		NoChanges:         backup.Deduplicated,
-	}, nil
+	}
 }
 
 // expandSkippedFiles widens a skipped set to every file sharing a skipped
@@ -1506,19 +1533,28 @@ func (m *Manager) RefreshRemoteAvailabilityIfStaleAsync() {
 func (m *Manager) updateRemoteAvailability(
 	ctx context.Context, client *remoteClient,
 ) (string, error) {
+	availability, _, err := m.updateRemoteDeviceAvailability(ctx, client)
+	return availability, err
+}
+
+// updateRemoteDeviceAvailability is updateRemoteAvailability that also
+// returns the device ID the server reported for the credential.
+func (m *Manager) updateRemoteDeviceAvailability(
+	ctx context.Context, client *remoteClient,
+) (availability, deviceID string, err error) {
 	me, err := client.deviceMe(ctx)
 	if err != nil {
 		if !errors.Is(err, errRemoteUnlinked) {
 			m.setRemoteAvailability(client, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
 		}
-		return RemoteAvailabilityUnknown, err
+		return RemoteAvailabilityUnknown, "", err
 	}
-	availability := RemoteAvailabilityUnavailable
+	availability = RemoteAvailabilityUnavailable
 	if me.allowsCloudBackup() {
 		availability = RemoteAvailabilityAvailable
 	}
 	m.setRemoteAvailability(client, availability, time.Now().UTC(), me)
-	return availability, nil
+	return availability, me.ID, nil
 }
 
 // setRemoteAvailability persists the availability check result. When the
@@ -1577,6 +1613,7 @@ func (m *Manager) MarkRemoteUnlinked() {
 	statusMu.Lock()
 	defer statusMu.Unlock()
 
+	m.clearRemoteDeltaStateLocked()
 	st := m.readStatusLocked()
 	st.Remote.Unlinked = true
 	st.Remote.Availability = RemoteAvailabilityUnknown
@@ -1599,6 +1636,7 @@ func (m *Manager) MarkRemoteLinked() {
 	statusMu.Lock()
 	defer statusMu.Unlock()
 
+	m.clearRemoteDeltaStateLocked()
 	st := m.readStatusLocked()
 	st.Remote.Unlinked = false
 	st.Remote.Availability = RemoteAvailabilityUnknown

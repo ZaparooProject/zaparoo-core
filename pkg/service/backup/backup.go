@@ -676,8 +676,17 @@ func (m *Manager) RecoverInterruptedRuns() {
 
 // writeStatusLocked persists the status file. Callers must hold statusMu.
 func (m *Manager) writeStatusLocked(st *statusFile) error {
-	statusPath := m.statusPath()
-	dir := filepath.Dir(statusPath)
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding backup status: %w", err)
+	}
+	return m.writeStateFileLocked(m.statusPath(), data)
+}
+
+// writeStateFileLocked atomically replaces one backup state file (the status
+// file or the remote delta index) with data. Callers must hold statusMu.
+func (m *Manager) writeStateFileLocked(statePath string, data []byte) error {
+	dir := filepath.Dir(statePath)
 	_, statErr := os.Stat(dir)
 	dirMissing := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !dirMissing {
@@ -690,10 +699,6 @@ func (m *Manager) writeStatusLocked(st *statusFile) error {
 		if err := m.syncRestoreDirectory(filepath.Dir(dir)); err != nil {
 			return fmt.Errorf("syncing backup status parent directory: %w", err)
 		}
-	}
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding backup status: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".status-*")
 	if err != nil {
@@ -714,7 +719,7 @@ func (m *Manager) writeStatusLocked(st *statusFile) error {
 	if closeErr != nil {
 		return fmt.Errorf("closing backup status temp file: %w", closeErr)
 	}
-	if err = os.Rename(tmpPath, statusPath); err != nil {
+	if err = os.Rename(tmpPath, statePath); err != nil {
 		return fmt.Errorf("installing backup status: %w", err)
 	}
 	if err = m.syncRestoreDirectory(dir); err != nil {
@@ -1006,6 +1011,9 @@ func (m *Manager) applyRestore(
 	if err != nil {
 		return err
 	}
+	// A restore replaces the files the remote delta index describes, so the
+	// next remote backup starts over from a full commit.
+	m.clearRemoteDeltaState()
 	return m.applyRestoreTransaction(ctx, prepared, preparedOpen)
 }
 
