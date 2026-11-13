@@ -241,7 +241,14 @@ func TestTerminateTree(t *testing.T) {
 	go func() { done <- game.Wait() }()
 
 	p.terminateTree(game.Process.Pid)
-	require.Error(t, <-done, "the shell was signalled")
+	// How the shell ends is not checked. Its child is signalled first, so
+	// the shell's wait can return and the shell exit cleanly before its
+	// own signal arrives.
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shell was still running after its tree was terminated")
+	}
 }
 
 func TestTerminateTree_KillsChildThatOutlivesWrapper(t *testing.T) {
