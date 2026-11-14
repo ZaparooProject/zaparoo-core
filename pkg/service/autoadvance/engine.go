@@ -888,7 +888,7 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		if e.host.PausePlaylistIfCurrent(mediaslot.Primary, pls) {
 			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
 				Msg("auto-advance: item never started, playlist paused")
-			e.openPausedPrompt(cdFailed, pls, next, ok, at)
+			e.openPausedPrompt(cdFailed, pls, at)
 		}
 		return
 	}
@@ -900,7 +900,7 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		if e.host.PausePlaylistIfCurrent(mediaslot.Primary, pls) {
 			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
 				Msg("auto-advance: item quit right after starting, playlist paused")
-			e.openPausedPrompt(cdPaused, pls, next, ok, at)
+			e.openPausedPrompt(cdPaused, pls, at)
 		}
 		return
 	}

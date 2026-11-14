@@ -36,6 +36,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -1409,4 +1410,37 @@ func TestStopActiveLauncher_ReloadsForAConsoleReset(t *testing.T) {
 	p := NewPlatform()
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 	require.ErrorIs(t, p.StopActiveLauncher(platforms.StopForConsoleReset), platforms.ErrStopFailed)
+}
+
+// A system launch loads its core with no game, and Main still reports the
+// menu until the core is up: a stop in that window must not be skipped.
+func TestStopActiveLauncher_StillStopsALoadingSystemCore(t *testing.T) {
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; cannot force a menu launch failure")
+	}
+	withStopCoreName(t, misterconfig.MenuCore)
+	withRBFCache(t, []cores.RBFInfo{{
+		Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+		ShortName: "SNES", MglName: "_Console/SNES",
+	}})
+
+	launches := map[string]func(p *Platform) error{
+		"system": func(p *Platform) error {
+			return p.LaunchSystem(&config.Instance{}, systemdefs.SystemSNES)
+		},
+		"system launcher": func(p *Platform) error {
+			return p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+		},
+	}
+	for name, launch := range launches {
+		t.Run(name, func(t *testing.T) {
+			p := NewPlatform()
+			p.setActiveMedia = func(_ *models.ActiveMedia) {}
+			p.launchSystemCore = func(*config.Instance, platforms.Platform, *cores.Core) error { return nil }
+			p.launchCoreAtRBF = func(cores.RBFInfo) error { return nil }
+			require.NoError(t, launch(p))
+			err := p.StopActiveLauncher(platforms.StopForMenu)
+			require.ErrorIs(t, err, platforms.ErrStopFailed, "the stop must reach the core on its way")
+		})
+	}
 }

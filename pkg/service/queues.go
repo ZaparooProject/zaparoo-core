@@ -254,6 +254,11 @@ func executeTokenZapScript(
 		}
 		if !deferLaunch {
 			if hookErr := beforeMediaStart(); hookErr != nil {
+				if errors.Is(hookErr, zapscript.ErrDelaySuperseded) && !inHookContext {
+					log.Info().Int("command", i+1).Int("of", len(cmds)).
+						Msg("a newer scan cut the hook's delay short, the rest of the script is skipped")
+					return nil
+				}
 				return hookErr
 			}
 		}
@@ -440,7 +445,9 @@ func executeTokenZapScript(
 			&cmdEnv,
 		)
 		releaseStopGate()
-		if errors.Is(err, zapscript.ErrDelaySuperseded) {
+		// A hook's own delay cut short ends the run the hook belongs to, so
+		// it is passed up rather than swallowed here.
+		if errors.Is(err, zapscript.ErrDelaySuperseded) && !inHookContext {
 			log.Info().Int("command", i+1).Int("of", len(cmds)).
 				Msg("a newer scan cut the delay short, the rest of the script is skipped")
 			return nil

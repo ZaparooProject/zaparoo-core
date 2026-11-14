@@ -223,6 +223,56 @@ func TestFailed_SkipPlaysTheNextItem(t *testing.T) {
 	assert.True(t, upd.Playing)
 }
 
+// Skip and Play next move on even when the item is set to repeat: repeating
+// is what the playlist does by itself, not what a person asking to move on
+// wants.
+func TestPaused_MovingOnIgnoresSingleItemRepeat(t *testing.T) {
+	t.Parallel()
+
+	loopOne := func(p *playlists.Playlist) { p.LoopOne = true }
+	tests := []struct {
+		play  func(r *rig) uint64
+		label string
+		name  string
+	}{
+		{
+			name: "skip a failed item", label: "Skip",
+			play: func(r *rig) uint64 {
+				gen := r.play(testPlaylist(3, 1, loopOne))
+				r.neverStarted(gen)
+				return gen
+			},
+		},
+		{
+			name: "play next after a quick quit", label: "Play next: GameC",
+			play: func(r *rig) uint64 {
+				gen := r.play(engineStarted(testPlaylist(3, 1, loopOne)))
+				r.tick(5 * time.Second)
+				r.end(gen, exited)
+				return gen
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, withUI(false))
+			tt.play(r)
+			r.changed()
+			require.Equal(t, 1, r.ui.opened())
+			assert.Contains(t, choiceLabels(r.ui.request(t, 0)), tt.label)
+			r.ui.respond(0, selected(choicePlay))
+			eventually(t, func() bool { return len(r.host.queued()) == 1 })
+
+			upd := r.host.last(t)
+			assert.Equal(t, 2, upd.Index)
+			assert.True(t, upd.Playing)
+			assert.False(t, upd.ForceRelaunch)
+			assert.True(t, upd.LoopOne, "the repeat setting is kept")
+		})
+	}
+}
+
 func TestFailed_HandedOffMediaThatNeverStarted(t *testing.T) {
 	t.Parallel()
 

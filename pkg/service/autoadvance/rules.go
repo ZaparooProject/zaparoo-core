@@ -537,13 +537,10 @@ func countdownPrompt(c *countdown, title string, wait time.Duration) (choices []
 
 // openPausedPrompt asks what to do with a playlist the engine just paused on
 // its current item: kind cdPaused after a quick quit, cdFailed after a launch
-// that never started. hasNext says whether next is where the playlist would
-// go on from it.
-func (e *Engine) openPausedPrompt(
-	kind countdownKind, pls, next *playlists.Playlist, hasNext bool, at time.Time,
-) {
+// that never started.
+func (e *Engine) openPausedPrompt(kind countdownKind, pls *playlists.Playlist, at time.Time) {
 	c := &countdown{kind: kind, slot: mediaslot.Primary, plsID: pls.ID, index: pls.Index}
-	if hasNext {
+	if next, ok := nextItem(pls); ok {
 		c.nextLabel = itemLabel(next.Current())
 	}
 	title := "Playlist paused"
@@ -571,7 +568,7 @@ func (e *Engine) resolvePaused(c *countdown, choice string) {
 	var upd *playlists.Playlist
 	switch choice {
 	case choicePlay:
-		next, ok := nextAfterCompletion(pls)
+		next, ok := nextItem(pls)
 		if !ok {
 			return
 		}

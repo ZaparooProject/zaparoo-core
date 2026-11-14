@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -100,4 +101,38 @@ func TestHandleQueuedToken_PlaylistItemLeavesDelayAlone(t *testing.T) {
 	require.NoError(t, waitRunCompletion(t, item))
 	done, _ := settled(first, 200*time.Millisecond)
 	assert.False(t, done, "a playlist's own item does not end the delay")
+}
+
+// runSuperseded runs script under a scan generation a newer scan has already
+// ended, as the script of an earlier tap is when the next one arrives.
+func runSuperseded(t *testing.T, env *exitTestEnv, script string) error {
+	t.Helper()
+	parent := env.svc.State.GetContext()
+	earlier := env.svc.scans.current(parent)
+	env.svc.scans.supersede(parent)
+	return runTokenZapScriptWithContext(withScanContext(parent, earlier), env.svc, tokens.Token{
+		UID:      "card",
+		Text:     script,
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 10)}, nil, false)
+}
+
+func TestRunTokenZapScript_CutShortDelaySkipsTheRest(t *testing.T) {
+	t.Parallel()
+	env := setupExitTestEnv(t, keypressHook)
+
+	require.NoError(t, runSuperseded(t, env, "**delay:20s||**launch:"+env.gamePath))
+	assert.Zero(t, env.rec.count("launch"), "nothing after the delay runs")
+}
+
+// A before_media_start hook's delay cut short ends the launch it was run for:
+// the newer scan owns what plays now.
+func TestRunTokenZapScript_CutShortHookDelayEndsTheLaunch(t *testing.T) {
+	t.Parallel()
+	env := setupExitTestEnv(t, keypressHook)
+	require.NoError(t, env.svc.Config.LoadTOML(`[launchers]
+before_media_start = "**delay:20s"`))
+
+	require.NoError(t, runSuperseded(t, env, "**launch:"+env.gamePath), "a cut-short delay is not a failure")
+	assert.Zero(t, env.rec.count("launch"))
 }
