@@ -281,7 +281,9 @@ func TestExited_QuickQuitPausesAutoStartedItem(t *testing.T) {
 	r.end(gen, exited)
 
 	assert.Equal(t, 1, r.host.pausedCount(), "the playlist is paused on the item")
-	assert.Zero(t, r.ui.opened(), "no countdown follows a quick quit")
+	require.Equal(t, 1, r.ui.opened(), "the pause is announced")
+	assert.Equal(t, "Playlist paused", r.ui.request(t, 0).Title)
+	r.changed()
 	r.tick(time.Minute)
 	r.quiet()
 	assert.True(t, r.host.ActivePlaylist().PausedByFailure)

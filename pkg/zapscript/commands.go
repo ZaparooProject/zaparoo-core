@@ -67,9 +67,12 @@ type RunCommandOptions struct {
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
 	BackgroundMedia    func() *apimodels.ActiveMedia
 	PlaylistMemory     platforms.PlaylistMemory
-	PlaybackManager    audio.PlaybackManager
-	UI                 *uievents.Service
-	LauncherManager    *state.LauncherManager
+	// ScanCtx ends when a newer scan supersedes the one running this
+	// command. Nil when the command did not come from a scanned token.
+	ScanCtx         context.Context
+	PlaybackManager audio.PlaybackManager
+	UI              *uievents.Service
+	LauncherManager *state.LauncherManager
 }
 
 var (
@@ -744,6 +747,7 @@ func RunCommand(
 		Cmd:                cmd,
 		Cfg:                cfg,
 		ServiceCtx:         serviceCtx,
+		ScanCtx:            opts.ScanCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
 		RecordMediaStop:    opts.RecordMediaStop,
@@ -873,6 +877,8 @@ func RunCommand(
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
+		case errors.Is(err, ErrDelaySuperseded):
+			// Reported once, at info, by the script runner it ends.
 		case IsExpectedRunError(err):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:

@@ -39,24 +39,27 @@ func nextAfterCompletion(pls *playlists.Playlist) (*playlists.Playlist, bool) {
 	if pls == nil || len(pls.Items) == 0 {
 		return nil, false
 	}
-	var next *playlists.Playlist
-	switch {
-	case pls.LoopOne:
+	if pls.LoopOne {
 		// ForceRelaunch bypasses the playlistNeedsUpdate dedup.
-		next = playlists.Play(*pls)
+		next := playlists.Play(*pls)
 		next.ForceRelaunch = true
-	case pls.Index+1 < len(pls.Items):
-		next = playlists.Next(*pls)
-		next.Playing = true
-	case pls.Loop:
-		next = playlists.Next(*pls) // Next already wraps to 0
-		next.Playing = true
-		if len(pls.Items) <= 1 {
-			// A single-item loop lands on the item it left.
-			next.ForceRelaunch = true
-		}
-	default:
+		return next, true
+	}
+	return nextItem(pls)
+}
+
+// nextItem is the item after the current one, wrapping only when the
+// playlist loops. Unlike nextAfterCompletion it ignores single-item repeat:
+// it is where a person asking to move on goes.
+func nextItem(pls *playlists.Playlist) (*playlists.Playlist, bool) {
+	if pls == nil || len(pls.Items) == 0 || (pls.Index+1 >= len(pls.Items) && !pls.Loop) {
 		return nil, false
+	}
+	next := playlists.Next(*pls) // Next already wraps to 0
+	next.Playing = true
+	if len(pls.Items) <= 1 {
+		// A single-item loop lands on the item it left.
+		next.ForceRelaunch = true
 	}
 	return next, true
 }

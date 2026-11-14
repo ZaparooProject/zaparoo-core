@@ -77,4 +77,7 @@ type ServiceContext struct {
 	// musicAutoplay starts the restored background playlist on the first
 	// start of a boot. Nil when it is off.
 	musicAutoplay atomic.Pointer[musicAutoplay]
+	// scans is the generation of the scripts queued tokens started, so a
+	// newer scan can cut short the delays an earlier one left pending.
+	scans scanGeneration
 }

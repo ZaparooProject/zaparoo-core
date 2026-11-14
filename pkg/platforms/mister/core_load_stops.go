@@ -80,6 +80,15 @@ func (c *coreLoadStops) stopWhenLoaded(now time.Time) {
 	c.stopUntil = until
 }
 
+// loading reports whether a launch's core may still be coming up: Main has
+// reported no core since the launch, and the load window is still open.
+func (c *coreLoadStops) loading(now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.launchedAt.IsZero() && c.coreChangedAt.Before(c.launchedAt) &&
+		now.Before(c.launchedAt.Add(coreLoadWindow))
+}
+
 // coreChanged records the core Main reports and says whether it is a core
 // that a stop was meant for. The first change after the stop settles it either
 // way: the menu means the stop took effect.
@@ -102,6 +111,8 @@ var (
 	coreLoadMenuInterval = 1500 * time.Millisecond
 	coreLoadCoreName     = mistermain.GetActiveCoreName
 	coreLoadSendMenu     = mistermain.LaunchMenu
+	// stopCoreName is the core a stop checks for the menu.
+	stopCoreName = mistermain.GetActiveCoreName
 )
 
 // StopCoreLoadedAfterStop is told by the tracker of each core change. When the

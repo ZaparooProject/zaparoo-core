@@ -1324,7 +1324,10 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, ErrNoPlaylistActive
+		// Stopping a playlist that is not running already has the outcome
+		// asked for, so the rest of the script carries on.
+		log.Info().Str("slot", slot).Msg("playlist stop: no playlist active")
+		return platforms.CmdResult{}, nil
 	}
 
 	clearUpdate := &playlists.Playlist{Slot: slot, Clear: true}

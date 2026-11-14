@@ -24,7 +24,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type plainRenderer struct{}
@@ -61,4 +63,57 @@ func TestRendersOverMedia(t *testing.T) {
 	assert.False(t, RendersOverMedia(nil))
 	assert.True(t, RendersOverMedia(plainRenderer{}), "assumed harmless unless it says otherwise")
 	assert.False(t, RendersOverMedia(replacingRenderer{}))
+}
+
+type recordingNoticeRenderer struct {
+	noticeOnlyRenderer
+	presented chan models.UIEvent
+}
+
+func (r recordingNoticeRenderer) PresentUI(_ context.Context, event *models.UIEvent) (func() error, error) {
+	r.presented <- *event
+	return func() error { return nil }, nil
+}
+
+func TestHostNoticeStandsInForAKindTheRendererCannotShow(t *testing.T) {
+	t.Parallel()
+
+	renderer := recordingNoticeRenderer{presented: make(chan models.UIEvent, 1)}
+	service := New(clockwork.NewFakeClock(), renderer, nil)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:       models.UIEventKindPicker,
+		Title:      "Playlist paused",
+		Choices:    []Choice{{Value: "stop", Label: "Stop playlist"}},
+		HostNotice: "Playlist paused. Scan the card again to continue",
+	})
+	require.NoError(t, err)
+
+	shown := <-renderer.presented
+	assert.Equal(t, models.UIEventKindNotice, shown.Kind)
+	assert.Equal(t, "Playlist paused. Scan the card again to continue", shown.Message)
+	assert.Empty(t, shown.Choices)
+	select {
+	case <-handle.Shown:
+		t.Fatal("a notice standing in for a picker does not count as the picker shown")
+	default:
+	}
+	state := service.State()
+	require.Len(t, state.Events, 1)
+	assert.Equal(t, models.UIEventKindPicker, state.Events[0].Kind, "API clients still get the picker")
+}
+
+func TestHostNoticeUnusedWhenTheRendererShowsTheKind(t *testing.T) {
+	t.Parallel()
+
+	renderer := &testRenderer{presented: make(chan models.UIEvent, 1)}
+	service := New(clockwork.NewFakeClock(), renderer, nil)
+	_, err := service.Open(t.Context(), &Request{
+		Kind:       models.UIEventKindPicker,
+		Title:      "Playlist paused",
+		Choices:    []Choice{{Value: "stop", Label: "Stop playlist"}},
+		HostNotice: "notice",
+	})
+	require.NoError(t, err)
+	shown := <-renderer.presented
+	assert.Equal(t, models.UIEventKindPicker, shown.Kind)
 }
