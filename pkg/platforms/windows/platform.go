@@ -904,9 +904,22 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 	launchers = append(launchers, p.retroBatLaunchers()...)
 
+	// A custom launcher keeps an ID an emulator launcher would also use, so
+	// installing an emulator never removes a launcher the user wrote.
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	launchers = append(launchers, p.standaloneLaunchers(cfg, customIDTaken(custom))...)
+
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
-	return helpers.CombineLaunchers(cfg, p, launchers)
+	return helpers.CombineParsedLaunchers(custom, launchers)
+}
+
+func customIDTaken(custom []platforms.Launcher) func(id string) bool {
+	ids := make(map[string]bool, len(custom))
+	for i := range custom {
+		ids[strings.ToLower(custom[i].ID)] = true
+	}
+	return func(id string) bool { return ids[strings.ToLower(id)] }
 }
 
 // newWindowsSteamLauncher builds the Steam launcher with external lifecycle

@@ -117,10 +117,57 @@ load_path = "snes9x"
 `))
 
 	coreLaunch := CoreLaunch{ID: "RetroArchBSNES", Core: "bsnes_libretro.so"}
-	core, err := resolveCore(cfg, &coreLaunch)
+	core, err := resolveCore(cfg, &coreLaunch, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, "snes9x_libretro.so", core)
+}
+
+func TestResolveCoreUsesDLLsOnWindows(t *testing.T) {
+	t.Parallel()
+
+	fs := testinghelpers.NewMemoryFS()
+	cfg, err := testinghelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	coreLaunch := CoreLaunch{ID: "RetroArchSNES9x", Core: "snes9x_libretro.so"}
+	core, err := resolveCore(cfg, &coreLaunch, true)
+	require.NoError(t, err)
+	assert.Equal(t, "snes9x_libretro.dll", core)
+
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "RetroArchSNES9x"
+load_path = "bsnes_libretro.dll"
+`))
+	core, err = resolveCore(cfg, &coreLaunch, true)
+	require.NoError(t, err)
+	assert.Equal(t, "bsnes_libretro.dll", core)
+
+	_, err = resolveCore(cfg, &coreLaunch, false)
+	require.Error(t, err, "DLL cores are only accepted on Windows")
+}
+
+func TestWindowsLauncherSkipsExecuteBitAndBuildsDLLCommand(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	exe := filepath.Join(string(filepath.Separator), "RetroArch", "retroarch.exe")
+	cores := filepath.Join(string(filepath.Separator), "RetroArch", "cores")
+	require.NoError(t, afero.WriteFile(fs, exe, []byte("MZ"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(cores, "snes9x_libretro.dll"), []byte("MZ"), 0o600))
+
+	launcher := NewLauncher(Options{
+		FS: fs, Exec: []string{exe}, CoresDir: cores, ExtraArgs: []string{"--fullscreen"}, Windows: true,
+	}, CoreLaunch{ID: "RetroArchSNES9x", Core: "snes9x_libretro.so"})
+	require.NoError(t, launcher.Availability(nil))
+	command, err := launcher.BuildLaunchCommand(nil, filepath.Join(string(filepath.Separator), "game.sfc"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, exe, command.Executable)
+	assert.Equal(t, []string{
+		"--fullscreen", "-L", filepath.Join(cores, "snes9x_libretro.dll"),
+		filepath.Join(string(filepath.Separator), "game.sfc"),
+	}, command.Args)
 }
 
 func TestNormalizeCoreFilename(t *testing.T) {

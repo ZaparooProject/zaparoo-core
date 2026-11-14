@@ -73,6 +73,9 @@ type Options struct {
 	ExtraEnv         []string
 	LaunchEnv        EnvFunc
 	ExtraArgs        []string
+	// Windows selects _libretro.dll cores and skips the Unix execute
+	// permission check.
+	Windows bool
 }
 
 // CoreLaunch maps one Core system to one libretro core.
