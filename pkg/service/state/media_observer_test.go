@@ -241,3 +241,56 @@ func TestMediaStopped_NotificationCarriesReason(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaEnd_NeverStarted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		end   func(st *State, gen uint64)
+		name  string
+		ready bool
+		want  bool
+	}{
+		{name: "ended before it was ready", end: func(st *State, _ uint64) { st.SetActiveMedia(nil) }, want: true},
+		{name: "ended once ready", ready: true, end: func(st *State, _ uint64) { st.SetActiveMedia(nil) }},
+		{
+			name: "exited once ready", ready: true,
+			end: func(st *State, gen uint64) { assert.True(t, st.ExitActiveMedia(gen)) },
+		},
+		{
+			name: "found never running once ready", ready: true, want: true,
+			end: func(st *State, gen uint64) { assert.True(t, st.ExitNeverStartedMedia(gen)) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			st, observer := newObservedState(t)
+			st.SetActiveMedia(testMedia("a.sfc"))
+			gen, ok := st.ActiveMediaReadyGeneration()
+			require.True(t, ok)
+			if tt.ready {
+				st.MarkActiveMediaReady(gen)
+			}
+			tt.end(st, gen)
+			end := observer.lastEnd(t)
+			assert.Equal(t, models.MediaStopReasonExited, end.Reason)
+			assert.Equal(t, tt.want, end.NeverStarted)
+		})
+	}
+}
+
+func TestMediaEnd_NeverStartedIsOnlyForItsGeneration(t *testing.T) {
+	t.Parallel()
+	st, observer := newObservedState(t)
+
+	st.SetActiveMedia(testMedia("a.sfc"))
+	gen, _ := st.ActiveMediaReadyGeneration()
+	st.MarkActiveMediaReady(gen)
+	st.SetActiveMedia(testMedia("b.sfc"))
+	assert.False(t, st.ExitNeverStartedMedia(gen), "other media took its place")
+	next, _ := st.ActiveMediaReadyGeneration()
+	st.MarkActiveMediaReady(next)
+	st.SetActiveMedia(nil)
+	assert.False(t, observer.lastEnd(t).NeverStarted)
+}

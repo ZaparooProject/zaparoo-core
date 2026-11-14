@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	statepkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -568,12 +569,19 @@ func TestStartMediaReadyProbeClearsAGameThatNeverStarted(t *testing.T) {
 			svc.State.SetActiveMedia(media)
 			gen, ok := svc.State.ActiveMediaReadyGeneration()
 			require.True(t, ok)
+			ends := &endRecorder{}
+			svc.State.AddMediaObserver(ends)
 
 			startMediaReadyProbe(svc, media, gen)
 
 			if tt.cleared {
 				require.Eventually(t, func() bool { return svc.State.ActiveMedia() == nil },
 					time.Second, 5*time.Millisecond, "the game that never started is still playing")
+				// Observers hear of the end after the state lets go of it.
+				require.Eventually(t, func() bool { _, ended := ends.last(); return ended },
+					time.Second, 5*time.Millisecond, "the end was never reported")
+				end, _ := ends.last()
+				assert.True(t, end.NeverStarted, "a game that never started is a failed launch")
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -592,4 +600,27 @@ func TestStartMediaReadyProbeClearsAGameThatNeverStarted(t *testing.T) {
 			assert.NotNil(t, svc.State.ActiveMedia())
 		})
 	}
+}
+
+type endRecorder struct {
+	ends []statepkg.MediaEnd
+	mu   syncutil.Mutex
+}
+
+func (*endRecorder) MediaStarted(statepkg.MediaStart) {}
+
+//nolint:gocritic // state.MediaObserver passes events by value
+func (r *endRecorder) MediaEnded(end statepkg.MediaEnd) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ends = append(r.ends, end)
+}
+
+func (r *endRecorder) last() (statepkg.MediaEnd, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.ends) == 0 {
+		return statepkg.MediaEnd{}, false
+	}
+	return r.ends[len(r.ends)-1], true
 }

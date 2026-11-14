@@ -1364,3 +1364,49 @@ func TestPresentUI_NoDeadlockWithActiveMedia(t *testing.T) {
 		t.Fatal("PresentUI deadlocked while stopping active launcher")
 	}
 }
+
+func withStopCoreName(t *testing.T, core string) {
+	t.Helper()
+	orig := stopCoreName
+	stopCoreName = func() string { return core }
+	t.Cleanup(func() { stopCoreName = orig })
+}
+
+// Hardware, 2026-11-14: **playlist.stop scanned on the menu reloaded it, and
+// Main dropped the launch of the playlist scanned next.
+func TestStopActiveLauncher_LeavesAnIdleMenuAlone(t *testing.T) {
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; a menu write would succeed")
+	}
+	withStopCoreName(t, misterconfig.MenuCore)
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	// A menu write fails on a test host, so success means none was made.
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+}
+
+func TestStopActiveLauncher_StillStopsACoreThatIsLoading(t *testing.T) {
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; cannot force a menu launch failure")
+	}
+	// Main still reports the menu while it loads a launched core.
+	withStopCoreName(t, misterconfig.MenuCore)
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	p.coreLoads.launched(time.Now())
+	err := p.StopActiveLauncher(platforms.StopForMenu)
+	require.ErrorIs(t, err, platforms.ErrStopFailed, "the stop must reach the core on its way")
+}
+
+func TestStopActiveLauncher_ReloadsForAConsoleReset(t *testing.T) {
+	if _, err := os.Stat(misterconfig.CmdInterface); err == nil {
+		t.Skip("MiSTer command interface present; cannot force a menu launch failure")
+	}
+	withStopCoreName(t, misterconfig.MenuCore)
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	require.ErrorIs(t, p.StopActiveLauncher(platforms.StopForConsoleReset), platforms.ErrStopFailed)
+}

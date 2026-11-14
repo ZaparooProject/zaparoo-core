@@ -867,7 +867,11 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 
 	p.clearTrackedActiveGame()
 
-	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
+	if proc == nil && intent == platforms.StopForMenu && p.idleOnMenu() {
+		// Reloading the menu would only restart it, and Main drops a launch
+		// sent while the menu core loads.
+		log.Debug().Msg("no tracked process and already on the menu, not reloading it")
+	} else if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
 		if err := p.loadMenu(intent == platforms.StopForMenu); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
@@ -881,6 +885,12 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	}
 
 	return nil
+}
+
+// idleOnMenu reports whether Main shows the menu with no launched core still
+// on its way, so there is nothing for a stop to return from.
+func (p *Platform) idleOnMenu() bool {
+	return stopCoreName() == misterconfig.MenuCore && !p.coreLoads.loading(time.Now())
 }
 
 // ReturnToMenu stops what is running and loads the menu core. A core still

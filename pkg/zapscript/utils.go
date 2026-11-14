@@ -108,6 +108,41 @@ func parseMacroDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// ErrDelaySuperseded is returned by a delay that a newer scan cut short. The
+// script it belonged to ends there, quietly: it was replaced, not failed.
+var ErrDelaySuperseded = errors.New("delay cut short by a newer scan")
+
+// mergeDone returns a context that ends when either a or b does. A nil a is
+// treated as one that never ends.
+func mergeDone(a, b context.Context) (context.Context, context.CancelFunc) {
+	if a == nil {
+		a = context.Background()
+	}
+	ctx, cancel := context.WithCancel(a)
+	stop := context.AfterFunc(b, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+// waitForScanDelay waits out a timed delay, which ends early with the service
+// or when a newer scan supersedes the one that started it.
+func waitForScanDelay(env *platforms.CmdEnv, delay time.Duration) error {
+	ctx := env.ServiceCtx
+	if env.ScanCtx != nil {
+		var stop context.CancelFunc
+		ctx, stop = mergeDone(ctx, env.ScanCtx)
+		defer stop()
+	}
+	err := waitForDelay(ctx, delay)
+	if err != nil && env.ScanCtx != nil && env.ScanCtx.Err() != nil &&
+		(env.ServiceCtx == nil || env.ServiceCtx.Err() == nil) {
+		return ErrDelaySuperseded
+	}
+	return err
+}
+
 func waitForDelay(ctx context.Context, delay time.Duration) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -136,10 +171,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	amount, err := strconv.Atoi(env.Cmd.Args[0])
 	if err == nil {
 		log.Info().Msgf("delaying for: %d", amount)
-		if waitErr := waitForDelay(env.ServiceCtx, time.Duration(amount)*time.Millisecond); waitErr != nil {
-			return platforms.CmdResult{}, waitErr
-		}
-		return platforms.CmdResult{}, nil
+		return platforms.CmdResult{}, waitForScanDelay(&env, time.Duration(amount)*time.Millisecond)
 	}
 
 	switch env.Cmd.Args[0] {
@@ -164,10 +196,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 			return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], durErr)
 		}
 		log.Info().Msgf("delaying for: %v", d)
-		if waitErr := waitForDelay(env.ServiceCtx, d); waitErr != nil {
-			return platforms.CmdResult{}, waitErr
-		}
-		return platforms.CmdResult{}, nil
+		return platforms.CmdResult{}, waitForScanDelay(&env, d)
 	}
 }
 

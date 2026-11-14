@@ -279,7 +279,11 @@ type CmdEnv struct {
 	LauncherCtx context.Context
 	// ServiceCtx is canceled during full service shutdown or process stop. Use it
 	// for work tied to service lifetime rather than the current launcher lifetime.
-	ServiceCtx         context.Context
+	ServiceCtx context.Context
+	// ScanCtx ends when a newer scan that launches media or works a playlist
+	// supersedes the scan running this command. Nil when the command did not
+	// come from a scanned token.
+	ScanCtx            context.Context
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (MediaLaunchAccess, error)
 	// RecordMediaStop notes a Core-initiated stop of the current primary media

@@ -435,10 +435,16 @@ func executeTokenZapScript(
 				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
 				BackgroundMedia:  svc.State.BackgroundMedia,
 				PlaylistMemory:   playlistMemoryFor(svc),
+				ScanCtx:          scanContextFrom(runCtx),
 			},
 			&cmdEnv,
 		)
 		releaseStopGate()
+		if errors.Is(err, zapscript.ErrDelaySuperseded) {
+			log.Info().Int("command", i+1).Int("of", len(cmds)).
+				Msg("a newer scan cut the delay short, the rest of the script is skipped")
+			return nil
+		}
 		if err != nil {
 			return &runfailure.CommandError{Name: cmd.Name, Err: err}
 		}
@@ -1524,16 +1530,26 @@ func handleQueuedToken(
 	}
 
 	// launch tokens in a separate thread
+	runCtx := svc.State.GetContext()
+	var scanCtx context.Context
+	if t.Source != tokens.SourcePlaylist && parseErr == nil && scriptSupersedesEarlierScans(&script) {
+		scanCtx = svc.scans.supersede(runCtx)
+	} else {
+		scanCtx = svc.scans.current(runCtx)
+	}
+
 	if svc.BackgroundWG != nil {
 		svc.BackgroundWG.Add(1)
 	}
-	go launchQueuedToken(svc, t, &he, player, successSound && t.Source == tokens.SourceAPI)
+	go launchQueuedToken(withScanContext(runCtx, scanCtx), svc, t, &he, player,
+		successSound && t.Source == tokens.SourceAPI)
 }
 
 // launchQueuedToken executes a token's ZapScript and records the outcome. The
 // completion is delivered as soon as execution finishes so a waiting caller
 // is not held behind sound playback or the history write.
 func launchQueuedToken(
+	runCtx context.Context,
 	svc *ServiceContext,
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
 	he *database.HistoryEntry,
@@ -1557,7 +1573,7 @@ func launchQueuedToken(
 		Queue:      svc.PlaylistQueue,
 	}
 
-	err := runTokenZapScriptRecovering(svc, t, plsc)
+	err := runTokenZapScriptRecovering(runCtx, svc, t, plsc)
 
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior
@@ -1674,6 +1690,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // into an error, so the token is still completed and recorded in history and
 // the worker keeps serving the queue.
 func runTokenZapScriptRecovering(
+	runCtx context.Context,
 	svc *ServiceContext,
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
 	plsc playlists.PlaylistController,
@@ -1686,7 +1703,7 @@ func runTokenZapScriptRecovering(
 				err = fmt.Errorf("%w: %v", errLaunchPanicked, r)
 			}
 		}()
-		err = runTokenZapScript(svc, t, plsc, nil, false)
+		err = runTokenZapScriptWithContext(runCtx, svc, t, plsc, nil, false)
 	}()
 	return err
 }
