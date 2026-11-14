@@ -417,7 +417,7 @@ func TestLauncherPreflightAllowsWhatItCannotCheck(t *testing.T) {
 		ext := h.connect(fixtureGames())
 		ext.set(func(f *fakeExtension) {
 			f.onCheck = func(Command) *Event {
-				go f.conn.Close()
+				go func() { _ = f.conn.Close() }()
 				return nil
 			}
 		})
