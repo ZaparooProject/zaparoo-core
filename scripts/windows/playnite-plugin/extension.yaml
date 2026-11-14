@@ -1,0 +1,10 @@
+Id: Zaparoo_de439158-de9d-46e7-bab7-ed6142afa0ef
+Name: Zaparoo
+Author: The Zaparoo Project
+Version: 1.0.0
+Module: ZaparooPlaynite.dll
+RequiresApiVersion: 6.11.0
+Type: GenericPlugin
+Links:
+  - Name: Zaparoo
+    Url: https://zaparoo.org

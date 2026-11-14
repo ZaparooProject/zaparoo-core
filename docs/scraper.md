@@ -11,6 +11,7 @@ Current scraper implementations:
 - `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept in the image folder (`[media] image_dir`, `images` under Core's data directory by default) as `libretro/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties holding a path relative to that folder, `images://libretro/<playlist>/<kind>/<name>.png`, so the folder can be moved by changing the setting. Core never copies or moves images when the setting changes: copy the folder yourself, or let a fill-missing run download what is absent. A PNG dropped into a `<kind>` folder is matched like a downloaded one. Before each download the run checks the image folder's free space and stops, reporting the reason in the scrape status, when less than 500 MB would be left. Older versions kept these files in `libretro-thumbnails/` under the data directory; Core moves that folder into the image folder once on startup when the two share a filesystem, and leaves it in place otherwise. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
 - `gamedatabase` fills in game facts from an embedded copy of [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase): genre, players, controls, save and add-on hardware, franchise, ports, compilation contents, release year, developer and publisher. It matches console titles by title slug and arcade sets by MAME set name, never by file hash, needs no network, and runs automatically after indexing. It is registered on every platform.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
+- `playnite` imports Playnite's own game metadata (release year, developers, publishers, genres, description) and cover and background images for media indexed by the Playnite launcher, on every system Playnite files games under. It is registered only on Windows when Playnite is installed or its Zaparoo extension is connected, and reads the library through that extension, so Playnite has to be running.
 
 ## Code Layout
 
@@ -22,6 +23,7 @@ Current scraper implementations:
 | `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
 | `pkg/database/scraper/libretrothumbs/` | libretro thumbnail server index, name matching, and image downloader |
 | `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
+| `pkg/database/scraper/playnitelib/` | Playnite library metadata and image importer for Playnite-launched games |
 | `pkg/database/scraper/misterarcade/` | MiSTer arcade catalog reader, field mapping, and control-vocabulary normalisation |
 | `pkg/database/scraper/mra/` | Shared MiSTer arcade descriptor set-name reader |
 | `pkg/database/scraper/gamedatabase/` | GameDataBase tag grammar, vocabulary tables, title and set-name matching, and write mapping |
@@ -51,13 +53,13 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 ### Ordinary Jobs After Indexing
 
-A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper, Playnite and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
 
 Index jobs run in each scraper's `AutoScrapeOrder`, lowest first, then by scraper ID. They only fill what is missing, so the order decides which source keeps a single-valued field two of them offer:
 
 | Order | Constant | Scrapers |
 |---|---|---|
-| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, the Android apps scraper: sources that describe this device's own library |
+| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, `playnite`, the Android apps scraper: sources that describe this device's own library |
 | 200 | `scraper.AutoOrderCatalog` | `gamedatabase`: a general catalog matched by name |
 | 300 | `scraper.AutoOrderDocuments` | `mister-docs`: documents and artwork that also carry some game facts |
 
@@ -651,6 +653,21 @@ The PinUP Popper launcher indexes tables as `popper://<GameID>/<name>` virtual p
 | `PlayField` image | `MediaProperties: image-screenshot` | |
 | `BackGlass` image | `MediaProperties: image-marquee` | The backglass is the pinball counterpart of a marquee |
 | `GameInfo` image | `MediaProperties: image-image` | Flyer or info card |
+
+## Playnite Behavior
+
+The Playnite launcher indexes games as `playnite://<game ID>/<name>` virtual paths, so the scraper needs no name matching: it asks the Zaparoo extension for the library once, with details, and resolves each media row's game ID to its Playnite game. Only the systems Playnite games are filed under are visited. Rows already carrying `scraper.playnite:scraped` are left out unless the scrape is forced; rows whose game no longer exists in Playnite are counted as skipped. Write failures are fatal, as for Popper.
+
+| Playnite field | Destination | Notes |
+|---|---|---|
+| `ReleaseDate` | `MediaTitleTags: year` | Exclusive, the year only |
+| `Developers` | `MediaTitleTags: developer` | Company-name normalized |
+| `Publishers` | `MediaTitleTags: publisher` | Company-name normalized |
+| `Genres` | `MediaTitleTags: genre` | Mapped through the shared genre name table; names with no mapping are dropped and counted |
+| `Description` | `MediaTitleProperties: description` | HTML reduced to plain text, at most 4000 characters |
+| `CoverImage` | `MediaProperties: image-boxart` | Only when Playnite holds the file locally |
+| `BackgroundImage` | `MediaProperties: image-fanart` | Only when Playnite holds the file locally |
+| `Icon`, tags, features, series, scores | not imported | |
 
 ### Frontend Ownership Boundary
 
