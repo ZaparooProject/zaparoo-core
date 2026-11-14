@@ -47,6 +47,11 @@ func NewLauncher(i *Integration) platforms.Launcher {
 			_, err := ParseGamePath(path)
 			return err == nil
 		},
+		// Playnite refusing the game must not cost the media already running,
+		// and DoLaunch stops that before Launch can hear the refusal.
+		Preflight: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) error {
+			return i.Preflight(path)
+		},
 		Scanner: func(
 			ctx context.Context, cfg *config.Instance, systemID string, results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {

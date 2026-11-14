@@ -44,6 +44,10 @@ type Timeouts struct {
 	// LaunchAccept is how long the extension may take to say whether
 	// Playnite accepted a launch. The game starting is reported separately.
 	LaunchAccept time.Duration
+	// Check is how long the extension may take to say whether Playnite
+	// would launch a game. A launch waits on it before stopping the running
+	// media, and goes ahead when it runs out.
+	Check time.Duration
 	// Stop is how long the extension may take to end a game. It has to fit
 	// inside the platform's stop budget with room for the fallback.
 	Stop time.Duration
@@ -57,6 +61,7 @@ func DefaultTimeouts() Timeouts {
 	return Timeouts{
 		Library:      30 * time.Second,
 		LaunchAccept: 10 * time.Second,
+		Check:        3 * time.Second,
 		Stop:         12 * time.Second,
 		LibraryCache: 2 * time.Minute,
 	}
@@ -310,6 +315,27 @@ func (i *Integration) Launch(cfg *config.Instance, path string) error {
 	}
 	log.Warn().Str("gameID", gameID).
 		Msg("Playnite extension not connected; started Playnite with the game, tracked once the extension connects")
+	return nil
+}
+
+// Preflight rejects a launch Playnite would refuse, before Core stops the
+// media that is running. It can only ask a connected extension; without one
+// the launch goes ahead and Playnite reports the problem itself.
+func (i *Integration) Preflight(path string) error {
+	gameID, err := ParseGamePath(path)
+	if err != nil {
+		return err
+	}
+	if !i.server.Connected() {
+		return nil
+	}
+	err = i.server.Check(context.Background(), gameID, i.deps.Timeouts.Check)
+	if errors.Is(err, ErrGameRejected) {
+		return fmt.Errorf("launch Playnite game: %w", err)
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("gameID", gameID).Msg("could not check Playnite game before launch")
+	}
 	return nil
 }
 

@@ -53,6 +53,9 @@ var (
 	// ErrStopUnsupported is returned when the extension cannot stop the game
 	// because Playnite never told it which process the game is.
 	ErrStopUnsupported = errors.New("no process reported by Playnite to stop")
+	// ErrGameRejected is returned by Check when Playnite answered that it
+	// cannot launch the game.
+	ErrGameRejected = errors.New("game rejected by Playnite")
 	// errDisconnected fails requests that were waiting when the pipe closed.
 	errDisconnected = errors.New("the Playnite extension disconnected")
 )
@@ -82,6 +85,7 @@ type Server struct {
 	writer   *bufio.Writer
 	games    map[string]*gamesRequest
 	launches map[string]chan Event
+	checks   map[string]chan Event
 	stops    map[string]chan Event
 	done     chan struct{}
 	handlers Handlers
@@ -104,6 +108,7 @@ func NewServer(clock clockwork.Clock, handlers Handlers) *Server {
 		handlers: handlers,
 		games:    make(map[string]*gamesRequest),
 		launches: make(map[string]chan Event),
+		checks:   make(map[string]chan Event),
 		stops:    make(map[string]chan Event),
 		done:     make(chan struct{}),
 	}
@@ -205,6 +210,27 @@ func (s *Server) Launch(ctx context.Context, gameID string, timeout time.Duratio
 		return resultError("launch", &result)
 	}
 	return nil
+}
+
+// Check asks the extension whether Playnite would accept a launch of the
+// game, without starting it. Only a refusal from the extension returns
+// ErrGameRejected; a lost or silent connection returns another error, as it
+// says nothing about the game.
+func (s *Server) Check(ctx context.Context, gameID string, timeout time.Duration) error {
+	result, err := s.request(ctx, s.checks, Command{Command: CommandCheck, ID: gameID}, timeout)
+	if err != nil {
+		return err
+	}
+	switch {
+	case result.Status == StatusCompleted:
+		return nil
+	case result.Error == errDisconnected.Error():
+		return errDisconnected
+	case result.Error != "":
+		return fmt.Errorf("%w: %s", ErrGameRejected, result.Error)
+	default:
+		return fmt.Errorf("%w: status %q", ErrGameRejected, result.Status)
+	}
 }
 
 // StopGame asks the extension to end a running game and waits for the result.
@@ -437,7 +463,7 @@ func (s *Server) failPending() {
 		}
 	}
 	failed := Event{Status: StatusFailed, Error: errDisconnected.Error()}
-	for _, pending := range []map[string]chan Event{s.launches, s.stops} {
+	for _, pending := range []map[string]chan Event{s.launches, s.checks, s.stops} {
 		for _, result := range pending {
 			select {
 			case result <- failed:
@@ -463,6 +489,8 @@ func (s *Server) handle(event *Event) {
 		s.handleGames(event)
 	case EventLaunchResult:
 		s.deliver(s.launches, event)
+	case EventCheckResult:
+		s.deliver(s.checks, event)
 	case EventMediaStopResult:
 		s.deliver(s.stops, event)
 	case EventMediaStarted:
@@ -527,6 +555,8 @@ func (s *Server) handleError(event *Event) {
 	switch event.Command {
 	case CommandLaunch:
 		s.deliver(s.launches, &failed)
+	case CommandCheck:
+		s.deliver(s.checks, &failed)
 	case CommandStop:
 		s.deliver(s.stops, &failed)
 	case CommandGetGames:

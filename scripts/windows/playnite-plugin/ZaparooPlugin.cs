@@ -340,6 +340,9 @@ namespace ZaparooPlaynite
                 case "Launch":
                     ThreadPool.QueueUserWorkItem(_ => Guarded(command, () => Launch(command)));
                     return;
+                case "Check":
+                    ThreadPool.QueueUserWorkItem(_ => Guarded(command, () => Check(command)));
+                    return;
                 case "Stop":
                     ThreadPool.QueueUserWorkItem(_ => Guarded(command, () => Stop(command)));
                     return;
@@ -392,25 +395,48 @@ namespace ZaparooPlaynite
             Send(new PluginEvent { Event = "Games", RequestId = command.RequestId, Games = chunk, Final = true });
         }
 
-        private void Launch(CoreCommand command)
+        // Launchable returns the game a command names when Playnite can start
+        // it, and otherwise reports why to Core and returns null.
+        private Game Launchable(CoreCommand command)
         {
             Guid id;
             if (!Guid.TryParse(command.Id, out id))
             {
                 SendError(command, "invalid game ID");
-                return;
+                return null;
             }
             var game = PlayniteApi.Database.Games.Get(id);
             if (game == null)
             {
                 SendError(command, "game is not in the Playnite library");
-                return;
+                return null;
             }
             if (!game.IsInstalled)
             {
                 SendError(command, "game is not installed");
+                return null;
+            }
+            return game;
+        }
+
+        // Check answers whether a launch would be accepted, so Core can turn a
+        // refused game away before it stops the media already running.
+        private void Check(CoreCommand command)
+        {
+            if (Launchable(command) != null)
+            {
+                Send(new PluginEvent { Event = "CheckResult", Id = command.Id, Status = "completed" });
+            }
+        }
+
+        private void Launch(CoreCommand command)
+        {
+            var game = Launchable(command);
+            if (game == null)
+            {
                 return;
             }
+            var id = game.Id;
 
             // StartGame can show Playnite's own dialogs, so it is queued on the
             // UI thread and the result reports only that Playnite has the request.

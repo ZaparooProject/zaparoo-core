@@ -39,6 +39,7 @@ const (
 	EventHello           = "Hello"
 	EventGames           = "Games"
 	EventLaunchResult    = "LaunchResult"
+	EventCheckResult     = "CheckResult"
 	EventMediaStarted    = "MediaStarted"
 	EventMediaStopped    = "MediaStopped"
 	EventMediaStopResult = "MediaStopResult"
@@ -51,6 +52,7 @@ const (
 	CommandPing     = "Ping"
 	CommandGetGames = "GetGames"
 	CommandLaunch   = "Launch"
+	CommandCheck    = "Check"
 	CommandStop     = "Stop"
 )
 

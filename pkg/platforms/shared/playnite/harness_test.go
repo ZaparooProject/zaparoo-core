@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,6 +117,7 @@ func (l *pipeListener) dial(t *testing.T) net.Conn {
 type fakeExtension struct {
 	conn     net.Conn
 	onLaunch func(cmd Command) *Event
+	onCheck  func(cmd Command) *Event
 	onStop   func(cmd Command) *Event
 	onGames  func(cmd Command) []Event
 	done     chan struct{}
@@ -142,7 +144,7 @@ func (f *fakeExtension) run() {
 		}
 		f.mu.Lock()
 		f.commands = append(f.commands, cmd)
-		onLaunch, onStop, onGames := f.onLaunch, f.onStop, f.onGames
+		onLaunch, onCheck, onStop, onGames := f.onLaunch, f.onCheck, f.onStop, f.onGames
 		games := f.games
 		f.mu.Unlock()
 
@@ -167,6 +169,14 @@ func (f *fakeExtension) run() {
 			if reply != nil {
 				f.write(reply)
 			}
+		case CommandCheck:
+			reply := checkReply(cmd, games)
+			if onCheck != nil {
+				reply = onCheck(cmd)
+			}
+			if reply != nil {
+				f.write(reply)
+			}
 		case CommandStop:
 			reply := &Event{Event: EventMediaStopResult, ID: cmd.ID, Status: StatusCompleted}
 			if onStop != nil {
@@ -177,6 +187,20 @@ func (f *fakeExtension) run() {
 			}
 		}
 	}
+}
+
+// checkReply answers a check the way the extension does.
+func checkReply(cmd Command, games []Game) *Event {
+	for i := range games {
+		if !strings.EqualFold(games[i].ID, cmd.ID) {
+			continue
+		}
+		if !games[i].IsInstalled {
+			return &Event{Event: EventError, Command: cmd.Command, ID: cmd.ID, Error: "game is not installed"}
+		}
+		return &Event{Event: EventCheckResult, ID: cmd.ID, Status: StatusCompleted}
+	}
+	return &Event{Event: EventError, Command: cmd.Command, ID: cmd.ID, Error: "game is not in the Playnite library"}
 }
 
 // write sends one event; a closed connection is not an error for the fake.

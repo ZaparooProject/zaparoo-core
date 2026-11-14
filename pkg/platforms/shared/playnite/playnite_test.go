@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -360,6 +361,75 @@ func TestLauncherDrivesTheIntegration(t *testing.T) {
 	h.requireMediaPath(path)
 	require.NoError(t, launcher.Kill(nil))
 	assert.Equal(t, 1, ext.count(CommandStop))
+}
+
+func TestLauncherPreflightRejectsGamesPlayniteRefuses(t *testing.T) {
+	t.Parallel()
+
+	// DoLaunch stops the running media between Preflight and Launch, so a
+	// game Playnite will refuse has to be turned away here or the running
+	// game is lost to a launch that never happens.
+	h := newHarness(t, harnessOptions{})
+	ext := h.connect(fixtureGames())
+	launcher := NewLauncher(h.integration)
+	require.NotNil(t, launcher.Preflight)
+
+	require.NoError(t, launcher.Preflight(nil, GamePath(idNES, "NES Game"), nil))
+
+	err := launcher.Preflight(nil, GamePath("00000000-0000-4000-8000-000000000001", "Gone"), nil)
+	require.ErrorIs(t, err, ErrGameRejected)
+	assert.Contains(t, err.Error(), "not in the Playnite library")
+
+	err = launcher.Preflight(nil, GamePath(idMissing, "Uninstalled Game"), nil)
+	require.ErrorIs(t, err, ErrGameRejected)
+	assert.Contains(t, err.Error(), "not installed")
+
+	assert.Equal(t, 3, ext.count(CommandCheck))
+	assert.Equal(t, 0, ext.count(CommandLaunch), "a check never starts a game")
+}
+
+func TestLauncherPreflightAllowsWhatItCannotCheck(t *testing.T) {
+	t.Parallel()
+
+	path := GamePath(idNES, "NES Game")
+
+	t.Run("Playnite closed", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, harnessOptions{})
+		h.install()
+		require.NoError(t, NewLauncher(h.integration).Preflight(nil, path, nil),
+			"Core starts Playnite with the game, which reports a refusal itself")
+	})
+
+	t.Run("extension silent", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, harnessOptions{timeouts: Timeouts{Check: 20 * time.Millisecond}})
+		ext := h.connect(fixtureGames())
+		ext.set(func(f *fakeExtension) {
+			f.onCheck = func(Command) *Event { return nil }
+		})
+		require.NoError(t, NewLauncher(h.integration).Preflight(nil, path, nil))
+	})
+
+	t.Run("extension disconnects", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, harnessOptions{})
+		ext := h.connect(fixtureGames())
+		ext.set(func(f *fakeExtension) {
+			f.onCheck = func(Command) *Event {
+				go f.conn.Close()
+				return nil
+			}
+		})
+		require.NoError(t, NewLauncher(h.integration).Preflight(nil, path, nil))
+	})
+
+	t.Run("malformed path", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, harnessOptions{})
+		h.connect(fixtureGames())
+		require.Error(t, NewLauncher(h.integration).Preflight(nil, "playnite://not-a-guid/x", nil))
+	})
 }
 
 func TestLauncherScannerKeepsResultsWhenPlayniteIsClosed(t *testing.T) {
