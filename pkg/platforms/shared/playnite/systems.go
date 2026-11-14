@@ -144,6 +144,19 @@ func SystemForGame(game *Game) (string, bool) {
 	return "", false
 }
 
+// HasSystem reports whether any Playnite game can be indexed under systemID.
+func HasSystem(systemID string) bool {
+	if systemID == systemdefs.SystemPC {
+		return true
+	}
+	for _, mapped := range specificationSystems {
+		if mapped == systemID {
+			return true
+		}
+	}
+	return false
+}
+
 // Systems returns every system a Playnite game can be indexed under, sorted.
 func Systems() []string {
 	seen := map[string]struct{}{systemdefs.SystemPC: {}}

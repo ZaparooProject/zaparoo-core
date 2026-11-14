@@ -87,6 +87,23 @@ func TestScanWithPlayniteClosedKeepsIndexedGames(t *testing.T) {
 	assert.True(t, err == platforms.ErrScannerUnavailable, "got %v", err)
 }
 
+func TestScanWithPlayniteClosedLeavesUnmappedSystemsComplete(t *testing.T) {
+	t.Parallel()
+
+	// No Playnite game can belong to a system without a mapping, so a closed
+	// Playnite must not mark that system's scan incomplete: that would stop
+	// missing media being flagged for every other launcher on it.
+	h := newHarness(t, harnessOptions{})
+	h.install()
+	for _, systemID := range Systems() {
+		require.True(t, HasSystem(systemID), systemID)
+	}
+	require.False(t, HasSystem(systemdefs.SystemGalaksija))
+	results, err := h.integration.Scan(context.Background(), nil, systemdefs.SystemGalaksija)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
 func TestScanReadsLibraryOncePerIndex(t *testing.T) {
 	t.Parallel()
 

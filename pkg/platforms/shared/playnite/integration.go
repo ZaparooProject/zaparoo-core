@@ -205,8 +205,13 @@ func (i *Integration) skipSteam(cfg *config.Instance) bool {
 // Scan returns the indexable games that belong to systemID. An absent
 // install contributes nothing. An install whose extension is not connected
 // cannot be read, which is reported as an unavailable source so the games
-// already indexed are kept.
+// already indexed are kept. An unavailable source leaves the whole system's
+// scan incomplete, so that is only reported for systems Playnite games can
+// belong to.
 func (i *Integration) Scan(ctx context.Context, cfg *config.Instance, systemID string) ([]platforms.ScanResult, error) {
+	if !HasSystem(systemID) {
+		return nil, nil
+	}
 	if !i.server.Connected() {
 		_, err := i.Locate(cfg)
 		if errors.Is(err, ErrNotInstalled) {
