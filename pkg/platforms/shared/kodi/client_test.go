@@ -1410,24 +1410,10 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		}))
 		defer server.Close()
 
-		// Mock auth config by temporarily setting it
-		// This simulates having auth configured for the server URL
-		originalAuthCfg := config.GetAuthCfg()
-		defer func() {
-			// Restore original config after test
-			if originalAuthCfg == nil {
-				config.ClearAuthCfgForTesting()
-			}
-		}()
-
-		// Set up test auth config
-		testAuthCfg := map[string]config.CredentialEntry{
-			server.URL: {
-				Username: "testuser",
-				Password: "testpass",
-			},
-		}
-		config.SetAuthCfgForTesting(testAuthCfg)
+		t.Cleanup(config.AddAuthEntryForTesting(server.URL, config.CredentialEntry{
+			Username: "testuser",
+			Password: "testpass",
+		}))
 
 		// Create client
 		client := kodi.NewClient(nil)
@@ -1449,7 +1435,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 	})
 
 	t.Run("bearer auth configured", func(t *testing.T) {
-		// No t.Parallel() - modifies global auth config
+		t.Parallel()
 
 		var receivedHeaders http.Header
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1465,20 +1451,9 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		}))
 		defer server.Close()
 
-		// Mock auth config with bearer token
-		originalAuthCfg := config.GetAuthCfg()
-		defer func() {
-			if originalAuthCfg == nil {
-				config.ClearAuthCfgForTesting()
-			}
-		}()
-
-		testAuthCfg := map[string]config.CredentialEntry{
-			server.URL: {
-				Bearer: "test-bearer-token-12345",
-			},
-		}
-		config.SetAuthCfgForTesting(testAuthCfg)
+		t.Cleanup(config.AddAuthEntryForTesting(server.URL, config.CredentialEntry{
+			Bearer: "test-bearer-token-12345",
+		}))
 
 		// Create client
 		client := kodi.NewClient(nil)

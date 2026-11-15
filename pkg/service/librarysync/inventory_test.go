@@ -95,10 +95,10 @@ func newSyncFixtureWithPace(t *testing.T, pace time.Duration, paths ...string) *
 	f.now.Store(time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC).Unix())
 	require.NoError(t, cfg.SetOnlineBaseURL(f.online.server.URL))
 	cfg.SetLibrarySync(true)
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token"},
-	})
-	t.Cleanup(config.ClearAuthCfgForTesting)
+	t.Cleanup(config.AddAuthEntryForTesting(
+		config.RemoteAuthLookupURL(f.online.server.URL),
+		config.CredentialEntry{Bearer: "library-token"},
+	))
 
 	platform := mocks.NewMockPlatform()
 	platform.On("ID").Return("test-platform")
