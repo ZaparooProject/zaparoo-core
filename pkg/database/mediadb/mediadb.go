@@ -316,9 +316,21 @@ func (db *MediaDB) removeScanScratch() {
 	}
 }
 
-// scanScratchCacheSize is the scratch database's page cache, in SQLite's
-// negative-KiB form.
-const scanScratchCacheSize = "-16384"
+// scanScratchCacheSize is the scratch database's page cache while a batch
+// transaction is open, in SQLite's negative-KiB form. An attached database
+// starts with a 2 MiB cache of its own; a batch of staged rows is several
+// times that, so pages spilled and were written again and again, and staging
+// went from 404 s to 706 s over a 252,000-file rescan on the MiSTer test
+// device until the cache held a whole batch.
+//
+// Every pooled connection that has served as the writer keeps the scratch
+// database attached, so the cache is handed back as each transaction ends
+// (scanScratchIdleCacheSize). Left in place on all of them it added 44 MiB to
+// the peak of the cache rebuilds that follow a scan.
+const (
+	scanScratchCacheSize     = "-16384"
+	scanScratchIdleCacheSize = "-256"
+)
 
 // attachScanScratch attaches the scratch database to conn unless it already
 // is. Pooled connections keep the attachment, so this is one query on reuse.
@@ -342,12 +354,6 @@ func attachScanScratch(ctx context.Context, conn *sql.Conn, path string) error {
 		fmt.Sprintf("PRAGMA %s.page_size = %d", scanScratchSchema, mediaDBPageSize),
 		"PRAGMA " + scanScratchSchema + ".journal_mode = MEMORY",
 		"PRAGMA " + scanScratchSchema + ".synchronous = OFF",
-		// An attached database starts with a 2 MiB cache of its own. A batch
-		// of staged rows is several times that, so pages spilled and were
-		// written again and again: staging went from 404 s to 706 s over a
-		// 252,000-file rescan on the MiSTer test device until the cache held
-		// a whole batch.
-		"PRAGMA " + scanScratchSchema + ".cache_size = " + scanScratchCacheSize,
 	} {
 		if _, err = conn.ExecContext(ctx, pragma); err != nil {
 			return fmt.Errorf("failed to configure scanner scratch database: %w", err)
@@ -1097,6 +1103,15 @@ func (db *MediaDB) releaseWriterConn() error {
 	db.txConn = nil
 	if conn == nil {
 		return nil
+	}
+
+	if db.scanScratchPath() != "" {
+		// Fails harmlessly on a connection that never attached the scratch
+		// database, or one database/sql has already discarded.
+		shrinkCtx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
+		_, _ = conn.ExecContext(shrinkCtx,
+			"PRAGMA "+scanScratchSchema+".cache_size = "+scanScratchIdleCacheSize)
+		cancel()
 	}
 
 	// Preserve the hot page cache between indexing batches. Resetting cache_size
@@ -2856,6 +2871,12 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		if attachErr := attachScanScratch(db.ctx, conn, scratchPath); attachErr != nil {
 			cleanupErr := db.closeWriterConn(conn)
 			return errors.Join(attachErr, cleanupErr)
+		}
+		if _, err = conn.ExecContext(db.ctx,
+			"PRAGMA "+scanScratchSchema+".cache_size = "+scanScratchCacheSize,
+		); err != nil {
+			cleanupErr := db.closeWriterConn(conn)
+			return errors.Join(fmt.Errorf("failed to size scanner scratch cache: %w", err), cleanupErr)
 		}
 		scanScratch = true
 	}
