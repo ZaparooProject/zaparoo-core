@@ -327,8 +327,12 @@ func (db *MediaDB) removeScanScratch() {
 // database attached, so the cache is handed back as each transaction ends
 // (scanScratchIdleCacheSize). Left in place on all of them it added 44 MiB to
 // the peak of the cache rebuilds that follow a scan.
+//
+// 6 MiB is measured: indexing 55,220 files into a new database took the same
+// time with 6 MiB as with 16 MiB (495 s against 514 s) while the process
+// peaked 41 MiB lower.
 const (
-	scanScratchCacheSize     = "-16384"
+	scanScratchCacheSize     = "-6144"
 	scanScratchIdleCacheSize = "-256"
 )
 
