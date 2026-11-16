@@ -23,6 +23,7 @@ package sqltrace
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -34,7 +35,14 @@ import (
 
 const (
 	logInterval   = 60 * time.Second
-	TopStatements = 10
+	TopStatements = 25
+)
+
+// Multi-row inserts and IN lists are prepared once per row count, which would
+// spread one logical statement over hundreds of entries.
+var (
+	repeatedRowGroups   = regexp.MustCompile(`(\((?:\s*\?\s*,)*\s*\?\s*\))(?:\s*,\s*\((?:\s*\?\s*,)*\s*\?\s*\))+`)
+	repeatedPlaceholder = regexp.MustCompile(`\?(?:\s*,\s*\?){3,}`)
 )
 
 // Collector aggregates statement timings reported by SQLite's trace hook for
@@ -42,6 +50,7 @@ const (
 type Collector struct {
 	lastLog    time.Time
 	statements map[uintptr]string
+	normalized map[string]string
 	stats      map[string]*statementStats
 	label      string
 	mu         syncutil.Mutex
@@ -62,6 +71,7 @@ func NewCollector(label string) *Collector {
 	return &Collector{
 		label:      label,
 		statements: make(map[uintptr]string),
+		normalized: make(map[string]string),
 		stats:      make(map[string]*statementStats),
 	}
 }
@@ -91,13 +101,23 @@ func (c *Collector) callback(info sqlite3.TraceInfo) int {
 }
 
 func (c *Collector) recordStatement(handle uintptr, statement string) {
-	statement = strings.Join(strings.Fields(statement), " ")
-	if statement == "" || strings.HasPrefix(statement, "--") {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	normalized, ok := c.normalized[statement]
+	if !ok {
+		normalized = normalize(statement)
+		c.normalized[statement] = normalized
+	}
+	if normalized == "" || strings.HasPrefix(normalized, "--") {
 		return
 	}
-	c.mu.Lock()
-	c.statements[handle] = statement
-	c.mu.Unlock()
+	c.statements[handle] = normalized
+}
+
+func normalize(statement string) string {
+	statement = strings.Join(strings.Fields(statement), " ")
+	statement = repeatedRowGroups.ReplaceAllString(statement, "$1, ...")
+	return repeatedPlaceholder.ReplaceAllString(statement, "?, ...")
 }
 
 func (c *Collector) recordProfile(handle uintptr, duration time.Duration) {
