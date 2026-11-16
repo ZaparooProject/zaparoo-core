@@ -143,6 +143,43 @@ const (
 // rebuild, and MediaDB rows are rebuildable, so NORMAL's small window of
 // last-transaction loss on power loss is an acceptable trade. UserDB keeps
 // synchronous=FULL since it holds non-rebuildable user data.
+// mediaDBPageSize is the page size a new media database is created with.
+//
+// MiSTer mounts its SD card sync,dirsync, so every write call SQLite makes is
+// flushed to the card before it returns, and SQLite writes one page per call
+// (two for a WAL frame). The cost of a bulk load is therefore the number of
+// pages written, not the bytes. Loading the same 12,000 rows on the test
+// device spent 14.3 s in commits and checkpoints with 4 KiB pages, 4.8 s with
+// 16 KiB and 3.2 s with 64 KiB (BenchmarkSQLiteWritePattern).
+//
+// The page size is fixed when the file is created. An existing database keeps
+// the size it was built with until it is rebuilt.
+const mediaDBPageSize = 16384
+
+// createMediaDBFile writes an empty database at dbPath with mediaDBPageSize.
+// It has to happen on its own connection before the normal open: the DSN
+// switches to WAL as it connects, and a WAL database cannot change page size.
+func createMediaDBFile(ctx context.Context, dbPath string) error {
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		return fmt.Errorf("open new media database: %w", err)
+	}
+	defer func() {
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close new media database after setting page size")
+		}
+	}()
+	sqlDB.SetMaxOpenConns(1)
+	if _, err = sqlDB.ExecContext(ctx, fmt.Sprintf("PRAGMA page_size=%d", mediaDBPageSize)); err != nil {
+		return fmt.Errorf("set media database page size: %w", err)
+	}
+	// The page size only reaches the file once something writes its header.
+	if _, err = sqlDB.ExecContext(ctx, "VACUUM"); err != nil {
+		return fmt.Errorf("write media database header: %w", err)
+	}
+	return nil
+}
+
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
 		"&_cache_size=" + defaultConnCacheSize + "&_temp_store=" + defaultConnTempStore + "&_mmap_size=0" +
@@ -562,6 +599,14 @@ func (db *MediaDB) Open() error {
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
 			return fmt.Errorf("failed to create media database directory: %w", mkdirErr)
+		}
+	}
+
+	if !exists {
+		// A file that keeps SQLite's default page size still works, so this
+		// is not worth failing the open over.
+		if pageErr := createMediaDBFile(db.ctx, dbPath); pageErr != nil {
+			log.Warn().Err(pageErr).Msg("failed to set media database page size; using the default")
 		}
 	}
 
