@@ -39,6 +39,18 @@ Currently: O(n*m) Jaro-Winkler, length pre-filter eliminates ~70-80%
 Best case (match found) at production 129k titles: ~44ms — within target. Exceeds 100ms above ~296k titles.
 Worst case (no match, full scan) at production 129k titles: ~331ms — needs algorithmic improvement (inverted index or candidate limit) to hit 100ms.
 
+## Storage on MiSTer
+
+MiSTer mounts its SD card `exfat rw,sync,dirsync`. Every write call is flushed to the card before it returns, so the cost of database work is the number of write calls, not the number of bytes or the `synchronous` setting:
+
+- A 4 KiB write costs 2-4 ms whether it appends or overwrites. 2 MiB written as 512 separate 4 KiB writes took 1.15-2.0 s; the same 2 MiB as two 1 MiB writes took 0.19 s.
+- SQLite issues one write per page, two per page for a WAL frame, and one more at checkpoint. A page changed inside a WAL transaction is three flushes.
+- `synchronous=FULL` and `NORMAL` measure the same on this mount (16.0 ms against 16.1 ms for a one-row UserDB commit), so UserDB keeps `FULL` at no cost.
+- Page size is the lever for bulk loads. Loading the same 12,000 rows spent 14.3 s in commits and checkpoints with 4 KiB pages, 4.8 s with 16 KiB and 3.2 s with 64 KiB (`BenchmarkSQLiteWritePattern`). Read speed with the real 252,000-file library was the same from 4 KiB to 64 KiB.
+- Anything the indexer does not need to keep must stay out of the main database file. Scan staging rows written there went through the WAL and a checkpoint like real data.
+
+Measure on the SD card, not on `/tmp`: `/tmp` is tmpfs, and a database benchmark run there never pays for a write. `task mister:bench-run` sets `TMPDIR` to the card for that reason. Baselines taken before November 2026 ran on tmpfs with SQLite compiled without optimization.
+
 ## Media Indexing
 
 Target: Full re-index of 239k media in < 15 minutes on MiSTer (real-world, including filesystem walk and overhead)
@@ -46,6 +58,8 @@ Benchmark target: < 21s per 10k in IndexingPipeline (MiSTer). Current: 32s per 1
 Components: fastwalk -> filename parsing -> slugification -> tag extraction -> DB batch insert
 
 Real-world overhead is ~1.8x the benchmark pipeline (filesystem walking, SD card I/O, WAL checkpointing, cache rebuild).
+
+Measured November 2026 on the test device (252,261 files, 165 systems), rescanning an unchanged library: 67.6 minutes before scan staging moved to a scratch database, 43.5 minutes after. Of what remains, about a quarter is the indexing throttle, a fifth the directory walk, and the rest staging and reconciling rows that turn out not to have changed.
 
 ## Memory Budget (Total)
 

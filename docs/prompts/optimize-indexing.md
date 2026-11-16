@@ -51,17 +51,18 @@ Every 10k files: `CommitTransaction()` + `FlushScanStateMaps()` (clears TitleIDs
 - The pipeline must remain single-threaded for DB writes (SQLite limitation with `SetMaxOpenConns(1)`)
 - CPU-bound stages (parsing, slugification) could potentially be parallelized or pipelined ahead of DB writes
 
-## x86 Benchmark Targets
+## Benchmarks
 
-The x86 benchmarks use in-memory SQLite (no fsync), so the 1220x "DB writes with fsync" multiplier doesn't apply. Use the appropriate multiplier:
+The benchmarks open a real SQLite file under `TMPDIR` with the production settings. On x86 that is fast storage, so they measure CPU and SQL cost; the MiSTer cost of a write is set by its `sync` mount (see "Storage on MiSTer" in `docs/optimization-targets.md`) and has to be measured on the device with `task mister:bench`.
 
-| Benchmark | What it measures | Multiplier | x86 Target |
-|-----------|-----------------|------------|------------|
-| `BenchmarkAddMediaPath_MockDB` | CPU pipeline only (no DB) | 41x (CPU) | ~512ms/10k |
-| `BenchmarkAddMediaPath_RealDB` | Pipeline + in-memory SQLite | 240x (DB writes in-txn) | ~88ms/10k |
-| `BenchmarkIndexingPipeline_EndToEnd` | Full pipeline with commits | 240x (DB writes in-txn) | ~88ms/10k |
-| `BenchmarkGetPathFragments_Batch` | Parsing + slugification only | 41x (CPU) | ~512ms/10k |
-| `BenchmarkFlushScanStateMaps` | Map clearing | 41x (CPU) | Based on entry count |
+| Benchmark | What it measures |
+|-----------|-----------------|
+| `BenchmarkGetPathFragments_Batch` | Parsing and slugification only, no database |
+| `BenchmarkMediaScanner_StageAndReconcile_FreshDB` | Staging and reconciling a system into an empty database |
+| `BenchmarkMediaScanner_Reconcile_ExistingRows` | Rescanning a system whose rows already exist |
+| `BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB` | A fixed-size scan against a growing database |
+| `BenchmarkMediaScanner_GrowingRun_AnalyzeCadence` | Planner statistics cadence over a long run |
+| `BenchmarkSQLiteWritePattern` | Page size and checkpoint mode against the storage under `TMPDIR` |
 
 ## Optimization Ideas
 
