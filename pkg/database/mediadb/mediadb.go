@@ -2144,6 +2144,9 @@ func (db *MediaDB) Truncate() error {
 	if err := sqlTruncate(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
+	if err := sqlClearScanMarkers(db.ctx, db.sql.Load(), nil); err != nil {
+		return err
+	}
 	if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), nil); err != nil {
 		return err
 	}
@@ -2173,6 +2176,9 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 		return err
 	}
 	if len(systemIDs) > 0 {
+		if err := sqlClearScanMarkers(db.ctx, db.sql.Load(), systemIDs); err != nil {
+			return err
+		}
 		if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), systemIDs); err != nil {
 			return err
 		}

@@ -1834,6 +1834,12 @@ type MediaDBI interface {
 	GetScrapeFingerprint(ctx context.Context, scraperID, systemID string) (string, error)
 	// SetScrapeFingerprint records the state a scraper completed a system in.
 	SetScrapeFingerprint(ctx context.Context, scraperID, systemID, fingerprint string) error
+	// ScanMarker returns the record the scanner stored for a system when it
+	// last reconciled it, or "" when it has stored none.
+	ScanMarker(ctx context.Context, systemID string) (string, error)
+	// SetScanMarker records what the scanner reconciled a system from, inside
+	// the open indexing transaction. An empty marker forgets the record.
+	SetScanMarker(ctx context.Context, systemID, marker string) error
 
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.

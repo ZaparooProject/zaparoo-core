@@ -3907,6 +3907,22 @@ func (m *MockMediaDBI) SetScrapeFingerprint(ctx context.Context, scraperID, syst
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) ScanMarker(ctx context.Context, systemID string) (string, error) {
+	if !m.hasExpectation("ScanMarker") {
+		return "", nil
+	}
+	args := m.Called(ctx, systemID)
+	return args.String(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) SetScanMarker(ctx context.Context, systemID, marker string) error {
+	if !m.hasExpectation("SetScanMarker") {
+		return nil
+	}
+	args := m.Called(ctx, systemID, marker)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetScrapeRunMediaIDs(
 	ctx context.Context, scraperID, runID string, systemDBID int64,
 ) (map[int64]struct{}, error) {

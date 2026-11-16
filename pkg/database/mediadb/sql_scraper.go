@@ -2364,6 +2364,9 @@ func upsertMediaTagsWithContext(
 	ctx context.Context, writeCtx *scrapeWriteTxContext, mediaDBID int64, tagInfos []database.TagInfo,
 ) error {
 	return upsertTagsWithContext(ctx, writeCtx, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+		if err := sqlClearScanMarkersForScannerLinks(ctx, tx, "?", mediaDBID, typeDBID); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaDBID, typeDBID,

@@ -2037,6 +2037,33 @@ func NewNamesIndexWithSources(
 			log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
 		}
 
+		// A system whose walk matches the record its last reconcile stored
+		// is left as it is: staging and reconciling it would write nothing.
+		// An incomplete walk proves nothing either way, so it never matches
+		// and is never recorded.
+		walkMarker, markerUsable := "", false
+		storedMarker := ""
+		if !scanIncomplete {
+			walkMarker, markerUsable = scanWalkMarker(cfg, files)
+		}
+		if stored, markerErr := db.ScanMarker(ctx, systemID); markerErr != nil {
+			log.Debug().Err(markerErr).Str("system", systemID).Msg("scan marker unreadable, reconciling system")
+			markerUsable = false
+		} else {
+			storedMarker = stored
+		}
+		if markerUsable && storedMarker != "" && storedMarker == walkMarker {
+			collectDur += time.Since(collectStart)
+			completedSystems[systemID] = true
+			log.Info().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Dur("elapsed", time.Since(systemSetupStart)).
+				Msg("system unchanged since its last index, skipped")
+			continue
+		}
+		gameIDUnresolved := 0
+
 		// Group files by directory and determine stripping policy per directory
 		filesByDir := make(map[string][]platforms.ScanResult)
 		for _, file := range files {
@@ -2110,6 +2137,8 @@ func NewNamesIndexWithSources(
 				Source:       file.Source,
 				LinkTarget:   file.LinkTarget,
 				NoExt:        file.NoExt,
+
+				GameIDUnresolved: &gameIDUnresolved,
 			})
 			insertDur += time.Since(insertStart)
 			if addErr != nil {
@@ -2238,6 +2267,18 @@ func NewNamesIndexWithSources(
 				Int64("mediaLinksDeleted", reconcileStats.MediaLinksDeleted).
 				Int64("touchedTitles", reconcileStats.TouchedTitles).
 				Msg("reconciled staged system")
+			// Record what this reconcile was derived from, in the same
+			// transaction as its rows. A system that still has files to
+			// identify keeps none, so the next index reads them again.
+			nextMarker := ""
+			if markerUsable && gameIDUnresolved == 0 {
+				nextMarker = walkMarker
+			}
+			if nextMarker != storedMarker {
+				if markerErr := db.SetScanMarker(ctx, systemID, nextMarker); markerErr != nil {
+					return 0, fmt.Errorf("failed to record scan marker for %s: %w", systemID, markerErr)
+				}
+			}
 			pendingSystems = append(pendingSystems, systemID)
 			// Track reconcile write volume so a run of low-file/high-reconcile
 			// systems still commits regularly, bounding WAL growth.
