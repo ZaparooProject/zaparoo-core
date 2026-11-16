@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -47,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/charlievieth/fastwalk"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -1315,6 +1317,11 @@ func newIndexLauncherCache(
 ) (*helpers.LauncherCache, []platforms.Launcher) {
 	allLaunchers := platform.Launchers(cfg)
 	allLaunchers = append(allLaunchers, launchables.Launchers(cfg, platform)...)
+	// Only with a server set: an any-scanner makes every system runnable,
+	// so an idle one would walk systems that have nothing to index.
+	if romm.ServerURL(cfg) != "" {
+		allLaunchers = append(allLaunchers, romm.NewLauncher(platform))
+	}
 	launcherCache := &helpers.LauncherCache{}
 	launcherCache.InitializeFromSlice(allLaunchers)
 	return launcherCache, allLaunchers
@@ -1977,11 +1984,15 @@ func NewNamesIndexWithSources(
 			}
 		}
 
-		// 3. Any-scanners — no SystemID, run for every system.
-		//    Replaces loop 3 (previously a separate outer loop over anyScanners).
+		// 3. Any-scanners — no SystemID, run for every system. Like the
+		//    pipeline scanners above they receive the files collected so far
+		//    and return them with their own results added, so a source can
+		//    leave out media the device already has. Their output replaces
+		//    files only on success.
 		for i := range anyScanners {
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", anyScanners[i].ID, systemID)
-			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
+			before := len(files)
+			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, slices.Clip(files))
 			if scanErr != nil {
 				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
@@ -2003,8 +2014,8 @@ func NewNamesIndexWithSources(
 					anyScanners[i].ID, systemID)
 				continue
 			}
-			files = append(files, results...)
-			if sourceCollector != nil && len(results) > 0 {
+			files = results
+			if sourceCollector != nil && len(results) > before {
 				successfulSources[anyScanners[i].ID] = true
 			}
 		}

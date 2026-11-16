@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
@@ -1039,6 +1040,24 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
+		if romm.IsRomPath(target.path) {
+			// A RomM game is fetched into its system's game folder and
+			// launched from there like any local file, with the launcher
+			// chosen for its system rather than the RomM placeholder.
+			localPath, systemID, err := romm.Install(env.LauncherCtx, env.Cfg, pl, env.UI, target.path)
+			if err != nil {
+				return fmt.Errorf("failed to install romm game: %w", err)
+			}
+			target.path = localPath
+			target.systemID = systemID
+			target.mediaID = 0
+			target.resolveMediaByPath = true
+			target.guideLauncherBySystem = true
+			if !explicitLauncher ||
+				strings.EqualFold(env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), romm.LauncherID) {
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+			}
+		}
 		if isAudioPlaylistTarget(pl, env, &target) {
 			return &audioPlaylistLaunchError{path: target.path}
 		}

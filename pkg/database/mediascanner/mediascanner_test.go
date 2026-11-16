@@ -1172,13 +1172,13 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 		ID:       "TestAnyScannerLauncher",
 		SystemID: "", // Empty = "any" scanner that runs against all systems
 		Scanner: func(_ context.Context, _ *config.Instance, systemID string,
-			_ []platforms.ScanResult,
+			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			scannerCalls[systemID]++
-			// Return a result for this system
-			return []platforms.ScanResult{
-				{Name: "Test Item from any scanner", Path: "test://any/" + systemID + "/item"},
-			}, nil
+			// Add a result for this system to what was already collected.
+			return append(results, platforms.ScanResult{
+				Name: "Test Item from any scanner", Path: "test://any/" + systemID + "/item",
+			}), nil
 		},
 	}
 
@@ -2924,4 +2924,76 @@ func TestAnyScannerSourceUnavailableIsSkipped(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "skipping TestUnreachableAnyScanner 'any' scanner: service unavailable")
 	assert.NotContains(t, output, "error running TestUnreachableAnyScanner")
+}
+
+// An any-scanner sees the files already collected for the system, so a
+// remote source can leave out games the device has, and whatever it returns
+// becomes the system's file list.
+func TestAnyScannerSeesCollectedFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	root := t.TempDir()
+	nesDir := filepath.Join(root, "NES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(nesDir, "Local Game.nes"), []byte("x"), 0o600))
+
+	var seen []string
+	anyLauncher := platforms.Launcher{
+		ID: "TestRemoteSource",
+		Scanner: func(_ context.Context, _ *config.Instance, systemID string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			if systemID != systemdefs.SystemNES {
+				return results, nil
+			}
+			have := map[string]bool{}
+			for _, r := range results {
+				seen = append(seen, filepath.Base(r.Path))
+				have[filepath.Base(r.Path)] = true
+			}
+			for _, name := range []string{"Local Game.nes", "Remote Game.nes"} {
+				if !have[name] {
+					results = append(results, platforms.ScanResult{
+						Name: strings.TrimSuffix(name, ".nes"), Path: "remote://1/" + name, NoExt: true,
+					})
+				}
+			}
+			return results, nil
+		},
+	}
+	nesLauncher := platforms.Launcher{
+		ID: "NES", SystemID: systemdefs.SystemNES, Folders: []string{"NES"}, Extensions: []string{".nes"},
+	}
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{nesLauncher, anyLauncher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	nes, err := systemdefs.GetSystem(systemdefs.SystemNES)
+	require.NoError(t, err)
+	indexed, err := NewNamesIndex(context.Background(), platform, cfg,
+		[]systemdefs.System{*nes}, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Local Game.nes"}, seen, "the any-scanner receives the local files")
+	assert.Equal(t, 2, indexed, "the local game once, plus the remote-only game")
 }

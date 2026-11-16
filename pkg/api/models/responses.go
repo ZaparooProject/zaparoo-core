@@ -1165,6 +1165,12 @@ type SettingsAuthUnlinkResponse struct {
 	Domains []string `json:"domains"`
 }
 
+// Auth link providers (settings.auth.link).
+const (
+	AuthLinkProviderZaparoo = "zaparoo"
+	AuthLinkProviderRomM    = "romm"
+)
+
 // Auth link session statuses (settings.auth.link).
 const (
 	AuthLinkStatusNone      = "none"
@@ -1185,6 +1191,8 @@ type AuthLinkStatusResponse struct {
 	VerificationURL         string     `json:"verificationUrl,omitempty"`
 	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
 	Error                   string     `json:"error,omitempty"`
+	// Provider is the service the flow links to: zaparoo or romm.
+	Provider string `json:"provider,omitempty"`
 }
 
 type BackupCategoryStatus struct {

@@ -168,8 +168,11 @@ type SettingsAuthStatusParams struct {
 
 type SettingsAuthLinkParams struct {
 	// URL overrides the auth server base URL; defaults to the official
-	// Zaparoo API.
+	// Zaparoo API. It is required for the romm provider.
 	URL string `json:"url,omitempty" validate:"omitempty,url"`
+	// Provider is the service the device links to: zaparoo (the default) or
+	// romm, a RomM server Core then uses as a game library.
+	Provider string `json:"provider,omitempty" validate:"omitempty,oneof=zaparoo romm"`
 }
 
 type ReaderWriteCancelParams struct {

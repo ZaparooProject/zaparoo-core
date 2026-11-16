@@ -49,6 +49,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
@@ -886,7 +887,7 @@ func startServiceWithOptions(
 	go func() {
 		defer close(launcherCacheDone)
 		launcherCacheStarted := time.Now()
-		launcherCache.Initialize(pl, cfg, nativeAudioLauncher)
+		launcherCache.Initialize(pl, cfg, nativeAudioLauncher, romm.NewLauncher(pl))
 		log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 	}()
 

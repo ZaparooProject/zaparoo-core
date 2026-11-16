@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,4 +189,68 @@ func TestAPIRequest_StatusCodes(t *testing.T) {
 	_, err = sendAPIRequest(server.URL, "/forbidden", "", time.Second)
 	require.ErrorIs(t, err, ErrUnexpectedStatus)
 	assert.NotErrorIs(t, err, ErrRouteUnsupported)
+}
+
+func TestGameID(t *testing.T) {
+	t.Parallel()
+
+	// The ID Batocera's EmulationStation gave this game.
+	assert.Equal(t, "5d91e2a1adc36916894154a53269a2f4", GameID("/userdata/roms/nes/Homebrew 2048 (World).nes"))
+}
+
+func TestGameKnown(t *testing.T) {
+	t.Parallel()
+
+	listed := "/roms/nes/listed.nes"
+	var reloads atomic.Int32
+	var hasRoutes atomic.Bool
+	hasRoutes.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/systems/nes/games/" + GameID(listed), "/systems/game%20boy/games/" + GameID(listed):
+			_, _ = w.Write([]byte("{}"))
+		case "/systems":
+			if hasRoutes.Load() {
+				_, _ = w.Write([]byte("[]"))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		case "/reloadgames":
+			reloads.Add(1)
+		case "/systems/broken/games/" + GameID(listed):
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	known, err := gameKnown(server.URL, "nes", listed)
+	require.NoError(t, err)
+	assert.True(t, known)
+
+	known, err = gameKnown(server.URL, "game boy", listed)
+	require.NoError(t, err)
+	assert.True(t, known, "system names are escaped")
+
+	known, err = gameKnown(server.URL, "nes", "/roms/nes/new.nes")
+	require.NoError(t, err)
+	assert.False(t, known, "a system ES has without the game")
+
+	known, err = gameKnown(server.URL, "psx", "/roms/psx/new.cue")
+	require.NoError(t, err)
+	assert.False(t, known, "a system ES hides until it has games")
+
+	hasRoutes.Store(false)
+	_, err = gameKnown(server.URL, "nes", "/roms/nes/new.nes")
+	require.ErrorIs(t, err, ErrRouteUnsupported, "an ES without the systems routes")
+
+	_, err = gameKnown(server.URL, "broken", listed)
+	require.Error(t, err)
+
+	require.NoError(t, reloadGames(server.URL))
+	assert.Equal(t, int32(1), reloads.Load())
+
+	server.Close()
+	require.Error(t, reloadGames(server.URL))
 }
