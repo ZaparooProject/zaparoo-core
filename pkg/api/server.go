@@ -482,6 +482,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaLookupCandidates: methods.HandleMediaLookupCandidates,
 		models.MethodMediaMeta:             methods.HandleMediaMeta,
 		models.MethodMediaImage:            methods.HandleMediaImage,
+		models.MethodMediaArtworkRandom:    methods.HandleMediaArtworkRandom,
 		models.MethodMediaAsset:            methods.HandleMediaAsset,
 		models.MethodScrapers:              methods.HandleScrapers,
 		models.MethodMediaScrape:           methods.HandleMediaScrape,

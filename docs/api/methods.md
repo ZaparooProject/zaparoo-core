@@ -3057,6 +3057,94 @@ When a resized thumbnail is built for a request whose image type preference list
 }
 ```
 
+### media.artwork.random
+
+**Access:** Localhost or any authenticated client.
+
+Return random indexed media that have artwork of the requested types, for slideshows and screensavers. Nothing is launched, fetched, or recorded in history, and no image data is returned: request each image with [`media.image`](#mediaimage).
+
+Every eligible row is equally likely. A row is eligible when it matches the filters, is not missing, and has at least one requested image type on its media row or its title. Indexed artwork counts as available; Core does not check that the file still exists, so `media.image` can still fail for an item. Hidden media and media in hidden folders are left out unless `includeHidden` is set or a `tags` filter requires a `user` tag, the same rule as `media.search`. Profiles do not limit systems here; to show only some systems or categories, pass them in `systems`.
+
+#### Parameters
+
+An object:
+
+| Key           | Type     | Required | Description |
+| :------------ | :------- | :------- | :---------- |
+| imageTypes    | string[] | Yes      | One to 12 image types. An item qualifies when it has any of them. Uses the [`media.image`](#mediaimage) values; any other value is rejected. |
+| limit         | number   | No       | Maximum number of items to return, 1 to 50. Default is 10. |
+| excludeIds    | number[] | No       | Up to 500 `mediaId` values to leave out, such as items already shown. |
+| systems       | string[] | No       | Case-sensitive list of system IDs to sample from. A missing key or empty list samples all systems. |
+| fuzzySystem   | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array. |
+| tags          | string[] | No       | Tag filters with the same syntax and limits as [`media.search`](#mediasearch). |
+| pathPrefix    | string   | No       | Recursively restrict items beneath a filesystem directory or virtual route, as in [`media.search`](#mediasearch). |
+| includeHidden | boolean  | No       | Include hidden media and media in hidden folders. Defaults to `false`. |
+
+Unknown keys are rejected.
+
+#### Result
+
+| Key   | Type                                                    | Required | Description |
+| :---- | :------------------------------------------------------ | :------- | :---------- |
+| items | [MediaArtworkRandomItem](#media-artwork-random-item-object)[] | Yes | Random items in random order. Fewer than `limit` items, or an empty list, when not enough media qualify. |
+
+##### Media artwork random item object
+
+| Key        | Type                       | Required | Description |
+| :--------- | :------------------------- | :------- | :---------- |
+| mediaId    | number                     | Yes      | Opaque media database row ID. Valid only until the next index or database rebuild finishes. |
+| system     | [System](#system-object)   | Yes      | System the media belongs to. |
+| name       | string                     | Yes      | Display name of the media. |
+| path       | string                     | Yes      | Indexed path of the media. With `system.id`, identifies the media across index runs and rebuilds. |
+| imageTypes | string[]                   | Yes      | The requested image types this item has, in request order. |
+
+To fetch an image, send `media.image` either `mediaId` alone or `system` and `path` together, never all three: all three name a directory entry. Use `system` and `path` for anything kept across an index run.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3f1c2a40-5b1e-4c7d-9a2e-0b6d1e2f3a4b",
+  "method": "media.artwork.random",
+  "params": {
+    "imageTypes": ["screenshot", "boxart"],
+    "systems": ["SNES", "Genesis"],
+    "limit": 2,
+    "excludeIds": [42]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3f1c2a40-5b1e-4c7d-9a2e-0b6d1e2f3a4b",
+  "result": {
+    "items": [
+      {
+        "mediaId": 1187,
+        "system": { "id": "Genesis", "name": "Genesis", "category": "Console" },
+        "name": "Sonic the Hedgehog",
+        "path": "/roms/Genesis/Sonic the Hedgehog (USA, Europe).md",
+        "imageTypes": ["screenshot", "boxart"]
+      },
+      {
+        "mediaId": 305,
+        "system": { "id": "SNES", "name": "SNES", "category": "Console" },
+        "name": "Super Metroid",
+        "path": "/roms/SNES/Super Metroid (USA).sfc",
+        "imageTypes": ["boxart"]
+      }
+    ]
+  }
+}
+```
+
 ### scrapers
 
 **Access:** All clients.
