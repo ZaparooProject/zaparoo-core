@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -252,4 +253,41 @@ func TestScanSkip_ScannerOwnedTablesHaveKnownWriters(t *testing.T) {
 	require.NoError(t, err)
 	sort.Strings(found)
 	assert.Equal(t, known, found)
+}
+
+// An index that changes nothing, on a database whose caches are all in place,
+// leaves them alone: the index generation, which every persisted cache and
+// the library sync inventory are keyed to, does not move. An index that does
+// change something moves it as before.
+func TestScanSkip_UnchangedIndexKeepsCachesAndGeneration(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache.
+	fixture := newScanSkipFixture(t)
+	ctx := context.Background()
+	fixture.index(t)
+
+	// Background optimization is what completes after a real index.
+	require.NoError(t, fixture.db.MediaDB.PopulateBrowseCache(ctx))
+	require.NoError(t, fixture.db.MediaDB.RebuildSlugSearchCache())
+	require.NoError(t, fixture.db.MediaDB.RebuildTagCache())
+	require.NoError(t, fixture.db.MediaDB.SetOptimizationStatus(mediadb.IndexingStatusCompleted))
+	concrete, ok := fixture.db.MediaDB.(*mediadb.MediaDB)
+	require.True(t, ok)
+	require.Empty(t, concrete.IndexCachesMissing(ctx), "fixture must start with intact caches")
+	before, err := fixture.db.MediaDB.IndexGeneration()
+	require.NoError(t, err)
+
+	fixture.index(t)
+	after, err := fixture.db.MediaDB.IndexGeneration()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "an unchanged index must not invalidate what was built from it")
+	status, err := fixture.db.MediaDB.GetOptimizationStatus()
+	require.NoError(t, err)
+	assert.Equal(t, mediadb.IndexingStatusCompleted, status)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(fixture.dirs[systemdefs.SystemSNES], "Gamma Game.bin"), []byte("x"), 0o600))
+	fixture.index(t)
+	changed, err := fixture.db.MediaDB.IndexGeneration()
+	require.NoError(t, err)
+	assert.NotEqual(t, before, changed, "an index that added media must rebuild")
 }

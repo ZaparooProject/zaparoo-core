@@ -263,7 +263,14 @@ type MediaDB struct {
 	inTransaction           bool
 	// scanScratch is set while the open transaction's connection has the
 	// scanner's scratch database attached.
-	scanScratch            bool
+	scanScratch bool
+	// txChangeReported and txLibraryChanged describe the open transaction:
+	// whether it ran work that reports what it changed (a system reconcile,
+	// the tag vocabulary seed), and whether any of it changed a library row.
+	// A batch of such work that changed nothing leaves every cache derived
+	// from the library as valid as it was.
+	txChangeReported       bool
+	txLibraryChanged       bool
 	browseCacheDirty       bool
 	utilityTagCacheDirty   bool
 	mediaSearchBoundsDirty bool
@@ -1525,6 +1532,67 @@ func (db *MediaDB) Exists() bool {
 	return db.sql.Load() != nil
 }
 
+// libraryInsertersUsed reports whether any row was handed to a batch inserter
+// that writes a library table, as opposed to the scanner's scratch tables.
+func (db *MediaDB) libraryInsertersUsed() bool {
+	for _, inserter := range []*BatchInserter{
+		db.batchInsertSystem, db.batchInsertMediaTitle, db.batchInsertMedia,
+		db.batchInsertTag, db.batchInsertTagType, db.batchInsertMediaTag,
+	} {
+		if inserter != nil && inserter.added > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TouchLastGenerated records that an index completed without changing the
+// library. It moves the timestamp and nothing else: the caches the library
+// feeds are left as they are.
+func (db *MediaDB) TouchLastGenerated() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlUpdateLastGenerated(db.ctx, db.conn())
+}
+
+// IndexCachesMissing names the first thing an index that changed nothing
+// would still have to rebuild at its end, or "" when everything it normally
+// rebuilds is present and current. Any doubt names something, which costs
+// only the usual rebuild.
+func (db *MediaDB) IndexCachesMissing(ctx context.Context) string {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return "database closed"
+	}
+	slugCache := db.slugSearchCache.Load()
+	if slugCache == nil || !slugCache.complete || slugCache.hasMidScanState() {
+		return "slug search cache"
+	}
+	if db.inMemoryTagCache.Load() == nil {
+		return "tag cache"
+	}
+	if status, err := db.GetOptimizationStatus(); err != nil || status != IndexingStatusCompleted {
+		return "background optimization not completed"
+	}
+	if needsRebuild, err := db.BrowseCacheNeedsRebuild(ctx); err != nil || needsRebuild {
+		return "browse cache"
+	}
+	var hasTags, hasGenerated bool
+	if err := sqlDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM SystemTagsCache)").Scan(&hasTags); err != nil {
+		return "system tags cache unreadable"
+	}
+	if !hasTags {
+		return "system tags cache"
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM DBConfig WHERE Name = ?)", DBConfigLastGeneratedAt,
+	).Scan(&hasGenerated); err != nil || !hasGenerated {
+		return "no completed index"
+	}
+	return ""
+}
+
 func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
@@ -2731,7 +2799,12 @@ func (db *MediaDB) ReconcileStagedSystem(
 	}
 	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), db.clock, systemID, opts)
 	if err != nil {
+		db.txLibraryChanged = true
 		return stats, err
+	}
+	db.txChangeReported = true
+	if stats.LibraryRowsChanged > 0 {
+		db.txLibraryChanged = true
 	}
 	// A reconcile that changed nothing leaves the revision alone, which is
 	// what lets an index-triggered scrape tell the system holds nothing new.
@@ -2794,7 +2867,11 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	// Seeding opens every index run. When the vocabulary has changed it also
 	// removes stored values it no longer accepts, and the index run rebuilds
 	// every tag cache when it finishes.
-	_, err := sqlSeedCanonicalTags(ctx, db.conn())
+	changed, err := sqlSeedCanonicalTags(ctx, db.conn())
+	db.txChangeReported = true
+	if changed || err != nil {
+		db.txLibraryChanged = true
+	}
 	return err
 }
 
@@ -2802,6 +2879,8 @@ func (db *MediaDB) clearTransactionState() {
 	db.tx = nil
 	db.inTransaction = false
 	db.scanScratch = false
+	db.txChangeReported = false
+	db.txLibraryChanged = false
 	db.clearBrowseCacheInvalidation()
 	db.utilityTagCacheDirty = false
 	db.mediaSearchBoundsDirty = false
@@ -3130,6 +3209,12 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return errors.Join(errors.New("cannot commit: SQLite transaction already ended"), cleanupErr)
 	}
 
+	// Decided before the inserters are closed and the dirty flags are reset.
+	unchangedBatch := db.txChangeReported && !db.txLibraryChanged && !db.libraryInsertersUsed() &&
+		!db.mediaSearchBoundsDirty && !db.utilityTagCacheDirty && !db.browseCacheDirty
+	db.txChangeReported = false
+	db.txLibraryChanged = false
+
 	flushStart := time.Now()
 	// Flush all batch inserters before committing (if any were created).
 	if db.batchInsertSystem != nil {
@@ -3186,9 +3271,16 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		scope = db.cacheInvalidationScopeForCommittedTransaction()
 	}
 
-	db.invalidateCaches(scope)
-	if indexingBatchCommit {
-		log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
+	// A batch that only reconciled systems and found them exactly as stored
+	// changed nothing a cache was built from. Dropping the caches anyway made
+	// every unchanged rescan rebuild all of them.
+	if indexingBatchCommit && unchangedBatch {
+		log.Debug().Str("status", indexingStatus).Msg("indexing batch changed nothing, caches kept")
+	} else {
+		db.invalidateCaches(scope)
+		if indexingBatchCommit {
+			log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
+		}
 	}
 	db.mediaSearchBoundsDirty = false
 

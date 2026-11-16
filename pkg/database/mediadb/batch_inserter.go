@@ -48,7 +48,9 @@ type BatchInserter struct {
 	batchSize    int
 	columnCount  int
 	currentCount int
-	orIgnore     bool
+	// added counts every row handed to Add over the inserter's life.
+	added    int
+	orIgnore bool
 }
 
 const maxCachedBatchStatements = 8
@@ -121,6 +123,7 @@ func (b *BatchInserter) SetDependencies(deps ...*BatchInserter) {
 // Add appends a row to the current batch and auto-flushes when the batch size is reached.
 // Dependency ordering ensures parent tables are flushed before children, preventing FK violations.
 func (b *BatchInserter) Add(values ...any) error {
+	b.added++
 	if len(values) != b.columnCount {
 		return fmt.Errorf(
 			"expected %d values for columns %v, got %d",

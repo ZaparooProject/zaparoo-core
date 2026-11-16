@@ -1292,6 +1292,10 @@ type ScanReconcileStats struct {
 	// purges the data copied from it and leaves the alias needing a scrape.
 	MediaLinksDeleted int64
 	TouchedTitles     int64
+	// LibraryRowsChanged counts every row the reconcile wrote outside its own
+	// scratch tables. Zero means the system's stored rows are exactly as they
+	// were, so nothing derived from them needs rebuilding.
+	LibraryRowsChanged int64
 	// SystemKnown is false when the system has no DB row and nothing was staged,
 	// meaning the reconcile was a no-op and no Systems row was created.
 	SystemKnown bool
@@ -1834,6 +1838,12 @@ type MediaDBI interface {
 	GetScrapeFingerprint(ctx context.Context, scraperID, systemID string) (string, error)
 	// SetScrapeFingerprint records the state a scraper completed a system in.
 	SetScrapeFingerprint(ctx context.Context, scraperID, systemID, fingerprint string) error
+	// TouchLastGenerated records that an index completed without changing
+	// the library, moving only the timestamp.
+	TouchLastGenerated() error
+	// IndexCachesMissing names the first thing an index that changed nothing
+	// would still have to rebuild at its end, or "" when there is nothing.
+	IndexCachesMissing(ctx context.Context) string
 	// ScanMarker returns the record the scanner stored for a system when it
 	// last reconciled it, or "" when it has stored none.
 	ScanMarker(ctx context.Context, systemID string) (string, error)

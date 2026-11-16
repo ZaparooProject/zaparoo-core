@@ -610,9 +610,15 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	}()
 	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
 
+	// libraryRows counts rows written outside the scratch tables. The
+	// "capture" steps only note which titles to revisit.
+	var libraryRows int64
 	execStep := func(step, query string, args ...any) (int64, error) {
 		stepStart := clock.Now()
 		affected, execErr := scanReconcileExec(ctx, db, clock, systemID, step, query, args...)
+		if !strings.HasPrefix(step, "capture") {
+			libraryRows += affected
+		}
 		recordStep(step, clock.Since(stepStart))
 		if execErr != nil || opts.Yield == nil {
 			return affected, execErr
@@ -1162,6 +1168,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	recordStep("clear scan stage", clock.Since(clearStart))
 	if clearErr != nil {
 		return stats, clearErr
+	}
+	// The chunked steps report through their own counters, and a system
+	// with links always runs the link sync, which this does not measure.
+	stats.LibraryRowsChanged = libraryRows + stats.MediaUpserted + stats.MediaMissing + stats.TouchedTitles
+	if hasLinks || freshSystem {
+		stats.LibraryRowsChanged++
 	}
 	return stats, nil
 }

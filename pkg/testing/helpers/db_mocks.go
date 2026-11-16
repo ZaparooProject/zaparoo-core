@@ -3907,6 +3907,22 @@ func (m *MockMediaDBI) SetScrapeFingerprint(ctx context.Context, scraperID, syst
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) TouchLastGenerated() error {
+	if !m.hasExpectation("TouchLastGenerated") {
+		return nil
+	}
+	args := m.Called()
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) IndexCachesMissing(ctx context.Context) string {
+	if !m.hasExpectation("IndexCachesMissing") {
+		return "not checked"
+	}
+	args := m.Called(ctx)
+	return args.String(0)
+}
+
 func (m *MockMediaDBI) ScanMarker(ctx context.Context, systemID string) (string, error) {
 	if !m.hasExpectation("ScanMarker") {
 		return "", nil

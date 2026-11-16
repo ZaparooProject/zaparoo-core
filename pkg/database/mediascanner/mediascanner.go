@@ -1761,6 +1761,9 @@ func NewNamesIndexWithSources(
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
 	// are called for every system, fixing the stale-state gaps that existed in
 	// the previous loop 2 and loop 3.
+	// Set once any system's reconcile writes a library row. A run that never
+	// does leaves the library exactly as the caches were built from it.
+	runChanged := false
 	for _, sys := range sortedSystems {
 		// Starts the iteration, not the collect phase: the pauser wait, status
 		// update, slug cache drop and scan-stage clear below all cost real time
@@ -2267,6 +2270,9 @@ func NewNamesIndexWithSources(
 				Int64("mediaLinksDeleted", reconcileStats.MediaLinksDeleted).
 				Int64("touchedTitles", reconcileStats.TouchedTitles).
 				Msg("reconciled staged system")
+			if reconcileStats.LibraryRowsChanged > 0 {
+				runChanged = true
+			}
 			// Record what this reconcile was derived from, in the same
 			// transaction as its rows. A system that still has files to
 			// identify keeps none, so the next index reads them again.
@@ -2472,7 +2478,24 @@ func NewNamesIndexWithSources(
 	// Mark database as complete and ready for use. UpdateLastGenerated clears
 	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
 	// population must happen after this call.
-	updateErr := db.UpdateLastGenerated()
+	//
+	// A run that changed no library row, on a database whose caches are all
+	// present and current, only moves the timestamp: rebuilding them cost
+	// about four minutes of an unchanged rescan on the MiSTer test device.
+	unchangedRun := false
+	if !runChanged {
+		missing := db.IndexCachesMissing(ctx)
+		unchangedRun = missing == ""
+		if !unchangedRun {
+			log.Info().Str("missing", missing).Msg("media index unchanged, but caches need rebuilding")
+		}
+	}
+	var updateErr error
+	if unchangedRun {
+		updateErr = db.TouchLastGenerated()
+	} else {
+		updateErr = db.UpdateLastGenerated()
+	}
 	if updateErr != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", updateErr)
 	}
@@ -2491,6 +2514,14 @@ func NewNamesIndexWithSources(
 		}
 	} else {
 		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
+		if unchangedRun && applied > 0 {
+			// User data was written onto the library after all, so the
+			// caches that show it have to be rebuilt in the usual way.
+			unchangedRun = false
+			if lateErr := db.UpdateLastGenerated(); lateErr != nil {
+				return 0, fmt.Errorf("failed to update last generated timestamp: %w", lateErr)
+			}
+		}
 	}
 	// Hidden folders are projected whole, so one already in line writes nothing.
 	if syncErr := database.SyncHiddenDirectories(ctx, fdb.UserDB, db); syncErr != nil {
@@ -2549,99 +2580,103 @@ func NewNamesIndexWithSources(
 	// persisted per-system SQL cache for the indexed systems, refresh in-memory slug
 	// coverage for them, and rebuild the in-memory tag cache from the SystemTagsCache
 	// table so first-entry requests for those systems stay warm too.
-	t0 = time.Now()
-	if selectiveRun {
-		if cacheErr := bestEffortMaintenanceError(
-			db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs),
-			"failed to populate system tags cache for indexed systems",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().
-			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(indexedSystemDefs)).
-			Msg("PopulateSystemTagsCacheForSystems complete")
-		logPhaseMetrics("populate_system_tags_cache")
-
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildTagCache(), "failed to rebuild tag cache after selective indexing",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
-		logPhaseMetrics("rebuild_tag_cache")
-
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems),
-			"failed to refresh slug search cache for indexed systems",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().
-			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(indexedSystems)).
-			Msg("RefreshSlugSearchCacheForSystems complete")
-		logPhaseMetrics("refresh_slug_search_cache")
+	if unchangedRun {
+		log.Info().Msg("media index unchanged, caches kept as they are")
 	} else {
-		if cacheErr := bestEffortMaintenanceError(
-			db.PopulateSystemTagsCache(ctx), "failed to populate system tags cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
-		logPhaseMetrics("populate_system_tags_cache")
-
 		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildSlugSearchCache(), "failed to rebuild slug search cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
-		logPhaseMetrics("rebuild_slug_search_cache")
+		if selectiveRun {
+			if cacheErr := bestEffortMaintenanceError(
+				db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs),
+				"failed to populate system tags cache for indexed systems",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().
+				Dur("elapsed", time.Since(t0)).
+				Int("systems", len(indexedSystemDefs)).
+				Msg("PopulateSystemTagsCacheForSystems complete")
+			logPhaseMetrics("populate_system_tags_cache")
 
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildTagCache(), "failed to rebuild tag cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
-		logPhaseMetrics("rebuild_tag_cache")
-	}
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildTagCache(), "failed to rebuild tag cache after selective indexing",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+			logPhaseMetrics("rebuild_tag_cache")
 
-	// Bump the index generation counter so persisted cache files written
-	// below carry the new value. Boot-time loads compare this against the
-	// DB to detect stale cache files from a previous run.
-	_, bumpErr := db.BumpIndexGeneration()
-	if maintenanceErr := bestEffortMaintenanceError(
-		bumpErr, "failed to bump index generation",
-	); maintenanceErr != nil {
-		return 0, maintenanceErr
-	}
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems),
+				"failed to refresh slug search cache for indexed systems",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().
+				Dur("elapsed", time.Since(t0)).
+				Int("systems", len(indexedSystems)).
+				Msg("RefreshSlugSearchCacheForSystems complete")
+			logPhaseMetrics("refresh_slug_search_cache")
+		} else {
+			if cacheErr := bestEffortMaintenanceError(
+				db.PopulateSystemTagsCache(ctx), "failed to populate system tags cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+			logPhaseMetrics("populate_system_tags_cache")
 
-	// Persist the rebuilt in-memory caches to disk so a subsequent cold
-	// boot can skip the SQL rebuild path. Best-effort: a write failure
-	// just means next boot pays the rebuild cost, no correctness impact.
-	// Skip if the bump failed: the persisted file would embed a generation
-	// the DB doesn't agree with, and the next boot would load it as fresh.
-	if bumpErr != nil {
-		log.Warn().Msg("skipping cache persist because index generation bump failed")
-	} else {
-		if persistErr := bestEffortMaintenanceError(
-			db.PersistTagCache(), "failed to persist tag cache to disk",
-		); persistErr != nil {
-			return 0, persistErr
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildSlugSearchCache(), "failed to rebuild slug search cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+			logPhaseMetrics("rebuild_slug_search_cache")
+
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildTagCache(), "failed to rebuild tag cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+			logPhaseMetrics("rebuild_tag_cache")
 		}
-		if persistErr := bestEffortMaintenanceError(
-			db.PersistSlugSearchCache(), "failed to persist slug search cache to disk",
-		); persistErr != nil {
-			return 0, persistErr
+
+		// Bump the index generation counter so persisted cache files written
+		// below carry the new value. Boot-time loads compare this against the
+		// DB to detect stale cache files from a previous run.
+		_, bumpErr := db.BumpIndexGeneration()
+		if maintenanceErr := bestEffortMaintenanceError(
+			bumpErr, "failed to bump index generation",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
 		}
+
+		// Persist the rebuilt in-memory caches to disk so a subsequent cold
+		// boot can skip the SQL rebuild path. Best-effort: a write failure
+		// just means next boot pays the rebuild cost, no correctness impact.
+		// Skip if the bump failed: the persisted file would embed a generation
+		// the DB doesn't agree with, and the next boot would load it as fresh.
+		if bumpErr != nil {
+			log.Warn().Msg("skipping cache persist because index generation bump failed")
+		} else {
+			if persistErr := bestEffortMaintenanceError(
+				db.PersistTagCache(), "failed to persist tag cache to disk",
+			); persistErr != nil {
+				return 0, persistErr
+			}
+			if persistErr := bestEffortMaintenanceError(
+				db.PersistSlugSearchCache(), "failed to persist slug search cache to disk",
+			); persistErr != nil {
+				return 0, persistErr
+			}
+		}
+		logPhaseMetrics("persist_caches")
 	}
-	logPhaseMetrics("persist_caches")
 
 	// Clear resume metadata and prepare background optimization before publishing
 	// Completed. Completed is the final database write, so no later maintenance
@@ -2674,13 +2709,17 @@ func NewNamesIndexWithSources(
 		return 0, setErr
 	}
 	if cacheErr := bestEffortMaintenanceError(
-		db.InvalidateCountCache(), "failed to invalidate media count cache after indexing",
+		invalidateCountCacheUnlessUnchanged(db, unchangedRun), "failed to invalidate media count cache after indexing",
 	); cacheErr != nil {
 		return 0, cacheErr
 	}
 
 	// Background optimization handles cache population and WAL housekeeping.
-	if optimizationErr := db.SetOptimizationStatus(mediadb.IndexingStatusPending); optimizationErr != nil {
+	// Background optimization rebuilds what a change to the library made
+	// stale, so an unchanged run leaves its status where it was.
+	if unchangedRun {
+		log.Debug().Msg("media index unchanged, background optimization not scheduled")
+	} else if optimizationErr := db.SetOptimizationStatus(mediadb.IndexingStatusPending); optimizationErr != nil {
 		return 0, fmt.Errorf("failed to set optimization status to pending: %w", optimizationErr)
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -2715,4 +2754,14 @@ func NewNamesIndexWithSources(
 // unreachable, which is the user's setup rather than a Core fault.
 func scannerSourceUnavailable(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, platforms.ErrScannerSourceUnreachable)
+}
+
+// invalidateCountCacheUnlessUnchanged drops the cached media counts after an
+// index, except when the index changed nothing they count.
+func invalidateCountCacheUnlessUnchanged(db database.MediaDBI, unchanged bool) error {
+	if unchanged {
+		return nil
+	}
+	//nolint:wrapcheck // the caller adds the context
+	return db.InvalidateCountCache()
 }
