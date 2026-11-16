@@ -240,6 +240,7 @@ type MediaDB struct {
 	batchInsertScanProperty *BatchInserter
 	batchInsertScanSource   *BatchInserter
 	batchInsertScanLink     *BatchInserter
+	batchInsertScanProducer *BatchInserter
 	dbPath                  string
 	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
@@ -2709,6 +2710,13 @@ func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 		}
 		db.batchInsertScanLink = nil
 	}
+	if db.batchInsertScanProducer != nil {
+		if closeErr := db.batchInsertScanProducer.finish(flush); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanProducer")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanProducer: %w", closeErr))
+		}
+		db.batchInsertScanProducer = nil
+	}
 
 	return errors.Join(closeErrs...)
 }
@@ -2741,6 +2749,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 		db.batchInsertScanProperty,
 		db.batchInsertScanSource,
 		db.batchInsertScanLink,
+		db.batchInsertScanProducer,
 	} {
 		if bi == nil {
 			continue
@@ -2805,6 +2814,24 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 		}
 		if err := db.batchInsertScanLink.Add(media.Path, media.LinkTarget); err != nil {
 			return fmt.Errorf("failed to stage scanned media link %s: %w", media.Path, err)
+		}
+	}
+	for _, producer := range media.Producers {
+		if producer == "" {
+			continue
+		}
+		// Created on first use, like the link inserter, so callers that
+		// stage without producers hold no buffer for them.
+		if db.batchInsertScanProducer == nil {
+			inserter, err := NewBatchInserterWithOptions(db.ctx, db.tx, "ScanStageProducers",
+				[]string{"Path", "ScannerID"}, db.batchSize, true)
+			if err != nil {
+				return fmt.Errorf("failed to create batch inserter for scan stage producers: %w", err)
+			}
+			db.batchInsertScanProducer = inserter
+		}
+		if err := db.batchInsertScanProducer.Add(media.Path, producer); err != nil {
+			return fmt.Errorf("failed to stage scanned media producer %s: %w", media.Path, err)
 		}
 	}
 	return nil

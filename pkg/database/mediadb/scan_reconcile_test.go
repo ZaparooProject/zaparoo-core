@@ -33,12 +33,14 @@ import (
 	"errors"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
@@ -749,4 +751,224 @@ func TestReconcileStagedSystem_ScraperMediaTagsSurviveReindex(t *testing.T) {
 			assert.Equal(t, []string{"jp"}, regions())
 		})
 	}
+}
+
+// producerScan is one staged path and the sources that reported it.
+type producerScan struct {
+	source    *platforms.MediaSource
+	path      string
+	producers []string
+}
+
+func indexWithProducers(
+	t *testing.T, db *mediadb.MediaDB, systemID string, failed []string, scans ...producerScan,
+) database.ScanReconcileStats {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, mediascanner.SeedCanonicalTags(ctx, db))
+	require.NoError(t, db.BeginTransaction(true))
+	require.NoError(t, db.ClearScanStage())
+	for _, scan := range scans {
+		require.NoError(t, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
+			DB: db, SystemID: systemID, Path: scan.path, Producers: scan.producers,
+			Source: scan.source, NoExt: strings.Contains(scan.path, "://"),
+		}))
+	}
+	stats, err := db.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{FailedProducers: failed})
+	require.NoError(t, err)
+	require.NoError(t, db.CommitTransaction())
+	return stats
+}
+
+func countMediaProducers(t *testing.T, db *mediadb.MediaDB) int {
+	t.Helper()
+	var count int
+	require.NoError(t, db.UnsafeGetSQLDb().QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM MediaProducers").Scan(&count))
+	return count
+}
+
+const (
+	testWalk     = "core:filesystem"
+	testPlaynite = "Playnite"
+	testRetroBat = "RetroBat"
+)
+
+// TestReconcileStagedSystem_FailedProducerProtectsOnlyItsMedia is the #1815
+// regression: a scanner that fails must keep only the media it reported, so a
+// file the walk no longer finds is still flagged missing.
+func TestReconcileStagedSystem_FailedProducerProtectsOnlyItsMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	kept := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "NES", "Kept.nes"))
+	deleted := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "NES", "Deleted.nes"))
+	frontend := "playnite://1234/Frontend Game"
+	indexWithProducers(t, mediaDB, "NES", nil,
+		producerScan{path: kept, producers: []string{testWalk}},
+		producerScan{path: deleted, producers: []string{testWalk}},
+		producerScan{path: frontend, producers: []string{testPlaynite}},
+	)
+	assert.Equal(t, 3, countMediaProducers(t, mediaDB))
+
+	stats := indexWithProducers(t, mediaDB, "NES", []string{testPlaynite},
+		producerScan{path: kept, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(1), stats.MediaMissing)
+	byPath := mediaDBIDsBySystem(t, mediaDB, "NES")
+	assert.False(t, byPath[kept].IsMissing)
+	assert.True(t, byPath[deleted].IsMissing, "the walk succeeded, so its absent file is gone")
+	assert.False(t, byPath[frontend].IsMissing, "the failed scanner's media must keep its state")
+
+	// Once the scanner works again and no longer reports it, it is gone.
+	stats = indexWithProducers(t, mediaDB, "NES", nil,
+		producerScan{path: kept, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(1), stats.MediaMissing)
+	assert.True(t, mediaDBIDsBySystem(t, mediaDB, "NES")[frontend].IsMissing)
+}
+
+// TestReconcileStagedSystem_SharedMediaProtectedByAnyFailedProducer covers a
+// file two sources report, such as a ROM both the walk and RetroBat's
+// gamelist list. Either one failing means its absence proves nothing.
+func TestReconcileStagedSystem_SharedMediaProtectedByAnyFailedProducer(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	other := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other.sfc"))
+	shared := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Shared.sfc"))
+	indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: other, producers: []string{testWalk}},
+		producerScan{path: shared, producers: []string{testWalk, testRetroBat}},
+	)
+
+	stats := indexWithProducers(t, mediaDB, "SNES", []string{testRetroBat},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(0), stats.MediaMissing)
+	assert.False(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[shared].IsMissing)
+
+	stats = indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(1), stats.MediaMissing)
+}
+
+// TestReconcileStagedSystem_UntrackedMediaProtectedWhileAProducerFails covers
+// media indexed before producers were recorded. Nothing says which source it
+// came from, so any failure keeps it, as every failure did before.
+func TestReconcileStagedSystem_UntrackedMediaProtectedWhileAProducerFails(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	fileA := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game A.sfc"))
+	fileB := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game B.sfc"))
+	scantest.IndexMediaPaths(t, mediaDB, "SNES", fileA, fileB)
+	require.Zero(t, countMediaProducers(t, mediaDB))
+
+	stats := indexWithProducers(t, mediaDB, "SNES", []string{testPlaynite},
+		producerScan{path: fileA, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(0), stats.MediaMissing)
+	assert.False(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[fileB].IsMissing)
+
+	stats = indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: fileA, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(1), stats.MediaMissing)
+}
+
+// TestReconcileStagedSystem_RescanReplacesProducers checks a row's producers
+// follow the latest scan that staged it, so a source that stopped reporting a
+// file no longer protects it.
+func TestReconcileStagedSystem_RescanReplacesProducers(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	game := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	other := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other.sfc"))
+	indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: game, producers: []string{testWalk, testRetroBat}},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: game, producers: []string{testWalk}},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, 2, countMediaProducers(t, mediaDB))
+
+	stats := indexWithProducers(t, mediaDB, "SNES", []string{testRetroBat},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(1), stats.MediaMissing)
+	assert.True(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[game].IsMissing)
+}
+
+// TestReconcileStagedSystem_FailedProducerKeepsMediaSources checks source
+// provenance follows the same rule as the missing flag: the failed scanner's
+// rows keep theirs until a working scan drops them.
+func TestReconcileStagedSystem_FailedProducerKeepsMediaSources(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	root := filepath.Join(t.TempDir(), "games")
+	frontend := "playnite://1234/Frontend Game"
+	source := &platforms.MediaSource{
+		Path: filepath.Join(root, "Frontend Game"), Root: root, Kind: platforms.MediaSourceDirectory,
+	}
+	walked := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "PC", "Walked.exe"))
+	indexWithProducers(t, mediaDB, "PC", nil,
+		producerScan{path: walked, producers: []string{testWalk}},
+		producerScan{path: frontend, producers: []string{testPlaynite}, source: source},
+	)
+	rows, err := mediaDB.GetMediaSourcesForScrape(ctx, "PC", nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	indexWithProducers(t, mediaDB, "PC", []string{testPlaynite},
+		producerScan{path: walked, producers: []string{testWalk}},
+	)
+	rows, err = mediaDB.GetMediaSourcesForScrape(ctx, "PC", nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "the failed scanner's media keeps its source provenance")
+
+	indexWithProducers(t, mediaDB, "PC", nil,
+		producerScan{path: walked, producers: []string{testWalk}},
+	)
+	rows, err = mediaDB.GetMediaSourcesForScrape(ctx, "PC", nil)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+// TestMediaProducers_RemovedWithTheirMedia checks producer rows do not outlive
+// their media through orphan cleanup or truncation, since media DBIDs are
+// reused.
+func TestMediaProducers_RemovedWithTheirMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	kept := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "NES", "Kept.nes"))
+	gone := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "NES", "Gone.nes"))
+	indexWithProducers(t, mediaDB, "NES", nil,
+		producerScan{path: kept, producers: []string{testWalk}},
+		producerScan{path: gone, producers: []string{testWalk, testRetroBat}},
+	)
+	indexWithProducers(t, mediaDB, "NES", nil,
+		producerScan{path: kept, producers: []string{testWalk}},
+	)
+	require.Equal(t, 3, countMediaProducers(t, mediaDB))
+
+	_, err := mediaDB.CleanMediaOrphans(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, countMediaProducers(t, mediaDB))
+
+	require.NoError(t, mediaDB.Truncate())
+	assert.Zero(t, countMediaProducers(t, mediaDB))
 }

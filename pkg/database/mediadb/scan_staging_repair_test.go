@@ -75,7 +75,7 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil)
+	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, scanFlagMissingBatchSize+1, affected)
 

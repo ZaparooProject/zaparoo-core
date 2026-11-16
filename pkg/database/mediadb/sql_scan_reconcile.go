@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,8 +128,8 @@ const scanScratchSchema = "scan"
 
 // scanStagingTables are the scanner's scratch tables, children first.
 var scanStagingTables = []string{
-	"ScanStageLinks", "ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage",
-	"ScanTouchedTitles",
+	"ScanStageLinks", "ScanStageSources", "ScanStageProducers", "ScanStageProperties", "ScanStageTags",
+	"ScanStage", "ScanTouchedTitles",
 }
 
 // scanScratchQueryable marks a connection that has the scratch database
@@ -200,6 +201,11 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageLinks (
 			Path       TEXT PRIMARY KEY,
 			TargetPath TEXT NOT NULL
+		) WITHOUT ROWID`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageProducers (
+			Path      TEXT NOT NULL,
+			ScannerID TEXT NOT NULL,
+			PRIMARY KEY (Path, ScannerID)
 		) WITHOUT ROWID`,
 		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
@@ -298,18 +304,50 @@ type chunkedStepTiming struct {
 	pacing time.Duration
 }
 
+// scanProducerJudgeable returns a condition on the Media alias m, and its
+// args, that holds when the row's absence from this scan can be trusted: no
+// producer it was last reported by failed. A row with no recorded producers
+// was indexed before producers were tracked, so nothing says which source it
+// came from; it is only judged when no producer failed at all. With no failed
+// producers the condition is empty and the caller's statement is unchanged.
+func scanProducerJudgeable(failed []string) (cond string, args []any) {
+	if len(failed) == 0 {
+		return "", nil
+	}
+	ids := slices.Clone(failed)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	args = make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return `
+		AND EXISTS (SELECT 1 FROM MediaProducers p WHERE p.MediaDBID = m.DBID)
+		AND NOT EXISTS (
+			SELECT 1 FROM MediaProducers p
+			JOIN MediaScanners sc ON sc.DBID = p.ScannerDBID
+			WHERE p.MediaDBID = m.DBID AND sc.ScannerID IN (` + prepareVariadic("?", ",", len(ids)) + `)
+		)`, args
+}
+
 func sqlFlagMissingMedia(
 	ctx context.Context,
 	db sqlQueryable,
 	clock clockwork.Clock,
 	systemID string,
 	systemDBID int64,
+	failedProducers []string,
 	yield func() error,
 ) (int64, chunkedStepTiming, error) {
 	const step = "flag missing media"
 	totalStart := clock.Now()
 	totalAffected := int64(0)
 	var timing chunkedStepTiming
+	judgeable, judgeableArgs := scanProducerJudgeable(failedProducers)
+	args := make([]any, 0, len(judgeableArgs)+2)
+	args = append(args, systemDBID)
+	args = append(args, judgeableArgs...)
+	args = append(args, scanFlagMissingBatchSize)
 	for {
 		if err := ctx.Err(); err != nil {
 			return totalAffected, timing, fmt.Errorf("scan reconcile cancelled before %s: %w", step, err)
@@ -320,11 +358,11 @@ func sqlFlagMissingMedia(
 				SELECT m.DBID
 				FROM Media m
 				WHERE m.SystemDBID = ? AND m.IsMissing = 0
-				  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)
+				  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)`+judgeable+`
 				LIMIT ?
 			)
 			UPDATE Media SET IsMissing = 1
-			WHERE DBID IN (SELECT DBID FROM missing)`, systemDBID, scanFlagMissingBatchSize)
+			WHERE DBID IN (SELECT DBID FROM missing)`, args...)
 		chunkElapsed := clock.Since(chunkStart)
 		if err != nil {
 			log.Warn().
@@ -553,7 +591,10 @@ func sqlResolveScanSystem(ctx context.Context, db sqlQueryable, systemID string)
 //
 // With opts.IncompleteScan, step 3 skips the missing flags (and step 2 skips
 // the newly-missing capture): the staged set is known to be a subset of the
-// library, so absence from it is not evidence a file is gone.
+// library, so absence from it is not evidence a file is gone. With
+// opts.FailedProducers, the same steps skip only the rows a failed producer
+// reported (see scanProducerJudgeable); step 3 then records the producers of
+// every staged row for the next scan to judge by.
 func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequence
 	ctx context.Context, db sqlQueryable, clock clockwork.Clock, systemID string, opts database.ScanReconcileOpts,
 ) (database.ScanReconcileStats, error) {
@@ -608,7 +649,9 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 				Msg("scan reconcile step timings")
 		}
 	}()
-	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
+	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).
+		Strs("failedProducers", opts.FailedProducers).Msg("scan reconcile started")
+	judgeable, judgeableArgs := scanProducerJudgeable(opts.FailedProducers)
 
 	// libraryRows counts rows written outside the scratch tables. The
 	// "capture" steps only note which titles to revisit.
@@ -790,8 +833,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
 			SELECT m.MediaTitleDBID FROM Media m
 			WHERE m.SystemDBID = ? AND m.IsMissing = 0
-			  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)`,
-			args: []any{systemDBID},
+			  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)` + judgeable,
+			args: append([]any{systemDBID}, judgeableArgs...),
 		})
 	}
 	for _, capture := range preUpsertCaptures {
@@ -832,6 +875,10 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		   OR MediaSources.SourceGroup IS NOT excluded.SourceGroup`, systemDBID); err != nil {
 		return stats, err
 	}
+	// Judged against the producers recorded before this scan, which is why
+	// this runs before "replace media producers": a row a failed producer
+	// reported keeps its provenance even when another source staged it
+	// without one.
 	if !opts.IncompleteScan {
 		if _, err = execStep("delete stale media sources", `
 			DELETE FROM MediaSources
@@ -840,8 +887,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 				WHERE m.SystemDBID = ?
 				  AND NOT EXISTS (
 					SELECT 1 FROM ScanStageSources ss WHERE ss.Path = m.Path
-				  )
-			)`, systemDBID); err != nil {
+				  )`+judgeable+`
+			)`, append([]any{systemDBID}, judgeableArgs...)...); err != nil {
 			return stats, err
 		}
 	}
@@ -874,12 +921,50 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		flagMissingStart := clock.Now()
 		var flagMissingTiming chunkedStepTiming
 		stats.MediaMissing, flagMissingTiming, err = sqlFlagMissingMedia(
-			ctx, db, clock, systemID, systemDBID, opts.Yield,
+			ctx, db, clock, systemID, systemDBID, opts.FailedProducers, opts.Yield,
 		)
 		recordChunkedStep("flag missing media", clock.Since(flagMissingStart), flagMissingTiming)
 		if err != nil {
 			return stats, err
 		}
+	}
+
+	// Record which sources reported each staged row, replacing what an
+	// earlier scan recorded for it. Rows absent from this scan keep their
+	// producers, so a later scan can still tell which source to wait for.
+	if _, err = execStep("insert media scanners", `
+		INSERT OR IGNORE INTO MediaScanners (ScannerID)
+		SELECT DISTINCT ScannerID FROM ScanStageProducers`); err != nil {
+		return stats, err
+	}
+	// A fresh system owns no Media rows from before this reconcile, so none
+	// has recorded producers to replace. Both producer statements CROSS JOIN
+	// to pin the stage as the outer loop; left to the planner they walk every
+	// Media row of the system, which costs the whole system per rescan.
+	if !freshSystem {
+		if _, err = execStep("delete stale media producers", `
+			DELETE FROM MediaProducers
+			WHERE (MediaDBID, ScannerDBID) IN (
+				SELECT p.MediaDBID, p.ScannerDBID
+				FROM ScanStage s
+				CROSS JOIN Media m ON m.SystemDBID = ? AND m.Path = s.Path
+				CROSS JOIN MediaProducers p ON p.MediaDBID = m.DBID
+				WHERE NOT EXISTS (
+					SELECT 1 FROM ScanStageProducers sp
+					JOIN MediaScanners sc ON sc.ScannerID = sp.ScannerID
+					WHERE sp.Path = s.Path AND sc.DBID = p.ScannerDBID
+				)
+			)`, systemDBID); err != nil {
+			return stats, err
+		}
+	}
+	if _, err = execStep("insert media producers", `
+		INSERT OR IGNORE INTO MediaProducers (MediaDBID, ScannerDBID)
+		SELECT m.DBID, sc.DBID
+		FROM ScanStageProducers sp
+		CROSS JOIN Media m ON m.SystemDBID = ? AND m.Path = sp.Path
+		CROSS JOIN MediaScanners sc ON sc.ScannerID = sp.ScannerID`, systemDBID); err != nil {
+		return stats, err
 	}
 
 	// Create Tags rows for staged values of the types that are not closed

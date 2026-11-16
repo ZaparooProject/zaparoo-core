@@ -87,7 +87,9 @@ type StageMediaPathParams struct {
 	// scanner reads such a file again on every index.
 	GameIDUnresolved *int
 	PrefixPolicy     browseprefix.Policy
-	NoExt            bool
+	// Producers names the scan sources that reported this path.
+	Producers []string
+	NoExt     bool
 }
 
 // StageMediaPath parses one scanned file into its media fragments and appends
@@ -133,6 +135,7 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		Tags:          stagedTagsFromFragments(&pf, params.Config),
 		Properties:    properties,
 		Source:        source,
+		Producers:     params.Producers,
 	}
 	if params.LinkTarget != "" {
 		staged.LinkTarget = pathutil.CanonicalMediaPath(params.LinkTarget)

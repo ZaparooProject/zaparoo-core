@@ -1378,7 +1378,12 @@ type ScanStagedMedia struct {
 	// LinkTarget is the canonical path of the media this row is a symlink
 	// alias of. Reconcile links the two so the row follows its target's
 	// scraped data.
-	LinkTarget    string
+	LinkTarget string
+	// Producers names the scan sources that reported this path (the
+	// filesystem walk, a launcher scanner, platform virtual media). Reconcile
+	// records them so a later scan where one of them fails protects only the
+	// rows it reported.
+	Producers     []string
 	Tags          []ScanStagedTag
 	Properties    []ScanStagedProperty
 	SlugLength    int
@@ -1392,6 +1397,12 @@ type ScanReconcileOpts struct {
 	// updates. Background indexers use it for cooperative pacing; nil preserves
 	// unpaced callers such as foreground maintenance and tests.
 	Yield func() error
+	// FailedProducers names scan sources that failed for this system. Media
+	// absent from the stage keep their missing state when any of their
+	// recorded producers failed, or when they have no recorded producers.
+	// Media whose producers all succeeded are judged normally. Ignored when
+	// IncompleteScan is set.
+	FailedProducers []string
 	// IncompleteScan means file collection for this system hit errors (an
 	// unreadable path, a failed launcher scanner), so the staged set may be a
 	// subset of what actually exists. Staged files are still upserted and

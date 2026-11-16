@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -190,6 +191,50 @@ func configureIndexingPragmas(db indexingPragmaDB) func() {
 // reconcile-volume commits. Production now commits at every system boundary;
 // only the file-limit path can still commit mid-system.
 var maxReconcileRowsPerTransaction int64 = 50000
+
+// Producer IDs for the sources that are not launcher scanners. Launcher
+// scanners use their launcher ID. The prefix keeps them apart from any
+// launcher ID.
+const (
+	scanProducerFilesystem  = "core:filesystem"
+	scanProducerLaunchables = "core:launchables"
+)
+
+// scanProducers tracks which sources reported each scan result of one
+// system, keyed by scanResultIdentity so coalesced duplicates share one set.
+type scanProducers map[string][]string
+
+func (p scanProducers) add(files []platforms.ScanResult, producer string) {
+	for i := range files {
+		key := scanResultIdentity(files[i].Path)
+		if !slices.Contains(p[key], producer) {
+			p[key] = append(p[key], producer)
+		}
+	}
+}
+
+// piped returns the producers after a pipeline scanner replaced the result
+// list with out. A result that was already in the list keeps the sources that
+// reported it; a result the scanner added is attributed to the scanner.
+func (p scanProducers) piped(out []platforms.ScanResult, producer string) scanProducers {
+	next := make(scanProducers, len(out))
+	for i := range out {
+		key := scanResultIdentity(out[i].Path)
+		if _, done := next[key]; done {
+			continue
+		}
+		if existing, ok := p[key]; ok {
+			next[key] = existing
+		} else {
+			next[key] = []string{producer}
+		}
+	}
+	return next
+}
+
+func (p scanProducers) of(path string) []string {
+	return p[scanResultIdentity(path)]
+}
 
 func scanResultIdentity(path string) string {
 	if schemeEnd := strings.Index(path, "://"); schemeEnd > 0 {
@@ -1861,12 +1906,14 @@ func NewNamesIndexWithSources(
 		// Per-system setup: the pauser wait, status update, slug cache drop and
 		// scan-stage clear that ran before collection could start.
 		systemSetupDur := collectStart.Sub(systemSetupStart)
-		// Set when any file source for this system errors. The staged set is
-		// then a subset of the library, so the reconcile must not treat
-		// absence from it as evidence media is missing. Starts true when a
+		// Sources that failed for this system. The staged set then lacks what
+		// they would have reported, so the reconcile must not treat absence of
+		// their media as evidence it is gone. Media from sources that
+		// succeeded is still judged. The filesystem starts failed when a
 		// source root this system could use failed to read above.
-		scanIncomplete := sourceScanIncomplete[systemID]
-		filesystemIncomplete := scanIncomplete
+		var failedProducers []string
+		producers := make(scanProducers)
+		filesystemIncomplete := sourceScanIncomplete[systemID]
 		var successfulSources map[string]bool
 		if sourceCollector != nil {
 			successfulSources = make(map[string]bool)
@@ -1903,11 +1950,14 @@ func NewNamesIndexWithSources(
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
-				scanIncomplete = true
 				filesystemIncomplete = true
 				continue
 			}
 			files = append(files, pathFiles...)
+		}
+		producers.add(files, scanProducerFilesystem)
+		if filesystemIncomplete {
+			failedProducers = append(failedProducers, scanProducerFilesystem)
 		}
 		if status.WalkEntries > 0 {
 			status.WalkEntries = 0
@@ -1945,6 +1995,7 @@ func NewNamesIndexWithSources(
 				if scanErr == nil {
 					produced = len(independent)
 					files = append(files, independent...)
+					producers.add(independent, l.ID)
 				}
 			} else {
 				// Pipeline: scanner filters/enriches existing files. Replace the
@@ -1955,10 +2006,11 @@ func NewNamesIndexWithSources(
 				if scanErr == nil {
 					produced = len(piped)
 					files = piped
+					producers = producers.piped(piped, l.ID)
 				}
 			}
 			if scanErr != nil {
-				scanIncomplete = true
+				failedProducers = append(failedProducers, l.ID)
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 				}
@@ -1970,7 +2022,7 @@ func NewNamesIndexWithSources(
 					continue
 				}
 				// Only the platform's exact unavailable result is expected. A joined
-				// failure must remain reportable; keep scanIncomplete set above.
+				// failure must remain reportable; the producer is already failed.
 				if scanErr == platforms.ErrScannerUnavailable { //nolint:errorlint // Do not hide joined I/O failures.
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: optional installation unavailable", l.ID)
 					continue
@@ -1990,7 +2042,7 @@ func NewNamesIndexWithSources(
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", anyScanners[i].ID, systemID)
 			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
-				scanIncomplete = true
+				failedProducers = append(failedProducers, anyScanners[i].ID)
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
 				}
@@ -2011,6 +2063,7 @@ func NewNamesIndexWithSources(
 				continue
 			}
 			files = append(files, results...)
+			producers.add(results, anyScanners[i].ID)
 			if sourceCollector != nil && len(results) > 0 {
 				successfulSources[anyScanners[i].ID] = true
 			}
@@ -2019,6 +2072,7 @@ func NewNamesIndexWithSources(
 		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
 		// rows with zaparoo:// paths, so search, browse, paging, and missing-state
 		// handling stay in one place.
+		launchableStart := len(files)
 		for _, item := range launchables.MediaForSystem(cfg, platform, systemID) {
 			files = append(files, platforms.ScanResult{
 				Path:  item.ZapScript(),
@@ -2026,6 +2080,7 @@ func NewNamesIndexWithSources(
 				NoExt: true,
 			})
 		}
+		producers.add(files[launchableStart:], scanProducerLaunchables)
 
 		files = coalesceScanResults(systemID, files)
 		if sourceCollector != nil {
@@ -2050,7 +2105,7 @@ func NewNamesIndexWithSources(
 		// and is never recorded.
 		walkMarker, markerUsable := "", false
 		storedMarker := ""
-		if !scanIncomplete {
+		if len(failedProducers) == 0 {
 			walkMarker, markerUsable = scanWalkMarker(cfg, files)
 		}
 		if stored, markerErr := db.ScanMarker(ctx, systemID); markerErr != nil {
@@ -2154,6 +2209,7 @@ func NewNamesIndexWithSources(
 				Source:       file.Source,
 				LinkTarget:   file.LinkTarget,
 				NoExt:        file.NoExt,
+				Producers:    producers.of(file.Path),
 
 				GameIDUnresolved: &gameIDUnresolved,
 				GameIDMisses:     discMisses,
@@ -2246,10 +2302,11 @@ func NewNamesIndexWithSources(
 			}
 			batchStarted = true
 		}
-		if scanIncomplete {
+		if len(failedProducers) > 0 {
 			log.Warn().
 				Str("system", systemID).
-				Msg("file collection hit errors; keeping existing missing-media state for this system")
+				Strs("failedSources", failedProducers).
+				Msg("file collection hit errors; keeping missing-media state for media those sources reported")
 		}
 		// WaitForPacing, not Wait: reconcile holds the open write transaction
 		// (see ReconcileStagedSystem), so honoring a full pause here would
@@ -2258,8 +2315,8 @@ func NewNamesIndexWithSources(
 		// statements.
 		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
 			ctx, systemID, database.ScanReconcileOpts{
-				Yield:          func() error { return pauser.WaitForPacing(ctx) },
-				IncompleteScan: scanIncomplete,
+				Yield:           func() error { return pauser.WaitForPacing(ctx) },
+				FailedProducers: failedProducers,
 			},
 		)
 		if reconcileErr != nil {
