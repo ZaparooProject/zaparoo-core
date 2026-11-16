@@ -1087,8 +1087,8 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
-		if isAudioPlaylistTarget(pl, env, &target) {
-			return &audioPlaylistLaunchError{path: target.path}
+		if isPlaylistFileTarget(pl, env, &target) {
+			return &playlistFileLaunchError{path: target.path}
 		}
 		backgroundSlot := false
 		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {

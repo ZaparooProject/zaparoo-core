@@ -884,12 +884,12 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
-	if playlistFile, ok := errors.AsType[*audioPlaylistLaunchError](err); ok {
+	if playlistFile, ok := errors.AsType[*playlistFileLaunchError](err); ok {
 		// The playlist's first item launches from the playlist queue and
 		// takes the launch guard itself, so this command lets it go first.
 		releaseGuard()
-		log.Info().Str("path", playlistFile.path).Msg("playing audio playlist file")
-		res, err = startAudioPlaylistFile(&env, playlistFile.path)
+		log.Info().Str("path", playlistFile.path).Msg("playing playlist file")
+		res, err = startPlaylistFile(pl, &env, playlistFile.path)
 	}
 	if errors.Is(err, errMediaLaunchSkipped) {
 		// A resolved no-op is successful, including when wrapped by random
