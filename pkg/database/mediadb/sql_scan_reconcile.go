@@ -314,20 +314,43 @@ func scanProducerJudgeable(failed []string) (cond string, args []any) {
 	if len(failed) == 0 {
 		return "", nil
 	}
-	ids := slices.Clone(failed)
+	holders, args := scanProducerIDArgs(failed)
+	return `
+		AND EXISTS (SELECT 1 FROM MediaProducers p WHERE p.MediaDBID = m.DBID)
+		AND NOT EXISTS (
+			SELECT 1 FROM MediaProducers p
+			JOIN MediaScanners sc ON sc.DBID = p.ScannerDBID
+			WHERE p.MediaDBID = m.DBID AND sc.ScannerID IN (` + holders + `)
+		)`, args
+}
+
+// scanProducerKeepFailed returns a condition on the MediaProducers alias p,
+// and its args, that spares the links of failed producers when a staged
+// path's producer set is replaced. A failed producer did not report anything
+// this scan, so its absence from a path's staged producers says nothing about
+// whether it still reports that path.
+func scanProducerKeepFailed(failed []string) (cond string, args []any) {
+	if len(failed) == 0 {
+		return "", nil
+	}
+	holders, args := scanProducerIDArgs(failed)
+	return `
+				  AND p.ScannerDBID NOT IN (
+					SELECT DBID FROM MediaScanners WHERE ScannerID IN (` + holders + `)
+				  )`, args
+}
+
+// scanProducerIDArgs deduplicates producer IDs into bind args and their
+// placeholder list.
+func scanProducerIDArgs(ids []string) (holders string, args []any) {
+	ids = slices.Clone(ids)
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	args = make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
-	return `
-		AND EXISTS (SELECT 1 FROM MediaProducers p WHERE p.MediaDBID = m.DBID)
-		AND NOT EXISTS (
-			SELECT 1 FROM MediaProducers p
-			JOIN MediaScanners sc ON sc.DBID = p.ScannerDBID
-			WHERE p.MediaDBID = m.DBID AND sc.ScannerID IN (` + prepareVariadic("?", ",", len(ids)) + `)
-		)`, args
+	return prepareVariadic("?", ",", len(ids)), args
 }
 
 func sqlFlagMissingMedia(
@@ -938,10 +961,13 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, err
 	}
 	// A fresh system owns no Media rows from before this reconcile, so none
-	// has recorded producers to replace. Both producer statements CROSS JOIN
-	// to pin the stage as the outer loop; left to the planner they walk every
-	// Media row of the system, which costs the whole system per rescan.
-	if !freshSystem {
+	// has recorded producers to replace. An incomplete scan stages only part
+	// of what its sources report, so it adds producers but removes none.
+	// Both producer statements CROSS JOIN to pin the stage as the outer loop;
+	// left to the planner they walk every Media row of the system, which costs
+	// the whole system per rescan.
+	if !opts.IncompleteScan && !freshSystem {
+		keepFailed, keepFailedArgs := scanProducerKeepFailed(opts.FailedProducers)
 		if _, err = execStep("delete stale media producers", `
 			DELETE FROM MediaProducers
 			WHERE (MediaDBID, ScannerDBID) IN (
@@ -953,8 +979,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 					SELECT 1 FROM ScanStageProducers sp
 					JOIN MediaScanners sc ON sc.ScannerID = sp.ScannerID
 					WHERE sp.Path = s.Path AND sc.DBID = p.ScannerDBID
-				)
-			)`, systemDBID); err != nil {
+				)`+keepFailed+`
+			)`, append([]any{systemDBID}, keepFailedArgs...)...); err != nil {
 			return stats, err
 		}
 	}

@@ -764,6 +764,13 @@ func indexWithProducers(
 	t *testing.T, db *mediadb.MediaDB, systemID string, failed []string, scans ...producerScan,
 ) database.ScanReconcileStats {
 	t.Helper()
+	return indexWithProducersOpts(t, db, systemID, database.ScanReconcileOpts{FailedProducers: failed}, scans...)
+}
+
+func indexWithProducersOpts(
+	t *testing.T, db *mediadb.MediaDB, systemID string, opts database.ScanReconcileOpts, scans ...producerScan,
+) database.ScanReconcileStats {
+	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, mediascanner.SeedCanonicalTags(ctx, db))
 	require.NoError(t, db.BeginTransaction(true))
@@ -774,7 +781,7 @@ func indexWithProducers(
 			Source: scan.source, NoExt: strings.Contains(scan.path, "://"),
 		}))
 	}
-	stats, err := db.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{FailedProducers: failed})
+	stats, err := db.ReconcileStagedSystem(ctx, systemID, opts)
 	require.NoError(t, err)
 	require.NoError(t, db.CommitTransaction())
 	return stats
@@ -906,6 +913,61 @@ func TestReconcileStagedSystem_RescanReplacesProducers(t *testing.T) {
 	)
 	assert.Equal(t, int64(1), stats.MediaMissing)
 	assert.True(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[game].IsMissing)
+}
+
+// TestReconcileStagedSystem_FailedProducerKeepsLinkOnSharedPath covers a file
+// two sources report while one of them is failing. The working source still
+// stages it, but the failed one reported nothing this scan, so its link must
+// survive. Otherwise a later scan where the working source loses the file
+// would flag it missing while the failed source may still report it.
+func TestReconcileStagedSystem_FailedProducerKeepsLinkOnSharedPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	shared := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Shared.sfc"))
+	other := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other.sfc"))
+	indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: shared, producers: []string{testWalk, testRetroBat}},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	indexWithProducers(t, mediaDB, "SNES", []string{testRetroBat},
+		producerScan{path: shared, producers: []string{testWalk}},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, 3, countMediaProducers(t, mediaDB))
+
+	stats := indexWithProducers(t, mediaDB, "SNES", []string{testRetroBat},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(0), stats.MediaMissing)
+	assert.False(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[shared].IsMissing)
+}
+
+// TestReconcileStagedSystem_IncompleteScanKeepsProducers checks an incremental
+// scan, which stages only part of what its sources report, adds producers but
+// removes none.
+func TestReconcileStagedSystem_IncompleteScanKeepsProducers(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	game := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	other := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other.sfc"))
+	indexWithProducers(t, mediaDB, "SNES", nil,
+		producerScan{path: game, producers: []string{testWalk, testRetroBat}},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	indexWithProducersOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{IncompleteScan: true},
+		producerScan{path: game, producers: []string{testWalk}},
+	)
+	assert.Equal(t, 3, countMediaProducers(t, mediaDB))
+
+	stats := indexWithProducers(t, mediaDB, "SNES", []string{testRetroBat},
+		producerScan{path: other, producers: []string{testWalk}},
+	)
+	assert.Equal(t, int64(0), stats.MediaMissing)
+	assert.False(t, mediaDBIDsBySystem(t, mediaDB, "SNES")[game].IsMissing)
 }
 
 // TestReconcileStagedSystem_FailedProducerKeepsMediaSources checks source
