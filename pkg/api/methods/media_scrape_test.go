@@ -247,6 +247,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 	// Linked rows take the run's results once it finishes, across every
@@ -340,6 +341,7 @@ func TestHandleMediaScrape_LinkSyncFailureFailsRun(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	backgroundOperationDone := make(chan struct{})
 	mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
 		close(backgroundOperationDone)
@@ -408,6 +410,7 @@ func TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount(t *testing.T) {
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 	mockDB.On("RefreshScrapedMediaCounts", assertmock.Anything).Return(nil)
@@ -509,6 +512,7 @@ func TestHandleMediaScrape_PublishesDoneAfterTagRefresh(t *testing.T) {
 				doneBeforeRefresh <- seen
 			}).Return(nil).Once()
 			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			mockDB.On("BackgroundOperationDone").Return()
 			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
@@ -580,6 +584,7 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	// The goroutine clears the running flag (which IsScrapingRunning reads)
 	// before its deferred BackgroundOperationDone unwinds, so polling
 	// IsScrapingRunning is not proof the mock call already landed. Wait on
@@ -698,6 +703,7 @@ func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 			mockDB.On("ClearScrapingOperation").Return(nil).Once()
 			mockDB.On("WALCheckpoint").Return(nil).Once()
 			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			mockDB.On("BackgroundOperationDone").Return()
 			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
@@ -785,6 +791,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
@@ -893,6 +900,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	// Writes before the failure committed, so their tags must still be refreshed.
 	mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
 
@@ -1298,6 +1306,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "resume-scraper", "resume-run").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return().Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
@@ -1359,6 +1368,7 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return().Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "scope-scraper").Return(0, nil)
@@ -1412,6 +1422,7 @@ func TestHandleMediaScrape_AnswersBeforeScraperStartupFinishes(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return().Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "slow-scraper").Return(0, nil)
@@ -1549,6 +1560,7 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	// Startup itself is tracked, even when no producer goroutine is created.
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return().Once()
 	env := makeScrapeEnv(t,
 		map[string]platforms.Scraper{"fail-scraper": failingScraper},
@@ -1737,6 +1749,7 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	db.On("WALCheckpoint").Return(nil).Twice()
 	tracked := false
 	db.On("TrackBackgroundOperation").Run(func(assertmock.Arguments) { tracked = true }).Return().Once()
+	db.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	finished := make(chan struct{})
 	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
 		events = append(events, "done")
@@ -1827,6 +1840,7 @@ func TestScrapeQueueContinuesPastUnavailableJob(t *testing.T) {
 	db.On("WALCheckpoint").Return(nil).Times(3)
 	db.On("GetScrapedMediaCount", assertmock.Anything, assertmock.Anything).Return(0, nil)
 	db.On("TrackBackgroundOperation").Return().Once()
+	db.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	done := make(chan struct{})
 	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(done) }).Return().Once()
 	env := makeScrapeEnv(t, map[string]platforms.Scraper{
@@ -1866,6 +1880,7 @@ func TestMediaScrapeShutdownRetainsResumableWork(t *testing.T) {
 			db.On("ClearScrapeRunMarkers", assertmock.Anything, "test-scraper", assertmock.Anything).Return(nil).Maybe()
 			db.On("WALCheckpoint").Return(nil).Once()
 			db.On("TrackBackgroundOperation").Return().Once()
+			db.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			finished := make(chan struct{})
 			db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(finished) }).Return().Once()
 			db.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
@@ -2010,6 +2025,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(5, nil).Once()
@@ -2096,6 +2112,7 @@ func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fatal-scraper").Return(0, nil)
@@ -2206,6 +2223,7 @@ func TestHandleMediaScrape_ReportsUnreadableSources(t *testing.T) {
 			workerDone := make(chan struct{})
 			mockDB := testhelpers.NewMockMediaDBI()
 			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(workerDone) }).Return()
 			mockDB.On("WALCheckpoint").Return(nil).Once()
 			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "source-scraper").Return(0, nil)
@@ -2422,6 +2440,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "progress-scraper", runIDMatcher).
 		Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
