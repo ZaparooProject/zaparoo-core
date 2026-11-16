@@ -130,6 +130,8 @@ tasks:
             echo "Done: $(ls _build/bench_arm/*.test | wc -l) binaries"'
 
   bench-run:
+    # TMPDIR points at the SD card: /tmp is tmpfs on MiSTer, where database
+    # benchmarks would never pay for a real write.
     desc: Run benchmark binaries on MiSTer (BENCH_OUT=testdata/benchmarks/baseline-mister.txt replaces the baseline)
     vars:
       BENCH_COUNT: '{{default "3" .BENCH_COUNT}}'
@@ -144,7 +146,7 @@ tasks:
         (for bin in _build/bench_arm/*.test; do
           name=$(basename $bin)
           echo "Running $name..." >&2
-          ssh {{.SSH_OPTS}} root@${MISTER_IP} "/media/fat/zaparoo-bench/$name -test.run='^\$' -test.bench='{{.BENCH_PATTERN}}' -test.benchmem -test.count={{.BENCH_COUNT}} -test.timeout={{.BENCH_TIMEOUT}}"
+          ssh {{.SSH_OPTS}} root@${MISTER_IP} "mkdir -p /media/fat/zaparoo-bench/tmp && TMPDIR=/media/fat/zaparoo-bench/tmp /media/fat/zaparoo-bench/$name -test.run='^\$' -test.bench='{{.BENCH_PATTERN}}' -test.benchmem -test.count={{.BENCH_COUNT}} -test.timeout={{.BENCH_TIMEOUT}}"
         done) | grep -E "^(Benchmark.* ns/op|goos:|goarch:|pkg:|cpu:)" | tee {{.BENCH_OUT}}
       - ssh {{.SSH_OPTS}} root@${MISTER_IP} "rm -rf /media/fat/zaparoo-bench"
 

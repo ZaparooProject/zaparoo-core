@@ -67,9 +67,10 @@ type UserDB struct {
 	ctx context.Context
 	// fs overrides the filesystem used to recover an interrupted restore; nil
 	// uses the OS filesystem. Set only by tests to inject failures.
-	fs     afero.Fs
-	sql    database.Conn
-	dbPath string
+	fs       afero.Fs
+	sql      database.Conn
+	dbPath   string
+	mappings enabledMappingsCache
 	// drainTimeout overrides how long closeAndDrain waits; zero uses
 	// connDrainTimeout. Set only by tests to avoid multi-second waits.
 	drainTimeout time.Duration
@@ -178,6 +179,7 @@ func (db *UserDB) Truncate() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
+	defer db.mappings.invalidate()
 	return sqlTruncate(db.ctx, db.sql.Load())
 }
 
