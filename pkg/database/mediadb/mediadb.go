@@ -261,11 +261,14 @@ type MediaDB struct {
 	indexingCacheBoost      atomic.Bool
 	walAutoCheckpointSet    atomic.Bool
 	inTransaction           bool
-	browseCacheDirty        bool
-	utilityTagCacheDirty    bool
-	mediaSearchBoundsDirty  bool
-	scrapeImageChangesAll   bool
-	scrapeTagChangesAll     bool
+	// scanScratch is set while the open transaction's connection has the
+	// scanner's scratch database attached.
+	scanScratch            bool
+	browseCacheDirty       bool
+	utilityTagCacheDirty   bool
+	mediaSearchBoundsDirty bool
+	scrapeImageChangesAll  bool
+	scrapeTagChangesAll    bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -281,9 +284,66 @@ type sqlQueryable interface {
 // conn returns the active transaction if one exists, otherwise the raw pool.
 func (db *MediaDB) conn() sqlQueryable {
 	if db.tx != nil {
+		if db.scanScratch {
+			return scanScratchQueryable{db.tx}
+		}
 		return db.tx
 	}
 	return db.sql.Load()
+}
+
+// scanScratchPath is where the scanner's scratch database lives, or "" when
+// this database has no file of its own to put it beside.
+func (db *MediaDB) scanScratchPath() string {
+	if db.dbPath == "" || strings.Contains(db.dbPath, ":memory:") {
+		return ""
+	}
+	return db.dbPath + ".scan"
+}
+
+// removeScanScratch deletes the scratch database. Nothing in it outlives a
+// system's reconcile, and it runs without a durable journal, so a file left by
+// a crash is not trusted.
+func (db *MediaDB) removeScanScratch() {
+	path := db.scanScratchPath()
+	if path == "" {
+		return
+	}
+	for _, suffix := range []string{"", "-journal"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn().Err(err).Str("path", path+suffix).Msg("failed to remove scanner scratch database")
+		}
+	}
+}
+
+// attachScanScratch attaches the scratch database to conn unless it already
+// is. Pooled connections keep the attachment, so this is one query on reuse.
+func attachScanScratch(ctx context.Context, conn *sql.Conn, path string) error {
+	var attached int
+	err := conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_database_list WHERE name = ?", scanScratchSchema).Scan(&attached)
+	if err != nil {
+		return fmt.Errorf("failed to check for scanner scratch database: %w", err)
+	}
+	if attached > 0 {
+		return nil
+	}
+	if _, err = conn.ExecContext(ctx, "ATTACH DATABASE ? AS "+scanScratchSchema, path); err != nil {
+		return fmt.Errorf("failed to attach scanner scratch database: %w", err)
+	}
+	// The journal stays in memory so a rollback still works; durability does
+	// not matter for a file that is deleted at every start. page_size only
+	// takes effect while the file is still empty.
+	for _, pragma := range []string{
+		fmt.Sprintf("PRAGMA %s.page_size = %d", scanScratchSchema, mediaDBPageSize),
+		"PRAGMA " + scanScratchSchema + ".journal_mode = MEMORY",
+		"PRAGMA " + scanScratchSchema + ".synchronous = OFF",
+	} {
+		if _, err = conn.ExecContext(ctx, pragma); err != nil {
+			return fmt.Errorf("failed to configure scanner scratch database: %w", err)
+		}
+	}
+	return nil
 }
 
 // readConn returns the pool handle for a read that must not wait on the writer.
@@ -602,6 +662,7 @@ func (db *MediaDB) Open() error {
 		}
 	}
 
+	db.removeScanScratch()
 	if !exists {
 		// A file that keeps SQLite's default page size still works, so this
 		// is not worth failing the open over.
@@ -1779,6 +1840,7 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
 	// the reopen below. Close has already rolled back and released any writer connection.
 	db.tx = nil
+	db.scanScratch = false
 	db.txConn = nil
 	db.inTransaction = false
 
@@ -2314,6 +2376,8 @@ func (db *MediaDB) Close() error {
 	closeErr := sqlDB.Close()
 	if closeErr != nil {
 		closeErr = fmt.Errorf("failed to close database: %w", closeErr)
+	} else {
+		db.removeScanScratch()
 	}
 	return errors.Join(transactionErr, closeErr)
 }
@@ -2664,7 +2728,27 @@ func (db *MediaDB) ClearScanStage() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlClearScanStage(db.ctx, db.conn())
+	scratchPath := db.scanScratchPath()
+	if db.tx != nil || scratchPath == "" {
+		return sqlClearScanStage(db.ctx, db.conn())
+	}
+	// Outside a transaction the pool hands out any connection; take one and
+	// attach the scratch database so the clear reaches the staged rows.
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	conn, err := db.sql.Load().Conn(acquireCtx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection to clear scan stage: %w", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to release connection after clearing scan stage")
+		}
+	}()
+	if attachErr := attachScanScratch(db.ctx, conn, scratchPath); attachErr != nil {
+		return attachErr
+	}
+	return sqlClearScanStage(db.ctx, scanScratchQueryable{conn})
 }
 
 // SeedCanonicalTagDefinitions ensures every canonical tag type and value exists,
@@ -2683,6 +2767,7 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 func (db *MediaDB) clearTransactionState() {
 	db.tx = nil
 	db.inTransaction = false
+	db.scanScratch = false
 	db.clearBrowseCacheInvalidation()
 	db.utilityTagCacheDirty = false
 	db.mediaSearchBoundsDirty = false
@@ -2754,6 +2839,18 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		return errors.Join(fmt.Errorf("failed to set writer WAL autocheckpoint: %w", err), cleanupErr)
 	}
 
+	// Staged rows span several transactions of one system, so every batch
+	// transaction has to see the same scratch database: failing here is
+	// better than staging part of a system somewhere else.
+	scanScratch := false
+	if scratchPath := db.scanScratchPath(); batchEnabled && scratchPath != "" {
+		if attachErr := attachScanScratch(db.ctx, conn, scratchPath); attachErr != nil {
+			cleanupErr := db.closeWriterConn(conn)
+			return errors.Join(attachErr, cleanupErr)
+		}
+		scanScratch = true
+	}
+
 	tx, err := conn.BeginTx(db.ctx, nil)
 	if err != nil {
 		cleanupErr := db.closeWriterConn(conn)
@@ -2761,10 +2858,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	}
 	db.tx = tx
 	db.txConn = conn
+	db.scanScratch = scanScratch
 
 	// Use batch inserters if enabled, otherwise use prepared statements
 	if batchEnabled {
-		if ensureErr := sqlEnsureScanStagingTables(db.ctx, tx); ensureErr != nil {
+		if ensureErr := sqlEnsureScanStagingTables(db.ctx, db.conn()); ensureErr != nil {
 			db.rollbackAndLogError()
 			return ensureErr
 		}
@@ -3020,6 +3118,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	// A cleanup failure does not turn an already-successful commit into an
 	// apparent write failure; closeWriterConn discards connections it cannot reset.
 	db.tx = nil
+	db.scanScratch = false
 	db.inTransaction = false
 	if connErr := db.releaseWriterConn(); connErr != nil {
 		log.Warn().Err(connErr).Msg("failed to reset writer connection after commit")
