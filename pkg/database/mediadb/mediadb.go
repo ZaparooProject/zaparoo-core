@@ -316,6 +316,10 @@ func (db *MediaDB) removeScanScratch() {
 	}
 }
 
+// scanScratchCacheSize is the scratch database's page cache, in SQLite's
+// negative-KiB form.
+const scanScratchCacheSize = "-16384"
+
 // attachScanScratch attaches the scratch database to conn unless it already
 // is. Pooled connections keep the attachment, so this is one query on reuse.
 func attachScanScratch(ctx context.Context, conn *sql.Conn, path string) error {
@@ -338,6 +342,12 @@ func attachScanScratch(ctx context.Context, conn *sql.Conn, path string) error {
 		fmt.Sprintf("PRAGMA %s.page_size = %d", scanScratchSchema, mediaDBPageSize),
 		"PRAGMA " + scanScratchSchema + ".journal_mode = MEMORY",
 		"PRAGMA " + scanScratchSchema + ".synchronous = OFF",
+		// An attached database starts with a 2 MiB cache of its own. A batch
+		// of staged rows is several times that, so pages spilled and were
+		// written again and again: staging went from 404 s to 706 s over a
+		// 252,000-file rescan on the MiSTer test device until the cache held
+		// a whole batch.
+		"PRAGMA " + scanScratchSchema + ".cache_size = " + scanScratchCacheSize,
 	} {
 		if _, err = conn.ExecContext(ctx, pragma); err != nil {
 			return fmt.Errorf("failed to configure scanner scratch database: %w", err)
