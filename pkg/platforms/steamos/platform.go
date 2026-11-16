@@ -39,11 +39,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
@@ -511,6 +513,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		jellyfin.NewJellyfinMovieLauncher(),
+		jellyfin.NewJellyfinTVEpisodeLauncher(),
+		jellyfin.NewJellyfinTVShowLauncher(),
+		jellyfin.NewJellyfinSongLauncher(),
+		jellyfin.NewJellyfinAlbumLauncher(),
+		jellyfin.NewJellyfinArtistLauncher(),
+		plex.NewPlexMovieLauncher(),
+		plex.NewPlexTVLauncher(),
+		plex.NewPlexTVShowLauncher(),
+		plex.NewPlexSongLauncher(),
+		plex.NewPlexAlbumLauncher(),
+		plex.NewPlexArtistLauncher(),
 
 		// Steam with Steam Deck optimizations
 		steamLauncher,

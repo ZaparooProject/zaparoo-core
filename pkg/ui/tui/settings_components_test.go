@@ -530,3 +530,21 @@ func TestButtonBar_ChainedMethods(t *testing.T) {
 
 	assert.Len(t, bb.buttons, 3)
 }
+
+func TestTextEditModalWidthFitsLabelAndField(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		label      string
+		fieldWidth int
+	}{
+		{label: "Server address: ", fieldWidth: 48},
+		{label: "PIN: ", fieldWidth: 8},
+		{label: "A rather long label for a field: ", fieldWidth: 30},
+	}
+	for _, tt := range tests {
+		width := textEditModalWidth(tt.label, tt.fieldWidth)
+		inner := width - 2
+		assert.GreaterOrEqual(t, inner, len(tt.label)+tt.fieldWidth, tt.label)
+		assert.GreaterOrEqual(t, width, 32, tt.label)
+	}
+}

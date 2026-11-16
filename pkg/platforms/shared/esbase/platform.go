@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,7 +30,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
@@ -453,6 +456,13 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 		return p.stopKodi(p.cfg, reason)
 	}
 
+	// Media playing on a remote server's client has nothing running here, so
+	// signalling EmulationStation would only disturb its UI.
+	if activeMedia != nil && isRemoteServerLauncher(activeMedia.LauncherID) {
+		p.setActiveMedia(nil)
+		return nil
+	}
+
 	// Nothing active to stop — avoid sending an exit signal to ES, which
 	// interferes with its UI state when nothing is running.
 	p.processMu.RLock()
@@ -589,6 +599,17 @@ func (p *Platform) shouldKeepRunningInstance(cfg *config.Instance, newLauncher *
 	}
 
 	return false
+}
+
+// isRemoteServerLauncher reports a launcher that plays on a media server's
+// own client device rather than on this machine.
+func isRemoteServerLauncher(launcherID string) bool {
+	return slices.Contains([]string{
+		shared.LauncherJellyfinMovie, shared.LauncherJellyfinTVEpisode, shared.LauncherJellyfinTVShow,
+		shared.LauncherJellyfinSong, shared.LauncherJellyfinAlbum, shared.LauncherJellyfinArtist,
+		shared.LauncherPlexMovie, shared.LauncherPlexTVEpisode, shared.LauncherPlexTVShow,
+		shared.LauncherPlexSong, shared.LauncherPlexAlbum, shared.LauncherPlexArtist,
+	}, launcherID)
 }
 
 // isKodiLauncher checks if the given launcher ID is a Kodi launcher
@@ -839,12 +860,13 @@ func (p *Platform) LaunchMedia(
 	// A stop that came while the game was starting overtook this launch. Core
 	// then published no media for the game, so that stop found nothing to
 	// stop and the game would keep running unnoticed.
-	if launchCtx.Err() != nil && !isKodiLauncher(launcher.ID) && !p.hasActiveMedia() {
+	launchedHere := !isKodiLauncher(launcher.ID) && !isRemoteServerLauncher(launcher.ID)
+	if launchCtx.Err() != nil && launchedHere && !p.hasActiveMedia() {
 		p.stopUnpublishedGame()
 	}
 
-	// Delay for non-Kodi launches (ES API needs settling time)
-	if !isKodiLauncher(launcher.ID) {
+	// Delay for launches ES runs itself (ES API needs settling time)
+	if launchedHere {
 		if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
 			log.Debug().Err(settleErr).Msg("stopped while EmulationStation settled after launch")
 		}
@@ -1042,7 +1064,7 @@ func (p *Platform) hasESSystem(esSystems map[string]ESSystem, folder string) boo
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
+	launchers := make([]platforms.Launcher, 0, 21+len(esde.SystemMap))
 	if p.opts.HasKodi == nil || p.opts.HasKodi() {
 		launchers = append(launchers,
 			kodi.NewKodiLocalLauncher(),
@@ -1055,6 +1077,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			kodi.NewKodiTVShowLauncher(),
 		)
 	}
+	// Remote media servers play on their own clients, so they do not depend
+	// on Kodi being installed here.
+	launchers = append(launchers, jellyfin.Launchers()...)
+	launchers = append(launchers, plex.Launchers()...)
 
 	var esSystems map[string]ESSystem
 	if p.opts.OnlyESSystems {

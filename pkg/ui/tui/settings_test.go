@@ -1860,7 +1860,7 @@ func startApprovedLinkFlow(
 ) {
 	t.Helper()
 	pages := tview.NewPages()
-	mockSvc.On("StartAuthLink", mock.Anything).Return(&models.AuthLinkStatusResponse{
+	mockSvc.On("StartAuthLink", mock.Anything, "", "").Return(&models.AuthLinkStatusResponse{
 		Status:          models.AuthLinkStatusPending,
 		UserCode:        "ABCD-1234",
 		VerificationURL: "https://zaparoo.com/link",

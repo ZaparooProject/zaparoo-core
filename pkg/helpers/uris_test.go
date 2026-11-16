@@ -356,6 +356,11 @@ func TestDecodeURIIfNeeded_EdgeCases(t *testing.T) {
 			expected: "steam://123/Game Name?launch=true",
 		},
 		{
+			name:     "kodi_keeps_escaped_semicolon_in_name",
+			input:    "kodi-movie://456/Up%3B%20Down;tmdb=1",
+			expected: "kodi-movie://456/Up%3B Down;tmdb=1", // ';' stays escaped so it cannot start the parameters
+		},
+		{
 			name:     "kodi_with_fragment",
 			input:    "kodi-movie://456/The%20Matrix#play",
 			expected: "kodi-movie://456/The Matrix%23play", // '#' re-encoded to keep it in path, not fragment

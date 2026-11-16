@@ -129,6 +129,10 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 	case "", models.AuthLinkProviderZaparoo:
 	case models.AuthLinkProviderRomM:
 		return startRomMAuthLink(&env, params.URL)
+	case models.AuthLinkProviderPlex:
+		return startPlexAuthLink(&env, params.URL)
+	case models.AuthLinkProviderJellyfin:
+		return startJellyfinAuthLink(&env, params.URL)
 	default:
 		return nil, models.ClientErrf("unknown link provider %q", params.Provider)
 	}

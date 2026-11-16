@@ -41,6 +41,72 @@ func CreateVirtualPath(scheme, id, name string) string {
 	return fmt.Sprintf("%s://%s/%s", scheme, url.PathEscape(id), url.PathEscape(name))
 }
 
+// ParamSep starts a virtual path's parameters and separates them, as in
+// "kodi-movie://12/Inception;tmdb=27205;imdb=tt1375666". Unlike '?', it has no
+// meaning in ZapScript, so a path with parameters can be written on a card as
+// it is. Names and IDs are path-escaped, which encodes any ';' they contain.
+const ParamSep = ";"
+
+// CreateVirtualPathWithParams creates a virtual path like CreateVirtualPath
+// and appends params, each an already-encoded "key=value" pair.
+func CreateVirtualPathWithParams(scheme, id, name string, params []string) string {
+	path := CreateVirtualPath(scheme, id, name)
+	if len(params) == 0 {
+		return path
+	}
+	return path + ParamSep + strings.Join(params, ParamSep)
+}
+
+// splitNameParams splits a raw, still-encoded name into the name and its
+// ';' parameters. The split only happens when every parameter is a
+// "key=value" pair, so a hand-written name holding a bare ';' stays whole.
+func splitNameParams(raw string) (name, params string) {
+	idx := strings.Index(raw, ParamSep)
+	if idx < 0 {
+		return raw, ""
+	}
+	params = raw[idx+1:]
+	for _, pair := range strings.Split(params, ParamSep) {
+		if key, _, found := strings.Cut(pair, "="); !found || key == "" {
+			return raw, ""
+		}
+	}
+	return raw[:idx], params
+}
+
+// ParseParams returns a virtual path's parameters. Both the ';' form and the
+// older '?' query form are read, so paths written before ';' was adopted keep
+// working.
+func ParseParams(virtualPath string) (url.Values, error) {
+	parsed := ParseURIComponents(virtualPath)
+	values := url.Values{}
+	if parsed.Query != "" {
+		query, err := url.ParseQuery(parsed.Query)
+		if err != nil {
+			return nil, fmt.Errorf("invalid virtual path query: %w", err)
+		}
+		for key, list := range query {
+			values[key] = append(values[key], list...)
+		}
+	}
+	_, name, found := strings.Cut(parsed.Rest, "/")
+	if !found {
+		return values, nil
+	}
+	_, raw := splitNameParams(strings.TrimRight(name, "/"))
+	if raw == "" {
+		return values, nil
+	}
+	params, err := url.ParseQuery(strings.ReplaceAll(raw, ParamSep, "&"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid virtual path parameters: %w", err)
+	}
+	for key, list := range params {
+		values[key] = append(values[key], list...)
+	}
+	return values, nil
+}
+
 // VirtualPathResult holds parsed virtual path components
 type VirtualPathResult struct {
 	Scheme string
@@ -174,8 +240,8 @@ func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
 	}
 
 	if len(idAndName) == 2 {
-		// Remove trailing slashes
-		namePart := strings.TrimRight(idAndName[1], "/")
+		// Remove trailing slashes and any ';' parameters
+		namePart, _ := splitNameParams(strings.TrimRight(idAndName[1], "/"))
 		if namePart != "" {
 			decoded, err := decodePathComponent(namePart)
 			if err != nil {

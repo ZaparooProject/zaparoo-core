@@ -173,8 +173,10 @@ func (m *MockSettingsService) RestoreRemoteBackup(ctx context.Context, id string
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
-func (m *MockSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
-	args := m.Called(ctx)
+func (m *MockSettingsService) StartAuthLink(
+	ctx context.Context, provider, serverURL string,
+) (*models.AuthLinkStatusResponse, error) {
+	args := m.Called(ctx, provider, serverURL)
 	link, ok := args.Get(0).(*models.AuthLinkStatusResponse)
 	if !ok {
 		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors

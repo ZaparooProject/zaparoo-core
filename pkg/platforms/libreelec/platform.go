@@ -43,7 +43,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -244,6 +246,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		jellyfin.NewJellyfinMovieLauncher(),
+		jellyfin.NewJellyfinTVEpisodeLauncher(),
+		jellyfin.NewJellyfinTVShowLauncher(),
+		jellyfin.NewJellyfinSongLauncher(),
+		jellyfin.NewJellyfinAlbumLauncher(),
+		jellyfin.NewJellyfinArtistLauncher(),
+		plex.NewPlexMovieLauncher(),
+		plex.NewPlexTVLauncher(),
+		plex.NewPlexTVShowLauncher(),
+		plex.NewPlexSongLauncher(),
+		plex.NewPlexAlbumLauncher(),
+		plex.NewPlexArtistLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

@@ -21,6 +21,7 @@ package kodi
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -29,6 +30,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -313,7 +315,7 @@ func (c *Client) GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, 
 // GetMovies retrieves all movies from Kodi's library
 func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 	params := VideoLibraryGetMoviesParams{
-		Properties: []string{"title", "file"},
+		Properties: []string{"title", "file", "uniqueid"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, params)
@@ -328,6 +330,53 @@ func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 	}
 
 	return response.Movies, nil
+}
+
+// GetMovieDetails retrieves one movie by ID. It returns nil when Kodi has no
+// movie with that ID.
+func (c *Client) GetMovieDetails(ctx context.Context, movieID int) (*Movie, error) {
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovieDetails, VideoLibraryGetMovieDetailsParams{
+		MovieID:    movieID,
+		Properties: []string{"title", "file", "uniqueid"},
+	})
+	if isMissingItem(err) {
+		return nil, nil //nolint:nilnil // a missing item is not an error here
+	}
+	if err != nil {
+		return nil, err
+	}
+	var response VideoLibraryGetMovieDetailsResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetMovieDetails response: %w", err)
+	}
+	return &response.Movie, nil
+}
+
+// GetEpisodeDetails retrieves one episode by ID. It returns nil when Kodi has
+// no episode with that ID.
+func (c *Client) GetEpisodeDetails(ctx context.Context, episodeID int) (*Episode, error) {
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetEpisodeDetails, VideoLibraryGetEpisodeDetailsParams{
+		EpisodeID:  episodeID,
+		Properties: []string{"title", "file", "tvshowid", "showtitle", "season", "episode", "uniqueid"},
+	})
+	if isMissingItem(err) {
+		return nil, nil //nolint:nilnil // a missing item is not an error here
+	}
+	if err != nil {
+		return nil, err
+	}
+	var response VideoLibraryGetEpisodeDetailsResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetEpisodeDetails response: %w", err)
+	}
+	return &response.Episode, nil
+}
+
+// isMissingItem reports whether Kodi rejected a details request because the
+// library ID names no item.
+func isMissingItem(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Code == apiErrorInvalidParams
 }
 
 // GetTVShows retrieves all TV shows from Kodi's library
@@ -354,7 +403,7 @@ func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
 func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error) {
 	params := VideoLibraryGetEpisodesParams{
 		TVShowID:   tvShowID,
-		Properties: []string{"title", "file", "tvshowid", "season", "episode"},
+		Properties: []string{"title", "file", "tvshowid", "season", "episode", "uniqueid"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetEpisodes, params)
@@ -368,6 +417,11 @@ func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, erro
 		return nil, fmt.Errorf("failed to unmarshal GetEpisodes response: %w", err)
 	}
 
+	// Kodi returns episodes in library order, which follows the order they
+	// were scanned in, so a show would queue out of order without this.
+	slices.SortStableFunc(response.Episodes, func(a, b Episode) int {
+		return cmp.Or(cmp.Compare(a.Season, b.Season), cmp.Compare(a.Episode, b.Episode))
+	})
 	return response.Episodes, nil
 }
 
@@ -666,7 +720,7 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 			platforms.ErrScannerSourceUnreachable, resp.StatusCode, mediaType)
 	}
 	if apiResp.Error != nil {
-		return nil, fmt.Errorf("error from kodi api: %s", apiResp.Error.Message)
+		return nil, fmt.Errorf("error from kodi api: %w", apiResp.Error)
 	}
 
 	return apiResp.Result, nil

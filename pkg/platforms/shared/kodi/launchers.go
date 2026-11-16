@@ -203,9 +203,13 @@ func NewKodiMovieLauncher() platforms.Launcher {
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
 		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			exp := libraryExpectation(path, shared.SchemeKodiMovie, "movie")
+			resolved, err := resolveLibraryPath(client, path, shared.SchemeKodiMovie, resolveMovie)
+			if err != nil {
+				return nil, err
+			}
+			exp := libraryExpectation(resolved, shared.SchemeKodiMovie, "movie")
 			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
-				return c.LaunchMovie(path)
+				return c.LaunchMovie(resolved)
 			})
 		},
 		Scanner: func(
@@ -235,9 +239,13 @@ func NewKodiTVLauncher() platforms.Launcher {
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
 		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClientWithLauncherID(cfg, id, groups)
-			exp := libraryExpectation(path, shared.SchemeKodiEpisode, "episode")
+			resolved, err := resolveLibraryPath(client, path, shared.SchemeKodiEpisode, resolveEpisode)
+			if err != nil {
+				return nil, err
+			}
+			exp := libraryExpectation(resolved, shared.SchemeKodiEpisode, "episode")
 			return nil, launchTracked(client, opts, exp, func(c KodiClient) error {
-				return c.LaunchTVEpisode(path)
+				return c.LaunchTVEpisode(resolved)
 			})
 		},
 		Scanner: func(

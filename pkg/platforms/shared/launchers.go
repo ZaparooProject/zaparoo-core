@@ -31,6 +31,26 @@ const (
 	LauncherKodiArtist     = "KodiArtist"
 )
 
+// Jellyfin launcher IDs
+const (
+	LauncherJellyfinMovie     = "JellyfinMovie"
+	LauncherJellyfinTVEpisode = "JellyfinTVEpisode"
+	LauncherJellyfinTVShow    = "JellyfinTVShow"
+	LauncherJellyfinSong      = "JellyfinSong"
+	LauncherJellyfinAlbum     = "JellyfinAlbum"
+	LauncherJellyfinArtist    = "JellyfinArtist"
+)
+
+// Plex launcher IDs
+const (
+	LauncherPlexMovie     = "PlexMovie"
+	LauncherPlexTVEpisode = "PlexTVEpisode"
+	LauncherPlexTVShow    = "PlexTVShow"
+	LauncherPlexSong      = "PlexSong"
+	LauncherPlexAlbum     = "PlexAlbum"
+	LauncherPlexArtist    = "PlexArtist"
+)
+
 // Launcher groups used as stable configuration references.
 const (
 	LauncherGroupNative            = "Native"
@@ -40,6 +60,8 @@ const (
 	LauncherGroupKodi              = "Kodi"
 	LauncherGroupKodiTV            = "KodiTV"
 	LauncherGroupKodiMusic         = "KodiMusic"
+	LauncherGroupJellyfin          = "Jellyfin"
+	LauncherGroupPlex              = "Plex"
 )
 
 // MiSTer alt-core launcher groups. Each name matches a family of cores

@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
@@ -192,6 +193,34 @@ func TestStopActiveLauncher_ExitGameRunsFirst(t *testing.T) {
 
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
 	assert.Equal(t, []string{"exit"}, order, "a game that exited needs no kill")
+}
+
+func TestStopActiveLauncher_RemoteServerMediaLeavesESAlone(t *testing.T) {
+	t.Parallel()
+
+	exits, kills := 0, 0
+	opts := Options{
+		ID:  "batocera",
+		API: &fakeAPI{},
+		ExitGame: func(context.Context) error {
+			exits++
+			return nil
+		},
+		KillGame: func() error {
+			kills++
+			return nil
+		},
+	}
+	p, published := runningPlatform(t, &opts)
+	media := models.NewActiveMedia("Movie", "Movies", "jellyfin-movie://abc/Alien", "Alien",
+		shared.LauncherJellyfinMovie)
+	p.activeMedia = func() *models.ActiveMedia { return media }
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Zero(t, exits, "nothing runs in EmulationStation")
+	assert.Zero(t, kills)
+	require.NotEmpty(t, *published)
+	assert.Nil(t, (*published)[len(*published)-1])
 }
 
 func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {

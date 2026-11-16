@@ -53,9 +53,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/deverr"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/pinup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/playnite"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows/windowfocus"
@@ -800,7 +802,7 @@ func (p *Platform) launchBoxLauncher() platforms.Launcher {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 16
+	const staticLauncherCount = 28
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -812,6 +814,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		jellyfin.NewJellyfinMovieLauncher(),
+		jellyfin.NewJellyfinTVEpisodeLauncher(),
+		jellyfin.NewJellyfinTVShowLauncher(),
+		jellyfin.NewJellyfinSongLauncher(),
+		jellyfin.NewJellyfinAlbumLauncher(),
+		jellyfin.NewJellyfinArtistLauncher(),
+		plex.NewPlexMovieLauncher(),
+		plex.NewPlexTVLauncher(),
+		plex.NewPlexTVShowLauncher(),
+		plex.NewPlexSongLauncher(),
+		plex.NewPlexAlbumLauncher(),
+		plex.NewPlexArtistLauncher(),
 		p.steamLauncher(),
 		platforms.Launcher{
 			ID:           "Flashpoint",

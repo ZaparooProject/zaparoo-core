@@ -63,6 +63,7 @@ const (
 	PageSettingsAbout          = "settings_about"
 	PageSettingsCredits        = "settings_credits"
 	PageSettingsCreditsViewer  = "settings_credits_viewer"
+	PageSettingsMediaServers   = "settings_media_servers"
 	PageSearchMedia            = "search_media"
 	PageExportLog              = "export_log"
 	PageGenerateDB             = "generate_db"
