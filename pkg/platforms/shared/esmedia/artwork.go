@@ -315,21 +315,36 @@ func FindFileIn(
 	if len(fallbackNames) == 0 {
 		return nil
 	}
+	// Each name is taken apart once. Joining and cleaning every name against
+	// every candidate directory was a quarter of the artwork scraper's CPU
+	// time on a first scrape of a large library.
+	type lookup struct {
+		name, dir, base string
+	}
+	lookups := make([]lookup, 0, len(fallbackNames))
+	for _, name := range fallbackNames {
+		cleanName := filepath.Clean(name)
+		if name == "" || cleanName == "." || cleanName == ".." ||
+			strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			continue
+		}
+		lookups = append(lookups, lookup{name: name, dir: filepath.Dir(cleanName), base: filepath.Base(cleanName)})
+	}
 	for _, dir := range candidates {
 		dirPath, ok := availableDirs[dir]
 		if !ok {
 			continue
 		}
-		for _, name := range fallbackNames {
-			cleanName := filepath.Clean(name)
-			if name == "" || cleanName == "." || cleanName == ".." ||
-				strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+		lastDir, lastJoined := "", ""
+		for i := range lookups {
+			if i == 0 || lookups[i].dir != lastDir {
+				lastDir = lookups[i].dir
+				lastJoined = filepath.Join(dirPath, lastDir)
+			}
+			if !names.MayContain(lastJoined, lookups[i].base) {
 				continue
 			}
-			candidate := filepath.Join(dirPath, name)
-			if !names.MayContain(filepath.Dir(candidate), filepath.Base(candidate)) {
-				continue
-			}
+			candidate := filepath.Join(dirPath, lookups[i].name)
 			if exists, err := afero.Exists(fs, candidate); err == nil && exists {
 				return &File{Path: filepath.ToSlash(candidate), ContentType: MimeFromExt(candidate)}
 			}
