@@ -49,6 +49,8 @@ var ErrNullSQL = errors.New("UserDB is not connected")
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 	"&_cache_size=-512&_mmap_size=0&_txlock=immediate"
 
+const sqliteUserDriver = "sqlite3"
+
 const (
 	// connDrainTimeout bounds the wait for in-flight queries before an
 	// operation that replaces the database files gives up.
@@ -127,7 +129,7 @@ func (db *UserDB) Open() error {
 
 func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 	log.Debug().Msg("opening user database connection")
-	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
+	sqlInstance, err := sql.Open(sqliteDriverName(), dbPath+sqliteConnParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user database: %w", err)
 	}
@@ -217,6 +219,7 @@ func (db *UserDB) Close() error {
 	if db.sql.Load() == nil {
 		return nil
 	}
+	logSQLTraceSummary()
 	err := db.sql.Load().Close()
 	if err != nil {
 		return fmt.Errorf("failed to close database: %w", err)
