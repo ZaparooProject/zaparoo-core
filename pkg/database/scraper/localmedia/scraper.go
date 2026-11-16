@@ -286,11 +286,78 @@ func (s *scraperImpl) scrapeLoop(
 	}
 }
 
-// scrapeSystem scrapes one system. It returns false when the run has ended,
+// fingerprintVersion is bumped when a change to how artwork is matched or
+// written means a system whose artwork folders and library are unchanged has
+// to be scraped again.
+const fingerprintVersion = 1
+
+// scrapeSystem scrapes one system unless an index-triggered run finds its
+// artwork folders and its library as the last completed run left them. It
+// returns false when the run has ended, having already sent the final update.
+func (s *scraperImpl) scrapeSystem(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	systems []scraper.ScrapeSystem,
+	systemIdx int,
+	ch chan<- scraper.ScrapeUpdate,
+) bool {
+	system := systems[systemIdx]
+	state, fingerprinted := "", false
+	if opts.Scope == nil && !opts.Force {
+		state, fingerprinted = s.artworkSourceState(ctx, system)
+	}
+	if fingerprinted && opts.FillMissing &&
+		scraper.SystemUnchanged(ctx, s.db, scraperID, system.ID, fingerprintVersion, state) {
+		log.Debug().Str("system", system.ID).Msg("localmedia: artwork and library unchanged, system skipped")
+		ch <- scraper.ScrapeUpdate{SystemID: system.ID, TotalSteps: len(systems), CurrentStep: systemIdx + 1}
+		return true
+	}
+	if !s.scrapeSystemRows(ctx, opts, systems, systemIdx, ch) {
+		return false
+	}
+	if fingerprinted && ctx.Err() == nil {
+		if err := scraper.RememberSystem(ctx, s.db, scraperID, system.ID, fingerprintVersion, state); err != nil {
+			log.Debug().Err(err).Msg("localmedia: system fingerprint not stored")
+		}
+	}
+	return true
+}
+
+// artworkSourceState describes every artwork folder a system's scrape reads,
+// by the names found under it at any depth. Artwork is matched by name, so a
+// scrape can only find something new when a name appears, goes or moves. ok is
+// false for a system with a root that is not a plain directory tree, which is
+// always scraped.
+func (s *scraperImpl) artworkSourceState(ctx context.Context, system scraper.ScrapeSystem) (state string, ok bool) {
+	roots := slices.Clone(system.ROMPaths)
+	slices.Sort(roots)
+	var description strings.Builder
+	for _, root := range roots {
+		if platforms.IsSourcePath(root) {
+			return "", false
+		}
+		dirs := esmedia.StatMediaDirsFS(s.fs, root)
+		names := make([]string, 0, len(dirs))
+		for name := range dirs {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		_, _ = fmt.Fprintf(&description, "root=%s\n", root)
+		for _, name := range names {
+			if ctx.Err() != nil {
+				return "", false
+			}
+			_, _ = fmt.Fprintf(&description, "%s: %s\n", name, scraper.TreeListingState(s.fs, dirs[name]))
+		}
+	}
+	return description.String(), true
+}
+
+// scrapeSystemRows scrapes one system. It returns false when the run has ended,
 // having already sent the final update.
 //
 //nolint:gocognit,gocyclo,cyclop,funlen // one system's load, per-row, and folder artwork sequence
-func (s *scraperImpl) scrapeSystem(
+func (s *scraperImpl) scrapeSystemRows(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
 	systems []scraper.ScrapeSystem,
