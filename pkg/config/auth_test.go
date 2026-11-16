@@ -20,6 +20,8 @@
 package config
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -948,4 +950,41 @@ func TestDeleteAuthEntries_NoAuthFileIsNoOp(t *testing.T) {
 
 	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
 	require.NoError(t, err)
+}
+
+func TestAddAuthEntryForTesting_ConcurrentEntriesSurviveEachOther(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	ClearAuthCfgForTesting()
+	t.Cleanup(ClearAuthCfgForTesting)
+
+	const n = 32
+	removes := make([]func(), n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			removes[i] = AddAuthEntryForTesting(
+				fmt.Sprintf("https://host%d.example.com", i),
+				CredentialEntry{Bearer: fmt.Sprintf("token-%d", i)},
+			)
+		}()
+	}
+	wg.Wait()
+	require.Len(t, GetAuthCfg(), n)
+
+	for i := 0; i < n; i += 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			removes[i]()
+		}()
+	}
+	wg.Wait()
+
+	creds := GetAuthCfg()
+	require.Len(t, creds, n/2)
+	for i := 1; i < n; i += 2 {
+		assert.Equal(t, fmt.Sprintf("token-%d", i), creds[fmt.Sprintf("https://host%d.example.com", i)].Bearer)
+	}
 }
