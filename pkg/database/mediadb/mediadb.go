@@ -1566,8 +1566,17 @@ func (db *MediaDB) IndexCachesMissing(ctx context.Context) string {
 		return "database closed"
 	}
 	slugCache := db.slugSearchCache.Load()
-	if slugCache == nil || !slugCache.complete || slugCache.hasMidScanState() {
-		return "slug search cache"
+	switch {
+	case slugCache == nil:
+		return "slug search cache absent"
+	case !slugCache.complete && !slugCache.derivedFromComplete:
+		return "slug search cache incomplete"
+	case len(slugCache.droppedSystems) > 0:
+		// A cache derived from a complete one covers every system that was
+		// not dropped from it; with none dropped it still covers them all.
+		return "slug search cache missing systems"
+	case slugCache.hasMidScanState():
+		return "slug search cache holds mid-scan state"
 	}
 	if db.inMemoryTagCache.Load() == nil {
 		return "tag cache"

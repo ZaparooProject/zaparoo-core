@@ -1764,6 +1764,9 @@ func NewNamesIndexWithSources(
 	// Set once any system's reconcile writes a library row. A run that never
 	// does leaves the library exactly as the caches were built from it.
 	runChanged := false
+	// batchChanged is the same question for the systems waiting on the next
+	// commit: a batch that changed nothing leaves nothing to refresh.
+	batchChanged := false
 	for _, sys := range sortedSystems {
 		// Starts the iteration, not the collect phase: the pauser wait, status
 		// update, slug cache drop and scan-stage clear below all cost real time
@@ -2272,6 +2275,7 @@ func NewNamesIndexWithSources(
 				Msg("reconciled staged system")
 			if reconcileStats.LibraryRowsChanged > 0 {
 				runChanged = true
+				batchChanged = true
 			}
 			// Record what this reconcile was derived from, in the same
 			// transaction as its rows. A system that still has files to
@@ -2385,7 +2389,11 @@ func NewNamesIndexWithSources(
 					return 0, analyzeErr
 				}
 				cacheRefreshStart := time.Now()
-				cacheErr := refreshMidScanCaches(ctx, db, justCommitted, midScanTagsCache)
+				var cacheErr error
+				if batchChanged {
+					cacheErr = refreshMidScanCaches(ctx, db, justCommitted, midScanTagsCache)
+				}
+				batchChanged = false
 				cacheRefreshDur += time.Since(cacheRefreshStart)
 				if cacheErr != nil {
 					return 0, cacheErr
