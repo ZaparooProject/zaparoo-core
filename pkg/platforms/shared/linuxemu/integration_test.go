@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/standalone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -171,16 +171,6 @@ func TestReadProviderSystemFoldersRejectsSymlinks(t *testing.T) {
 	folders, err := readProviderSystemFolders(root)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"nes"}, folders)
-}
-
-func TestReadLauncherTargetRejectsOversizedFile(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "game.ps3")
-	require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("a", maxLauncherTargetSize+1)), 0o600))
-
-	_, err := readLauncherTarget(path, ".ps3")
-	require.ErrorContains(t, err, "invalid launcher target")
 }
 
 func TestStandaloneDiscoversNativeBeforeFlatpak(t *testing.T) {
@@ -346,7 +336,7 @@ func TestStandaloneCommandRequiresExistingAbsoluteMedia(t *testing.T) {
 
 	options := NewOptions(t.TempDir(), sharedretroarch.Options{})
 	options.IsFlatpakInstalled = func(string) bool { return true }
-	def := standaloneDef{id: "Test", flatpakID: "example.App", args: batchArgs()}
+	def := standaloneDef{id: "Test", flatpakID: "example.App", args: standalone.Batch()}
 
 	_, err := buildStandaloneLaunchCommand(&options, &def, filepath.Join("host", "game.rom"))
 	require.ErrorContains(t, err, "absolute")
@@ -372,38 +362,6 @@ func TestStandaloneInstallationAvailability(t *testing.T) {
 	assert.False(t, standaloneInstallationAvailable(&options, standaloneInstallation{
 		executable: "flatpak", flatpakID: "example.Missing",
 	}))
-}
-
-func TestMAMEArgsUseROMDirectoryAndMachineName(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(string(filepath.Separator), "roms", "arcade", "outrun.zip")
-	args, err := mameArgs(path)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"-nowindow", "-rompath", filepath.Dir(path), "outrun"}, args)
-	_, err = mameArgs(filepath.Join(string(filepath.Separator), "roms", "arcade", "outrun.chd"))
-	require.Error(t, err)
-}
-
-func TestStandaloneTargetArguments(t *testing.T) {
-	t.Parallel()
-
-	vitaTarget := filepath.Join(t.TempDir(), "game.psvita")
-	require.NoError(t, os.WriteFile(vitaTarget, []byte("PCSA00001"), 0o600))
-	args, err := vita3KArgs(vitaTarget)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"-F", "-r", "PCSA00001"}, args)
-
-	ps3Target := filepath.Join(t.TempDir(), "game.ps3")
-	require.NoError(t, os.WriteFile(ps3Target, []byte("/games/PS3_GAME"), 0o600))
-	args, err = rpcs3Args(ps3Target)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"--no-gui", "--fullscreen", "/games/PS3_GAME"}, args)
-
-	romPath := filepath.Join(string(filepath.Separator), "roms", "wiiu", "game.rpx")
-	args, err = cemuArgs(romPath)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"-g", romPath, "-f"}, args)
 }
 
 func TestAuditedStandaloneArguments(t *testing.T) {
@@ -435,7 +393,7 @@ func TestAuditedStandaloneArguments(t *testing.T) {
 			}
 		}
 		require.NotNil(t, def, id)
-		actual, err := def.args(path)
+		actual, err := def.args(&standalone.Context{Path: path})
 		require.NoError(t, err, id)
 		assert.Equal(t, expected, actual, id)
 	}
@@ -449,7 +407,7 @@ func TestShadPS4FlatpakRunsEmulatorDirectly(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("CUSA00001"), 0o600))
 	options := NewOptions(home, sharedretroarch.Options{})
 	def := standaloneDef{
-		id: "ShadPS4", flatpakID: "net.shadps4.shadPS4", flatpakCommand: "shadps4", args: shadPS4Args,
+		id: "ShadPS4", flatpakID: "net.shadps4.shadPS4", flatpakCommand: "shadps4", args: standalone.ShadPS4Args,
 	}
 	command, err := buildStandaloneLaunchCommandForInstallation(&options, &def, standaloneInstallation{
 		executable: "flatpak", flatpakID: def.flatpakID,
@@ -459,6 +417,65 @@ func TestShadPS4FlatpakRunsEmulatorDirectly(t *testing.T) {
 		"run", "--filesystem=" + home + ":ro", "--die-with-parent", "--command=shadps4",
 		"net.shadps4.shadPS4", "-g", "CUSA00001", "--fullscreen", "true",
 	}, command.Args)
+}
+
+func TestMAMEKeepsTheRompathMAMEReports(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	game := filepath.Join(home, "arcade", "19xx.zip")
+	require.NoError(t, os.MkdirAll(filepath.Dir(game), 0o750))
+	require.NoError(t, os.WriteFile(game, []byte("zip"), 0o600))
+	var def *standaloneDef
+	for i := range nativeStandaloneDefs {
+		if nativeStandaloneDefs[i].id == "MAME" {
+			def = &nativeStandaloneDefs[i]
+		}
+	}
+	require.NotNil(t, def)
+
+	var asked []*platforms.LaunchCommand
+	options := NewOptions(home, sharedretroarch.Options{})
+	options.LaunchEnv = func() []string { return []string{"SDL_VIDEODRIVER=x11"} }
+	options.MAMEShowConfig = func(command *platforms.LaunchCommand) ([]byte, error) {
+		asked = append(asked, command)
+		return []byte("rompath                   /usr/share/mame/roms;$HOME/bios\n"), nil
+	}
+
+	command, err := buildStandaloneLaunchCommandForInstallation(&options, def, standaloneInstallation{
+		executable: "/usr/bin/mame",
+	}, game)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"-rompath", filepath.Dir(game) + ";/usr/share/mame/roms;$HOME/bios", "19xx",
+	}, command.Args)
+	require.Len(t, asked, 1)
+	assert.Equal(t, &platforms.LaunchCommand{
+		Executable: "/usr/bin/mame", Args: []string{"-showconfig"}, Env: []string{"SDL_VIDEODRIVER=x11"},
+	}, asked[0])
+
+	// A Flatpak is asked inside its sandbox, where its own paths apply.
+	command, err = buildStandaloneLaunchCommandForInstallation(&options, def, standaloneInstallation{
+		executable: "flatpak", flatpakID: "org.mamedev.MAME",
+	}, game)
+	require.NoError(t, err)
+	require.Len(t, asked, 2)
+	assert.Equal(t, "flatpak", asked[1].Executable)
+	assert.Equal(t, []string{
+		"run", "--filesystem=" + filepath.Dir(game) + ":ro", "--die-with-parent",
+		"org.mamedev.MAME", "-showconfig",
+	}, asked[1].Args)
+	assert.Equal(t, []string{
+		"-rompath", filepath.Dir(game) + ";/usr/share/mame/roms;$HOME/bios", "19xx",
+	}, command.Args[len(command.Args)-3:])
+
+	options.MAMEShowConfig = func(*platforms.LaunchCommand) ([]byte, error) {
+		return nil, errors.New("mame crashed")
+	}
+	_, err = buildStandaloneLaunchCommandForInstallation(&options, def, standaloneInstallation{
+		executable: "/usr/bin/mame",
+	}, game)
+	require.ErrorContains(t, err, "mame crashed")
 }
 
 func TestStandaloneDiscoversNewNativeEmulators(t *testing.T) {
@@ -494,16 +511,6 @@ func TestFlatpakRunArgsRejectsUnsafeMediaDirectory(t *testing.T) {
 	require.Error(t, err)
 	_, err = flatpakRunArgs("example.App", filepath.Join(string(filepath.Separator), "media:rw", "game.rom"), nil)
 	require.Error(t, err)
-}
-
-func TestReadLauncherTargetRejectsOptionInjection(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "game.scummvm")
-	require.NoError(t, os.WriteFile(path, []byte("--help"), 0o600))
-
-	_, err := readLauncherTarget(path, ".scummvm")
-	require.ErrorContains(t, err, "invalid launcher target")
 }
 
 func TestProviderLauncherGuardRejectsOutsidePath(t *testing.T) {

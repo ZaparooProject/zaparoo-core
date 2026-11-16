@@ -640,3 +640,16 @@ func TestSyncDecks_SkipsADeckIDThisCoreCannotHold(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 1, "the unusable deck is skipped")
 }
+
+// Fixtures share the process-wide credential store and deck tests run in
+// parallel, so another fixture coming and going must not unlink this one.
+func TestSyncFixturesKeepTheirOwnLink(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	t.Run("another fixture", func(t *testing.T) {
+		other := newSyncFixture(t)
+		other.syncDecks(t)
+	})
+	f.syncDecks(t)
+	assert.NotNil(t, f.online.deck("0123456789ab"))
+}

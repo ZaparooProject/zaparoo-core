@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -383,9 +382,7 @@ func TestSyncState_RelinkStartsBookkeepingOver(t *testing.T) {
 	f.online.stateRows = make(map[string]*fakeStateRow)
 	f.online.token = "library-token-2"
 	f.online.mu.Unlock()
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token-2"},
-	})
+	setFixtureAuth(f.online.server.URL, "library-token-2")
 
 	result := f.syncState(t)
 	assert.Equal(t, 1, result.Pushed, "a new link pushes local state as new rows")
