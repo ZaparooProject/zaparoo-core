@@ -255,3 +255,24 @@ func TestSqlSearchMediaByTitleDBIDs_CandidateTagFilterSemantics(t *testing.T) {
 		})
 	}
 }
+
+// A NOT filter on a user tag excludes a collected set instead of probing the
+// tag tables per candidate; a NOT on an ordinary tag, which can cover much of
+// the library, keeps the per-candidate probe.
+func TestBuildCandidateTagFilterSQL_NotUserTagUsesExclusionSet(t *testing.T) {
+	t.Parallel()
+
+	clauses, args := buildCandidateTagFilterSQLForRef([]zapscript.TagFilter{
+		{Type: "user", Value: "hidden", Operator: zapscript.TagOperatorNOT},
+		{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+	}, "m")
+
+	require.Len(t, clauses, 2)
+	assert.Contains(t, clauses[0], "m.DBID NOT IN (")
+	assert.NotContains(t, clauses[0], "EXISTS")
+	assert.Contains(t, clauses[1], "NOT (EXISTS (")
+	assert.Equal(t, []any{
+		"user", "hidden", "user", "hidden",
+		"unfinished", "demo", "unfinished", "demo",
+	}, args)
+}

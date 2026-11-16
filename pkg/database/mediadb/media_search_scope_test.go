@@ -780,7 +780,7 @@ func TestMediaDB_SearchMediaWithFilters_StreamsWithHiddenMedia(t *testing.T) {
 		WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(int64(1), int64(20_000)))
 	path := filepath.Join("games", "nes", "rtype.nes")
-	mock.ExpectQuery("FROM Media NOT INDEXED.*AND NOT \\(EXISTS").
+	mock.ExpectQuery("FROM Media NOT INDEXED.*AND Media\\.DBID NOT IN").
 		WithArgs(int64(1), int64(10_000), int64(1), "user", "hidden", "user", "hidden").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"Name", "Path", "DBID", "DisambiguationTypes", "MediaTitleDBID", "SystemDBID",

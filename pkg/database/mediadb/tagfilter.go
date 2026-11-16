@@ -235,6 +235,18 @@ func buildCandidateTagFilterSQLForRef(
 			continue
 		}
 		typ, val := resolveFilter(f.Type, f.Value)
+		if typ == string(tags.TagTypeUser) {
+			// A user tag marks a handful of rows, and the commonest of these
+			// filters, the one that drops hidden media, is on every listing
+			// once anything is hidden. Probing the tag tables for each
+			// candidate cost 250 ms to count a 7,000-file folder on a MiSTer;
+			// collecting the few tagged rows once and excluding them does not
+			// grow with the folder.
+			setClauses, setArgs := buildTagFilterSQLForRef([]zapscript.TagFilter{f}, mediaRef)
+			clauses = append(clauses, setClauses...)
+			args = append(args, setArgs...)
+			continue
+		}
 		clauses = append(clauses, "NOT "+candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?", mediaRef))
 		args = append(args, typ, val, typ, val)
 	}
