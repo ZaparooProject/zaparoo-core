@@ -2514,7 +2514,7 @@ func NewNamesIndexWithSources(
 	// they reflect it. Best-effort: a failure here only means the projection is
 	// stale until the next reindex; the truth in UserDB is unaffected.
 	t0 = time.Now()
-	if applied, reapplyErr := reapplyMediaUserData(ctx, db, fdb.UserDB); reapplyErr != nil {
+	if applied, tagWrites, reapplyErr := reapplyMediaUserDataCountingWrites(ctx, db, fdb.UserDB); reapplyErr != nil {
 		if maintenanceErr := bestEffortMaintenanceError(
 			reapplyErr, "failed to re-apply media user data",
 		); maintenanceErr != nil {
@@ -2522,9 +2522,10 @@ func NewNamesIndexWithSources(
 		}
 	} else {
 		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
-		if unchangedRun && applied > 0 {
-			// User data was written onto the library after all, so the
-			// caches that show it have to be rebuilt in the usual way.
+		if unchangedRun && tagWrites > 0 {
+			// A user flag had to be written onto the library after all, so
+			// the caches that show it have to be rebuilt in the usual way.
+			log.Info().Int("tagWrites", tagWrites).Msg("media index unchanged, but user flags were re-applied")
 			unchangedRun = false
 			if lateErr := db.UpdateLastGenerated(); lateErr != nil {
 				return 0, fmt.Errorf("failed to update last generated timestamp: %w", lateErr)
