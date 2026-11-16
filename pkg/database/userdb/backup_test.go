@@ -474,6 +474,53 @@ func TestUserDBEnsureRecentBackupCreatesWhenAbsent(t *testing.T) {
 	assert.False(t, backup.Manual, "a scheduled backup is an auto backup")
 }
 
+// TestUserDBEnsureRecentBackupSkipsCorruptFreshBackup verifies a damaged fresh
+// backup does not count as recent: the next valid one is used, or a new one made.
+func TestUserDBEnsureRecentBackupSkipsCorruptFreshBackup(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	older, err := userDB.Backup("test", false)
+	require.NoError(t, err)
+	newer, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+	now := time.Now()
+	require.NoError(t, os.Chtimes(older.Path, now.Add(-time.Hour), now.Add(-time.Hour)))
+	require.NoError(t, os.Chtimes(newer.Path, now, now))
+	require.NoError(t, os.WriteFile(newer.Path, []byte("not a database"), 0o600))
+
+	backup, didCreate, err := userDB.EnsureRecentBackup(24 * time.Hour)
+	require.NoError(t, err)
+	assert.False(t, didCreate)
+	assert.Equal(t, older.Name, backup.Name)
+	assert.True(t, backup.Valid)
+
+	require.NoError(t, os.WriteFile(older.Path, []byte("not a database"), 0o600))
+	require.NoError(t, os.Chtimes(older.Path, now.Add(-time.Hour), now.Add(-time.Hour)))
+	backup, didCreate, err = userDB.EnsureRecentBackup(24 * time.Hour)
+	require.NoError(t, err)
+	assert.True(t, didCreate)
+	assert.True(t, backup.Valid)
+}
+
+// TestUserDBEnsureRecentBackupIgnoresStaleBackups verifies an old backup is
+// replaced without being read: it is unreadable here, which a full check of
+// every stored backup would have had to open.
+func TestUserDBEnsureRecentBackupIgnoresStaleBackups(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	stale, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+	old := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(stale.Path, old, old))
+
+	backup, didCreate, err := userDB.EnsureRecentBackup(24 * time.Hour)
+	require.NoError(t, err)
+	assert.True(t, didCreate)
+	assert.NotEqual(t, stale.Name, backup.Name)
+}
+
 // TestUserDBRestoreBackupRejectsInvalidName verifies restore refuses names that escape the
 // backup directory or aren't backup files, before the live connection is touched.
 func TestUserDBRestoreBackupRejectsInvalidName(t *testing.T) {

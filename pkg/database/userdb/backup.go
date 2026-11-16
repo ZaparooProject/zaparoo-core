@@ -169,7 +169,7 @@ func quickCheckDBContext(parent context.Context, path string) (valid bool, resul
 }
 
 func (db *UserDB) pruneAutoBackups() error {
-	backups, err := db.ListBackups()
+	backups, err := db.listBackups(false)
 	if err != nil {
 		return err
 	}
@@ -374,25 +374,39 @@ func sanitizeTransferBackup(parent context.Context, path string) (err error) {
 	return nil
 }
 
+// EnsureRecentBackup runs at every start, so it verifies only the backups
+// young enough to count instead of reading every stored backup in full.
 func (db *UserDB) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {
-	backups, err := db.ListBackups()
+	backups, err := db.listBackups(false)
 	if err != nil {
 		return database.BackupInfo{}, false, err
 	}
-	for _, backup := range backups {
-		if !backup.Valid {
+	for i := range backups {
+		if time.Since(backups[i].CreatedAt) > maxAge {
+			break
+		}
+		checked, checkErr := backupInfo(backups[i].Path, true)
+		if checkErr != nil {
+			log.Warn().Err(checkErr).Str("name", backups[i].Name).Msg("failed to inspect user database backup")
 			continue
 		}
-		if time.Since(backup.CreatedAt) <= maxAge {
-			return backup, false, nil
+		if checked.Valid {
+			return checked, false, nil
 		}
-		break
 	}
 	backup, err := db.Backup("scheduled", false)
 	return backup, err == nil, err
 }
 
+// ListBackups returns every stored backup, newest first, each verified with
+// a quick_check.
 func (db *UserDB) ListBackups() ([]database.BackupInfo, error) {
+	return db.listBackups(true)
+}
+
+// listBackups returns every stored backup, newest first. Without quickCheck
+// the files are only stat'ed and Valid is not meaningful.
+func (db *UserDB) listBackups(quickCheck bool) ([]database.BackupInfo, error) {
 	entries, err := os.ReadDir(db.backupDir())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -405,7 +419,7 @@ func (db *UserDB) ListBackups() ([]database.BackupInfo, error) {
 		if entry.IsDir() || !isBackupName(entry.Name()) {
 			continue
 		}
-		info, infoErr := backupInfo(filepath.Join(db.backupDir(), entry.Name()), true)
+		info, infoErr := backupInfo(filepath.Join(db.backupDir(), entry.Name()), quickCheck)
 		if infoErr != nil {
 			log.Warn().Err(infoErr).Str("name", entry.Name()).Msg("failed to inspect user database backup")
 			continue
