@@ -20,10 +20,12 @@
 package standalone
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -114,17 +116,24 @@ func (d *windowsDiscovery) fromConfig(emu *WindowsEmulator) (exe, source string)
 			continue
 		}
 		info, err := d.env.FS.Stat(configured)
-		if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			log.Warn().Str("launcher", id).Str("installDir", configured).
+				Msg("configured install_dir does not exist, searching for the emulator instead")
 			continue
-		}
-		if info.Mode().IsRegular() {
+		case err != nil:
+			log.Warn().Err(err).Str("launcher", id).Str("installDir", configured).
+				Msg("cannot read configured install_dir, searching for the emulator instead")
+			continue
+		case info.Mode().IsRegular():
 			return configured, "install_dir"
-		}
-		if info.IsDir() {
+		case info.IsDir():
 			if found := d.exeIn(emu, configured); found != "" {
 				return found, "install_dir"
 			}
 		}
+		log.Warn().Str("launcher", id).Str("installDir", configured).
+			Msg("configured install_dir has no emulator executable, searching for the emulator instead")
 	}
 	return "", ""
 }

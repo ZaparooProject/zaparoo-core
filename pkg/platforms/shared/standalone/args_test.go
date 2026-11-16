@@ -22,6 +22,7 @@ package standalone
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -124,6 +125,9 @@ func TestValidateMediaFile(t *testing.T) {
 	require.ErrorContains(t, ValidateMediaFile(filepath.Join("roms", "game.rom")), "absolute")
 	require.ErrorContains(t, ValidateMediaFile(filepath.Join(dir, "missing.rom")), "stat media path")
 	require.ErrorContains(t, ValidateMediaFile(dir), "must be a file")
+	if runtime.GOOS != "windows" {
+		require.ErrorContains(t, ValidateMediaFile(os.DevNull), "must be a file")
+	}
 }
 
 func TestSetName(t *testing.T) {

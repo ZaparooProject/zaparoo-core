@@ -93,6 +93,17 @@ func TestFBNeoArgsPreferAnEmptySlot(t *testing.T) {
 	assert.Equal(t, "szAppRomPaths[0] missing/\nszAppRomPaths[1] "+dir+`\`+"\nx 1\n", readConfig(t, configPath))
 }
 
+func TestFBNeoArgsKeepAFolderThatCannotBeInspected(t *testing.T) {
+	t.Parallel()
+
+	// A NUL byte makes Stat fail with an error other than "does not exist".
+	config := "szAppRomPaths[0] bad\x00folder/\nx 1\n"
+	exe, configPath := fbneoInstall(t, config)
+	err := ensureFBNeoROMPath(exe, t.TempDir())
+	require.ErrorContains(t, err, "no unused ROM folder slot")
+	assert.Equal(t, config, readConfig(t, configPath))
+}
+
 func TestFBNeoArgsWithoutConfigCreateOne(t *testing.T) {
 	t.Parallel()
 

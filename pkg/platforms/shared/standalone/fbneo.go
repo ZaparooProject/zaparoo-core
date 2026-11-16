@@ -96,6 +96,11 @@ func ensureFBNeoROMPath(exe, dir string) error {
 		}
 		info, statErr := os.Stat(path)
 		switch {
+		case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+			// A folder that cannot be inspected may still exist, so its slot
+			// is kept.
+			log.Warn().Err(statErr).Str("folder", path).
+				Msg("cannot inspect FinalBurn Neo ROM folder, keeping its slot")
 		case statErr != nil || !info.IsDir():
 			if missing < 0 {
 				missing = i

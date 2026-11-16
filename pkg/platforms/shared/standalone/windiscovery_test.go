@@ -129,6 +129,29 @@ func TestDiscoverWindowsConfiguredInstallDir(t *testing.T) {
 	assert.Equal(t, exe, install.Exe)
 }
 
+func TestDiscoverWindowsUnusableInstallDirFallsBackToSearch(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	found := touch(t, fs, filepath.Join(testDrive, "Emulators", "Dolphin", "Dolphin.exe"))
+	empty := filepath.Join(testRoot, "Portable", "Empty")
+	require.NoError(t, fs.MkdirAll(empty, 0o750))
+
+	for _, configured := range []string{filepath.Join(testRoot, "Portable", "Missing"), empty} {
+		env := testEnv(fs, nil)
+		env.Configured = func(id string) string {
+			if id == "DolphinWii" {
+				return configured
+			}
+			return ""
+		}
+		install, ok := discoverOne(env)
+		require.True(t, ok, configured)
+		assert.Equal(t, found, install.Exe, configured)
+		assert.NotEqual(t, "install_dir", install.Source, configured)
+	}
+}
+
 func TestDiscoverWindowsAppPaths(t *testing.T) {
 	t.Parallel()
 

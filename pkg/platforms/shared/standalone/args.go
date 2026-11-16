@@ -179,7 +179,7 @@ func ValidateMediaFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("stat media path: %w", err)
 	}
-	if info.IsDir() {
+	if !info.Mode().IsRegular() {
 		return errors.New("media path must be a file")
 	}
 	return nil
