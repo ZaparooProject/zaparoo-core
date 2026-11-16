@@ -53,6 +53,10 @@ type BatchInserter struct {
 
 const maxCachedBatchStatements = 8
 
+// maxBatchInsertVariables stays under SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER of 32766 with a safety margin.
+const maxBatchInsertVariables = 32000
+
 // NewBatchInserter creates a batch inserter for the given table
 func NewBatchInserter(
 	ctx context.Context,
@@ -84,6 +88,14 @@ func NewBatchInserterWithOptions(
 	}
 	if batchSize <= 0 {
 		return nil, fmt.Errorf("batch size must be positive, got %d", batchSize)
+	}
+	// A full batch is one statement with batchSize x columns parameters. Wide
+	// tables at the default batch size ask for more than SQLite binds, and
+	// every such flush then failed to prepare before falling back to
+	// uncached chunk statements. Keeping the batch within the limit makes a
+	// full flush one cached statement.
+	if maxRows := maxBatchInsertVariables / len(columns); maxRows > 0 && batchSize > maxRows {
+		batchSize = maxRows
 	}
 
 	return &BatchInserter{
@@ -277,9 +289,7 @@ func (b *BatchInserter) touchCachedStatementRowCount(rowCount int) {
 
 // flushChunked splits the batch into smaller chunks when SQLite variable limit is exceeded
 func (b *BatchInserter) flushChunked() error {
-	// SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32766
-	// Use 32000 to provide a safety margin
-	const maxSQLiteVars = 32000
+	const maxSQLiteVars = maxBatchInsertVariables
 
 	// Calculate maximum rows per chunk based on column count
 	maxRowsPerChunk := maxSQLiteVars / b.columnCount
