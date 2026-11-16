@@ -185,6 +185,7 @@ type MediaDB struct {
 	stmtInsertTagType       *sql.Stmt
 	batchInsertMediaTag     *BatchInserter
 	inMemoryTagCache        atomic.Pointer[tagCache]
+	mergedSystemTags        mergedSystemTagsMemo
 	mediaWriteArbiter       atomic.Pointer[database.MediaWriteArbiter]
 	batchInsertTag          *BatchInserter
 	mediaSearchBounds       map[int64]mediaDBIDBounds
@@ -4025,7 +4026,7 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 
 	// Try in-memory cache first (instant)
 	if cache := db.inMemoryTagCache.Load(); cache != nil {
-		return cache.tagsForSystems(systems), nil
+		return db.mergedSystemTags.tagsForSystems(cache, systems), nil
 	}
 
 	// Fallback: try SQL cached approach

@@ -169,7 +169,7 @@ func quickCheckDBContext(parent context.Context, path string) (valid bool, resul
 }
 
 func (db *UserDB) pruneAutoBackups() error {
-	backups, err := db.listBackups(false)
+	backups, err := db.scanBackups(false)
 	if err != nil {
 		return err
 	}
@@ -377,7 +377,7 @@ func sanitizeTransferBackup(parent context.Context, path string) (err error) {
 // EnsureRecentBackup runs at every start, so it verifies only the backups
 // young enough to count instead of reading every stored backup in full.
 func (db *UserDB) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {
-	backups, err := db.listBackups(false)
+	backups, err := db.scanBackups(false)
 	if err != nil {
 		return database.BackupInfo{}, false, err
 	}
@@ -401,12 +401,12 @@ func (db *UserDB) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo,
 // ListBackups returns every stored backup, newest first, each verified with
 // a quick_check.
 func (db *UserDB) ListBackups() ([]database.BackupInfo, error) {
-	return db.listBackups(true)
+	return db.scanBackups(true)
 }
 
-// listBackups returns every stored backup, newest first. Without quickCheck
+// scanBackups returns every stored backup, newest first. Without quickCheck
 // the files are only stat'ed and Valid is not meaningful.
-func (db *UserDB) listBackups(quickCheck bool) ([]database.BackupInfo, error) {
+func (db *UserDB) scanBackups(quickCheck bool) ([]database.BackupInfo, error) {
 	entries, err := os.ReadDir(db.backupDir())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
