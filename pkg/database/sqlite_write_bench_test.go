@@ -20,6 +20,7 @@
 package database_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math/rand/v2"
@@ -63,6 +64,7 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 		rowsPerBatch = 2000
 		walThreshold = 8 << 20
 	)
+	ctx := context.Background()
 	b.StopTimer()
 	dir := b.TempDir()
 	path := filepath.Join(dir, "pattern.db")
@@ -84,7 +86,7 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 		"CREATE INDEX media_parent ON Media(ParentDir, SystemDBID)",
 		"CREATE INDEX media_path ON Media(Path)",
 	} {
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			b.Fatalf("%s: %v", stmt, err)
 		}
 	}
@@ -93,11 +95,11 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 
 	id := 0
 	for batch := range batches {
-		tx, err := db.Begin()
+		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
-		stmt, err := tx.Prepare("INSERT INTO Media VALUES(?,?,?,?,?,?,?)")
+		stmt, err := tx.PrepareContext(ctx, "INSERT INTO Media VALUES(?,?,?,?,?,?,?)")
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -105,10 +107,12 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 			id++
 			name := fmt.Sprintf("Game %06d (USA) (Rev %d)", rng.IntN(1_000_000), i%3)
 			parent := fmt.Sprintf("/media/fat/games/Sys%d/dir%d/", batch%4, i%20)
-			if _, err := stmt.Exec(id, rng.IntN(50_000), batch%4, parent+name+".bin", parent, 0, name); err != nil {
+			_, err := stmt.ExecContext(ctx, id, rng.IntN(50_000), batch%4, parent+name+".bin", parent, 0, name)
+			if err != nil {
 				b.Fatal(err)
 			}
 		}
+		//nolint:sqlclosecheck // closed before the commit that is being timed
 		_ = stmt.Close()
 		started := time.Now()
 		if err := tx.Commit(); err != nil {
@@ -125,14 +129,14 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 		}
 		if due {
 			started = time.Now()
-			if _, err := db.Exec("PRAGMA wal_checkpoint(" + checkpoint + ")"); err != nil {
+			if _, err := db.ExecContext(ctx, "PRAGMA wal_checkpoint("+checkpoint+")"); err != nil {
 				b.Fatal(err)
 			}
 			checkpointing += time.Since(started)
 		}
 	}
 	started := time.Now()
-	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		b.Fatal(err)
 	}
 	checkpointing += time.Since(started)
