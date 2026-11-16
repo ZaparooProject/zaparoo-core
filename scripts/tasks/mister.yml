@@ -93,7 +93,7 @@ tasks:
       # Same C flags as the service build (LINUX_CFLAGS in zigcc.yml). Without
       # them Zig compiles SQLite unoptimized and UBSan-instrumented, so the
       # numbers do not describe the shipped binary.
-      BENCH_CFLAGS: "-Os -fstack-protector-strong -fno-omit-frame-pointer"
+      BENCH_CFLAGS: '{{default "-Os -fstack-protector-strong -fno-omit-frame-pointer" .BENCH_CFLAGS}}'
     cmds:
       - task: :zigcc:setup
       - task: :docker:run

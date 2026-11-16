@@ -1265,7 +1265,6 @@ var secondaryIndexes = []secondaryIndex{
 		name: "idx_browsedircounts_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsedircounts_system ON BrowseDirCounts(SystemDBID)",
 	},
-	{name: "idx_media_parentdir", ddl: "CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)"},
 	{
 		name: "idx_media_parentdir_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",

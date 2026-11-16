@@ -473,7 +473,7 @@ func TestMediaDB_Open_RequiredSecondaryIndexesExist_Integration(t *testing.T) {
 	defer cleanup()
 
 	assertIndexExists(t, mediaDB, "media_path_idx")
-	assertIndexExists(t, mediaDB, "idx_media_parentdir")
+	assertIndexExists(t, mediaDB, "idx_media_parentdir_system")
 }
 
 func TestMediaDB_TransactionCycle_Integration(t *testing.T) {
@@ -4035,7 +4035,7 @@ func TestMediaDB_CreateSecondaryIndexes_RecreatesMissingIndexes_Integration(t *t
 
 	ctx := context.Background()
 
-	for _, indexName := range []string{"media_path_idx", "idx_media_parentdir"} {
+	for _, indexName := range []string{"media_path_idx", "idx_media_parentdir_system"} {
 		_, err := mediaDB.UnsafeGetSQLDb().ExecContext(ctx, "DROP INDEX IF EXISTS "+indexName)
 		require.NoError(t, err)
 	}
@@ -4050,7 +4050,7 @@ func TestMediaDB_CreateSecondaryIndexes_RecreatesMissingIndexes_Integration(t *t
 	require.NoError(t, err)
 	assert.False(t, mediaDB.needsIndexRebuild.Load())
 
-	for _, indexName := range []string{"media_path_idx", "idx_media_parentdir"} {
+	for _, indexName := range []string{"media_path_idx", "idx_media_parentdir_system"} {
 		assertIndexExists(t, mediaDB, indexName)
 	}
 	current, err = mediaDB.secondaryIndexCurrent(browseSortIndexForTest(t))
