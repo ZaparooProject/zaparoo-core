@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,10 +37,15 @@ import (
 // the test's temp directory, so commit costs match a real install.
 func newBenchUserDB(b testing.TB) *UserDB {
 	b.Helper()
+	return newBenchUserDBWithParams(b, sqliteConnParams)
+}
+
+func newBenchUserDBWithParams(b testing.TB, connParams string) *UserDB {
+	b.Helper()
 	pl := mocks.NewMockPlatform()
 	pl.On("ID").Return("bench-platform")
 	path := filepath.Join(b.TempDir(), "user.db")
-	sqlDB, err := sql.Open(sqliteDriverName(), path+sqliteConnParams)
+	sqlDB, err := sql.Open(sqliteDriverName(), path+connParams)
 	if err != nil {
 		b.Fatalf("open bench user db: %v", err)
 	}
@@ -295,6 +301,29 @@ func BenchmarkUserDB_HistoryIndexBuild(b *testing.B) {
 					`CREATE INDEX idx_media_history_media ON MediaHistory (MediaPath, SystemID, DBID);
 					CREATE INDEX idx_media_history_end_time ON MediaHistory (EndTime)`)
 				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkUserDB_CommitSynchronous prices what synchronous=FULL adds to one
+// small commit on the storage under TMPDIR. It exists to measure, not to
+// choose: the user database keeps FULL.
+func BenchmarkUserDB_CommitSynchronous(b *testing.B) {
+	for _, mode := range []string{"FULL", "NORMAL"} {
+		b.Run(mode, func(b *testing.B) {
+			params := strings.Replace(sqliteConnParams, "_synchronous=FULL", "_synchronous="+mode, 1)
+			db := newBenchUserDBWithParams(b, params)
+			id, err := db.AddMediaHistory(benchMediaHistoryEntry(0))
+			if err != nil {
+				b.Fatal(err)
+			}
+			i := 0
+			for b.Loop() {
+				i++
+				if err := db.UpdateMediaHistoryTime(id, i*60); err != nil {
 					b.Fatal(err)
 				}
 			}
