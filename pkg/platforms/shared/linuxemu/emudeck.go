@@ -21,6 +21,7 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/standalone"
 	"github.com/rs/zerolog/log"
 )
 
@@ -32,7 +33,7 @@ const (
 )
 
 type emulatorConfig struct {
-	wrapperArgs func(string) ([]string, error)
+	wrapperArgs standalone.ArgsFunc
 	typeName    emulatorType
 	flatpakID   string
 	core        string
@@ -46,43 +47,43 @@ func buildEmulatorMapping() map[string]emulatorConfig {
 	mapping := map[string]emulatorConfig{
 		"psx": {
 			typeName: emulatorStandalone, flatpakID: "org.duckstation.DuckStation",
-			wrapper: "duckstation.sh", wrapperArgs: batchArgs("-batch", "-fullscreen"),
+			wrapper: "duckstation.sh", wrapperArgs: standalone.Batch("-batch", "-fullscreen"),
 		},
 		"ps2": {
 			typeName: emulatorStandalone, flatpakID: "net.pcsx2.PCSX2",
-			wrapper: "pcsx2-qt.sh", wrapperArgs: batchArgs("-batch", "-fullscreen"),
+			wrapper: "pcsx2-qt.sh", wrapperArgs: standalone.Batch("-batch", "-fullscreen"),
 		},
 		"ps3": {
 			typeName: emulatorStandalone, flatpakID: "net.rpcs3.RPCS3",
-			wrapper: "rpcs3.sh", wrapperArgs: batchArgs("--no-gui", "--fullscreen"),
+			wrapper: "rpcs3.sh", wrapperArgs: standalone.Batch("--no-gui", "--fullscreen"),
 		},
 		"psp": {
 			typeName: emulatorStandalone, flatpakID: "org.ppsspp.PPSSPP",
-			wrapper: "ppsspp.sh", wrapperArgs: batchArgs("--fullscreen"),
+			wrapper: "ppsspp.sh", wrapperArgs: standalone.Batch("--fullscreen"),
 		},
 		"gamecube": {
 			typeName: emulatorStandalone, flatpakID: "org.DolphinEmu.dolphin-emu",
-			wrapper: "dolphin-emu.sh", wrapperArgs: batchArgs("-b", "-f", "-e"),
+			wrapper: "dolphin-emu.sh", wrapperArgs: standalone.Batch("-b", "-f", "-e"),
 		},
 		"wii": {
 			typeName: emulatorStandalone, flatpakID: "org.DolphinEmu.dolphin-emu",
-			wrapper: "dolphin-emu.sh", wrapperArgs: batchArgs("-b", "-f", "-e"),
+			wrapper: "dolphin-emu.sh", wrapperArgs: standalone.Batch("-b", "-f", "-e"),
 		},
 		"wiiu": {
 			typeName: emulatorStandalone, flatpakID: "info.cemu.Cemu",
-			wrapper: "cemu.sh", wrapperArgs: batchArgs("-f", "-g"),
+			wrapper: "cemu.sh", wrapperArgs: standalone.Batch("-f", "-g"),
 		},
 		"switch": {
 			typeName: emulatorStandalone, flatpakID: "io.github.ryubing.Ryujinx",
-			wrapper: "ryujinx.sh", wrapperArgs: batchArgs("--fullscreen"),
+			wrapper: "ryujinx.sh", wrapperArgs: standalone.Batch("--fullscreen"),
 		},
 		"3ds": {
 			typeName: emulatorStandalone, flatpakID: "org.azahar_emu.Azahar",
-			wrapper: "azahar.sh", wrapperArgs: batchArgs("-f"),
+			wrapper: "azahar.sh", wrapperArgs: standalone.Batch("-f"),
 		},
 		"scummvm": {
 			typeName: emulatorStandalone, flatpakID: "org.scummvm.ScummVM",
-			wrapper: "scummvm.sh", wrapperArgs: scummVMArgs,
+			wrapper: "scummvm.sh", wrapperArgs: standalone.ScummVMArgs,
 		},
 	}
 	for _, core := range sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop) {
@@ -90,7 +91,7 @@ func buildEmulatorMapping() map[string]emulatorConfig {
 			continue
 		}
 		folder := core.Folders[0]
-		if _, standalone := mapping[folder]; standalone {
+		if _, mapped := mapping[folder]; mapped {
 			continue
 		}
 		mapping[folder] = emulatorConfig{
@@ -254,14 +255,14 @@ func emuDeckStandaloneCommand(
 	emulator emulatorConfig,
 	path string,
 ) (*platforms.LaunchCommand, error) {
-	if err := validateMediaFile(path); err != nil {
-		return nil, err
+	if err := standalone.ValidateMediaFile(path); err != nil {
+		return nil, fmt.Errorf("launch %s: %w", emulator.wrapper, err)
 	}
 	argsBuilder := emulator.wrapperArgs
 	if argsBuilder == nil {
-		argsBuilder = batchArgs()
+		argsBuilder = standalone.Batch()
 	}
-	args, err := argsBuilder(path)
+	args, err := argsBuilder(&standalone.Context{Path: path})
 	if err != nil {
 		return nil, err
 	}

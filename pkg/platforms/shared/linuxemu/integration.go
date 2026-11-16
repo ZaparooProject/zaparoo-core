@@ -20,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/standalone"
 )
 
 const flatpakDiscoveryTimeout = 2 * time.Second
@@ -31,6 +32,7 @@ type Options struct {
 	LaunchEnv            func() []string
 	IsFlatpakInstalled   func(string) bool
 	LookPath             func(string) (string, error)
+	MAMEShowConfig       func(*platforms.LaunchCommand) ([]byte, error)
 	HomeDir              string
 	IncludeRetroArch     bool
 	IncludeStandalone    bool
@@ -52,6 +54,10 @@ func NewOptions(homeDir string, retroArch sharedretroarch.Options) Options {
 	}
 }
 
+func runMAMEShowConfig(command *platforms.LaunchCommand) ([]byte, error) {
+	return standalone.MAMEShowConfig(command, nil) //nolint:wrapcheck // Already describes the failure.
+}
+
 func (o *Options) normalize() {
 	if o.HomeDir == "" {
 		home, err := os.UserHomeDir()
@@ -66,6 +72,9 @@ func (o *Options) normalize() {
 	}
 	if o.LookPath == nil {
 		o.LookPath = exec.LookPath
+	}
+	if o.MAMEShowConfig == nil {
+		o.MAMEShowConfig = runMAMEShowConfig
 	}
 	if o.HomeDir == "" {
 		o.IncludeProviderDecks = false

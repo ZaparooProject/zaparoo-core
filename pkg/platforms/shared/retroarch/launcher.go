@@ -53,7 +53,7 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 	}
 
 	launcher.Availability = func(cfg *config.Instance) error {
-		core, err := resolveCore(cfg, &c)
+		core, err := resolveCore(cfg, &c, opts.Windows)
 		if err != nil {
 			return err
 		}
@@ -64,7 +64,7 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		mediaPath string,
 		_ *platforms.LaunchOptions,
 	) (*platforms.LaunchCommand, error) {
-		core, err := resolveCore(cfg, &c)
+		core, err := resolveCore(cfg, &c, opts.Windows)
 		if err != nil {
 			return nil, err
 		}
@@ -96,8 +96,10 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		//nolint:gosec // command argv comes from built-in platform configuration
 		cmd := exec.CommandContext(context.Background(), commandSpec.Executable, commandSpec.Args...)
 		cmd.Env = helpers.MergeEnviron(os.Environ(), commandSpec.Env)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		if !opts.Windows {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
 		if err := cmd.Start(); err != nil {
 			return nil, fmt.Errorf("start retroarch: %w", err)
 		}
@@ -123,7 +125,7 @@ func NewLaunchers(opts Options, cs []CoreLaunch) []platforms.Launcher { //nolint
 	return launchers
 }
 
-func resolveCore(cfg *config.Instance, c *CoreLaunch) (string, error) {
+func resolveCore(cfg *config.Instance, c *CoreLaunch, windows bool) (string, error) {
 	core := c.Core
 	if cfg != nil {
 		if override := cfg.LookupLauncherDefaults(c.ID, nil).LoadPath; override != "" {
@@ -131,12 +133,25 @@ func resolveCore(cfg *config.Instance, c *CoreLaunch) (string, error) {
 		}
 	}
 
+	if windows {
+		if name, ok := strings.CutSuffix(core, windowsCoreSuffix); ok {
+			core = name + unixCoreSuffix
+		}
+	}
 	resolved, err := normalizeCoreFilename(core)
 	if err != nil {
 		return "", fmt.Errorf("invalid RetroArch core override for %s: %w", c.ID, err)
 	}
+	if windows {
+		resolved = strings.TrimSuffix(resolved, unixCoreSuffix) + windowsCoreSuffix
+	}
 	return resolved, nil
 }
+
+const (
+	unixCoreSuffix    = "_libretro.so"
+	windowsCoreSuffix = "_libretro.dll"
+)
 
 func normalizeCoreFilename(core string) (string, error) {
 	if core == "" {
@@ -174,7 +189,8 @@ func validateLaunch(opts *Options, corePath string) error {
 		if err != nil {
 			return fmt.Errorf("retroarch is not installed at %s: %w", executable, err)
 		}
-		if info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		// Windows has no execute permission bit.
+		if info.IsDir() || (!opts.Windows && info.Mode().Perm()&0o111 == 0) {
 			return fmt.Errorf("retroarch executable is not executable: %s", executable)
 		}
 	}
