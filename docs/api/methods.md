@@ -2784,7 +2784,7 @@ Property keys are canonical type tags such as `property:description`, `property:
 
 ### media.meta.update
 
-**Access:** All clients. An image taken from a file on the Core host needs localhost or admin.
+**Access:** All clients. An image named by an absolute path on the Core host needs localhost or admin; one picked with [`files.browse`](#filesbrowse) needs localhost or any authenticated client.
 
 Update writable metadata fields for one indexed media row, then return the same response shape as [`media.meta`](#mediameta).
 
@@ -2831,8 +2831,9 @@ An image must be a JPEG, PNG, GIF or WebP of at most 10 MiB. Core copies it into
 
 | Key      | Type   | Required | Description |
 | :------- | :----- | :------- | :---------- |
-| kind     | string | Yes      | `file` for an image on the Core host, `upload` for a finished [upload](#uploads). |
-| path     | string | No       | Absolute path of the image on the Core host. Required for `file`, which needs localhost or admin. |
+| kind     | string | Yes      | `file` for an image on the Core host by absolute path, `browse` for one picked with [`files.browse`](#filesbrowse), `upload` for a finished [upload](#uploads). |
+| path     | string | No       | For `file`, the absolute path of the image on the Core host; `file` needs localhost or admin. For `browse`, the entry's `path` under its root. |
+| root     | string | No       | ID of the browse root the image is under. Required for `browse`. |
 | uploadId | string | No       | ID of a finished upload of purpose `media-image`. Required for `upload`. The upload is used up. |
 
 #### Result
@@ -3913,6 +3914,88 @@ Discard an upload session and its bytes.
 #### Result
 
 Returns `null` on success.
+
+## Files
+
+A client picks an image that is already on the Core host by browsing to it. It never names an absolute path: Core offers a set of roots, and a client names a root by its ID and a path under it.
+
+The roots are the folders Core indexes media from, including any media folder set in the configuration, and Core's image folder. A folder that does not exist is not offered.
+
+Every path is resolved against its root again on each request. A path that leaves its root, by `..` or through a symbolic link, is refused, and a link that leads out of a root is not listed.
+
+### files.browse
+
+**Access:** Localhost or any authenticated client.
+
+List the browse roots, or the folders and images of one folder under a root. Without `root`, the result holds `roots` and no entries.
+
+A listing holds folders and files with an image extension (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`), folders first and each group by name. Hidden entries, whose names start with a dot, are left out.
+
+#### Parameters
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| purpose | string | Yes      | What is being picked. `image` is the one purpose. |
+| root    | string | No       | ID of a root from a request without `root`. Omit to list the roots. |
+| path    | string | No       | Folder under the root, with forward slashes. Omit for the root itself. Needs `root`. |
+| offset  | number | No       | Zero-based index of the first entry to return. Defaults to `0`. |
+| limit   | number | No       | Entries to return, 1 to 500. Defaults to `100`. |
+
+#### Result
+
+| Key       | Type                              | Required | Description |
+| :-------- | :-------------------------------- | :------- | :---------- |
+| roots     | [FilesRoot](#files-root-object)[] | No       | The browse roots. Present only when the request named no root. |
+| root      | string                            | No       | ID of the root that was listed. |
+| path      | string                            | Yes      | Folder that was listed, as requested. |
+| entries   | [FilesEntry](#files-entry-object)[] | Yes    | This page of the folder's entries. |
+| total     | number                            | Yes      | Entries in the folder across every page. |
+| truncated | boolean                           | Yes      | True when the folder holds more than 10,000 entries and was read in part. |
+
+##### Files root object
+
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| id   | string | Yes      | Opaque ID to pass as `root`. Stable for a folder between requests. |
+| name | string | Yes      | The folder's path on the Core host, for display. |
+
+##### Files entry object
+
+| Key      | Type    | Required | Description |
+| :------- | :------ | :------- | :---------- |
+| name     | string  | Yes      | Name of the folder or file. |
+| path     | string  | Yes      | Path under the root, with forward slashes. Pass it as `path` to browse a folder, fetch an image or set one. |
+| isDir    | boolean | Yes      | True for a folder. |
+| size     | number  | Yes      | Size of a file in bytes. `0` for a folder. |
+| modified | string  | Yes      | Modification time, RFC 3339. |
+
+A folder that does not answer within five seconds is refused, as is a request made while four other folders are still being read.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "files.browse",
+  "params": { "purpose": "image", "root": "r3f9a1c0b2e", "path": "covers" }
+}
+```
+
+### files.image
+
+**Access:** Localhost or any authenticated client.
+
+Return one image found with `files.browse`, to preview it. The response is the one [`media.image`](#mediaimage) gives, with `typeTag` `file:image`.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| root     | string | Yes      | ID of the root the image is under. |
+| path     | string | Yes      | The entry's `path`. |
+| maxSize  | number | No       | Longest edge in pixels to resize down to, as in `media.image`. Omit for the full image. |
+| delivery | string | No       | `inline` (default) or `localPath`, as in `media.image`. `localPath` needs `maxSize`. |
 
 ## Playlists
 

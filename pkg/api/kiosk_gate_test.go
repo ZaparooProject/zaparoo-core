@@ -56,7 +56,9 @@ var kioskDeniedMethods = map[string]bool{
 	// Uploads only feed media.meta.update.
 	models.MethodUploadsBegin: true, models.MethodUploadsChunk: true,
 	models.MethodUploadsStatus: true, models.MethodUploadsFinish: true,
-	models.MethodUploadsCancel:  true,
+	models.MethodUploadsCancel: true,
+	// Host file browsing only feeds media.meta.update.
+	models.MethodFilesBrowse: true, models.MethodFilesImage: true,
 	models.MethodSettingsUpdate: true, models.MethodSettingsZapScriptHold: true,
 	models.MethodSettingsReload: true, models.MethodSettingsLogsDownload: true,
 	models.MethodSettingsBackup: true, models.MethodSettingsBackupList: true,

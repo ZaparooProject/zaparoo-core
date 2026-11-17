@@ -489,6 +489,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodUploadsStatus:         methods.HandleUploadsStatus,
 		models.MethodUploadsFinish:         methods.HandleUploadsFinish,
 		models.MethodUploadsCancel:         methods.HandleUploadsCancel,
+		models.MethodFilesBrowse:           methods.HandleFilesBrowse,
+		models.MethodFilesImage:            methods.HandleFilesImage,
 		models.MethodScrapers:              methods.HandleScrapers,
 		models.MethodMediaScrape:           methods.HandleMediaScrape,
 		models.MethodMediaScrapeStatus:     methods.HandleMediaScrapeStatus,

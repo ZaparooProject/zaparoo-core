@@ -142,6 +142,8 @@ const (
 	MethodUploadsStatus               = "uploads.status"
 	MethodUploadsFinish               = "uploads.finish"
 	MethodUploadsCancel               = "uploads.cancel"
+	MethodFilesBrowse                 = "files.browse"
+	MethodFilesImage                  = "files.image"
 	MethodScrapers                    = "scrapers"
 	MethodMediaScrape                 = "media.scrape"
 	MethodMediaScrapeStatus           = "media.scrape.status"

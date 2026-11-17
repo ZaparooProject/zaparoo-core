@@ -249,12 +249,16 @@ func parseMediaUserImages(raw json.RawMessage) ([]mediaFieldEdit, error) {
 		}
 		switch input.Kind {
 		case models.MediaImageKindFile:
-			if input.UploadID != "" || !filepath.IsAbs(input.Path) {
-				return nil, fmt.Errorf("media.images.%s: a file image needs an absolute path and no uploadId", kind)
+			if input.UploadID != "" || input.Root != "" || !filepath.IsAbs(input.Path) {
+				return nil, fmt.Errorf("media.images.%s: a file image needs an absolute path and nothing else", kind)
 			}
 		case models.MediaImageKindUpload:
-			if input.Path != "" || input.UploadID == "" {
-				return nil, fmt.Errorf("media.images.%s: an upload image needs an uploadId and no path", kind)
+			if input.Path != "" || input.Root != "" || input.UploadID == "" {
+				return nil, fmt.Errorf("media.images.%s: an upload image needs an uploadId and nothing else", kind)
+			}
+		case models.MediaImageKindBrowse:
+			if input.UploadID != "" || input.Root == "" || input.Path == "" {
+				return nil, fmt.Errorf("media.images.%s: a browse image needs a root and a path", kind)
 			}
 		default:
 			return nil, fmt.Errorf("media.images.%s: unknown image kind %q", kind, input.Kind)
@@ -304,18 +308,29 @@ func storeMediaUserImage(
 		return nil
 	}
 
-	// A file image reads any image on the Core host.
-	if !isLocalOrAdmin(env) {
+	sourcePath := input.Path
+	if input.Kind == models.MediaImageKindBrowse {
+		// A browse image is one files.browse listed: inside a browse root.
+		browser, browseErr := hostBrowser(env)
+		if browseErr != nil {
+			return browseErr
+		}
+		sourcePath, err = browser.ResolveImage(input.Root, input.Path)
+		if err != nil {
+			return hostFilesClientError(err)
+		}
+	} else if !isLocalOrAdmin(env) {
+		// A file image reads any image on the Core host.
 		return models.ClientErrf("%w", ErrForbidden)
 	}
-	info, err := os.Stat(input.Path)
+	info, err := os.Stat(sourcePath)
 	if err != nil || !info.Mode().IsRegular() {
 		return models.ClientErrf("image file not found: %s", input.Path)
 	}
 	if info.Size() > imagefiles.MaxBytes {
 		return models.ClientErr(imagefiles.ErrTooLarge)
 	}
-	data, err := readMediaBinaryFile(afero.NewOsFs(), input.Path, imagefiles.MaxBytes)
+	data, err := readMediaBinaryFile(afero.NewOsFs(), sourcePath, imagefiles.MaxBytes)
 	if err != nil {
 		return models.ClientErrf("image file cannot be read: %w", err)
 	}
