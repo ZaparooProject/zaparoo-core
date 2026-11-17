@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -159,11 +160,14 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	t.ScanTime = time.Now()
 	t.Source = tokens.SourceAPI
 	t.Completion = tokens.NewCompletion()
-	// A capped caller's script is card text as far as the kiosk lock goes.
-	// A paired admin's is not: it runs as it would on an unlocked device,
-	// though what it launches still answers to the content rule.
-	if requestGrant(&env).Capped() {
-		env.Kiosk.BoundToken(&t)
+	// Anyone but a paired admin is a caller the kiosk lock would cap, so
+	// their script is card text as far as the lock goes. It is marked
+	// whether or not the device is locked now: the lock is consulted as
+	// each command runs, and may engage while this one waits its turn. A
+	// paired admin's script runs as it would on an unlocked device, though
+	// what it launches still answers to the content rule.
+	if requestGrant(&env).Role != permissions.RoleAdmin {
+		env.Kiosk.GuardToken(&t)
 	}
 
 	env.State.SetActiveCard(t)
@@ -309,9 +313,9 @@ func HandleRunRest(
 			ScanTime: time.Now(),
 			Source:   tokens.SourceAPI,
 		}
-		// The REST run endpoint carries no paired identity, so on a locked
-		// device its text is always held to the kiosk command policy.
-		st.Kiosk().BoundToken(&t)
+		// The REST run endpoint carries no paired identity, so its text is
+		// always held to the kiosk command policy.
+		st.Kiosk().GuardToken(&t)
 
 		st.SetActiveCard(t)
 		select {

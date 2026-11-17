@@ -254,7 +254,11 @@ func TestBuildKioskProfileContent_ChangingModeSavesIt_Integration(t *testing.T) 
 	pages := newKioskPages()
 	mockSvc := NewMockSettingsService()
 	deny := models.ContentRuleEntry{Effect: "deny", Kind: "system", SystemID: "Genesis"}
-	mockSvc.On("GetProfileContent", mock.Anything, "p2").Return(contentResponse("", deny), nil)
+	added := models.ContentRuleEntry{Effect: "deny", Kind: "media", SystemID: "NES", Path: "/scary.nes"}
+	// The page loads one rule. By the time it saves, another client has
+	// added a deny entry.
+	mockSvc.On("GetProfileContent", mock.Anything, "p2").Return(contentResponse("", deny), nil).Once()
+	mockSvc.On("GetProfileContent", mock.Anything, "p2").Return(contentResponse("", deny, added), nil)
 	saved := make(chan *models.ProfilesContentUpdateParams, 1)
 	mockSvc.On("UpdateProfileContent", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		params, ok := args.Get(1).(*models.ProfilesContentUpdateParams)
@@ -277,7 +281,8 @@ func TestBuildKioskProfileContent_ChangingModeSavesIt_Integration(t *testing.T) 
 	case params := <-saved:
 		assert.Equal(t, "p2", params.ProfileID)
 		assert.Equal(t, database.ContentModeAll, params.Mode)
-		assert.Equal(t, []models.ContentRuleEntry{deny}, params.Entries, "changing the mode keeps every entry")
+		assert.Equal(t, []models.ContentRuleEntry{deny, added}, params.Entries,
+			"the save is made on the rule as stored now, so the entry added meanwhile survives")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the mode to be saved")
 	}
@@ -311,6 +316,8 @@ func TestBuildKioskSystemsPage_SavesSelectionAndKeepsOtherEntries_Integration(t 
 	deck := models.ContentRuleEntry{Effect: "allow", Kind: "deck", Value: "kids"}
 	content := contentResponse(database.ContentModeAllowed,
 		models.ContentRuleEntry{Effect: "allow", Kind: "system", SystemID: "NES"}, deck)
+	mockSvc.On("GetProfileContent", mock.Anything, "p2").Return(contentResponse(database.ContentModeAllowed,
+		models.ContentRuleEntry{Effect: "allow", Kind: "system", SystemID: "NES"}, deck), nil)
 	saved := make(chan *models.ProfilesContentUpdateParams, 1)
 	mockSvc.On("UpdateProfileContent", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		params, ok := args.Get(1).(*models.ProfilesContentUpdateParams)
@@ -350,6 +357,7 @@ func TestBuildKioskSystemsPage_SaveFailureStaysOnThePage_Integration(t *testing.
 	pages := newKioskPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetSystems([]models.System{{ID: "NES", Name: "Nintendo"}})
+	mockSvc.On("GetProfileContent", mock.Anything, "").Return(contentResponse(""), nil)
 	mockSvc.On("UpdateProfileContent", mock.Anything, mock.Anything).Return(errors.New("boom"))
 
 	runner.Start(pages)

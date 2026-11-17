@@ -1212,10 +1212,17 @@ func getLaunchClosure(
 		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
 			return errMediaLaunchSkipped
 		}
+		// The content policy is written against the path that was asked
+		// for, the way the allow list is: a MiSTer ZIP is game.zip in a
+		// rule and in the hidden flag, never the file inside it that the
+		// launch was normalized to above.
+		requested := resolved
+		requested.Path = allowListPath
+
 		// Asked before preparation, so a launch that will be refused never
 		// shows a confirmation or runs a hook first.
 		if env.AdmitLaunch != nil {
-			if admitErr := env.AdmitLaunch(resolved, false); admitErr != nil {
+			if admitErr := env.AdmitLaunch(requested, false); admitErr != nil {
 				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 			}
 		}
@@ -1246,9 +1253,10 @@ func getLaunchClosure(
 			return errors.New("file not allowed: " + allowListPath)
 		}
 		// So may the content policy: a device can lock while a confirmation
-		// is waiting.
+		// is waiting. Asked here so the outgoing media's exit hook below
+		// does not run for a launch that is going to be refused.
 		if env.AdmitLaunch != nil {
-			if admitErr := env.AdmitLaunch(resolved, true); admitErr != nil {
+			if admitErr := env.AdmitLaunch(requested, false); admitErr != nil {
 				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 			}
 		}
@@ -1269,6 +1277,15 @@ func getLaunchClosure(
 			}
 		}
 		defer launchAccess.Release()
+		// The last word, with the launch gate held: the exit hook and the
+		// wait for the gate can both take time, and the device may have
+		// locked or changed profile meanwhile. This is the check that uses
+		// up a one-time approval.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(requested, true); admitErr != nil {
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+			}
+		}
 		if env.Source == tokens.SourcePlaylist && normalizedSlot == mediaslot.Primary {
 			if opts == nil {
 				opts = &platforms.LaunchOptions{}

@@ -64,9 +64,12 @@ type RunCommandOptions struct {
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
 	// AdmitLaunch and AdmitMediaInstall carry the device's content policy
 	// to the launch path. See platforms.CmdEnv.
-	AdmitLaunch        func(target platforms.ResolvedLaunch, final bool) error
-	AdmitMediaInstall  func() error
-	SystemPermitted    func(systemID string) bool
+	AdmitLaunch       func(target platforms.ResolvedLaunch, final bool) error
+	AdmitMediaInstall func() error
+	SystemPermitted   func(systemID string) bool
+	// GuardPermits is asked, for a guarded token, whether the device
+	// currently lets it run a command. Nil permits everything.
+	GuardPermits       func(command string) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
@@ -820,6 +823,15 @@ func RunCommand(
 		// this, and the command alone does not say why it was refused.
 		log.Warn().Str("command", cmd.Name).Strs("permitted", token.AllowedCommands.Names()).
 			Msg("command is outside the bound this token carries")
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
+	}
+
+	// A guarded token also answers to what the device enforces right now,
+	// not only to the bound it was given on the way in. A device that
+	// locked while this script was running, or waiting to run, stops it at
+	// the next command the lock does not allow.
+	if token.AllowedCommands.Guarded() && opts.GuardPermits != nil && !opts.GuardPermits(cmd.Name) {
+		log.Warn().Str("command", cmd.Name).Msg("command is not permitted while the device is locked")
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
 	}
 

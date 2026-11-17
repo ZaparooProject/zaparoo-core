@@ -5082,13 +5082,15 @@ The lock has three states: `off`, `locked`, and `unlocked` (a temporary unlock t
 While the state is `locked`:
 
 - Every caller except a client paired as admin is held to a fixed list of methods: reading state, browsing, starting and stopping media, switching between non-admin profiles, [`kiosk`](#kiosk-1), [`kiosk.unlock`](#kioskunlock) and [`kiosk.lock`](#kiosklock). This includes localhost and API keys. Any other method returns `the device is locked`. [`clients.current`](#clientscurrent) reports such a caller with `access` `member` and no capabilities.
-- ZapScript from a card, from the run endpoints, or from a capped caller's [`run`](#run) may only use launch, stop, playlist, delay, echo and control commands, plus `profile` and `playtime.extend` when the settings allow them. A script a stored mapping substitutes for a card runs as written.
+- ZapScript from a card, from the run endpoints, from a remote operation, or from a [`run`](#run) by anyone but a paired admin may only use launch, stop, playlist, delay, echo and control commands, plus `profile` and `playtime.extend` when the settings allow them. This is checked as each command runs, so it also stops a script that was already running when the device locked. A script a stored mapping substitutes for a card runs as written.
 - Every launch is checked against the active profile's content rule, whatever started it. See [`profiles.content`](#profilescontent).
 - A card cannot download media.
 - The active profile cannot be changed to an admin profile or to the shared profile.
 - Browse, search and system listings returned to a capped caller leave out hidden media and systems the active profile's rule closes.
 
 For as long as kiosk mode is on, `locked` or `unlocked`, remote clients must be paired: Core behaves as if `service.encryption` were enabled, without changing the stored setting. Unpaired connections are closed when kiosk mode is turned on.
+
+A static API key is an admin credential set in the device's own configuration, and is not affected by that rule on the HTTP endpoints: a remote caller with a valid key is still admitted to HTTP POST and SSE. It is capped like any other caller while the state is `locked`, and has admin rights again during a temporary unlock. The WebSocket endpoint does not accept an API key in place of pairing while kiosk mode is on.
 
 ### kiosk
 

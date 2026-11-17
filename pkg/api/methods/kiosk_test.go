@@ -41,6 +41,7 @@ import (
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -432,7 +433,12 @@ func TestProfilesContentUpdateRoundTrip(t *testing.T) {
 	assert.Equal(t, "NES", resp.Entries[0].SystemID, "system IDs are stored in their canonical spelling")
 	assert.Equal(t, "kids-deck", resp.Entries[2].Value)
 
-	// What was stored is what the lock enforces.
+	// What was stored is what the lock enforces. The rule has a tag entry,
+	// so the lock needs an index to read tags from; this one holds none.
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.TagInfo{}, nil)
+	f.db.MediaDB = mediaDB
 	f.lockOpen(t)
 	ctx := context.Background()
 	require.NoError(t, f.lock.CheckLaunch(ctx, kioskKidID, "NES", "/games/NES/Mario.nes", true))
@@ -558,28 +564,35 @@ func runAndCapture(t *testing.T, env requests.RequestEnv, script string) tokens.
 	return captured
 }
 
-func TestRunFromACappedCallerIsBoundLikeACard(t *testing.T) {
+func TestRunFromAnyoneButAPairedAdminIsGuardedLikeACard(t *testing.T) {
 	t.Parallel()
 	f := newKioskFixture(t)
 
-	free := runAndCapture(t, f.local(), "**launch.system:NES")
-	assert.True(t, free.AllowedCommands.Unrestricted(), "kiosk off bounds nothing")
-
-	f.lockOpen(t)
-	for name, env := range map[string]requests.RequestEnv{
+	callers := map[string]requests.RequestEnv{
 		"localhost":     f.local(),
 		"paired member": f.paired("member"),
 		"API key":       f.env(func(e *requests.RequestEnv) { e.APIKeyAuthenticated = true }),
-	} {
-		bound := runAndCapture(t, env, "**launch.system:NES")
-		assert.False(t, bound.AllowedCommands.Unrestricted(), name)
-		assert.True(t, bound.AllowedCommands.Allows(gozapscript.ZapScriptCmdLaunchSystem), name)
-		assert.False(t, bound.AllowedCommands.Allows(gozapscript.ZapScriptCmdExecute), name)
-		assert.False(t, bound.AllowedCommands.Allows(gozapscript.ZapScriptCmdInputKeyboard), name)
 	}
 
+	// Marked with kiosk off as well: the lock may engage while the script
+	// waits its turn or runs, and the mark is what lets it reach it then.
+	for name, env := range callers {
+		token := runAndCapture(t, env, "**launch.system:NES")
+		assert.True(t, token.AllowedCommands.Guarded(), name)
+		assert.True(t, token.AllowedCommands.Unrestricted(), "%s: the mark adds no bound of its own", name)
+	}
+
+	f.lockOpen(t)
+	for name, env := range callers {
+		token := runAndCapture(t, env, "**launch.system:NES")
+		assert.True(t, token.AllowedCommands.Guarded(), name)
+	}
+	assert.True(t, f.lock.CommandPermitted(gozapscript.ZapScriptCmdLaunchSystem))
+	assert.False(t, f.lock.CommandPermitted(gozapscript.ZapScriptCmdExecute))
+	assert.False(t, f.lock.CommandPermitted(gozapscript.ZapScriptCmdInputKeyboard))
+
 	admin := runAndCapture(t, f.paired("admin"), "**launch.system:NES")
-	assert.True(t, admin.AllowedCommands.Unrestricted(), "a paired admin's script is not card text")
+	assert.False(t, admin.AllowedCommands.Guarded(), "a paired admin's script is not card text")
 }
 
 func TestKioskNarrowSystems(t *testing.T) {

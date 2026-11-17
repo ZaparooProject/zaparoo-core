@@ -22,6 +22,7 @@ package service
 import (
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -279,29 +280,32 @@ func TestKioskScan_FixedProfileRefusesEverySwitchCard(t *testing.T) {
 	assert.Nil(t, env.st.ActiveProfile())
 }
 
-func TestBoundScannedToken(t *testing.T) {
+func TestGuardScannedToken(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, "tap", 0)
 
-	bound := func(source string, hasMapping bool) bool {
+	guarded := func(source string, hasMapping bool) bool {
 		token := tokens.Token{Source: source}
-		boundScannedToken(env.svc, &token, hasMapping)
-		return !token.AllowedCommands.Unrestricted()
+		guardScannedToken(env.svc, &token, hasMapping)
+		return token.AllowedCommands.Guarded()
 	}
 
-	assert.False(t, bound(tokens.SourceReader, false), "no lock attached")
+	assert.False(t, guarded(tokens.SourceReader, false), "no lock attached")
 	lock := lockScanEnv(t, env, openRule, nil)
 
-	assert.True(t, bound(tokens.SourceReader, false))
-	assert.True(t, bound(tokens.SourceGMC, false))
-	assert.True(t, bound(tokens.SourceRemote, false))
-	assert.False(t, bound(tokens.SourceReader, true), "a mapped scan runs the owner's script")
-	assert.False(t, bound(tokens.SourceHook, false), "hooks are configured on the device")
-	assert.False(t, bound(tokens.SourceControl, false))
-	assert.False(t, bound(tokens.SourcePlaylist, false), "playlist items inherit their bound instead")
+	assert.True(t, guarded(tokens.SourceReader, false))
+	assert.True(t, guarded(tokens.SourceGMC, false))
+	assert.True(t, guarded(tokens.SourceRemote, false))
+	assert.False(t, guarded(tokens.SourceReader, true), "a mapped scan runs the owner's script")
+	assert.False(t, guarded(tokens.SourceHook, false), "hooks are configured on the device")
+	assert.False(t, guarded(tokens.SourceControl, false))
+	assert.False(t, guarded(tokens.SourcePlaylist, false), "playlist items inherit their guard instead")
 
+	// A card is marked during a temporary unlock too. What it may run is
+	// decided command by command, so the mark is what lets a relock reach a
+	// script that started while the device was open.
 	require.NoError(t, lock.Unlock(time.Minute))
-	assert.False(t, bound(tokens.SourceReader, false), "temporarily unlocked")
+	assert.True(t, guarded(tokens.SourceReader, false))
 }
 
 func TestAdmitKioskMediaInstall(t *testing.T) {
@@ -313,7 +317,7 @@ func TestAdmitKioskMediaInstall(t *testing.T) {
 	require.NoError(t, admitKioskMediaInstall(env.svc, &card), "no lock attached")
 
 	lock := lockScanEnv(t, env, openRule, nil)
-	lock.BoundToken(&card)
+	lock.GuardToken(&card)
 
 	err := admitKioskMediaInstall(env.svc, &card)
 	require.ErrorIs(t, err, kiosk.ErrLaunchRefused)
@@ -321,10 +325,43 @@ func TestAdmitKioskMediaInstall(t *testing.T) {
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, kiosk.ReasonDownload, refused.Reason)
 
-	require.NoError(t, admitKioskMediaInstall(env.svc, &owner), "an unbounded token is the owner's")
+	require.NoError(t, admitKioskMediaInstall(env.svc, &owner), "an unguarded token is the owner's")
 
 	require.NoError(t, lock.Unlock(time.Minute))
 	require.NoError(t, admitKioskMediaInstall(env.svc, &card), "temporarily unlocked")
+}
+
+func TestKioskScan_ScriptStartedWhileUnlockedIsStoppedByTheRelock(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	lock := lockScanEnv(t, env, openRule, nil)
+	require.NoError(t, lock.Unlock(time.Minute))
+
+	// The card is scanned while the device is open, waits, and only then
+	// reaches the command a locked device refuses.
+	completion := env.scanWithCompletion(t, "card1", "**delay:400||**input.keyboard:a")
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, lock.Lock())
+
+	require.ErrorIs(t, waitCompletion(t, completion), zapscript.ErrCommandNotPermitted)
+	env.expectNoKeyboard(t)
+}
+
+func TestKioskScan_ScriptStartedBeforeKioskWasTurnedOnIsStopped(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	// The lock exists but kiosk mode is off when the card is scanned.
+	lock := lockScanEnv(t, env, openRule, nil)
+	require.NoError(t, lock.Disable())
+
+	completion := env.scanWithCompletion(t, "card1", "**delay:400||**input.keyboard:a")
+	time.Sleep(100 * time.Millisecond)
+	settings, ok := kiosk.PresetSettings(kiosk.PresetFamily)
+	require.True(t, ok)
+	require.NoError(t, lock.Enable(&settings, kiosk.EnableOptions{ConfirmEmpty: true}))
+
+	require.ErrorIs(t, waitCompletion(t, completion), zapscript.ErrCommandNotPermitted)
+	env.expectNoKeyboard(t)
 }
 
 func TestKioskSystemPermitted(t *testing.T) {
@@ -367,4 +404,36 @@ func TestKioskLaunchSystem(t *testing.T) {
 
 	// A system launch has no path to look up.
 	assert.Equal(t, "NES", kioskLaunchSystem(platforms.ResolvedLaunch{SystemID: "NES"}, genesis))
+}
+
+func TestKioskScan_RefusedLaunchDisturbsNothing(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "hold", 0)
+	lockScanEnv(t, env, kioskRule{mode: database.ContentModeAllowed}, nil)
+	require.NoError(t, env.cfg.LoadTOML(`[launchers]
+before_media_start = "**input.keyboard:h"`))
+	var exits atomic.Int32
+	env.st.SetBeforeExitHook(func() { exits.Add(1) })
+
+	completion := env.scanWithCompletion(t, "card1", env.gbaLaunch("game1.gba"))
+	require.ErrorIs(t, waitCompletion(t, completion), kiosk.ErrLaunchRefused)
+
+	// Nothing that belongs to a launch has happened: no hook, no stop of
+	// what was playing, no exit hook for it.
+	env.expectNoKeyboard(t)
+	env.expectNoStop(t)
+	env.expectNoLaunch(t)
+	assert.Zero(t, exits.Load())
+}
+
+func TestKioskScan_AllowedLaunchStillRunsItsHook(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "hold", 0)
+	lockScanEnv(t, env, allowGBA(), nil)
+	require.NoError(t, env.cfg.LoadTOML(`[launchers]
+before_media_start = "**input.keyboard:h"`))
+
+	env.sendCommandScan("card1", env.gbaLaunch("game1.gba"))
+	assert.Equal(t, "h", env.waitForKeyboard(t))
+	env.waitForLaunch(t)
 }

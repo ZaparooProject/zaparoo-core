@@ -21,6 +21,7 @@ package kiosk_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -315,4 +316,48 @@ func TestSystemScopeWithNothingAllowedExposesNothing(t *testing.T) {
 	scope := lock.SystemScope("")
 	assert.True(t, scope.Limited())
 	assert.False(t, scope.Permits("NES"))
+}
+
+func TestDenyThatCannotBeLookedUpRefuses(t *testing.T) {
+	t.Parallel()
+	lock, db, _ := newLock(t)
+	mediaDB := helpers.NewMockMediaDBI()
+	db.MediaDB = mediaDB
+	mediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("database is locked"))
+
+	// An open rule with one deny by tag. The index cannot be read, so
+	// nothing says the game is not the one being denied.
+	setRule(t, db, "", database.ContentModeAll, tagRule(database.ContentEffectDeny, "rating:adult"))
+	enableOpen(t, lock)
+	requireRefused(t, check(lock, "", "NES", marioPath), kiosk.ReasonDenied)
+
+	// A launch of the system itself has no media to look up and is not
+	// what a tag entry is about.
+	require.NoError(t, check(lock, "", "NES", ""))
+}
+
+func TestDenyByTagWithNoIndexAtAllRefuses(t *testing.T) {
+	t.Parallel()
+	lock, db, _ := newLock(t)
+	setRule(t, db, "", database.ContentModeAll, tagRule(database.ContentEffectDeny, "rating:adult"))
+	enableOpen(t, lock)
+	requireRefused(t, check(lock, "", "NES", marioPath), kiosk.ReasonDenied)
+}
+
+func TestAllowThatCannotBeLookedUpAllowsNothing(t *testing.T) {
+	t.Parallel()
+	lock, db, _ := newLock(t)
+	mediaDB := helpers.NewMockMediaDBI()
+	db.MediaDB = mediaDB
+	mediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("database is locked"))
+
+	setRule(t, db, "", database.ContentModeAllowed,
+		tagRule(database.ContentEffectAllow, "rating:everyone"), allowSystem("SNES"))
+	require.NoError(t, lock.Enable(preset(t, kiosk.PresetFamily), kiosk.EnableOptions{ConfirmEmpty: true}))
+
+	requireRefused(t, check(lock, "", "NES", marioPath), kiosk.ReasonNotAllowed)
+	// An entry that can be evaluated still works beside one that cannot.
+	require.NoError(t, check(lock, "", "SNES", "/media/fat/games/SNES/Zelda.sfc"))
 }

@@ -21,6 +21,7 @@ package kiosk_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -85,8 +86,9 @@ func TestNilServiceReportsOff(t *testing.T) {
 	require.NoError(t, lock.CheckLaunch(context.Background(), "", "NES", "/games/a.nes", true))
 
 	token := tokens.Token{}
-	lock.BoundToken(&token)
-	assert.True(t, token.AllowedCommands.Unrestricted())
+	lock.GuardToken(&token)
+	assert.False(t, token.AllowedCommands.Guarded(), "a device with no lock guards nothing")
+	assert.True(t, lock.CommandPermitted(gozapscript.ZapScriptCmdExecute))
 }
 
 func TestEnableLocksAndPersists(t *testing.T) {
@@ -368,32 +370,34 @@ func TestCommandPolicyFollowsSettings(t *testing.T) {
 	assert.True(t, policy.Allows(gozapscript.ZapScriptCmdLaunch))
 }
 
-func TestBoundTokenOnlyNarrows(t *testing.T) {
+func TestGuardedTokenFollowsTheLock(t *testing.T) {
 	t.Parallel()
 	lock, _, _ := newLock(t)
 
-	open := tokens.Token{}
-	lock.BoundToken(&open)
-	assert.True(t, open.AllowedCommands.Unrestricted(), "an unlocked device bounds nothing")
+	// The mark is made whatever the lock's state, and adds no bound.
+	token := tokens.Token{}
+	lock.GuardToken(&token)
+	assert.True(t, token.AllowedCommands.Guarded())
+	assert.True(t, token.AllowedCommands.Unrestricted())
+	assert.True(t, lock.CommandPermitted(gozapscript.ZapScriptCmdExecute), "kiosk off permits everything")
 
+	// What a guarded token may run is decided when the command runs.
 	enableOpen(t, lock)
-	lock.BoundToken(&open)
-	assert.True(t, open.AllowedCommands.Allows(gozapscript.ZapScriptCmdLaunch))
-	assert.False(t, open.AllowedCommands.Allows(gozapscript.ZapScriptCmdExecute))
-
-	// A token that already carries a tighter bound keeps it.
-	narrow := tokens.Token{AllowedCommands: tokens.NewCommandPolicy(
-		gozapscript.ZapScriptCmdStop, gozapscript.ZapScriptCmdMisterScript,
-	)}
-	lock.BoundToken(&narrow)
-	assert.True(t, narrow.AllowedCommands.Allows(gozapscript.ZapScriptCmdStop))
-	assert.False(t, narrow.AllowedCommands.Allows(gozapscript.ZapScriptCmdLaunch))
-	assert.False(t, narrow.AllowedCommands.Allows(gozapscript.ZapScriptCmdMisterScript))
+	assert.True(t, lock.CommandPermitted(gozapscript.ZapScriptCmdLaunch))
+	assert.False(t, lock.CommandPermitted(gozapscript.ZapScriptCmdExecute))
 
 	require.NoError(t, lock.Unlock(time.Minute))
-	unlocked := tokens.Token{}
-	lock.BoundToken(&unlocked)
-	assert.True(t, unlocked.AllowedCommands.Unrestricted(), "a temporary unlock lifts the bound")
+	assert.True(t, lock.CommandPermitted(gozapscript.ZapScriptCmdExecute), "a temporary unlock lifts it")
+
+	require.NoError(t, lock.Lock())
+	assert.False(t, lock.CommandPermitted(gozapscript.ZapScriptCmdExecute), "and the relock brings it back")
+
+	// A token that carries a bound of its own keeps it beside the guard.
+	narrow := tokens.Token{AllowedCommands: tokens.NewCommandPolicy(gozapscript.ZapScriptCmdStop)}
+	lock.GuardToken(&narrow)
+	assert.True(t, narrow.AllowedCommands.Guarded())
+	assert.True(t, narrow.AllowedCommands.Allows(gozapscript.ZapScriptCmdStop))
+	assert.False(t, narrow.AllowedCommands.Allows(gozapscript.ZapScriptCmdLaunch))
 }
 
 func TestStoredGarbageDoesNotUnlock(t *testing.T) {
@@ -406,4 +410,63 @@ func TestStoredGarbageDoesNotUnlock(t *testing.T) {
 	assert.True(t, lock.Locked(), "an enabled lock with unreadable settings stays locked")
 	assert.Equal(t, database.ContentModeAllowed, lock.Status().Settings.DefaultContentMode)
 	require.NotErrorIs(t, lock.Lock(), kiosk.ErrNotEnabled)
+}
+
+// failingStateDB fails writes of the kiosk record on demand.
+type failingStateDB struct {
+	database.UserDBI
+	fail bool
+}
+
+func (f *failingStateDB) SetDeviceState(key, value string) error {
+	if f.fail && key == database.DeviceStateKeyKiosk {
+		return errors.New("disk is full")
+	}
+	return f.UserDBI.SetDeviceState(key, value) //nolint:wrapcheck // test double passes the real result through
+}
+
+func TestFailedDisableDuringUnlockStillRelocks(t *testing.T) {
+	t.Parallel()
+	_, db, clock := newLock(t)
+	failing := &failingStateDB{UserDBI: db.UserDB}
+	lock := kiosk.NewService(&database.Database{UserDB: failing}, clock)
+	enableOpen(t, lock)
+	require.NoError(t, lock.Unlock(time.Minute))
+
+	failing.fail = true
+	require.Error(t, lock.Disable())
+	require.Equal(t, kiosk.StateUnlocked, lock.Status().State, "a disable that was not stored changes nothing")
+
+	// The unlock it rolled back to still has to end.
+	clock.Advance(2 * time.Minute)
+	assert.Eventually(t, lock.Locked, time.Second, time.Millisecond)
+}
+
+func TestSettingsPatchesBuildOnEachOther(t *testing.T) {
+	t.Parallel()
+	lock, _, _ := newLock(t)
+	enableOpen(t, lock)
+
+	done := make(chan error, 2)
+	go func() {
+		done <- lock.PatchSettings(func(s *kiosk.Settings) { s.ExtensionCard = false })
+	}()
+	go func() {
+		done <- lock.PatchSettings(func(s *kiosk.Settings) { s.ProfileSwitching = false })
+	}()
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+
+	settings := lock.Status().Settings
+	assert.False(t, settings.ExtensionCard, "neither change undoes the other")
+	assert.False(t, settings.ProfileSwitching)
+}
+
+func TestPatchSettingsRefusesAnInvalidResult(t *testing.T) {
+	t.Parallel()
+	lock, _, _ := newLock(t)
+	enableOpen(t, lock)
+	err := lock.PatchSettings(func(s *kiosk.Settings) { s.UnlockDuration = 1 })
+	require.ErrorIs(t, err, kiosk.ErrInvalidSettings)
+	assert.Equal(t, 300, lock.Status().Settings.UnlockDuration)
 }

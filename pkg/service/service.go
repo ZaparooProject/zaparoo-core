@@ -1129,7 +1129,7 @@ func startServiceWithOptions(
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut, publisherFanOutDone := startPublishers(st, cfg, publisherNotifications)
 
-	kioskHost := newKioskHostSync(kioskLock, pl, clockwork.NewRealClock())
+	kioskHost := newKioskHostSync(kioskLock, pl, clockwork.NewRealClock(), db)
 	kioskMediaStarted, _ := notifBroker.Subscribe(8, models.NotificationStarted)
 	backgroundWG.Add(1)
 	go func() {
@@ -1331,7 +1331,7 @@ func startServiceWithOptions(
 			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
 		) error {
 			// A remote operation is card text to a locked device.
-			svc.State.Kiosk().BoundToken(&token)
+			svc.State.Kiosk().GuardToken(&token)
 			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
 		},
 	}, backgroundWG)

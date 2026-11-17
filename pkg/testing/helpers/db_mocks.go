@@ -3301,6 +3301,7 @@ func NewMockUserDBI() *MockUserDBI {
 		Return(map[database.MediaUserRef]database.MediaUserData{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyKiosk).Return("", false, nil).Maybe()
+	m.On("GetDeviceState", database.DeviceStateKeyKioskHostLock).Return("", false, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyPINAttempts).Return("", false, nil).Maybe()
 	m.On("SetDeviceState", database.DeviceStateKeyPINAttempts, mock.Anything).Return(nil).Maybe()
 	m.On("DeleteDeviceState", database.DeviceStateKeyPINAttempts).Return(nil).Maybe()

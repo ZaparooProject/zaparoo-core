@@ -312,6 +312,11 @@ const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
 // and settings, as versioned JSON.
 const DeviceStateKeyKiosk = "kiosk"
 
+// DeviceStateKeyKioskHostLock is the DeviceState key marking that Core has
+// set a lock of the host's own (MiSTer Main's kiosk flag) and still has to
+// release it. It is stored so the release survives a restart.
+const DeviceStateKeyKioskHostLock = "kiosk_host_lock"
+
 // DeviceStateKeyPINAttempts is the DeviceState key holding recent failed
 // profile PIN attempts, as JSON, so a restart does not hand out a fresh set
 // of guesses.

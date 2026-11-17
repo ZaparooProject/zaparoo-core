@@ -110,7 +110,18 @@ func (s *Service) CheckLaunch(ctx context.Context, profileID, systemID, path str
 
 	for i := range rule.Entries {
 		entry := &rule.Entries[i]
-		if entry.Effect == database.ContentEffectDeny && target.matches(entry) {
+		if entry.Effect != database.ContentEffectDeny {
+			continue
+		}
+		matched, matchErr := target.matches(entry)
+		if matchErr != nil {
+			// A deny that cannot be looked up may well apply. Letting the
+			// launch through would turn a failed lookup into an allow.
+			log.Error().Err(matchErr).Str("kind", entry.Kind).
+				Msg("kiosk: failed to evaluate deny entry, refusing launch")
+			return refuse(ReasonDenied)
+		}
+		if matched {
 			return refuse(ReasonDenied)
 		}
 	}
@@ -119,7 +130,16 @@ func (s *Service) CheckLaunch(ctx context.Context, profileID, systemID, path str
 	}
 	for i := range rule.Entries {
 		entry := &rule.Entries[i]
-		if entry.Effect == database.ContentEffectAllow && target.matches(entry) {
+		if entry.Effect != database.ContentEffectAllow {
+			continue
+		}
+		matched, matchErr := target.matches(entry)
+		if matchErr != nil {
+			// An allow that cannot be looked up allows nothing.
+			log.Error().Err(matchErr).Str("kind", entry.Kind).Msg("kiosk: failed to evaluate allow entry")
+			continue
+		}
+		if matched {
 			return nil
 		}
 	}
@@ -218,6 +238,8 @@ func containsFold(list []string, want string) bool {
 type launchTarget struct {
 	ctx         context.Context
 	svc         *Service
+	decksErr    error
+	tagsErr     error
 	decks       map[string][]int64
 	systemID    string
 	path        string
@@ -226,14 +248,17 @@ type launchTarget struct {
 	tagsLoaded  bool
 }
 
-func (t *launchTarget) matches(entry *database.ContentRuleEntry) bool {
+// matches reports whether an entry covers the launch. The error is a lookup
+// that failed, which is not the same as a lookup that found nothing: the
+// caller decides which way a rule it could not read has to fall.
+func (t *launchTarget) matches(entry *database.ContentRuleEntry) (bool, error) {
 	switch entry.Kind {
 	case database.ContentKindSystem:
-		return t.systemID != "" && strings.EqualFold(entry.SystemID, t.systemID)
+		return t.systemID != "" && strings.EqualFold(entry.SystemID, t.systemID), nil
 	case database.ContentKindMedia:
 		return t.path != "" && t.systemID != "" &&
 			strings.EqualFold(entry.SystemID, t.systemID) &&
-			samePath(pathutil.CanonicalMediaPath(entry.Path), t.path)
+			samePath(pathutil.CanonicalMediaPath(entry.Path), t.path), nil
 	case database.ContentKindDeck:
 		return t.inDeck(entry.Value)
 	case database.ContentKindTags:
@@ -242,7 +267,7 @@ func (t *launchTarget) matches(entry *database.ContentRuleEntry) bool {
 		// A kind this build does not know matches nothing: an allow entry
 		// written by a newer build opens nothing here, which is the safe
 		// reading of a rule that cannot be understood.
-		return false
+		return false, nil
 	}
 }
 
@@ -253,46 +278,54 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-func (t *launchTarget) inDeck(deckID string) bool {
+func (t *launchTarget) inDeck(deckID string) (bool, error) {
 	if t.path == "" || t.systemID == "" || deckID == "" {
-		return false
+		return false, nil
 	}
 	if !t.decksLoaded {
 		t.decksLoaded = true
-		decks, err := t.svc.db.UserDB.FindDeckItemsByAnchor(t.systemID, t.path)
-		if err != nil {
-			log.Error().Err(err).Msg("kiosk: failed to look up deck membership")
-		} else {
-			t.decks = decks
-		}
+		t.decks, t.decksErr = t.svc.db.UserDB.FindDeckItemsByAnchor(t.systemID, t.path)
 	}
-	return len(t.decks[deckID]) > 0
+	if t.decksErr != nil {
+		return false, fmt.Errorf("look up deck membership: %w", t.decksErr)
+	}
+	return len(t.decks[deckID]) > 0, nil
 }
 
+// errNoIndex reports a tag entry met with no media index to read tags from.
+var errNoIndex = errors.New("media index is not available")
+
 // hasTags reports whether the media carries the tag filter. Media the index
-// knows nothing about matches no filter, including one made only of
-// exclusions, so a tag entry never opens what cannot be looked up.
-func (t *launchTarget) hasTags(value string) bool {
-	if t.path == "" || t.systemID == "" || t.svc.db.MediaDB == nil {
-		return false
+// holds no tags for matches no filter, including one made only of
+// exclusions, so a tag entry never opens what the index does not know. A
+// lookup that fails is reported as such.
+func (t *launchTarget) hasTags(value string) (bool, error) {
+	if t.path == "" || t.systemID == "" {
+		return false, nil
 	}
 	tagFilters, err := filters.ParseTagFilters(splitTagList(value))
-	if err != nil || len(tagFilters) == 0 {
-		return false
+	if err != nil {
+		// An entry whose filter cannot be read cannot be evaluated either.
+		return false, fmt.Errorf("parse tag filter: %w", err)
+	}
+	if len(tagFilters) == 0 {
+		return false, nil
 	}
 	if !t.tagsLoaded {
 		t.tagsLoaded = true
-		tags, tagsErr := t.svc.db.MediaDB.GetZapScriptTagsBySystemAndPath(t.ctx, t.systemID, t.path)
-		if tagsErr != nil {
-			log.Debug().Err(tagsErr).Msg("kiosk: no index tags for launch target")
+		if t.svc.db.MediaDB == nil {
+			t.tagsErr = errNoIndex
 		} else {
-			t.tags = tags
+			t.tags, t.tagsErr = t.svc.db.MediaDB.GetZapScriptTagsBySystemAndPath(t.ctx, t.systemID, t.path)
 		}
 	}
-	if len(t.tags) == 0 {
-		return false
+	if t.tagsErr != nil {
+		return false, fmt.Errorf("look up media tags: %w", t.tagsErr)
 	}
-	return tagsSatisfy(t.tags, tagFilters)
+	if len(t.tags) == 0 {
+		return false, nil
+	}
+	return tagsSatisfy(t.tags, tagFilters), nil
 }
 
 func splitTagList(value string) []string {

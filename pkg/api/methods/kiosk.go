@@ -196,15 +196,13 @@ func HandleKioskUpdate(env requests.RequestEnv) (any, error) {
 	if err := requireKioskAdmin(&env); err != nil {
 		return nil, err
 	}
-	status := env.Kiosk.Status()
-	if !status.Active() {
-		// There are no settings to change yet, and saying so is clearer
-		// than validating an empty set of them.
-		return nil, kioskError(kiosk.ErrNotEnabled)
-	}
-	settings := status.Settings
-	applyKioskPatch(&settings, &params.Settings)
-	if err := env.Kiosk.UpdateSettings(&settings); err != nil {
+	// The patch is applied to the settings as they are when the change is
+	// made, not to a copy read beforehand, so two updates sent at once do
+	// not undo each other.
+	err := env.Kiosk.PatchSettings(func(settings *kiosk.Settings) {
+		applyKioskPatch(settings, &params.Settings)
+	})
+	if err != nil {
 		return nil, kioskError(err)
 	}
 	return kioskResponse(&env), nil

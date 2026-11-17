@@ -398,6 +398,29 @@ func withAllowedSystems(entries []models.ContentRuleEntry, systemIDs []string) [
 	return out
 }
 
+// saveKioskContent applies one edit to a profile's content rule as it is
+// stored now, not as it was when the page was drawn. A save replaces the
+// whole rule, so editing a copy read earlier would drop any entry another
+// client added in the meantime, a deny entry included.
+func saveKioskContent(
+	svc SettingsService, profileID string, edit func(*models.ProfilesContentResponse),
+) (*models.ProfilesContentResponse, error) {
+	ctx, cancel := tuiContext()
+	defer cancel()
+	current, err := svc.GetProfileContent(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the current rule: %w", err)
+	}
+	edit(current)
+	err = svc.UpdateProfileContent(ctx, &models.ProfilesContentUpdateParams{
+		ProfileID: profileID, Mode: current.Mode, Entries: current.Entries,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to save the rule: %w", err)
+	}
+	return current, nil
+}
+
 // buildKioskProfileContent edits one profile's content mode and the systems
 // it allows. Deck, single-game and tag entries are kept as they are; they
 // are set through the API.
@@ -431,16 +454,14 @@ func buildKioskProfileContent(
 	modeIndex := kioskModeIndex(content.Mode)
 	menu.AddCycle("Mode", "Whether this profile launches everything or only what is allowed",
 		kioskModeOptions, &modeIndex, func(_ string, index int) {
-			saveCtx, saveCancel := tuiContext()
-			saveErr := svc.UpdateProfileContent(saveCtx, &models.ProfilesContentUpdateParams{
-				ProfileID: profileID, Mode: kioskModeValue(index), Entries: content.Entries,
+			saved, saveErr := saveKioskContent(svc, profileID, func(current *models.ProfilesContentResponse) {
+				current.Mode = kioskModeValue(index)
 			})
-			saveCancel()
 			if saveErr != nil {
 				ShowErrorModal(pages, app, "Failed to save mode", rebuild)
 				return
 			}
-			content.Mode = kioskModeValue(index)
+			*content = *saved
 		})
 	menu.AddValueAction("Allowed systems", "Systems this profile may launch from", func() string {
 		count := len(allowedSystemIDs(content.Entries))
@@ -494,13 +515,10 @@ func buildKioskSystemsPage(
 		Selected: allowedSystemIDs(content.Entries),
 	})
 	save := func() {
-		saveCtx, saveCancel := tuiContext()
-		saveErr := svc.UpdateProfileContent(saveCtx, &models.ProfilesContentUpdateParams{
-			ProfileID: profileID,
-			Mode:      content.Mode,
-			Entries:   withAllowedSystems(content.Entries, selector.GetSelected()),
+		selected := selector.GetSelected()
+		_, saveErr := saveKioskContent(svc, profileID, func(current *models.ProfilesContentResponse) {
+			current.Entries = withAllowedSystems(current.Entries, selected)
 		})
-		saveCancel()
 		if saveErr != nil {
 			log.Warn().Err(saveErr).Msg("error saving allowed systems")
 			ShowErrorModal(pages, app, "Failed to save allowed systems", func() {

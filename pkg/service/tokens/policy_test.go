@@ -139,3 +139,54 @@ func TestCommandPolicyJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandPolicyGuard(t *testing.T) {
+	t.Parallel()
+
+	var zero tokens.CommandPolicy
+	assert.False(t, zero.Guarded())
+
+	guarded := zero.WithGuard()
+	assert.True(t, guarded.Guarded())
+	assert.True(t, guarded.Unrestricted(), "a guard adds no bound of its own")
+	assert.True(t, guarded.Allows("execute"))
+	assert.False(t, zero.Guarded(), "WithGuard leaves the original as it was")
+
+	// Combining never drops a guard, whichever side carries it and whether
+	// or not either side is bounded.
+	bounded := tokens.NewCommandPolicy("launch", "stop")
+	for name, got := range map[string]tokens.CommandPolicy{
+		"guarded with unrestricted": guarded.Intersect(zero),
+		"unrestricted with guarded": zero.Intersect(guarded),
+		"guarded with bounded":      guarded.Intersect(bounded),
+		"bounded with guarded":      bounded.Intersect(guarded),
+		"bounded guard with bound":  bounded.WithGuard().Intersect(tokens.NewCommandPolicy("launch")),
+	} {
+		assert.True(t, got.Guarded(), name)
+	}
+	assert.False(t, bounded.Intersect(zero).Guarded())
+	assert.True(t, guarded.Intersect(bounded).Allows("launch"))
+	assert.False(t, guarded.Intersect(bounded).Allows("execute"))
+}
+
+func TestCommandPolicyGuardSurvivesStorage(t *testing.T) {
+	t.Parallel()
+	for name, policy := range map[string]tokens.CommandPolicy{
+		"guarded and unrestricted": tokens.CommandPolicy{}.WithGuard(),
+		"guarded and bounded":      tokens.NewCommandPolicy("launch").WithGuard(),
+	} {
+		raw, err := json.Marshal(policy)
+		require.NoError(t, err, name)
+		var restored tokens.CommandPolicy
+		require.NoError(t, json.Unmarshal(raw, &restored), name)
+		assert.True(t, restored.Guarded(), name)
+		assert.Equal(t, policy.Unrestricted(), restored.Unrestricted(), name)
+		assert.Equal(t, policy.Names(), restored.Names(), name)
+	}
+
+	// A policy stored before guards existed reads back unguarded.
+	var old tokens.CommandPolicy
+	require.NoError(t, json.Unmarshal([]byte(`{"bounded":true,"names":["launch"]}`), &old))
+	assert.False(t, old.Guarded())
+	assert.True(t, old.Allows("launch"))
+}

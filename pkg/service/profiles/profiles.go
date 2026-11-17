@@ -370,21 +370,23 @@ func (s *Service) VerifyBySwitchID(switchID string) (*database.Profile, error) {
 // so leaving to it would be a way out of whatever the active profile is
 // held to.
 func (s *Service) Deactivate() error {
+	// Asked here so a locked device answers before anything else, and again
+	// inside clearActive once the change can no longer race the lock.
 	if err := s.kioskGuard(nil); err != nil {
 		return err
 	}
-	return s.clearActive()
+	return s.clearActive(func(*models.ActiveProfile) (bool, error) {
+		return true, s.kioskGuard(nil)
+	})
 }
 
 // DeactivateForKioskLock drops an admin profile that is active when the
 // kiosk lock engages, so the device is not left on a profile nobody could
 // have switched to while it was locked. Other profiles stay as they are.
 func (s *Service) DeactivateForKioskLock() error {
-	active := s.st.ActiveProfile()
-	if active == nil || active.Role != ProfileRoleAdmin {
-		return nil
-	}
-	return s.clearActive()
+	return s.clearActive(func(active *models.ActiveProfile) (bool, error) {
+		return active != nil && active.Role == ProfileRoleAdmin, nil
+	})
 }
 
 // kioskGuard refuses a profile change the kiosk lock does not allow. target
@@ -402,7 +404,13 @@ func (s *Service) kioskGuard(target *database.Profile) error {
 	return nil
 }
 
-func (s *Service) clearActive() error {
+// clearActive leaves the active profile for the shared one when decide,
+// asked with the profile that is active once no other switch can be in
+// progress, says to. Deciding under the activation lock is what keeps a
+// switch that lands in between from being undone, and what makes the kiosk
+// guard hold: the lock engages before its listeners run, so a change either
+// sees the device locked here or is seen by the listener that follows.
+func (s *Service) clearActive(decide func(active *models.ActiveProfile) (bool, error)) error {
 	release, err := s.st.TryAcquireRestoreAccess()
 	if err != nil {
 		return fmt.Errorf("cannot deactivate profile during backup restore: %w", err)
@@ -411,6 +419,11 @@ func (s *Service) clearActive() error {
 
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
+
+	clearIt, err := decide(s.st.ActiveProfile())
+	if err != nil || !clearIt {
+		return err
+	}
 
 	if err := s.db.UserDB.DeleteDeviceState(database.DeviceStateKeyActiveProfile); err != nil {
 		return fmt.Errorf("failed to clear active profile state: %w", err)
@@ -468,6 +481,14 @@ func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
 	// the persisted device state with the in-memory snapshot.
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
+
+	// The kiosk guard is asked again here, where the switch can no longer
+	// race the lock. A device that locked after the caller's own check
+	// refuses now; one that locks after this point runs its lock listener
+	// once this switch is done, which drops an admin profile again.
+	if err := s.kioskGuard(p); err != nil {
+		return nil, err
+	}
 
 	lastUsedAt := s.now().Unix()
 	if err := s.db.UserDB.ActivateProfile(p.ProfileID, lastUsedAt); err != nil {

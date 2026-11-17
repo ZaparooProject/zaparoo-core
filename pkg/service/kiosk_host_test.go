@@ -97,13 +97,20 @@ func (p *inputPlatform) WatchInput(ctx context.Context, _ bool, onActivity func(
 
 func newHostLock(t *testing.T) (*kiosk.Service, *clockwork.FakeClock) {
 	t.Helper()
+	lock, _, clock := newHostLockDB(t)
+	return lock, clock
+}
+
+func newHostLockDB(t *testing.T) (*kiosk.Service, *database.Database, *clockwork.FakeClock) {
+	t.Helper()
 	userDB, cleanup := helpers.NewInMemoryUserDB(t)
 	t.Cleanup(cleanup)
 	require.NoError(t, userDB.CreateProfile(&database.Profile{
 		ProfileID: "admin-1", Name: "Parent", Role: "admin", SwitchID: "a-b-c", PINHash: "x",
 	}))
 	clock := clockwork.NewFakeClock()
-	return kiosk.NewService(&database.Database{UserDB: userDB}, clock), clock
+	db := &database.Database{UserDB: userDB}
+	return kiosk.NewService(db, clock), db, clock
 }
 
 func enableHostLock(t *testing.T, lock *kiosk.Service, mutate func(*kiosk.Settings)) {
@@ -121,7 +128,14 @@ func startHostSync(
 	t *testing.T, lock *kiosk.Service, pl platforms.Platform, clock clockwork.Clock,
 ) chan models.Notification {
 	t.Helper()
-	host := newKioskHostSync(lock, pl, clock)
+	return startHostSyncDB(t, lock, pl, clock, lock.DB())
+}
+
+func startHostSyncDB(
+	t *testing.T, lock *kiosk.Service, pl platforms.Platform, clock clockwork.Clock, db *database.Database,
+) chan models.Notification {
+	t.Helper()
+	host := newKioskHostSync(lock, pl, clock, db)
 	mediaStarted := make(chan models.Notification)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -234,7 +248,7 @@ func TestKioskHostSyncRetriesAHostThatRefused(t *testing.T) {
 func TestKioskHostSyncIgnoresPlatformsWithoutALock(t *testing.T) {
 	t.Parallel()
 	lock, clock := newHostLock(t)
-	host := newKioskHostSync(lock, mocks.NewMockPlatform(), clock)
+	host := newKioskHostSync(lock, mocks.NewMockPlatform(), clock, lock.DB())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -572,4 +586,65 @@ func TestKioskIdleStopSurvivesAFailedStop(t *testing.T) {
 	// The idle watcher keeps running whatever the stop returned.
 	kioskIdleStop(&ServiceContext{Platform: pl, State: st})
 	pl.AssertExpectations(t)
+}
+
+func TestKioskHostSyncRetriesAReleaseTheHostRefused(t *testing.T) {
+	t.Parallel()
+	lock, clock := newHostLock(t)
+	pl := &kioskHostPlatform{MockPlatform: mocks.NewMockPlatform()}
+	startHostSync(t, lock, pl, clock)
+	enableHostLock(t, lock, nil)
+	eventuallySeen(t, pl, []bool{true})
+
+	// The host is between processes when kiosk mode is turned off.
+	pl.setFail(true)
+	require.NoError(t, lock.Disable())
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	assert.Equal(t, []bool{true}, collapse(pl.seen()), "nothing was released yet")
+
+	// It is asked again until it does release, or a kiosk mode that is off
+	// would leave the host locked.
+	pl.setFail(false)
+	clock.Advance(kioskHostRetry)
+	eventuallySeen(t, pl, []bool{true, false})
+}
+
+func TestKioskHostSyncReleasesALockLeftByAPreviousRun(t *testing.T) {
+	t.Parallel()
+	lock, db, clock := newHostLockDB(t)
+
+	// Core set the host's lock, kiosk mode was turned off, and Core stopped
+	// before the host released it.
+	require.NoError(t, db.UserDB.SetDeviceState(database.DeviceStateKeyKioskHostLock, "1"))
+
+	pl := &kioskHostPlatform{MockPlatform: mocks.NewMockPlatform()}
+	startHostSyncDB(t, lock, pl, clock, db)
+	eventuallySeen(t, pl, []bool{false})
+	assert.Eventually(t, func() bool {
+		_, found, err := db.UserDB.GetDeviceState(database.DeviceStateKeyKioskHostLock)
+		return err == nil && !found
+	}, 2*time.Second, time.Millisecond, "ownership is given up once the host releases")
+}
+
+func TestKioskHostSyncManyChangesStillEndReleased(t *testing.T) {
+	t.Parallel()
+	lock, clock := newHostLock(t)
+	pl := &kioskHostPlatform{MockPlatform: mocks.NewMockPlatform()}
+	startHostSync(t, lock, pl, clock)
+	enableHostLock(t, lock, nil)
+	// Wait until Core has set the host's lock: a lock it never set is not
+	// one it releases.
+	eventuallySeen(t, pl, []bool{true})
+
+	// More changes than the worker could ever have queued, ending in off.
+	for range 20 {
+		require.NoError(t, lock.Unlock(time.Minute))
+		require.NoError(t, lock.Lock())
+	}
+	require.NoError(t, lock.Disable())
+
+	assert.Eventually(t, func() bool {
+		seen := pl.seen()
+		return len(seen) > 0 && !seen[len(seen)-1]
+	}, 2*time.Second, time.Millisecond, "the host must end released whatever was dropped on the way")
 }

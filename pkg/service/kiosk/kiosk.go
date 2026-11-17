@@ -293,6 +293,11 @@ func (s *Service) persistLocked() error {
 	return nil
 }
 
+// DB returns the database the lock is stored in.
+func (s *Service) DB() *database.Database {
+	return s.db
+}
+
 // Status returns the current lock snapshot.
 func (s *Service) Status() Status {
 	if s == nil {
@@ -448,11 +453,17 @@ func (s *Service) Disable() error {
 		return ErrNotEnabled
 	}
 	return s.transition(func() error {
-		s.stopTimerLocked()
 		s.state = StateOff
 		s.unlockUntil = time.Time{}
+		if err := s.persistLocked(); err != nil {
+			// The relock timer of a temporary unlock is still running. It
+			// must be: the state rolls back to unlocked, and an unlock with
+			// no timer behind it would never end.
+			return err
+		}
+		s.stopTimerLocked()
 		s.approvals = make(map[approvalKey]time.Time)
-		return s.persistLocked()
+		return nil
 	})
 }
 
@@ -525,19 +536,30 @@ func (s *Service) stopTimerLocked() {
 
 // UpdateSettings replaces the settings of an enabled lock.
 func (s *Service) UpdateSettings(settings *Settings) error {
-	if err := settings.validate(); err != nil {
-		return err
-	}
+	replacement := *settings
+	return s.PatchSettings(func(current *Settings) { *current = replacement })
+}
+
+// PatchSettings changes the settings of an enabled lock. patch is given the
+// settings as they are now and edits them in place, all inside one
+// transition, so two changes made at once each build on the other's result
+// instead of one silently undoing the other.
+func (s *Service) PatchSettings(patch func(*Settings)) error {
 	s.transitionMu.Lock()
 	defer s.transitionMu.Unlock()
 	if !s.Active() {
 		return ErrNotEnabled
 	}
-	if err := s.checkUnlockable(settings); err != nil {
+	settings := s.Status().Settings
+	patch(&settings)
+	if err := settings.validate(); err != nil {
+		return err
+	}
+	if err := s.checkUnlockable(&settings); err != nil {
 		return err
 	}
 	return s.transition(func() error {
-		s.settings = *settings
+		s.settings = settings
 		return s.persistLocked()
 	})
 }
@@ -631,8 +653,8 @@ func (s *Service) CheckRecoveryToken(token string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(s.recoveryToken)) == 1
 }
 
-// CommandPolicy is the bound on ZapScript that reaches a locked device as
-// plain text: a card, the run API, a remote operation. It is default-deny,
+// CommandPolicy is what a guarded token may run on a locked device: card
+// text, a capped caller's run, a remote operation. It is default-deny,
 // so a command added later stays out until it is listed here.
 //
 // Everything that starts or steers media is in, because that is what a card
@@ -672,14 +694,26 @@ func (s *Service) CommandPolicy() tokens.CommandPolicy {
 	return tokens.NewCommandPolicy(names...)
 }
 
-// BoundToken narrows token to the kiosk command policy when the lock is
-// enforcing. Derived tokens inherit the bound, so one call where a token
-// enters covers everything it expands into.
-func (s *Service) BoundToken(token *tokens.Token) {
-	if !s.Locked() {
+// GuardToken marks a token whose script the device's owner did not write
+// here, so that it answers to the kiosk command policy for as long as it
+// runs. The mark is made whether or not the lock is enforcing: the policy
+// is consulted when each command runs, which is what lets a lock that
+// engages later reach a script that was already running or queued.
+// Everything the token expands into carries the mark with it.
+func (s *Service) GuardToken(token *tokens.Token) {
+	if s == nil {
 		return
 	}
-	token.AllowedCommands = token.AllowedCommands.Intersect(s.CommandPolicy())
+	token.AllowedCommands = token.AllowedCommands.WithGuard()
+}
+
+// CommandPermitted reports whether a guarded token may run a command right
+// now. With the lock not enforcing, every command is permitted.
+func (s *Service) CommandPermitted(name string) bool {
+	if !s.Locked() {
+		return true
+	}
+	return s.CommandPolicy().Allows(name)
 }
 
 // IdleResetSupported reports whether pl can tell when the device is being

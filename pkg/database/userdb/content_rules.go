@@ -47,15 +47,24 @@ func (db *UserDB) ReplaceContentRule(profileID string, rule *database.ContentRul
 	return sqlReplaceContentRule(db.ctx, db.sql.Load(), profileID, rule)
 }
 
+// sqlGetContentRule reads the mode and the entries in one transaction, so
+// a rule replaced while it is being read comes back whole: never the old
+// mode with the new entries, which could admit what both rules refuse.
 func sqlGetContentRule(ctx context.Context, db *sql.DB, profileID string) (database.ContentRule, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return database.ContentRule{}, fmt.Errorf("failed to begin content rule read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	rule := database.ContentRule{Entries: []database.ContentRuleEntry{}}
-	err := db.QueryRowContext(ctx,
+	err = tx.QueryRowContext(ctx,
 		`SELECT Mode FROM ProfileContentModes WHERE ProfileID = ?;`, profileID).Scan(&rule.Mode)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return database.ContentRule{}, fmt.Errorf("failed to query content mode: %w", err)
 	}
 
-	rows, err := db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT Effect, Kind, SystemID, Path, Value
 		FROM ProfileContentRules WHERE ProfileID = ? ORDER BY DBID;
 	`, profileID)

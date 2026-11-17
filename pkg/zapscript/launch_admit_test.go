@@ -118,9 +118,10 @@ func TestLaunchClosure_AsksTheContentPolicyBeforeAndAtLaunch(t *testing.T) {
 	launch := getLaunchClosure(mockPlatform, env, false)
 	require.NoError(t, launch(launchTarget{path: "/games/NES/Mario.nes", systemID: "NES"}))
 
-	// The first ask comes before a confirmation is shown, the last after
-	// it, so a device that locks while the prompt is open still refuses.
-	assert.Equal(t, []string{"admit-first", "prepare", "admit-final"}, order)
+	// Asked before a confirmation is shown, again once it is answered, and
+	// a last time with the launch gate held, so a device that locks at any
+	// point on the way still refuses. Only the last uses up an approval.
+	assert.Equal(t, []string{"admit-first", "prepare", "admit-first", "admit-final"}, order)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -153,23 +154,97 @@ func TestLaunchClosure_RefusedLaunchNeverPreparesOrStarts(t *testing.T) {
 func TestLaunchClosure_RefusedAfterConfirmationNeverStarts(t *testing.T) {
 	t.Parallel()
 	mockPlatform := admitPlatform()
+	asked := 0
+	exitHookRan := false
 	env := &platforms.CmdEnv{
 		Cmd: zapscript.Command{Name: "launch", AdvArgs: zapscript.NewAdvArgs(map[string]string{})},
 		Cfg: &config.Instance{},
-		AdmitLaunch: func(_ platforms.ResolvedLaunch, final bool) error {
-			if final {
+		AdmitLaunch: func(platforms.ResolvedLaunch, bool) error {
+			asked++
+			if asked > 1 {
 				// The device locked while the confirmation was waiting.
 				return errNotAdmitted
 			}
 			return nil
 		},
 		PrepareMediaLaunch: func(platforms.ResolvedLaunch) (bool, error) { return true, nil },
+		BeforeExit:         func() { exitHookRan = true },
 	}
 
 	launch := getLaunchClosure(mockPlatform, env, false)
 	require.ErrorIs(t, launch(launchTarget{path: "/games/NES/Mario.nes", systemID: "NES"}), errNotAdmitted)
+	assert.False(t, exitHookRan, "the running game's exit hook does not run for a refused launch")
 	mockPlatform.AssertNotCalled(t, "LaunchMedia",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestLaunchClosure_RefusedWithTheGateHeldNeverStarts(t *testing.T) {
+	t.Parallel()
+	mockPlatform := admitPlatform()
+	released := false
+	env := &platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", AdvArgs: zapscript.NewAdvArgs(map[string]string{})},
+		Cfg: &config.Instance{},
+		AdmitLaunch: func(_ platforms.ResolvedLaunch, final bool) error {
+			if final {
+				// The device locked while the launch waited for the gate.
+				return errNotAdmitted
+			}
+			return nil
+		},
+		AcquireMediaLaunch: func() (platforms.MediaLaunchAccess, error) {
+			return platforms.MediaLaunchAccess{Release: func() { released = true }}, nil
+		},
+	}
+
+	launch := getLaunchClosure(mockPlatform, env, false)
+	err := launch(launchTarget{path: "/games/NES/Mario.nes", systemID: "NES"})
+	require.ErrorIs(t, err, errNotAdmitted)
+	require.ErrorIs(t, err, ErrLaunchNotAdmitted)
+	assert.True(t, released, "a refused launch gives the gate back")
+	mockPlatform.AssertNotCalled(t, "LaunchMedia",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// archivePlatform normalizes a launch path the way MiSTer does a ZIP: to
+// the file inside it.
+type archivePlatform struct {
+	*mocks.MockPlatform
+}
+
+func (*archivePlatform) NormalizeLaunchPath(path string) string {
+	return path + "/inner.nes"
+}
+
+func TestLaunchClosure_ContentPolicySeesThePathThatWasAskedFor(t *testing.T) {
+	t.Parallel()
+	pl := &archivePlatform{MockPlatform: admitPlatform()}
+	pl.On("LaunchMedia", mock.Anything, "/games/NES/Mario.zip/inner.nes",
+		mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	var judged []string
+	env := &platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", AdvArgs: zapscript.NewAdvArgs(map[string]string{})},
+		Cfg: &config.Instance{},
+		// Set, as it is for a tap-mode scan, which is what turns on the
+		// normalization.
+		SkipMediaLaunch: func(platforms.ResolvedLaunch) bool { return false },
+		AdmitLaunch: func(target platforms.ResolvedLaunch, _ bool) error {
+			judged = append(judged, target.Path)
+			return nil
+		},
+	}
+
+	launch := getLaunchClosure(pl, env, false)
+	require.NoError(t, launch(launchTarget{path: "/games/NES/Mario.zip", systemID: "NES"}))
+
+	// A rule, a hidden flag and a deck all name the archive. Judging the
+	// file inside it would match none of them.
+	require.NotEmpty(t, judged)
+	for _, path := range judged {
+		assert.Equal(t, "/games/NES/Mario.zip", path)
+	}
+	pl.AssertExpectations(t)
 }
 
 func TestCmdLaunch_RefusedMediaInstallDownloadsNothing(t *testing.T) {

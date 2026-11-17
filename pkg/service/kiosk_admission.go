@@ -67,12 +67,12 @@ func admitKioskLaunch(
 	return fmt.Errorf("kiosk: %w", err)
 }
 
-// admitKioskMediaInstall refuses a media download asked for by a token the
-// lock has bounded. A card that names a URL would otherwise put a file of
+// admitKioskMediaInstall refuses a media download asked for by a guarded
+// token while the device is locked. A card that names a URL would otherwise put a file of
 // its author's choosing onto a locked device and start it.
 func admitKioskMediaInstall(svc *ServiceContext, token *tokens.Token) error {
 	lock := svc.State.Kiosk()
-	if !lock.Locked() || token.AllowedCommands.Unrestricted() {
+	if !lock.Locked() || !token.AllowedCommands.Guarded() {
 		return nil
 	}
 	profileID := ""
@@ -98,17 +98,17 @@ func notifyKioskRefusal(svc *ServiceContext, refused *kiosk.RefusedError) {
 	})
 }
 
-// boundScannedToken narrows a token read from a card to the kiosk command
-// policy. A scan that a stored mapping replaces is left alone: mappings can
-// only be written while the device is unlocked, so the script that runs is
-// one its owner chose, whatever the card itself says.
-func boundScannedToken(svc *ServiceContext, token *tokens.Token, hasMapping bool) {
+// guardScannedToken marks a token read from a card as answerable to the
+// kiosk lock. A scan that a stored mapping replaces is left alone: mappings
+// can only be written while the device is unlocked, so the script that runs
+// is one its owner chose, whatever the card itself says.
+func guardScannedToken(svc *ServiceContext, token *tokens.Token, hasMapping bool) {
 	if hasMapping {
 		return
 	}
 	switch token.Source {
 	case tokens.SourceReader, tokens.SourceGMC, tokens.SourceRemote:
-		svc.State.Kiosk().BoundToken(token)
+		svc.State.Kiosk().GuardToken(token)
 	}
 }
 

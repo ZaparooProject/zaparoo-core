@@ -84,26 +84,86 @@ func setupKiosk(
 // Core's. The host can lose the lock without saying so (MiSTer's Main is
 // replaced on every core load, and a command sent mid-load is dropped), so
 // the lock is offered again whenever media starts and until the host takes
-// it. Core leaves the host's lock alone for as long as its own kiosk mode
-// is off, apart from releasing it once when it is turned off.
+// it.
+//
+// Core only ever releases a host lock it set. That ownership is stored, so
+// a release that fails, or that Core is restarted in the middle of, is
+// still made: without it a host could be left locked by a kiosk mode that
+// is off, with nothing on the device able to open it. A host lock that was
+// on before Core's kiosk mode was ever used is never touched.
 type kioskHostSync struct {
-	lock    *kiosk.Service
-	pl      platforms.Platform
-	clock   clockwork.Clock
-	changed chan kiosk.Status
+	lock  *kiosk.Service
+	pl    platforms.Platform
+	clock clockwork.Clock
+	db    *database.Database
+	// changed only says that something changed. The worker reads the
+	// lock's current state each time it wakes, so a wake-up that is dropped
+	// because one is already waiting loses nothing.
+	changed chan struct{}
 }
 
-func newKioskHostSync(lock *kiosk.Service, pl platforms.Platform, clock clockwork.Clock) *kioskHostSync {
-	h := &kioskHostSync{lock: lock, pl: pl, clock: clock, changed: make(chan kiosk.Status, 8)}
-	lock.OnChange(func(status kiosk.Status) {
+func newKioskHostSync(
+	lock *kiosk.Service, pl platforms.Platform, clock clockwork.Clock, db *database.Database,
+) *kioskHostSync {
+	h := &kioskHostSync{lock: lock, pl: pl, clock: clock, db: db, changed: make(chan struct{}, 1)}
+	lock.OnChange(func(kiosk.Status) {
 		select {
-		case h.changed <- status:
+		case h.changed <- struct{}{}:
 		default:
-			// A full buffer already holds a change that will make the
-			// worker read the current state, which is all it acts on.
 		}
 	})
 	return h
+}
+
+// owned reports whether Core has set the host's lock and not yet released
+// it. A marker that cannot be read counts as owned: releasing a lock Core
+// may have set is safer than leaving a host locked for good.
+func (h *kioskHostSync) owned() bool {
+	_, found, err := h.db.UserDB.GetDeviceState(database.DeviceStateKeyKioskHostLock)
+	if err != nil {
+		log.Warn().Err(err).Msg("kiosk: failed to read host lock ownership")
+		return true
+	}
+	return found
+}
+
+func (h *kioskHostSync) setOwned(owned bool) {
+	var err error
+	if owned {
+		err = h.db.UserDB.SetDeviceState(database.DeviceStateKeyKioskHostLock, "1")
+	} else {
+		err = h.db.UserDB.DeleteDeviceState(database.DeviceStateKeyKioskHostLock)
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("kiosk: failed to store host lock ownership")
+	}
+}
+
+// reconcile brings the host's lock in line with Core's current state and
+// reports whether it has to be tried again.
+func (h *kioskHostSync) reconcile() (retry bool) {
+	status := h.lock.Status()
+	if status.Active() {
+		// Ownership is recorded before the host is told, so a restart
+		// between the two still knows there may be a lock to release.
+		if !h.owned() {
+			h.setOwned(true)
+		}
+		if err := platforms.SetKioskLocked(h.pl, status.Locked()); err != nil {
+			log.Debug().Err(err).Msg("kiosk: host did not take the lock, will offer it again")
+			return true
+		}
+		return false
+	}
+	if !h.owned() {
+		return false
+	}
+	if err := platforms.SetKioskLocked(h.pl, false); err != nil {
+		log.Debug().Err(err).Msg("kiosk: host did not release the lock, will ask again")
+		return true
+	}
+	h.setOwned(false)
+	return false
 }
 
 func (h *kioskHostSync) run(ctx context.Context, mediaStarted <-chan models.Notification) {
@@ -113,12 +173,7 @@ func (h *kioskHostSync) run(ctx context.Context, mediaStarted <-chan models.Noti
 	var retry <-chan time.Time
 	apply := func() {
 		retry = nil
-		status := h.lock.Status()
-		if !status.Active() {
-			return
-		}
-		if err := platforms.SetKioskLocked(h.pl, status.Locked()); err != nil {
-			log.Debug().Err(err).Msg("kiosk: host did not take the lock, will offer it again")
+		if h.reconcile() {
 			retry = h.clock.After(kioskHostRetry)
 		}
 	}
@@ -127,14 +182,7 @@ func (h *kioskHostSync) run(ctx context.Context, mediaStarted <-chan models.Noti
 		select {
 		case <-ctx.Done():
 			return
-		case status := <-h.changed:
-			if !status.Active() {
-				retry = nil
-				if err := platforms.SetKioskLocked(h.pl, false); err != nil {
-					log.Warn().Err(err).Msg("kiosk: failed to release the host's lock")
-				}
-				continue
-			}
+		case <-h.changed:
 			apply()
 		case <-mediaStarted:
 			apply()
@@ -264,10 +312,31 @@ func (k *kioskIdleReset) watch(ctx context.Context) {
 	}
 }
 
-// kioskIdleStop ends the running media the way a reached playtime limit
-// does: the outgoing media's before_exit hook, then an unconditional stop.
+// kioskIdleStop ends the running media the way the stop API does. It calls
+// off a launch that is still settling, runs the outgoing media's
+// before_exit hook, and then waits for the media stop gate, so it cannot
+// land on a game a launch in flight has only just started and leave that
+// launch to publish media that is no longer running.
 func kioskIdleStop(svc *ServiceContext) {
+	ctx := svc.State.GetContext()
+	svc.State.LauncherManager().NewContext()
+
+	// Before the gate: a before_exit script may launch media, which takes
+	// the read side of the gate held below.
+	outgoingGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
 	svc.State.RunBeforeExitHook()
+
+	release, err := svc.State.AcquireMediaStop(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("kiosk: idle reset could not wait for an in-flight launch")
+		return
+	}
+	defer release()
+
+	if svc.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+		log.Info().Msg("kiosk: before_exit replaced the outgoing media, leaving it running")
+		return
+	}
 	cancelStop := svc.State.RecordMediaStop(models.MediaStopReasonStopped)
 	if err := svc.Platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		log.Error().Err(err).Msg("kiosk: failed to stop media on idle reset")
