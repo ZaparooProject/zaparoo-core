@@ -72,4 +72,10 @@ func TestOpenMediaDB_ExistingDatabaseKeepsItsPageSize(t *testing.T) {
 	require.NoError(t, reopened.Open())
 	t.Cleanup(func() { _ = reopened.Close() })
 	assert.Equal(t, int64(4096), mediaDBPageSizeOf(t, reopened))
+	assert.True(t, reopened.StoragePageSizeOutdated())
+
+	// Replacing the file is what brings an older database to the current size.
+	require.NoError(t, reopened.Recreate(false))
+	assert.Equal(t, int64(mediaDBPageSize), mediaDBPageSizeOf(t, reopened))
+	assert.False(t, reopened.StoragePageSizeOutdated())
 }

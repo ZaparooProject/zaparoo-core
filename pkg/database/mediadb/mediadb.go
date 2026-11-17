@@ -152,8 +152,9 @@ const (
 // device spent 14.3 s in commits and checkpoints with 4 KiB pages, 4.8 s with
 // 16 KiB and 3.2 s with 64 KiB (BenchmarkSQLiteWritePattern).
 //
-// The page size is fixed when the file is created. An existing database keeps
-// the size it was built with until it is rebuilt.
+// The page size is fixed when the file is created, so a database built with
+// another size only changes when its file is replaced. StoragePageSizeOutdated
+// reports that case, and the next full index rebuilds the file.
 const mediaDBPageSize = 16384
 
 // createMediaDBFile writes an empty database at dbPath with mediaDBPageSize.
@@ -2212,6 +2213,22 @@ func (db *MediaDB) GetIndexingSkippedSystems() ([]string, error) {
 		return nil, err
 	}
 	return sqlGetIndexingSkippedSystems(db.ctx, sqlDB)
+}
+
+// StoragePageSizeOutdated reports whether the database file was created with
+// a page size other than mediaDBPageSize. A database that cannot be read
+// reports false: this only ever asks for a rebuild it is sure about.
+func (db *MediaDB) StoragePageSizeOutdated() bool {
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return false
+	}
+	var pageSize int64
+	if err := sqlDB.QueryRowContext(db.ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		log.Debug().Err(err).Msg("failed to read media database page size")
+		return false
+	}
+	return pageSize != mediaDBPageSize
 }
 
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {

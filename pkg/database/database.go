@@ -1511,6 +1511,9 @@ type MediaDBI interface {
 	ClearCorruptMarker() error
 	NoteCorruption(err error) bool
 	Recreate(keepBackup bool) error
+	// StoragePageSizeOutdated reports whether the database file was created
+	// with a page size this build no longer uses for new databases.
+	StoragePageSizeOutdated() bool
 
 	// On-disk persistence for rebuilt caches. Persist* writes the current
 	// in-memory cache atomically; LoadCached* reads it back at startup and

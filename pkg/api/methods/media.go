@@ -1090,6 +1090,16 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
+	// A database file keeps the page size it was created with, and the size
+	// new databases get makes bulk writes several times cheaper on slow
+	// storage. A full index is the one point where every row is about to be
+	// visited anyway, so it starts from a new file instead. User flags are
+	// re-applied from UserDB as on any rebuild; scraped data is fetched again.
+	if !rebuild && !isSelectiveIndexing && env.Database.MediaDB.StoragePageSizeOutdated() {
+		log.Info().Msg("media database uses an outdated page size, rebuilding it for this full index")
+		rebuild = true
+	}
+
 	// Ensure at least one resolved system is specified for selective indexing.
 	// Process-local lease ownership, not persisted optimization status, decides conflicts.
 	if isSelectiveIndexing && len(systems) == 0 {

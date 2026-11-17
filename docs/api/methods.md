@@ -1478,6 +1478,7 @@ An omitted or `null` value parameters key is also valid and will index every sys
 - When `systems` is provided with specific system IDs, only those systems will be reindexed
 - The server will validate all provided system IDs and return an error if any are invalid
 - If all systems are specified (equivalent to no restriction), a full database rebuild will be performed for optimal performance
+- A full index of a media database created with an older storage page size replaces the database first, as `rebuild` does. This happens once per database; scraped metadata is re-scraped and favourites and launcher overrides are preserved
 - Selective indexing cannot be performed while database optimization is running
 - A request refused because indexing, scraping, optimization, maintenance or recovery is already running returns an error whose `data.category` is `busy`. See [media database busy errors](#media-database-busy-errors).
 - Resume functionality will validate that the system configuration hasn't changed between indexing sessions

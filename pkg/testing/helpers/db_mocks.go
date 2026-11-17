@@ -1518,6 +1518,13 @@ func (m *MockMediaDBI) NoteCorruption(err error) bool {
 	return args.Bool(0)
 }
 
+func (m *MockMediaDBI) StoragePageSizeOutdated() bool {
+	if !m.hasExpectation("StoragePageSizeOutdated") {
+		return false
+	}
+	return m.Called().Bool(0)
+}
+
 func (m *MockMediaDBI) Recreate(keepBackup bool) error {
 	if !m.hasExpectation("Recreate") {
 		return nil
