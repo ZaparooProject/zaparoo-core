@@ -1,4 +1,4 @@
-Optimize the media indexing pipeline. Priority #3 — 1.3x over target.
+Optimize the media indexing pipeline. Priority #2 — 1.3x over target.
 
 ## Target
 

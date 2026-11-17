@@ -11,9 +11,9 @@ Autonomous optimization loop for zaparoo-core. Read targets, pick the highest-pr
 
 If multiple targets are behind, work on the highest priority first:
 
-1. **Slug search** — 3x over target at 500k. See `docs/prompts/optimize-slug-search.md`
-2. **Fuzzy matching** — worst case 3x over target. See `docs/prompts/optimize-fuzzy-matching.md`
-3. **Media indexing** — 1.5x over target. See `docs/prompts/optimize-indexing.md`
+1. **Fuzzy matching** — worst case 3x over target. See `docs/prompts/optimize-fuzzy-matching.md`
+2. **Media indexing** — 1.3x over target. See `docs/prompts/optimize-indexing.md`
+3. **Slug search** — within target at 500k (36ms); watch for regressions. See `docs/prompts/optimize-slug-search.md`
 4. **Memory** — 2x over target. See `docs/prompts/optimize-memory.md`
 
 Read the target-specific prompt for the area you're optimizing. It contains the exact files, functions, benchmarks, and constraints.

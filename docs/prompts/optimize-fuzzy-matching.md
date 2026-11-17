@@ -57,7 +57,7 @@ benchstat testdata/benchmarks/baseline.txt /tmp/bench-current.txt
 
 ## Success Criteria
 
-- Worst case (no match) at 129k titles: < 2.9ms on x86 (currently ~9.5ms)
+- Worst case (no match) at 129k titles: < 2.1ms on x86 (currently ~9.5ms)
 - Best case (match found) must not regress
 - Match quality unchanged — same results for same inputs
 - All existing tests pass

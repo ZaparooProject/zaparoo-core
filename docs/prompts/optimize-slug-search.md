@@ -1,11 +1,11 @@
-Optimize slug search cache substring matching. Priority #1 — furthest from target.
+Optimize slug search cache substring matching. Within target as of November 2026; the sections below describe the linear scan it replaced and are kept for regressions.
 
 ## Target
 
 MiSTer target: < 100ms per search query at 500k entries
-MiSTer baseline: 281ms (single-word query at 500k)
+MiSTer baseline: 36ms (single-word query at 500k, `BenchmarkSlugSearchCacheSearch_500k`)
 x86 CI threshold: < 2.1ms (100ms / 47x search multiplier)
-Gap: ~3x over target
+Gap: none — within target
 
 ## The Problem
 
@@ -68,7 +68,7 @@ benchstat testdata/benchmarks/baseline.txt /tmp/bench-current.txt
 
 ## Success Criteria
 
-- Search at 500k: < 2.9ms on x86 (currently ~8ms)
+- Search at 500k: < 2.1ms on x86 (currently ~0.75ms)
 - No regression in build time > 50% (build is a startup-only cost, some increase is acceptable)
 - Memory increase < 2x (< 50MB total at 500k)
 - All existing tests pass
