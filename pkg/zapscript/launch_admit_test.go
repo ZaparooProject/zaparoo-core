@@ -209,3 +209,22 @@ func TestPermittedSystems(t *testing.T) {
 	closed := &platforms.CmdEnv{SystemPermitted: func(string) bool { return false }}
 	assert.Empty(t, permittedSystems(closed, systems))
 }
+
+func TestOpenSystems(t *testing.T) {
+	t.Parallel()
+
+	all, err := openSystems(&platforms.CmdEnv{})
+	require.NoError(t, err)
+	assert.Equal(t, systemdefs.AllImplicitSystems(), all, "no policy leaves every system open")
+
+	onlyNES, err := openSystems(&platforms.CmdEnv{SystemPermitted: func(id string) bool { return id == "NES" }})
+	require.NoError(t, err)
+	require.Len(t, onlyNES, 1)
+	assert.Equal(t, "NES", onlyNES[0].ID)
+
+	// An empty list would read as every system further down, so a policy
+	// that closes them all has to come back as a refusal.
+	_, err = openSystems(&platforms.CmdEnv{SystemPermitted: func(string) bool { return false }})
+	require.ErrorIs(t, err, ErrLaunchNotAdmitted)
+	assert.True(t, IsExpectedRunError(err))
+}

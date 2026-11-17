@@ -644,7 +644,10 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
-		allSystems := systemdefs.AllImplicitSystems()
+		allSystems, openErr := openSystems(env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
 		systemIDs := make([]string, len(allSystems))
 		for i, sys := range allSystems {
 			systemIDs[i] = sys.ID
@@ -767,7 +770,11 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systemTiers = [][]systemdefs.System{permittedSystems(env, systemdefs.AllImplicitSystems())}
+			allSystems, openErr := openSystems(env)
+			if openErr != nil {
+				return platforms.CmdResult{}, openErr
+			}
+			systemTiers = [][]systemdefs.System{allSystems}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -827,6 +834,15 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	}
 	if len(systems) == 0 && firstLookupErr != nil {
 		return platforms.CmdResult{}, firstLookupErr
+	}
+
+	// A card that offers several systems picks among the ones the content
+	// policy leaves open. One that names only closed systems is left as it
+	// is, so the launch is refused for what the card asked for.
+	if len(systems) > 1 {
+		if open := permittedSystems(env, systems); len(open) > 0 {
+			systems = open
+		}
 	}
 
 	mediaQuery := database.MediaQuery{Tags: tagFilters}
@@ -896,6 +912,17 @@ func permittedSystems(env *platforms.CmdEnv, systems []systemdefs.System) []syst
 		}
 	}
 	return permitted
+}
+
+// openSystems returns every system a pick across "all" may draw from. An
+// empty list would read as every system to the queries that take it, so a
+// policy that closes them all is reported as a refusal instead.
+func openSystems(env *platforms.CmdEnv) ([]systemdefs.System, error) {
+	systems := permittedSystems(env, systemdefs.AllImplicitSystems())
+	if len(systems) == 0 {
+		return nil, fmt.Errorf("%w: no system is open", ErrLaunchNotAdmitted)
+	}
+	return systems, nil
 }
 
 func orderedSystemTiers(systems []systemdefs.System) [][]systemdefs.System {
@@ -1596,8 +1623,12 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
+		allSystems, openErr := openSystems(&env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
 		searchFilters := database.SearchFilters{
-			Systems: systemdefs.AllImplicitSystems(),
+			Systems: allSystems,
 			Query:   query,
 			Tags:    tagFilters,
 			Limit:   1,
@@ -1631,7 +1662,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systemTiers = [][]systemdefs.System{permittedSystems(&env, systemdefs.AllImplicitSystems())}
+		allSystems, openErr := openSystems(&env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
+		systemTiers = [][]systemdefs.System{allSystems}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {
