@@ -64,13 +64,16 @@ Measured November 2026 on the test device (252,261 files, 165 systems):
 
 | Run | Before | After |
 |-----|--------|-------|
-| Update with nothing changed | 67.6 min, 3.6 GB written | 9.3 min, about 70 MB written |
+| Update with nothing changed | 67.6 min, 3.6 GB written | 8.0 min, 53 MB written |
 | Scrape that follows an unchanged update | 38 min | 1.1 min |
-| First index into a new database | not measured | 58-61 min including optimization; one run took 77 min writing the same 3.6 GB |
+| First index into a new database | not measured | 58-61 min including optimization |
+| First scrape after a first index | 31 min | 29 min |
 | Four systems from empty (55,220 files) | 15.1 min, 1,457 MB written | 8 min, about 420 MB written |
 | One system from empty (GBA, 6,115 files) | 141 s, 177 MB written | 66 s, 54 MB written |
 
-An unchanged update is now the directory walk plus the indexing throttle: a system whose file list matches its stored scan marker is not staged or reconciled at all. A first index, or the first index after a Core upgrade, still stages and reconciles every row.
+An unchanged update is now the directory walk, the indexing throttle and matching files to launchers: a system whose file list matches its stored scan marker is not staged or reconciled at all. About 300 s of the 480 s is reading directory entries from the card. Systems that share a folder each walk it again (54 s on this library).
+
+The marker carries a parsing-rules version and the name catalog versions, not the Core version, so an upgrade only reconciles everything again when what a file is stored as has changed. A first index still stages and reconciles every row.
 
 ## Memory Budget (Total)
 
