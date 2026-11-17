@@ -147,7 +147,7 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 // A launcher is reported once it accepts any of the system's files, wherever
 // in the list that file is, and not at all when it accepts none.
 func TestIndexSourceCollector_ReportsLauncherThatAcceptsAnyFile(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel() - the matcher reads the shared GlobalLauncherCache.
 	dir := t.TempDir()
 	files := []platforms.ScanResult{
 		{Path: filepath.Join(dir, "first.bin")},
@@ -157,10 +157,20 @@ func TestIndexSourceCollector_ReportsLauncherThatAcceptsAnyFile(t *testing.T) {
 	}
 	pl := mocks.NewMockPlatform()
 	pl.On("ID").Return("test-platform").Maybe()
+	pl.On("Settings").Return(platforms.Settings{}).Maybe()
 	pl.On("RootDirs", mock.Anything).Return([]string{}).Maybe()
 	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
 	cfg, err := testhelpers.NewTestConfig(testhelpers.NewMemoryFS(), t.TempDir())
 	require.NoError(t, err)
+	testLauncherCacheMutex.Lock()
+	previous := helpers.GlobalLauncherCache
+	cache := &helpers.LauncherCache{}
+	cache.Initialize(pl, cfg)
+	helpers.GlobalLauncherCache = cache
+	t.Cleanup(func() {
+		helpers.GlobalLauncherCache = previous
+		testLauncherCacheMutex.Unlock()
+	})
 	collector := newIndexSourceCollector(cfg, pl, &IndexSourceOptions{
 		AllLaunchers: true, Completed: func([]IndexedSource) {},
 	})
