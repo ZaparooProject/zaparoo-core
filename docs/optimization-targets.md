@@ -46,6 +46,8 @@ MiSTer mounts its SD card `exfat rw,sync,dirsync`. Every write call is flushed t
 - SQLite issues one write per page, two per page for a WAL frame, and one more at checkpoint. A page changed inside a WAL transaction is three flushes.
 - `synchronous=FULL` and `NORMAL` measure the same on this mount (16.0 ms against 16.1 ms for a one-row UserDB commit), so UserDB keeps `FULL` at no cost.
 - Page size is the lever for bulk loads. Loading the same 12,000 rows spent 14.3 s in commits and checkpoints with 4 KiB pages, 4.8 s with 16 KiB and 3.2 s with 64 KiB (`BenchmarkSQLiteWritePattern`). Read speed with the real 252,000-file library was the same from 4 KiB to 64 KiB.
+- A larger page costs a small write more. One tag link committed alone takes 27 ms with 4 KiB pages, 38 ms with 16 KiB and 45 ms with 64 KiB (`BenchmarkSQLiteSmallCommit`). 16 KiB is the trade: bulk loads three times cheaper, a favorite edit or cache write about 11 ms dearer.
+- A database file keeps the page size it was created with. A full index of one created with another size replaces the file first, as a fresh-start rebuild does; a selective index never does.
 - Anything the indexer does not need to keep must stay out of the main database file. Scan staging rows written there went through the WAL and a checkpoint like real data.
 
 Measure on the SD card, not on `/tmp`: `/tmp` is tmpfs, and a database benchmark run there never pays for a write. `task mister:bench-run` sets `TMPDIR` to the card for that reason. Baselines taken before November 2026 ran on tmpfs with SQLite compiled without optimization.

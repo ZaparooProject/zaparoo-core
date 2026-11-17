@@ -72,6 +72,15 @@ BenchmarkSQLiteWritePattern/page_65536/TRUNCATE-2        	       1	6086300202 ns
 BenchmarkSQLiteWritePattern/page_65536/RESTART-2         	       1	5847359630 ns/op	       850.0 checkpoint-ms/op	      1669 commit-ms/op	         4.062 db-MiB	 4801856 B/op	  191550 allocs/op
 BenchmarkSQLiteWritePattern/page_65536/RESTART-2         	       1	9380199826 ns/op	       887.0 checkpoint-ms/op	      5252 commit-ms/op	         4.062 db-MiB	 4801904 B/op	  191551 allocs/op
 BenchmarkSQLiteWritePattern/page_65536/RESTART-2         	       1	5792088691 ns/op	       875.0 checkpoint-ms/op	      1736 commit-ms/op	         4.062 db-MiB	 4802016 B/op	  191553 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-2         	      36	  31327297 ns/op	     231 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-2         	      43	  24631585 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-2         	      45	  27079782 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-2        	      31	  35786051 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-2        	      42	  38263674 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-2        	      30	  38986415 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-2        	      27	  44538316 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-2        	      25	  45361865 ns/op	     232 B/op	      11 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-2        	      25	  44026618 ns/op	     232 B/op	      11 allocs/op
 pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/gamedatabase
 cpu: ARMv7 Processor rev 0 (v7l)
 BenchmarkForEach-2   	      12	  98816479 ns/op	 1899341 B/op	    8037 allocs/op

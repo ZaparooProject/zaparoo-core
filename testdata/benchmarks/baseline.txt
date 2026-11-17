@@ -440,6 +440,24 @@ BenchmarkSQLiteWritePattern/page_65536/RESTART-16         	      26	  42125517 n
 BenchmarkSQLiteWritePattern/page_65536/RESTART-16         	      27	  40522963 ns/op	         2.519 checkpoint-ms/op	         2.704 commit-ms/op	         4.062 db-MiB	 7019843 B/op	  191563 allocs/op
 BenchmarkSQLiteWritePattern/page_65536/RESTART-16         	      28	  40675666 ns/op	         2.571 checkpoint-ms/op	         2.750 commit-ms/op	         4.062 db-MiB	 7019636 B/op	  191562 allocs/op
 BenchmarkSQLiteWritePattern/page_65536/RESTART-16         	      28	  40428527 ns/op	         2.571 checkpoint-ms/op	         2.750 commit-ms/op	         4.062 db-MiB	 7019863 B/op	  191562 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   75864	     16150 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   74344	     16495 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   71731	     16279 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   75752	     16380 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   77319	     16006 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_4096-16         	   71983	     16461 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   50666	     23648 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   48891	     25592 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   50521	     24142 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   43527	     26509 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   52566	     22787 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_16384-16        	   52513	     23135 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   22996	     52031 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   22892	     51998 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   23794	     49702 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   23252	     50580 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   22892	     51961 ns/op	     351 B/op	      10 allocs/op
+BenchmarkSQLiteSmallCommit/page_65536-16        	   26608	     45268 ns/op	     351 B/op	      10 allocs/op
 goos: linux
 goarch: amd64
 pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/arcadenames
