@@ -20,6 +20,7 @@
 package scraper
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,15 +35,49 @@ func TestTreeListingState_MovesWithAnyNameAtAnyDepth(t *testing.T) {
 	root := filepath.Join("games", "media", "boxart")
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "a.png"), []byte("x"), 0o600))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "sub", "b.png"), []byte("x"), 0o600))
-	base := TreeListingState(fs, root)
-	assert.Equal(t, base, TreeListingState(fs, root))
+	state := func(dir string) string {
+		t.Helper()
+		described, ok := TreeListingState(fs, dir)
+		require.True(t, ok)
+		return described
+	}
+	base := state(root)
+	assert.Equal(t, base, state(root))
 
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "sub", "deeper", "c.png"), []byte("x"), 0o600))
-	added := TreeListingState(fs, root)
+	added := state(root)
 	assert.NotEqual(t, base, added)
 
 	require.NoError(t, fs.Rename(filepath.Join(root, "a.png"), filepath.Join(root, "sub", "a.png")))
-	assert.NotEqual(t, added, TreeListingState(fs, root), "a file moved between folders is a change")
+	assert.NotEqual(t, added, state(root), "a file moved between folders is a change")
 
-	assert.Equal(t, "unreadable", TreeListingState(fs, filepath.Join("games", "missing")))
+	assert.Equal(t, "unreadable", state(filepath.Join("games", "missing")))
+}
+
+// A lookup follows a symlinked folder and this walk does not, so a tree that
+// has one cannot be described well enough to skip a scrape on.
+func TestTreeListingState_RefusesTreeWithSymlinkedDirectory(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	root := filepath.Join(base, "media", "boxart")
+	elsewhere := filepath.Join(base, "elsewhere")
+	require.NoError(t, os.MkdirAll(root, 0o750))
+	require.NoError(t, os.MkdirAll(elsewhere, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.png"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(elsewhere, "b.png"), []byte("x"), 0o600))
+	fs := afero.NewOsFs()
+
+	_, ok := TreeListingState(fs, root)
+	require.True(t, ok)
+
+	// A symlink to a file is only a name, which the description covers.
+	if err := os.Symlink(filepath.Join(elsewhere, "b.png"), filepath.Join(root, "b.png")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, ok = TreeListingState(fs, root)
+	require.True(t, ok)
+
+	require.NoError(t, os.Symlink(elsewhere, filepath.Join(root, "sub")))
+	_, ok = TreeListingState(fs, root)
+	assert.False(t, ok)
 }

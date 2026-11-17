@@ -75,6 +75,9 @@ type scraperImpl struct {
 
 type runCounts struct {
 	processed, matched, skipped int
+	// rowFailed is set when a row of the system being scraped could not be
+	// written.
+	rowFailed bool
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
@@ -312,10 +315,13 @@ func (s *scraperImpl) scrapeSystem(
 		ch <- scraper.ScrapeUpdate{SystemID: system.ID, TotalSteps: len(systems), CurrentStep: systemIdx + 1}
 		return true
 	}
+	s.run.rowFailed = false
 	if !s.scrapeSystemRows(ctx, opts, systems, systemIdx, ch) {
 		return false
 	}
-	if fingerprinted && ctx.Err() == nil {
+	// A row that could not be written is still owed its artwork, so the
+	// system is not remembered as done and the next run tries again.
+	if fingerprinted && ctx.Err() == nil && !s.run.rowFailed {
 		if err := scraper.RememberSystem(ctx, s.db, scraperID, system.ID, fingerprintVersion, state); err != nil {
 			log.Debug().Err(err).Msg("localmedia: system fingerprint not stored")
 		}
@@ -326,7 +332,8 @@ func (s *scraperImpl) scrapeSystem(
 // artworkSourceState describes every artwork folder a system's scrape reads,
 // by the names found under it at any depth. Artwork is matched by name, so a
 // scrape can only find something new when a name appears, goes or moves. ok is
-// false for a system with a root that is not a plain directory tree, which is
+// false for a system with a root that is not a plain directory tree, or with
+// an artwork folder that reaches a directory through a symlink; either is
 // always scraped.
 func (s *scraperImpl) artworkSourceState(ctx context.Context, system scraper.ScrapeSystem) (state string, ok bool) {
 	roots := slices.Clone(system.ROMPaths)
@@ -347,7 +354,14 @@ func (s *scraperImpl) artworkSourceState(ctx context.Context, system scraper.Scr
 			if ctx.Err() != nil {
 				return "", false
 			}
-			_, _ = fmt.Fprintf(&description, "%s: %s\n", name, scraper.TreeListingState(s.fs, dirs[name]))
+			tree, described := scraper.TreeListingState(s.fs, dirs[name])
+			if !described {
+				return "", false
+			}
+			// The folder's own path is part of the state: found artwork is
+			// stored by path, so a folder renamed in case alone has to be
+			// read again even though its lowercased name and contents match.
+			_, _ = fmt.Fprintf(&description, "%s=%s: %s\n", name, dirs[name], tree)
 		}
 	}
 	return description.String(), true
@@ -461,6 +475,7 @@ func (s *scraperImpl) scrapeSystemRows(
 				ctx, media, roots, props, cleanupNames,
 			)
 			if cleanupErr != nil {
+				s.run.rowFailed = true
 				skipped++
 				processed++
 				ch <- scraper.ScrapeUpdate{
@@ -493,6 +508,7 @@ func (s *scraperImpl) scrapeSystemRows(
 				write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
 			}
 			if err := s.db.ApplyScrapeResult(ctx, media.DBID, media.MediaTitleDBID, write); err != nil {
+				s.run.rowFailed = true
 				skipped++
 				processed++
 				ch <- scraper.ScrapeUpdate{

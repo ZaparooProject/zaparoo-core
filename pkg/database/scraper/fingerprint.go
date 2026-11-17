@@ -70,7 +70,11 @@ func ListingState(fs afero.Fs, dir string) string {
 // at any depth and a digest of their paths below dir, from one listing per
 // directory. Like ListingState it moves whenever an entry is added, removed,
 // renamed or moved, and reads no file.
-func TreeListingState(fs afero.Fs, dir string) string {
+//
+// ok is false for a tree that reaches a directory through a symlink. A file
+// lookup follows the link, but the walk here does not, so what is behind it
+// could change without the description moving.
+func TreeListingState(fs afero.Fs, dir string) (state string, ok bool) {
 	var entries, names uint64
 	pending := []string{""}
 	for len(pending) > 0 {
@@ -78,7 +82,7 @@ func TreeListingState(fs afero.Fs, dir string) string {
 		pending = pending[:len(pending)-1]
 		listing, err := readTreeDir(fs, filepath.Join(dir, relative))
 		if err != nil {
-			return "unreadable"
+			return "unreadable", true
 		}
 		for _, entry := range listing {
 			child := filepath.Join(relative, entry.Name())
@@ -87,10 +91,17 @@ func TreeListingState(fs afero.Fs, dir string) string {
 			names += NameDigest(child)
 			if entry.IsDir() {
 				pending = append(pending, child)
+				continue
+			}
+			if entry.Type()&iofs.ModeSymlink == 0 {
+				continue
+			}
+			if target, statErr := fs.Stat(filepath.Join(dir, child)); statErr == nil && target.IsDir() {
+				return "", false
 			}
 		}
 	}
-	return fmt.Sprintf("entries=%d names=%x", entries, names)
+	return fmt.Sprintf("entries=%d names=%x", entries, names), true
 }
 
 // readTreeDir lists dir with each entry's type. Where the filesystem reports
