@@ -1163,8 +1163,13 @@ outer:
 }
 
 const (
-	scrapeProgressInterval  = 250 * time.Millisecond
-	companionWriteBatchSize = 10
+	scrapeProgressInterval = 250 * time.Millisecond
+	// companionWriteBatchSize is how many matched files one write transaction
+	// carries. Ten spent most of a scrape in commits: forcing two systems
+	// (15,363 matches) on the MiSTer test device took 547 s and wrote 700 MB,
+	// against 224 s and 259 MB here. The writer is held for about half a
+	// second per batch, as it is by the other scrapers.
+	companionWriteBatchSize = scraper.WriteBatchSize
 )
 
 func shouldUseRunMarker(opts scraper.ScrapeOptions) bool {

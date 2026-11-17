@@ -323,8 +323,18 @@ func FindFileIn(
 	}
 	lookups := make([]lookup, 0, len(fallbackNames))
 	for _, name := range fallbackNames {
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		// Nearly every name is a bare file name, which is already clean and
+		// has no directory part: cleaning and splitting those was most of
+		// what remained of this function's time.
+		if !strings.ContainsRune(name, filepath.Separator) && !strings.ContainsRune(name, '/') {
+			lookups = append(lookups, lookup{name: name, dir: ".", base: name})
+			continue
+		}
 		cleanName := filepath.Clean(name)
-		if name == "" || cleanName == "." || cleanName == ".." ||
+		if cleanName == "." || cleanName == ".." ||
 			strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
 			continue
 		}
