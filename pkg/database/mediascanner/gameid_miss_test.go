@@ -21,8 +21,11 @@ package mediascanner
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +130,33 @@ func TestGameIDMisses_MissingTrackIsSettledUntilTheFilesChange(t *testing.T) {
 	untrusted := &gameIDMisses{next: map[string]gameIDFileState{}}
 	_, unresolved = stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, untrusted)
 	assert.True(t, unresolved, "without a trustworthy walk the missing file settles nothing")
+}
+
+// Only a failure to open a file the disc names, for a reason that cannot
+// pass, settles a disc. The disc itself failing to open, or an I/O error on a
+// track, is tried again.
+func TestGameIDMisses_OnlyLastingFailuresOfNamedFilesSettle(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "game.cue")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	state, ok := gameIDFileStateOf(path)
+	require.True(t, ok)
+	track := filepath.Join(filepath.Dir(path), "game.bin")
+	cases := []struct {
+		err     error
+		name    string
+		settled bool
+	}{
+		{name: "track missing", err: &fs.PathError{Op: "open", Path: track, Err: fs.ErrNotExist}, settled: true},
+		{name: "track name unusable", err: &fs.PathError{Op: "open", Path: track, Err: syscall.EILSEQ}, settled: true},
+		{name: "track unreadable", err: &fs.PathError{Op: "read", Path: track, Err: syscall.EIO}},
+		{name: "disc itself missing", err: &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}},
+	}
+	for _, tc := range cases {
+		misses := &gameIDMisses{next: map[string]gameIDFileState{}, listing: "walk-1"}
+		wrapped := fmt.Errorf("identify from path: %w", tc.err)
+		assert.Equal(t, tc.settled, misses.record(path, state, true, wrapped), tc.name)
+	}
 }
 
 // A record written by other identification code is not trusted.

@@ -28,6 +28,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -61,7 +62,7 @@ var gameIDMissVersion = sync.OnceValue(func() string {
 // gameIDFileState is what a disc image looked like when it was read.
 type gameIDFileState struct {
 	// Listing is set for a disc that could not be read because a file it
-	// names was not there, such as a cue sheet whose track is missing. It is
+	// names could not be opened, such as a cue sheet whose track is missing. It is
 	// the system's walk marker at the time, so the disc is read again once
 	// the system's files change.
 	Listing string `json:"listing,omitempty"`
@@ -148,9 +149,9 @@ func (m *gameIDMisses) isKnown(path string) bool {
 // file that could not be opened or read, or that changed during the read,
 // says nothing about its contents and is read again by the next index.
 //
-// A disc that names a file which is not there is recorded against the
-// system's current files instead: nothing but a change to those files can
-// make it readable.
+// A disc that names a file which is not there or cannot be named is recorded
+// against the system's current files instead: nothing but a change to those
+// files can make it readable.
 func (m *gameIDMisses) record(path string, before gameIDFileState, beforeOK bool, identifyErr error) bool {
 	if m == nil || !beforeOK {
 		return false
@@ -158,7 +159,7 @@ func (m *gameIDMisses) record(path string, before gameIDFileState, beforeOK bool
 	listing := ""
 	var pathErr *fs.PathError
 	if errors.As(identifyErr, &pathErr) {
-		if !errors.Is(identifyErr, fs.ErrNotExist) || m.listing == "" {
+		if pathErr.Path == path || !namedFileUnusable(pathErr) || m.listing == "" {
 			return false
 		}
 		listing = m.listing
@@ -170,6 +171,18 @@ func (m *gameIDMisses) record(path string, before gameIDFileState, beforeOK bool
 	after.Listing = listing
 	m.next[path] = after
 	return true
+}
+
+// namedFileUnusable reports whether a file a disc names failed to open for a
+// reason that trying again cannot change: it is not there, or its name cannot
+// be used on this filesystem, as with a cue sheet written in another encoding.
+// Anything else, an I/O error above all, may pass.
+func namedFileUnusable(pathErr *fs.PathError) bool {
+	return errors.Is(pathErr, fs.ErrNotExist) ||
+		errors.Is(pathErr, syscall.EILSEQ) ||
+		errors.Is(pathErr, syscall.ENAMETOOLONG) ||
+		errors.Is(pathErr, syscall.ENOTDIR) ||
+		errors.Is(pathErr, syscall.EINVAL)
 }
 
 // save stores the misses of the files this reconcile staged, in the open
