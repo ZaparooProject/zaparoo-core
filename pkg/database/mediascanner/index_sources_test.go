@@ -125,19 +125,57 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.True(t, called)
-			want := []IndexedSource{{LauncherID: "filesystem", SystemID: systemdefs.SystemNES, Files: 1}}
+			want := []IndexedSource{{LauncherID: "filesystem", SystemID: systemdefs.SystemNES, HasFiles: true}}
 			if mode == "success" || mode == "all" {
-				want = append(want, IndexedSource{LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1})
+				want = append(want, IndexedSource{
+					LauncherID: "catalog", SystemID: systemdefs.SystemNES, HasFiles: true,
+				})
 			}
 			// Desktop, 2026-10-26: GameDataBase skipped NES, Genesis and Game Boy
 			// after an index because no emulator for them was installed. A scraper
 			// for every launcher hears about them, marked.
 			if mode == "all-unavailable" {
 				want = append(want, IndexedSource{
-					LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1, Unavailable: true,
+					LauncherID: "catalog", SystemID: systemdefs.SystemNES, HasFiles: true, Unavailable: true,
 				})
 			}
 			require.ElementsMatch(t, want, sources)
 		})
 	}
+}
+
+// A launcher is reported once it accepts any of the system's files, wherever
+// in the list that file is, and not at all when it accepts none.
+func TestIndexSourceCollector_ReportsLauncherThatAcceptsAnyFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	files := []platforms.ScanResult{
+		{Path: filepath.Join(dir, "first.bin")},
+		{Path: filepath.Join(dir, "second.bin")},
+		{Path: filepath.Join(dir, "third.nes")},
+		{Path: filepath.Join(dir, "fourth.nes")},
+	}
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("test-platform").Maybe()
+	pl.On("RootDirs", mock.Anything).Return([]string{}).Maybe()
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	cfg, err := testhelpers.NewTestConfig(testhelpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	collector := newIndexSourceCollector(cfg, pl, &IndexSourceOptions{
+		AllLaunchers: true, Completed: func([]IndexedSource) {},
+	})
+	require.NotNil(t, collector)
+
+	nes := platforms.Launcher{
+		ID: "nes", SystemID: systemdefs.SystemNES, Folders: []string{dir}, Extensions: []string{".nes"},
+	}
+	none := platforms.Launcher{
+		ID: "none", SystemID: systemdefs.SystemNES, Folders: []string{dir}, Extensions: []string{".sfc"},
+	}
+	collector.record(systemdefs.SystemNES, files, &nes, nil, false)
+	collector.record(systemdefs.SystemNES, files, &none, nil, false)
+
+	require.Equal(t, []IndexedSource{
+		{LauncherID: "nes", SystemID: systemdefs.SystemNES, HasFiles: true},
+	}, collector.sources)
 }
