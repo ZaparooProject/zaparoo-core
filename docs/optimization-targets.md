@@ -67,7 +67,7 @@ Measured November 2026 on the test device (252,261 files, 165 systems):
 | Update with nothing changed | 67.6 min, 3.6 GB written | 8.0 min, 53 MB written |
 | Scrape that follows an unchanged update | 38 min | 1.1 min |
 | First index into a new database | not measured | 58-61 min including optimization |
-| First scrape after a first index | 31 min | 29 min |
+| First scrape after a first index | not measured | 29 min |
 | Four systems from empty (55,220 files) | 15.1 min, 1,457 MB written | 8 min, about 420 MB written |
 | One system from empty (GBA, 6,115 files) | 141 s, 177 MB written | 66 s, 54 MB written |
 
