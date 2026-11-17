@@ -251,6 +251,7 @@ func TestPostIndexOptimizationHandoffBlocksScraping(t *testing.T) {
 	unblockOptimization := make(chan struct{})
 	optimizationDone := make(chan struct{})
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, indexLease).
 		Run(func(mock.Arguments) { <-unblockOptimization }).Return(nil).Once()
 	mockDB.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(optimizationDone) }).Return().Once()
@@ -279,6 +280,7 @@ func TestPostIndexOptimizationFailedStartReleasesLease(t *testing.T) {
 
 	optimizationDone := make(chan struct{})
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, indexLease).
 		Return(errors.New("injected optimization startup failure")).Once()
 	mockDB.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(optimizationDone) }).Return().Once()

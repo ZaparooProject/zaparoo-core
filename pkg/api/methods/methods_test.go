@@ -857,6 +857,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("RunBackgroundOptimizationWithLease",
 				mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
+			mockMediaDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
 
 			// Mock total media count

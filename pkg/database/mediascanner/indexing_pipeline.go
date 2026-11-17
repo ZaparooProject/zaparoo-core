@@ -78,9 +78,16 @@ type StageMediaPathParams struct {
 	MediaType    slugs.MediaType
 	ProvidedName string
 	// LinkTarget is the path of the media this file is a symlink alias of.
-	LinkTarget   string
-	PrefixPolicy browseprefix.Policy
-	NoExt        bool
+	LinkTarget string
+	// GameIDMisses, when set, remembers disc images that were read and carry
+	// no game ID, so they are not read again while they stay as they are.
+	GameIDMisses *gameIDMisses
+	// GameIDUnresolved, when set, is incremented for a file that could carry
+	// a game ID, has none stored, and could not be identified this time. The
+	// scanner reads such a file again on every index.
+	GameIDUnresolved *int
+	PrefixPolicy     browseprefix.Policy
+	NoExt            bool
 }
 
 // StageMediaPath parses one scanned file into its media fragments and appends
@@ -109,6 +116,11 @@ func StageMediaPath(params *StageMediaPathParams) error {
 				Msg("ignoring invalid media source provenance")
 		}
 	}
+	properties, gameIDUnresolved := stagedPropertiesFromPath(
+		params.DB, params.SystemID, pf.Path, params.GameIDMisses)
+	if gameIDUnresolved && params.GameIDUnresolved != nil {
+		*params.GameIDUnresolved++
+	}
 	staged := database.ScanStagedMedia{
 		Path:          pf.Path,
 		ParentDir:     mediadb.ParentDirForMediaPath(pf.Path),
@@ -119,7 +131,7 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		SlugLength:    metadata.SlugLength,
 		SlugWordCount: metadata.SlugWordCount,
 		Tags:          stagedTagsFromFragments(&pf, params.Config),
-		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
+		Properties:    properties,
 		Source:        source,
 	}
 	if params.LinkTarget != "" {
@@ -235,9 +247,11 @@ func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*data
 	}, nil
 }
 
-func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []database.ScanStagedProperty {
+func stagedPropertiesFromPath(
+	db database.MediaDBI, systemID, path string, misses *gameIDMisses,
+) (properties []database.ScanStagedProperty, unresolved bool) {
 	if !gameid.IsCandidate(path, systemID) {
-		return nil
+		return nil, false
 	}
 
 	property := string(tags.TagPropertyGameID)
@@ -246,10 +260,16 @@ func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []dat
 		log.Warn().Err(err).Str("system", systemID).Str("path", path).Msg("failed to check existing gameid property")
 	} else if has {
 		log.Debug().Str("system", systemID).Str("path", path).Msg("gameid property already indexed")
-		return nil
+		return nil, false
+	}
+
+	if misses.isKnown(path) {
+		log.Debug().Str("system", systemID).Str("path", path).Msg("gameid already known to be absent")
+		return nil, false
 	}
 
 	started := time.Now()
+	fileState, fileStateOK := gameIDFileStateOf(path)
 	log.Debug().Str("system", systemID).Str("path", path).Msg("gameid identification started")
 	id, err := gameid.IdentifyPathForSystem(path, systemID)
 	duration := time.Since(started)
@@ -260,11 +280,11 @@ func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []dat
 			Str("path", path).
 			Dur("duration", duration).
 			Msg("gameid identification skipped")
-		return nil
+		return nil, !misses.record(path, fileState, fileStateOK, err)
 	}
 	if id == "" {
 		log.Debug().Str("system", systemID).Str("path", path).Dur("duration", duration).Msg("gameid not found")
-		return nil
+		return nil, !misses.record(path, fileState, fileStateOK, nil)
 	}
 
 	log.Debug().Str("system", systemID).Str("path", path).Str("gameid", id).Dur("duration", duration).
@@ -274,7 +294,7 @@ func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []dat
 		Type: string(tags.TagTypeProperty),
 		Name: property,
 		Text: id,
-	}}
+	}}, false
 }
 
 // stagedTagsFromFragments converts the parsed filename tags (and the extension

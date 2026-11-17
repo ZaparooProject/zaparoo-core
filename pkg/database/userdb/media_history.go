@@ -581,46 +581,49 @@ func sqlGetDistinctMediaHistory(
 	}
 
 	args := make([]any, 0, len(systemIDs)+2)
-	latestWhere := "WHERE " + notDeleted
+	args = append(args, lastID)
+	systemFilter := ""
 	switch len(systemIDs) {
+	case 0:
 	case 1:
-		latestWhere += " AND SystemID = ?"
+		systemFilter = " AND history.SystemID = ?"
 		args = append(args, systemIDs[0])
 	default:
-		if len(systemIDs) > 1 {
-			placeholders := make([]string, len(systemIDs))
-			for i, systemID := range systemIDs {
-				placeholders[i] = "?"
-				args = append(args, systemID)
-			}
-			latestWhere += " AND SystemID IN (" + strings.Join(placeholders, ", ") + ")"
+		placeholders := make([]string, len(systemIDs))
+		for i, systemID := range systemIDs {
+			placeholders[i] = "?"
+			args = append(args, systemID)
 		}
+		systemFilter = " AND history.SystemID IN (" + strings.Join(placeholders, ", ") + ")"
 	}
-	args = append(args, lastID, limit)
+	args = append(args, limit)
 
-	// Group before applying the cursor. Filtering raw history rows first would
-	// let an older session for a media identity reappear on a later page. A
-	// withdrawn row is excluded from the grouping itself, not just the
-	// cursor, so it never hides that media's real latest session.
-	//nolint:gosec // latestWhere contains only fixed SQL and placeholders.
+	// A row is listed only when no newer live session exists for the same
+	// media, so an older session never reappears on a later page. Withdrawn
+	// rows are skipped on both sides: one is never listed, and one never
+	// hides that media's real latest session. Walking DBID downwards and
+	// probing idx_media_history_media per row reads about a page of history
+	// instead of grouping every row ever recorded.
+	//nolint:gosec // systemFilter contains only fixed SQL and placeholders.
 	query := fmt.Sprintf(`
-		WITH LatestMedia AS (
-			SELECT MAX(DBID) AS DBID
-			FROM MediaHistory
-			%s
-			GROUP BY SystemID, MediaPath
-		)
 		SELECT
 			history.DBID, history.StartTime, history.EndTime,
 			history.SystemID, history.SystemName, history.MediaPath,
 			history.MediaName, history.LauncherID, history.PlayTime,
 			history.SessionSource, history.SessionConfidence, history.MediaIdentity
 		FROM MediaHistory AS history
-		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
 		WHERE history.DBID < ?
+		  AND COALESCE(history.IsDeleted, 0) = 0%s
+		  AND NOT EXISTS (
+			SELECT 1 FROM MediaHistory AS newer
+			WHERE newer.SystemID = history.SystemID
+			  AND newer.MediaPath = history.MediaPath
+			  AND newer.DBID > history.DBID
+			  AND COALESCE(newer.IsDeleted, 0) = 0
+		  )
 		ORDER BY history.DBID DESC
 		LIMIT ?;
-	`, latestWhere)
+	`, systemFilter)
 
 	list := make([]database.MediaHistoryEntry, 0, limit)
 	queryStarted := time.Now()

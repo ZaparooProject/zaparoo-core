@@ -21,6 +21,8 @@ package mediadb
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -210,4 +212,42 @@ func BenchmarkSlugSearchCache_CompactTrigramDeltas(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkSlugSearchCache_PersistedLoad measures what a start pays to bring
+// the persisted cache back: decoding the file and rebuilding the candidate
+// blocks, for a library of about 112,000 titles.
+func BenchmarkSlugSearchCache_PersistedLoad(b *testing.B) {
+	cache, _ := buildBenchSweepCache(130, 866)
+	buildTrigramIndex(cache)
+	path := filepath.Join(b.TempDir(), "slug_search_cache.gob")
+	if err := writePersistedCacheFile(path, newPersistedSlugSearchCache(cache, 1)); err != nil {
+		b.Fatal(err)
+	}
+	if info, err := os.Stat(path); err == nil {
+		b.ReportMetric(float64(info.Size())/(1<<20), "file-MiB")
+	}
+	b.Run("decode", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			var stored persistedSlugSearchCache
+			loaded, err := loadPersistedCacheFile(path, slugSearchCacheMaxBytes, &stored, slugSearchCacheKind,
+				slugSearchCacheFileMagic, slugSearchCacheFileVersion, 1)
+			if err != nil || !loaded {
+				b.Fatalf("load failed: loaded=%v err=%v", loaded, err)
+			}
+		}
+	})
+	b.Run("decode_and_blocks", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			var stored persistedSlugSearchCache
+			loaded, err := loadPersistedCacheFile(path, slugSearchCacheMaxBytes, &stored, slugSearchCacheKind,
+				slugSearchCacheFileMagic, slugSearchCacheFileVersion, 1)
+			if err != nil || !loaded {
+				b.Fatalf("load failed: loaded=%v err=%v", loaded, err)
+			}
+			stored.toCache(nil).buildCandidateBlocks()
+		}
+	})
 }

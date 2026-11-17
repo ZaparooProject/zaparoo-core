@@ -154,6 +154,31 @@ func TestScanDropsLibrarySnapshotOnReconnect(t *testing.T) {
 	assert.Empty(t, results, "the previous session's library must not be served")
 }
 
+// Playnite can come back before the previous connection is seen to close. The
+// new connection replaces the old one without a disconnect ever being
+// reported, so only the connection itself can tell the snapshot is stale.
+func TestScanDropsLibrarySnapshotWhenConnectionIsReplaced(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, harnessOptions{clock: clockwork.NewFakeClock()})
+	ctx := context.Background()
+	h.connect(fixtureGames())
+	results, err := h.integration.Scan(ctx, nil, systemdefs.SystemNES)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	session := h.integration.server.Session()
+
+	// The first connection is still open.
+	replacement := newFakeExtension(h.listener.dial(t), []Game{{ID: idPC, Name: "PC Game", IsInstalled: true}})
+	t.Cleanup(replacement.close)
+	replacement.write(&Event{Event: EventHello, PluginVersion: "1.0.0", ProtocolVersion: 1, Mode: "Desktop"})
+	require.Eventually(t, func() bool { return h.integration.server.Session() != session }, waitFor, tick)
+
+	results, err = h.integration.Scan(ctx, nil, systemdefs.SystemNES)
+	require.NoError(t, err)
+	assert.Empty(t, results, "the replaced connection's library must not be served")
+}
+
 func TestScanReportsLibraryFailure(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +395,9 @@ func TestStartsCoreDoesNotIndexAreIgnored(t *testing.T) {
 	// A marker the reader reaches only after the events above.
 	ext.write(started(game(t, idPC), 4, 13))
 	h.requireMediaPath(GamePath(idPC, "PC Game"))
+	// The process is handed over after the media is set, so wait for it:
+	// the ignored events before the marker would have been tracked by now.
+	require.Eventually(t, func() bool { return len(h.trackedCalls()) > 0 }, waitFor, tick)
 	assert.Equal(t, []trackCall{{pid: 13, exe: `C:\Games\game.exe`}}, h.trackedCalls())
 }
 

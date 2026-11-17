@@ -143,6 +143,44 @@ const (
 // rebuild, and MediaDB rows are rebuildable, so NORMAL's small window of
 // last-transaction loss on power loss is an acceptable trade. UserDB keeps
 // synchronous=FULL since it holds non-rebuildable user data.
+// mediaDBPageSize is the page size a new media database is created with.
+//
+// MiSTer mounts its SD card sync,dirsync, so every write call SQLite makes is
+// flushed to the card before it returns, and SQLite writes one page per call
+// (two for a WAL frame). The cost of a bulk load is therefore the number of
+// pages written, not the bytes. Loading the same 12,000 rows on the test
+// device spent 14.3 s in commits and checkpoints with 4 KiB pages, 4.8 s with
+// 16 KiB and 3.2 s with 64 KiB (BenchmarkSQLiteWritePattern).
+//
+// The page size is fixed when the file is created, so a database built with
+// another size only changes when its file is replaced. StoragePageSizeOutdated
+// reports that case, and the next full index rebuilds the file.
+const mediaDBPageSize = 16384
+
+// createMediaDBFile writes an empty database at dbPath with mediaDBPageSize.
+// It has to happen on its own connection before the normal open: the DSN
+// switches to WAL as it connects, and a WAL database cannot change page size.
+func createMediaDBFile(ctx context.Context, dbPath string) error {
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		return fmt.Errorf("open new media database: %w", err)
+	}
+	defer func() {
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close new media database after setting page size")
+		}
+	}()
+	sqlDB.SetMaxOpenConns(1)
+	if _, err = sqlDB.ExecContext(ctx, fmt.Sprintf("PRAGMA page_size=%d", mediaDBPageSize)); err != nil {
+		return fmt.Errorf("set media database page size: %w", err)
+	}
+	// The page size only reaches the file once something writes its header.
+	if _, err = sqlDB.ExecContext(ctx, "VACUUM"); err != nil {
+		return fmt.Errorf("write media database header: %w", err)
+	}
+	return nil
+}
+
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
 		"&_cache_size=" + defaultConnCacheSize + "&_temp_store=" + defaultConnTempStore + "&_mmap_size=0" +
@@ -185,6 +223,7 @@ type MediaDB struct {
 	stmtInsertTagType       *sql.Stmt
 	batchInsertMediaTag     *BatchInserter
 	inMemoryTagCache        atomic.Pointer[tagCache]
+	mergedSystemTags        mergedSystemTagsMemo
 	mediaWriteArbiter       atomic.Pointer[database.MediaWriteArbiter]
 	batchInsertTag          *BatchInserter
 	mediaSearchBounds       map[int64]mediaDBIDBounds
@@ -223,11 +262,21 @@ type MediaDB struct {
 	indexingCacheBoost      atomic.Bool
 	walAutoCheckpointSet    atomic.Bool
 	inTransaction           bool
-	browseCacheDirty        bool
-	utilityTagCacheDirty    bool
-	mediaSearchBoundsDirty  bool
-	scrapeImageChangesAll   bool
-	scrapeTagChangesAll     bool
+	// scanScratch is set while the open transaction's connection has the
+	// scanner's scratch database attached.
+	scanScratch bool
+	// txChangeReported and txLibraryChanged describe the open transaction:
+	// whether it ran work that reports what it changed (a system reconcile,
+	// the tag vocabulary seed), and whether any of it changed a library row.
+	// A batch of such work that changed nothing leaves every cache derived
+	// from the library as valid as it was.
+	txChangeReported       bool
+	txLibraryChanged       bool
+	browseCacheDirty       bool
+	utilityTagCacheDirty   bool
+	mediaSearchBoundsDirty bool
+	scrapeImageChangesAll  bool
+	scrapeTagChangesAll    bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -243,9 +292,86 @@ type sqlQueryable interface {
 // conn returns the active transaction if one exists, otherwise the raw pool.
 func (db *MediaDB) conn() sqlQueryable {
 	if db.tx != nil {
+		if db.scanScratch {
+			return scanScratchQueryable{db.tx}
+		}
 		return db.tx
 	}
 	return db.sql.Load()
+}
+
+// scanScratchPath is where the scanner's scratch database lives, or "" when
+// this database has no file of its own to put it beside.
+func (db *MediaDB) scanScratchPath() string {
+	if db.dbPath == "" || strings.Contains(db.dbPath, ":memory:") {
+		return ""
+	}
+	return db.dbPath + ".scan"
+}
+
+// removeScanScratch deletes the scratch database. Nothing in it outlives a
+// system's reconcile, and it runs without a durable journal, so a file left by
+// a crash is not trusted.
+func (db *MediaDB) removeScanScratch() {
+	path := db.scanScratchPath()
+	if path == "" {
+		return
+	}
+	for _, suffix := range []string{"", "-journal"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn().Err(err).Str("path", path+suffix).Msg("failed to remove scanner scratch database")
+		}
+	}
+}
+
+// scanScratchCacheSize is the scratch database's page cache while a batch
+// transaction is open, in SQLite's negative-KiB form. An attached database
+// starts with a 2 MiB cache of its own; a batch of staged rows is several
+// times that, so pages spilled and were written again and again, and staging
+// went from 404 s to 706 s over a 252,000-file rescan on the MiSTer test
+// device until the cache held a whole batch.
+//
+// Every pooled connection that has served as the writer keeps the scratch
+// database attached, so the cache is handed back as each transaction ends
+// (scanScratchIdleCacheSize). Left in place on all of them it added 44 MiB to
+// the peak of the cache rebuilds that follow a scan.
+//
+// 6 MiB is measured: indexing 55,220 files into a new database took the same
+// time with 6 MiB as with 16 MiB (495 s against 514 s) while the process
+// peaked 41 MiB lower.
+const (
+	scanScratchCacheSize     = "-6144"
+	scanScratchIdleCacheSize = "-256"
+)
+
+// attachScanScratch attaches the scratch database to conn unless it already
+// is. Pooled connections keep the attachment, so this is one query on reuse.
+func attachScanScratch(ctx context.Context, conn *sql.Conn, path string) error {
+	var attached int
+	err := conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_database_list WHERE name = ?", scanScratchSchema).Scan(&attached)
+	if err != nil {
+		return fmt.Errorf("failed to check for scanner scratch database: %w", err)
+	}
+	if attached > 0 {
+		return nil
+	}
+	if _, err = conn.ExecContext(ctx, "ATTACH DATABASE ? AS "+scanScratchSchema, path); err != nil {
+		return fmt.Errorf("failed to attach scanner scratch database: %w", err)
+	}
+	// The journal stays in memory so a rollback still works; durability does
+	// not matter for a file that is deleted at every start. page_size only
+	// takes effect while the file is still empty.
+	for _, pragma := range []string{
+		fmt.Sprintf("PRAGMA %s.page_size = %d", scanScratchSchema, mediaDBPageSize),
+		"PRAGMA " + scanScratchSchema + ".journal_mode = MEMORY",
+		"PRAGMA " + scanScratchSchema + ".synchronous = OFF",
+	} {
+		if _, err = conn.ExecContext(ctx, pragma); err != nil {
+			return fmt.Errorf("failed to configure scanner scratch database: %w", err)
+		}
+	}
+	return nil
 }
 
 // readConn returns the pool handle for a read that must not wait on the writer.
@@ -561,6 +687,15 @@ func (db *MediaDB) Open() error {
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
 			return fmt.Errorf("failed to create media database directory: %w", mkdirErr)
+		}
+	}
+
+	db.removeScanScratch()
+	if !exists {
+		// A file that keeps SQLite's default page size still works, so this
+		// is not worth failing the open over.
+		if pageErr := createMediaDBFile(db.ctx, dbPath); pageErr != nil {
+			log.Warn().Err(pageErr).Msg("failed to set media database page size; using the default")
 		}
 	}
 
@@ -982,6 +1117,15 @@ func (db *MediaDB) releaseWriterConn() error {
 		return nil
 	}
 
+	if db.scanScratchPath() != "" {
+		// Fails harmlessly on a connection that never attached the scratch
+		// database, or one database/sql has already discarded.
+		shrinkCtx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
+		_, _ = conn.ExecContext(shrinkCtx,
+			"PRAGMA "+scanScratchSchema+".cache_size = "+scanScratchIdleCacheSize)
+		cancel()
+	}
+
 	// Preserve the hot page cache between indexing batches. Resetting cache_size
 	// after every commit evicts cached pages, making the next reconcile reread the
 	// database from slow storage. SetIndexingCacheSize(false) drains and restores
@@ -1158,7 +1302,6 @@ var secondaryIndexes = []secondaryIndex{
 		name: "idx_browsedircounts_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsedircounts_system ON BrowseDirCounts(SystemDBID)",
 	},
-	{name: "idx_media_parentdir", ddl: "CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)"},
 	{
 		name: "idx_media_parentdir_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
@@ -1388,6 +1531,76 @@ func (db *MediaDB) CreateSecondaryIndexes() error {
 
 func (db *MediaDB) Exists() bool {
 	return db.sql.Load() != nil
+}
+
+// libraryInsertersUsed reports whether any row was handed to a batch inserter
+// that writes a library table, as opposed to the scanner's scratch tables.
+func (db *MediaDB) libraryInsertersUsed() bool {
+	for _, inserter := range []*BatchInserter{
+		db.batchInsertSystem, db.batchInsertMediaTitle, db.batchInsertMedia,
+		db.batchInsertTag, db.batchInsertTagType, db.batchInsertMediaTag,
+	} {
+		if inserter != nil && inserter.added > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TouchLastGenerated records that an index completed without changing the
+// library. It moves the timestamp and nothing else: the caches the library
+// feeds are left as they are.
+func (db *MediaDB) TouchLastGenerated() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlUpdateLastGenerated(db.ctx, db.conn())
+}
+
+// IndexCachesMissing names the first thing an index that changed nothing
+// would still have to rebuild at its end, or "" when everything it normally
+// rebuilds is present and current. Any doubt names something, which costs
+// only the usual rebuild.
+func (db *MediaDB) IndexCachesMissing(ctx context.Context) string {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return "database closed"
+	}
+	slugCache := db.slugSearchCache.Load()
+	switch {
+	case slugCache == nil:
+		return "slug search cache absent"
+	case !slugCache.complete && !slugCache.derivedFromComplete:
+		return "slug search cache incomplete"
+	case len(slugCache.droppedSystems) > 0:
+		// A cache derived from a complete one covers every system that was
+		// not dropped from it; with none dropped it still covers them all.
+		return "slug search cache missing systems"
+	case slugCache.hasMidScanState():
+		return "slug search cache holds mid-scan state"
+	}
+	if db.inMemoryTagCache.Load() == nil {
+		return "tag cache"
+	}
+	if status, err := db.GetOptimizationStatus(); err != nil || status != IndexingStatusCompleted {
+		return "background optimization not completed"
+	}
+	if needsRebuild, err := db.BrowseCacheNeedsRebuild(ctx); err != nil || needsRebuild {
+		return "browse cache"
+	}
+	var hasTags, hasGenerated bool
+	if err := sqlDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM SystemTagsCache)").Scan(&hasTags); err != nil {
+		return "system tags cache unreadable"
+	}
+	if !hasTags {
+		return "system tags cache"
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM DBConfig WHERE Name = ?)", DBConfigLastGeneratedAt,
+	).Scan(&hasGenerated); err != nil || !hasGenerated {
+		return "no completed index"
+	}
+	return ""
 }
 
 func (db *MediaDB) UpdateLastGenerated() error {
@@ -1733,6 +1946,7 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
 	// the reopen below. Close has already rolled back and released any writer connection.
 	db.tx = nil
+	db.scanScratch = false
 	db.txConn = nil
 	db.inTransaction = false
 
@@ -2001,6 +2215,22 @@ func (db *MediaDB) GetIndexingSkippedSystems() ([]string, error) {
 	return sqlGetIndexingSkippedSystems(db.ctx, sqlDB)
 }
 
+// StoragePageSizeOutdated reports whether the database file was created with
+// a page size other than mediaDBPageSize. A database that cannot be read
+// reports false: this only ever asks for a rebuild it is sure about.
+func (db *MediaDB) StoragePageSizeOutdated() bool {
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return false
+	}
+	var pageSize int64
+	if err := sqlDB.QueryRowContext(db.ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		log.Debug().Err(err).Msg("failed to read media database page size")
+		return false
+	}
+	return pageSize != mediaDBPageSize
+}
+
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql.Load()
 }
@@ -2010,6 +2240,9 @@ func (db *MediaDB) Truncate() error {
 		return ErrNullSQL
 	}
 	if err := sqlTruncate(db.ctx, db.sql.Load()); err != nil {
+		return err
+	}
+	if err := sqlClearScanMarkers(db.ctx, db.sql.Load(), nil); err != nil {
 		return err
 	}
 	if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), nil); err != nil {
@@ -2041,6 +2274,9 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 		return err
 	}
 	if len(systemIDs) > 0 {
+		if err := sqlClearScanMarkers(db.ctx, db.sql.Load(), systemIDs); err != nil {
+			return err
+		}
 		if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), systemIDs); err != nil {
 			return err
 		}
@@ -2268,6 +2504,8 @@ func (db *MediaDB) Close() error {
 	closeErr := sqlDB.Close()
 	if closeErr != nil {
 		closeErr = fmt.Errorf("failed to close database: %w", closeErr)
+	} else {
+		db.removeScanScratch()
 	}
 	return errors.Join(transactionErr, closeErr)
 }
@@ -2587,7 +2825,12 @@ func (db *MediaDB) ReconcileStagedSystem(
 	}
 	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), db.clock, systemID, opts)
 	if err != nil {
+		db.txLibraryChanged = true
 		return stats, err
+	}
+	db.txChangeReported = true
+	if stats.LibraryRowsChanged > 0 {
+		db.txLibraryChanged = true
 	}
 	// A reconcile that changed nothing leaves the revision alone, which is
 	// what lets an index-triggered scrape tell the system holds nothing new.
@@ -2618,7 +2861,27 @@ func (db *MediaDB) ClearScanStage() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlClearScanStage(db.ctx, db.conn())
+	scratchPath := db.scanScratchPath()
+	if db.tx != nil || scratchPath == "" {
+		return sqlClearScanStage(db.ctx, db.conn())
+	}
+	// Outside a transaction the pool hands out any connection; take one and
+	// attach the scratch database so the clear reaches the staged rows.
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	conn, err := db.sql.Load().Conn(acquireCtx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection to clear scan stage: %w", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to release connection after clearing scan stage")
+		}
+	}()
+	if attachErr := attachScanScratch(db.ctx, conn, scratchPath); attachErr != nil {
+		return attachErr
+	}
+	return sqlClearScanStage(db.ctx, scanScratchQueryable{conn})
 }
 
 // SeedCanonicalTagDefinitions ensures every canonical tag type and value exists,
@@ -2630,13 +2893,20 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	// Seeding opens every index run. When the vocabulary has changed it also
 	// removes stored values it no longer accepts, and the index run rebuilds
 	// every tag cache when it finishes.
-	_, err := sqlSeedCanonicalTags(ctx, db.conn())
+	changed, err := sqlSeedCanonicalTags(ctx, db.conn())
+	db.txChangeReported = true
+	if changed || err != nil {
+		db.txLibraryChanged = true
+	}
 	return err
 }
 
 func (db *MediaDB) clearTransactionState() {
 	db.tx = nil
 	db.inTransaction = false
+	db.scanScratch = false
+	db.txChangeReported = false
+	db.txLibraryChanged = false
 	db.clearBrowseCacheInvalidation()
 	db.utilityTagCacheDirty = false
 	db.mediaSearchBoundsDirty = false
@@ -2708,6 +2978,24 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		return errors.Join(fmt.Errorf("failed to set writer WAL autocheckpoint: %w", err), cleanupErr)
 	}
 
+	// Staged rows span several transactions of one system, so every batch
+	// transaction has to see the same scratch database: failing here is
+	// better than staging part of a system somewhere else.
+	scanScratch := false
+	if scratchPath := db.scanScratchPath(); batchEnabled && scratchPath != "" {
+		if attachErr := attachScanScratch(db.ctx, conn, scratchPath); attachErr != nil {
+			cleanupErr := db.closeWriterConn(conn)
+			return errors.Join(attachErr, cleanupErr)
+		}
+		if _, err = conn.ExecContext(db.ctx,
+			"PRAGMA "+scanScratchSchema+".cache_size = "+scanScratchCacheSize,
+		); err != nil {
+			cleanupErr := db.closeWriterConn(conn)
+			return errors.Join(fmt.Errorf("failed to size scanner scratch cache: %w", err), cleanupErr)
+		}
+		scanScratch = true
+	}
+
 	tx, err := conn.BeginTx(db.ctx, nil)
 	if err != nil {
 		cleanupErr := db.closeWriterConn(conn)
@@ -2715,10 +3003,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	}
 	db.tx = tx
 	db.txConn = conn
+	db.scanScratch = scanScratch
 
 	// Use batch inserters if enabled, otherwise use prepared statements
 	if batchEnabled {
-		if ensureErr := sqlEnsureScanStagingTables(db.ctx, tx); ensureErr != nil {
+		if ensureErr := sqlEnsureScanStagingTables(db.ctx, db.conn()); ensureErr != nil {
 			db.rollbackAndLogError()
 			return ensureErr
 		}
@@ -2946,6 +3235,12 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return errors.Join(errors.New("cannot commit: SQLite transaction already ended"), cleanupErr)
 	}
 
+	// Decided before the inserters are closed and the dirty flags are reset.
+	unchangedBatch := db.txChangeReported && !db.txLibraryChanged && !db.libraryInsertersUsed() &&
+		!db.mediaSearchBoundsDirty && !db.utilityTagCacheDirty && !db.browseCacheDirty
+	db.txChangeReported = false
+	db.txLibraryChanged = false
+
 	flushStart := time.Now()
 	// Flush all batch inserters before committing (if any were created).
 	if db.batchInsertSystem != nil {
@@ -2974,6 +3269,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	// A cleanup failure does not turn an already-successful commit into an
 	// apparent write failure; closeWriterConn discards connections it cannot reset.
 	db.tx = nil
+	db.scanScratch = false
 	db.inTransaction = false
 	if connErr := db.releaseWriterConn(); connErr != nil {
 		log.Warn().Err(connErr).Msg("failed to reset writer connection after commit")
@@ -3001,9 +3297,16 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		scope = db.cacheInvalidationScopeForCommittedTransaction()
 	}
 
-	db.invalidateCaches(scope)
-	if indexingBatchCommit {
-		log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
+	// A batch that only reconciled systems and found them exactly as stored
+	// changed nothing a cache was built from. Dropping the caches anyway made
+	// every unchanged rescan rebuild all of them.
+	if indexingBatchCommit && unchangedBatch {
+		log.Debug().Str("status", indexingStatus).Msg("indexing batch changed nothing, caches kept")
+	} else {
+		db.invalidateCaches(scope)
+		if indexingBatchCommit {
+			log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
+		}
 	}
 	db.mediaSearchBoundsDirty = false
 
@@ -4025,7 +4328,7 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 
 	// Try in-memory cache first (instant)
 	if cache := db.inMemoryTagCache.Load(); cache != nil {
-		return cache.tagsForSystems(systems), nil
+		return db.mergedSystemTags.tagsForSystems(cache, systems), nil
 	}
 
 	// Fallback: try SQL cached approach

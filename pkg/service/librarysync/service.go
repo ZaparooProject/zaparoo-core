@@ -273,5 +273,12 @@ func mediaDBSettled(mediaDB database.MediaDBI) bool {
 	if err != nil || optimizing == mediadb.IndexingStatusRunning || optimizing == mediadb.IndexingStatusPending {
 		return false
 	}
+	// A scrape rewrites the tags an identity is built from, and it holds the
+	// writer the inventory's own cache writes need, so the two only slow each
+	// other down. The scheduler rechecks once the scrape is over.
+	scraping, err := mediaDB.GetScrapingStatus()
+	if err != nil || scraping == mediadb.IndexingStatusRunning || scraping == mediadb.IndexingStatusPending {
+		return false
+	}
 	return true
 }

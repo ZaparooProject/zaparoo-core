@@ -20,6 +20,7 @@
 package mediadb
 
 import (
+	"bufio"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -36,6 +37,9 @@ import (
 // caches from a previous indexing run. Each persisted struct declares the
 // three header fields directly (rather than embedding this type) so the
 // on-disk gob shape is independent of struct layout decisions.
+// persistedCacheReadBuffer is how much of a cache file is read per call.
+const persistedCacheReadBuffer = 1 << 20
+
 type persistedHeader struct {
 	Magic           string
 	Version         int
@@ -84,7 +88,11 @@ func loadPersistedCacheFile(
 		fileSize = st.Size()
 	}
 
-	if decodeErr := gob.NewDecoder(io.LimitReader(f, maxBytes)).Decode(dst); decodeErr != nil {
+	// gob reads through its own 4 KiB buffer unless handed a buffered reader,
+	// which turns a multi-megabyte cache file into thousands of small reads
+	// from the SD card at the busiest moment of a cold start.
+	reader := bufio.NewReaderSize(io.LimitReader(f, maxBytes), persistedCacheReadBuffer)
+	if decodeErr := gob.NewDecoder(reader).Decode(dst); decodeErr != nil {
 		if errors.Is(decodeErr, io.EOF) || errors.Is(decodeErr, io.ErrUnexpectedEOF) {
 			if fileSize > maxBytes {
 				log.Warn().Str("path", path).

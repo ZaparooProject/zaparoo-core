@@ -29,7 +29,11 @@ import (
 type IndexedSource struct {
 	LauncherID string
 	SystemID   string
-	Files      int
+	// HasFiles reports that the launcher accepts at least one of the
+	// system's indexed files. It is all a scrape queue needs to know, and
+	// counting the rest matched every file against every launcher on each
+	// index: 75 s of an unchanged update of 252,000 files on MiSTer.
+	HasFiles bool
 	// Unavailable marks files indexed for a launcher that cannot run here,
 	// such as one whose emulator is not installed. A scraper keyed on the
 	// files themselves still applies to them; one that reads the launcher's
@@ -89,15 +93,13 @@ func (c *indexSourceCollector) record(
 	if incomplete && !launcher.SkipFilesystemScan {
 		return
 	}
-	count := 0
 	for _, file := range files {
-		if c.matcher.MatchLauncherFileForScan(launcher, file.Path) {
-			count++
+		if !c.matcher.MatchLauncherFileForScan(launcher, file.Path) {
+			continue
 		}
-	}
-	if count > 0 {
 		c.sources = append(c.sources, IndexedSource{
-			LauncherID: launcher.ID, SystemID: systemID, Files: count, Unavailable: unavailable,
+			LauncherID: launcher.ID, SystemID: systemID, HasFiles: true, Unavailable: unavailable,
 		})
+		return
 	}
 }

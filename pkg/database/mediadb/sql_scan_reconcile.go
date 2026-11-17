@@ -121,13 +121,48 @@ func sqlErrorIsMissingScanStage(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table: Scan")
 }
 
+// scanScratchSchema is the name the scanner's scratch database is attached
+// under on the writer connection.
+const scanScratchSchema = "scan"
+
+// scanStagingTables are the scanner's scratch tables, children first.
+var scanStagingTables = []string{
+	"ScanStageLinks", "ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage",
+	"ScanTouchedTitles",
+}
+
+// scanScratchQueryable marks a connection that has the scratch database
+// attached, so the staging tables belong there rather than in the main file.
+//
+// Staged rows are rebuilt for every system and thrown away after its
+// reconcile. Kept in the main database they went through its WAL and a
+// checkpoint like real data: an unchanged 252,000-file rescan on the MiSTer
+// test device wrote 3.6 GB, spent 37% of its time in commits, and left the
+// 356 MB database at 448 MB with a quarter of its pages free. The scratch
+// database has no WAL and is deleted at every start.
+type scanScratchQueryable struct {
+	sqlQueryable
+}
+
 // sqlEnsureScanStagingTables recreates scanner scratch tables when a copied or
 // partially migrated media.db has the scan-staging migration marked applied but
 // the tables are absent. They hold no durable user data, so creating missing
 // tables is safer than failing an otherwise recoverable index resume.
 func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS ScanStage (
+	// Table and index names take the schema prefix; the table an index is on
+	// is always resolved inside that same schema.
+	schema := ""
+	statements := make([]string, 0, len(scanStagingTables)+12)
+	if _, scratch := db.(scanScratchQueryable); scratch {
+		schema = scanScratchSchema + "."
+		// A table of the same name in the main database would be found first
+		// by every unqualified reference, and the scan would write there.
+		for _, table := range scanStagingTables {
+			statements = append(statements, "DROP TABLE IF EXISTS main."+table)
+		}
+	}
+	statements = append(statements, []string{
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStage (
 			Path          TEXT PRIMARY KEY,
 			ParentDir     TEXT NOT NULL,
 			Slug          TEXT NOT NULL,
@@ -137,24 +172,24 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SlugWordCount INTEGER NOT NULL,
 			SecondarySlug TEXT
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstage_slug_idx ON ScanStage(Slug)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageTags (
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstage_slug_idx ON ScanStage(Slug)`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageTags (
 			Path    TEXT NOT NULL,
 			TagType TEXT NOT NULL,
 			Tag     TEXT NOT NULL,
 			PRIMARY KEY (Path, TagType, Tag)
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstagetags_type_tag_path_idx ON ScanStageTags(TagType, Tag, Path)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageProperties (
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstagetags_type_tag_path_idx ON ScanStageTags(TagType, Tag, Path)`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageProperties (
 			Path         TEXT NOT NULL,
 			PropertyType TEXT NOT NULL,
 			Property     TEXT NOT NULL,
 			Text         TEXT NOT NULL,
 			PRIMARY KEY (Path, PropertyType, Property)
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstageproperties_property_idx
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstageproperties_property_idx
 			ON ScanStageProperties(PropertyType, Property, Text)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageSources (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageSources (
 			Path       TEXT PRIMARY KEY,
 			SourcePath TEXT NOT NULL,
 			SourceKey  TEXT NOT NULL,
@@ -162,14 +197,14 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory')),
 			SourceGroup TEXT NOT NULL DEFAULT ''
 		) WITHOUT ROWID`,
-		`CREATE TABLE IF NOT EXISTS ScanStageLinks (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageLinks (
 			Path       TEXT PRIMARY KEY,
 			TargetPath TEXT NOT NULL
 		) WITHOUT ROWID`,
-		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
 		) WITHOUT ROWID`,
-	}
+	}...)
 	for _, stmt := range statements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("failed to ensure scan staging schema: %w", err)
@@ -181,10 +216,7 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 // sqlClearScanStage empties all scanner staging tables. Called before staging a
 // system (clearing any rows a crashed run left behind) and after its reconcile.
 func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
-	for _, table := range []string{
-		"ScanStageLinks", "ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage",
-		"ScanTouchedTitles",
-	} {
+	for _, table := range scanStagingTables {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			if sqlErrorIsMissingScanStage(err) {
@@ -578,9 +610,15 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	}()
 	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
 
+	// libraryRows counts rows written outside the scratch tables. The
+	// "capture" steps only note which titles to revisit.
+	var libraryRows int64
 	execStep := func(step, query string, args ...any) (int64, error) {
 		stepStart := clock.Now()
 		affected, execErr := scanReconcileExec(ctx, db, clock, systemID, step, query, args...)
+		if !strings.HasPrefix(step, "capture") {
+			libraryRows += affected
+		}
 		recordStep(step, clock.Since(stepStart))
 		if execErr != nil || opts.Yield == nil {
 			return affected, execErr
@@ -1130,6 +1168,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	recordStep("clear scan stage", clock.Since(clearStart))
 	if clearErr != nil {
 		return stats, clearErr
+	}
+	// The chunked steps report through their own counters, and a system
+	// with links always runs the link sync, which this does not measure.
+	stats.LibraryRowsChanged = libraryRows + stats.MediaUpserted + stats.MediaMissing + stats.TouchedTitles
+	if hasLinks || freshSystem {
+		stats.LibraryRowsChanged++
 	}
 	return stats, nil
 }

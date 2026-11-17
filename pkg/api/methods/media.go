@@ -681,6 +681,18 @@ func startPostIndexOptimization(
 	mediaDB.TrackBackgroundOperation()
 	go func() {
 		defer mediaDB.BackgroundOperationDone()
+		// An index that changed nothing leaves the optimization status at
+		// completed instead of queueing a pass: everything the pass rebuilds
+		// is still current.
+		if status, statusErr := mediaDB.GetOptimizationStatus(); statusErr == nil &&
+			status == mediadb.IndexingStatusCompleted {
+			log.Debug().Msg("post-index background optimization not needed")
+			lease.Release()
+			if statusCallback != nil {
+				statusCallback(false)
+			}
+			return
+		}
 		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
 			if database.IsOptimizationCanceled(err) {
 				log.Debug().Err(err).Msg("post-index background optimization canceled")
@@ -1076,6 +1088,16 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		}
 	} else {
 		systems = systemdefs.AllSystems()
+	}
+
+	// A database file keeps the page size it was created with, and the size
+	// new databases get makes bulk writes several times cheaper on slow
+	// storage. A full index is the one point where every row is about to be
+	// visited anyway, so it starts from a new file instead. User flags are
+	// re-applied from UserDB as on any rebuild; scraped data is fetched again.
+	if !rebuild && !isSelectiveIndexing && env.Database.MediaDB.StoragePageSizeOutdated() {
+		log.Info().Msg("media database uses an outdated page size, rebuilding it for this full index")
+		rebuild = true
 	}
 
 	// Ensure at least one resolved system is specified for selective indexing.

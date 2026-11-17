@@ -1,11 +1,11 @@
-Optimize the media indexing pipeline. Priority #3 — 1.5x over target.
+Optimize the media indexing pipeline. Priority #2 — 1.3x over target.
 
 ## Target
 
-MiSTer target: < 21s per 10k files in IndexingPipeline benchmark
-MiSTer baseline: 32s per 10k files
-Real-world target: Full 239k re-index in < 15 minutes (currently ~22-24 min)
-Gap: 1.5x over benchmark target
+MiSTer target: < 21s per 10k files in `BenchmarkMediaScanner_StageAndReconcile_FreshDB`
+MiSTer baseline: 27s per 10k files
+Real-world target: Full 239k re-index in < 15 minutes (currently about an hour for a first index of 252k files, 9 minutes for an update with nothing changed)
+Gap: 1.3x over benchmark target
 
 Real-world overhead is ~1.8x the benchmark pipeline (filesystem walking, SD card I/O, WAL checkpointing, cache rebuild).
 
@@ -30,17 +30,17 @@ Every 10k files: `CommitTransaction()` + `FlushScanStateMaps()` (clears TitleIDs
 |------|------|-----------------|
 | `pkg/database/mediascanner/mediascanner.go` | `NewNamesIndex()` orchestrator, transaction batching, fastwalk | Mixed |
 | `pkg/database/mediascanner/indexing_pipeline.go` | `AddMediaPath()`, `GetPathFragments()`, `FlushScanStateMaps()`, `SeedCanonicalTags()` | DB writes: 240x |
-| `pkg/database/tags/filename_parser.go` | `ParseFilenameToCanonicalTags()`, ~20 compiled regex patterns | CPU: 41x |
-| `pkg/database/slugs/slugify.go` | `Slugify()`, 9-stage Unicode normalization pipeline | CPU: 41x |
-| `pkg/database/slugs/normalization.go` | Unicode normalization stages | CPU: 41x |
-| `pkg/database/slugs/media_parsing.go` | Media-type-specific parsing dispatchers | CPU: 41x |
+| `pkg/database/tags/filename_parser.go` | `ParseFilenameToCanonicalTags()`, ~20 compiled regex patterns | CPU: 66x |
+| `pkg/database/slugs/slugify.go` | `Slugify()`, 9-stage Unicode normalization pipeline | CPU: 66x |
+| `pkg/database/slugs/normalization.go` | Unicode normalization stages | CPU: 66x |
+| `pkg/database/slugs/media_parsing.go` | Media-type-specific parsing dispatchers | CPU: 66x |
 | `pkg/database/mediascanner/mediascanner_bench_test.go` | All indexing benchmarks | - |
 
 ## Key Hotspots
 
-1. **DB transaction commits + fsync** (1220x on MiSTer SD card) — Each 10k-file batch triggers a commit with fsync. This is the dominant cost on MiSTer.
-2. **Slugification** (41x CPU multiplier) — 9-stage Unicode pipeline per title: width normalization, NFKD decomposition, article stripping, character filtering. Called once per unique title.
-3. **Regex tag parsing** (41x CPU multiplier) — 20 compiled patterns per filename in `ParseFilenameToCanonicalTags()`. Called once per file.
+1. **DB transaction commits + fsync** (378x for bulk writes, 1778x for a single-row commit on MiSTer SD card) — Each 10k-file batch triggers a commit with fsync. This is the dominant cost on MiSTer.
+2. **Slugification** (66x CPU multiplier) — 9-stage Unicode pipeline per title: width normalization, NFKD decomposition, article stripping, character filtering. Called once per unique title.
+3. **Regex tag parsing** (66x CPU multiplier) — 20 compiled patterns per filename in `ParseFilenameToCanonicalTags()`. Called once per file.
 4. **Map operations** — `FlushScanStateMaps()` clears TitleIDs/MediaIDs every 10k files. Map clear is O(n) in Go.
 5. **GenerateSlugWithMetadata()** — Called per unique title during insert. Generates SlugLength, SlugWordCount, TokenSignature, SecondarySlug.
 
@@ -51,17 +51,18 @@ Every 10k files: `CommitTransaction()` + `FlushScanStateMaps()` (clears TitleIDs
 - The pipeline must remain single-threaded for DB writes (SQLite limitation with `SetMaxOpenConns(1)`)
 - CPU-bound stages (parsing, slugification) could potentially be parallelized or pipelined ahead of DB writes
 
-## x86 Benchmark Targets
+## Benchmarks
 
-The x86 benchmarks use in-memory SQLite (no fsync), so the 1220x "DB writes with fsync" multiplier doesn't apply. Use the appropriate multiplier:
+The benchmarks open a real SQLite file under `TMPDIR` with the production settings. On x86 that is fast storage, so they measure CPU and SQL cost; the MiSTer cost of a write is set by its `sync` mount (see "Storage on MiSTer" in `docs/optimization-targets.md`) and has to be measured on the device with `task mister:bench`.
 
-| Benchmark | What it measures | Multiplier | x86 Target |
-|-----------|-----------------|------------|------------|
-| `BenchmarkAddMediaPath_MockDB` | CPU pipeline only (no DB) | 41x (CPU) | ~512ms/10k |
-| `BenchmarkAddMediaPath_RealDB` | Pipeline + in-memory SQLite | 240x (DB writes in-txn) | ~88ms/10k |
-| `BenchmarkIndexingPipeline_EndToEnd` | Full pipeline with commits | 240x (DB writes in-txn) | ~88ms/10k |
-| `BenchmarkGetPathFragments_Batch` | Parsing + slugification only | 41x (CPU) | ~512ms/10k |
-| `BenchmarkFlushScanStateMaps` | Map clearing | 41x (CPU) | Based on entry count |
+| Benchmark | What it measures |
+|-----------|-----------------|
+| `BenchmarkGetPathFragments_Batch` | Parsing and slugification only, no database |
+| `BenchmarkMediaScanner_StageAndReconcile_FreshDB` | Staging and reconciling a system into an empty database |
+| `BenchmarkMediaScanner_Reconcile_ExistingRows` | Rescanning a system whose rows already exist |
+| `BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB` | A fixed-size scan against a growing database |
+| `BenchmarkMediaScanner_GrowingRun_AnalyzeCadence` | Planner statistics cadence over a long run |
+| `BenchmarkSQLiteWritePattern` | Page size and checkpoint mode against the storage under `TMPDIR` |
 
 ## Optimization Ideas
 
@@ -76,7 +77,7 @@ The x86 benchmarks use in-memory SQLite (no fsync), so the 1220x "DB writes with
 
 ```bash
 # All indexing benchmarks
-go test -run='^$' -bench='Benchmark(AddMediaPath|IndexingPipeline|GetPathFragments_Batch|FlushScanStateMaps)' \
+go test -run='^$' -bench='Benchmark(MediaScanner_|GetPathFragments_Batch)' \
   -benchmem -count=6 -timeout=30m ./pkg/database/mediascanner/
 
 # Slugification (called during indexing)
@@ -93,8 +94,8 @@ benchstat testdata/benchmarks/baseline.txt /tmp/bench-current.txt
 
 ## Success Criteria
 
-- `BenchmarkIndexingPipeline_EndToEnd/10k_1sys`: measurable improvement (> 10%) on x86
-- `BenchmarkAddMediaPath_RealDB/10k`: measurable improvement (> 10%) on x86
+- `BenchmarkMediaScanner_StageAndReconcile_FreshDB/10k`: measurable improvement (> 10%) on x86
+- `BenchmarkMediaScanner_Reconcile_ExistingRows`: measurable improvement (> 10%) on x86
 - No regressions in `BenchmarkGetPathFragments` (per-file parsing)
 - All existing tests pass
 - `task lint-fix` passes clean

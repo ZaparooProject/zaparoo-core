@@ -21,6 +21,7 @@ package localmedia
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -932,4 +933,142 @@ func TestDeleteStaleLocalMediaProps_RecognisesDifferentlyCasedFolder(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
 	mockDB.AssertExpectations(t)
+}
+
+// An index-triggered run leaves a system alone when neither its artwork
+// folders nor its library changed since the last completed run, and scrapes
+// it again as soon as a file appears under one of those folders.
+func TestScrape_FillMissingSkipsSystemWithUnchangedArtworkAndLibrary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemRoot := filepath.Join(root, "n64")
+	romPath := filepath.Join(systemRoot, "Game.z64")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, os.MkdirAll(systemRoot, 0o750))
+	require.NoError(t, afero.WriteFile(fs,
+		filepath.Join(systemRoot, "media", "Boxart", "Game.png"), []byte("boxart"), 0o600))
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{{
+		ID: "n64", SystemID: "Nintendo64", Folders: []string{"n64"}, Extensions: []string{".z64"},
+	}})
+
+	stored := ""
+	applied := 0
+	newDB := func() *testhelpers.MockMediaDBI {
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("IndexedSystems").Return([]string{"Nintendo64"}, nil)
+		mockDB.On("FindSystemBySystemID", "Nintendo64").
+			Return(database.System{DBID: 1, SystemID: "Nintendo64", Name: "Nintendo 64"}, nil)
+		mockDB.On("GetMediaBySystemID", "Nintendo64").Return([]database.MediaWithFullPath{
+			{DBID: 11, MediaTitleDBID: 101, Path: romPath, SystemID: "Nintendo64"},
+		}, nil)
+		mockDB.On("LibraryRevision", mock.Anything, "Nintendo64").Return(int64(7), nil)
+		mockDB.On("GetScrapeFingerprint", mock.Anything, scraperID, "Nintendo64").Return(stored, nil)
+		mockDB.On("SetScrapeFingerprint", mock.Anything, scraperID, "Nintendo64", mock.Anything).
+			Run(func(args mock.Arguments) { stored = args.String(3) }).Return(nil)
+		mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(101), mock.Anything).
+			Run(func(mock.Arguments) { applied++ }).Return(nil)
+		return mockDB
+	}
+	run := func() {
+		ch := make(chan scraper.ScrapeUpdate, 32)
+		require.NoError(t, NewPlatformScraper().Scrape(
+			context.Background(), cfg, pl, fs, &database.Database{MediaDB: newDB()},
+			scraper.ScrapeOptions{FillMissing: true}, nil, ch,
+		))
+		var last scraper.ScrapeUpdate
+		for update := range ch {
+			last = update
+		}
+		require.True(t, last.Done)
+		require.NoError(t, last.FatalErr)
+	}
+
+	run()
+	require.Equal(t, 1, applied)
+	require.NotEmpty(t, stored, "a completed system records the state it was scraped in")
+
+	run()
+	assert.Equal(t, 1, applied, "nothing changed, so the system is not scraped again")
+
+	require.NoError(t, afero.WriteFile(fs,
+		filepath.Join(systemRoot, "media", "Snaps", "Game.png"), []byte("snap"), 0o600))
+	run()
+	assert.Equal(t, 2, applied, "new artwork is picked up")
+}
+
+// A system is only remembered as scraped when every row it had artwork for
+// was written, and its state follows the artwork folder's own path, so a
+// folder renamed in case alone is read again.
+func TestScrape_FillMissingRemembersOnlyACleanSystem(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemRoot := filepath.Join(root, "n64")
+	romPath := filepath.Join(systemRoot, "Game.z64")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, os.MkdirAll(systemRoot, 0o750))
+	require.NoError(t, afero.WriteFile(fs,
+		filepath.Join(systemRoot, "media", "Boxart", "Game.png"), []byte("boxart"), 0o600))
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{{
+		ID: "n64", SystemID: "Nintendo64", Folders: []string{"n64"}, Extensions: []string{".z64"},
+	}})
+
+	stored := ""
+	applied := 0
+	var writeErr error
+	run := func() {
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("IndexedSystems").Return([]string{"Nintendo64"}, nil)
+		mockDB.On("FindSystemBySystemID", "Nintendo64").
+			Return(database.System{DBID: 1, SystemID: "Nintendo64", Name: "Nintendo 64"}, nil)
+		mockDB.On("GetMediaBySystemID", "Nintendo64").Return([]database.MediaWithFullPath{
+			{DBID: 11, MediaTitleDBID: 101, Path: romPath, SystemID: "Nintendo64"},
+		}, nil)
+		mockDB.On("LibraryRevision", mock.Anything, "Nintendo64").Return(int64(7), nil)
+		mockDB.On("GetScrapeFingerprint", mock.Anything, scraperID, "Nintendo64").Return(stored, nil)
+		mockDB.On("SetScrapeFingerprint", mock.Anything, scraperID, "Nintendo64", mock.Anything).
+			Run(func(args mock.Arguments) { stored = args.String(3) }).Return(nil)
+		mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(101), mock.Anything).
+			Run(func(mock.Arguments) { applied++ }).Return(writeErr)
+		ch := make(chan scraper.ScrapeUpdate, 32)
+		require.NoError(t, NewPlatformScraper().Scrape(
+			context.Background(), cfg, pl, fs, &database.Database{MediaDB: mockDB},
+			scraper.ScrapeOptions{FillMissing: true}, nil, ch,
+		))
+		var last scraper.ScrapeUpdate
+		for update := range ch {
+			last = update
+		}
+		require.True(t, last.Done)
+		require.NoError(t, last.FatalErr)
+	}
+
+	writeErr = errors.New("database is locked")
+	run()
+	require.Equal(t, 1, applied)
+	require.Empty(t, stored, "a system with a failed write must not be remembered as scraped")
+
+	writeErr = nil
+	run()
+	require.Equal(t, 2, applied, "the failed row is tried again")
+	require.NotEmpty(t, stored)
+
+	run()
+	require.Equal(t, 2, applied)
+
+	require.NoError(t, fs.Rename(
+		filepath.Join(systemRoot, "media", "Boxart"), filepath.Join(systemRoot, "media", "boxart")))
+	run()
+	assert.Equal(t, 3, applied, "a renamed artwork folder changes the paths found, so it is read again")
 }

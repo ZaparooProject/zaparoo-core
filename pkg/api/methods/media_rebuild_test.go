@@ -44,6 +44,7 @@ func newRebuildTestEnv(t *testing.T, mockMediaDB *helpers.MockMediaDBI, params s
 
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Maybe()
 	mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
+	mockMediaDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -205,4 +206,87 @@ func TestHandleGenerateMedia_RebuildRecreateFailureAbortsIndexing(t *testing.T) 
 	// touches the (possibly still closed) database.
 	mockMediaDB.AssertNotCalled(t, "SetIndexingStatus", mock.Anything)
 	mockMediaDB.AssertExpectations(t)
+}
+
+// newOutdatedPageSizeEnv returns a request environment whose media database
+// was created with a page size this build no longer uses and holds one row.
+func newOutdatedPageSizeEnv(t *testing.T, params string) (requests.RequestEnv, *database.Database) {
+	t.Helper()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{}).Maybe()
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{t.TempDir()}).Maybe()
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	db.DeckTags = &recordingDeckTags{}
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	_, err := db.MediaDB.UnsafeGetSQLDb().ExecContext(context.Background(),
+		"PRAGMA journal_mode=DELETE; PRAGMA page_size=4096; VACUUM")
+	require.NoError(t, err)
+	require.True(t, db.MediaDB.StoragePageSizeOutdated())
+
+	sys, err := db.MediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+	require.NoError(t, err)
+	title, err := db.MediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       "marker",
+		Name:       "Marker",
+	})
+	require.NoError(t, err)
+	markerPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "marker.sfc"))
+	_, err = db.MediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           markerPath,
+		ParentDir:      mediadb.ParentDirForMediaPath(markerPath),
+	})
+	require.NoError(t, err)
+
+	return requests.RequestEnv{
+		Context:  context.Background(),
+		Params:   []byte(params),
+		Database: db,
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}, db
+}
+
+// A database file keeps the page size it was created with. A full index of one
+// built with an older size replaces the file, which is the only thing that
+// changes it.
+func TestHandleGenerateMedia_FullIndexRebuildsOutdatedPageSize(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	ClearIndexingStatus()
+	env, db := newOutdatedPageSizeEnv(t, "")
+
+	_, err := HandleGenerateMedia(env)
+	require.NoError(t, err)
+	waitForIndexingFinished(t)
+
+	assert.False(t, db.MediaDB.StoragePageSizeOutdated(), "a full index must leave the current page size behind")
+	count, err := db.MediaDB.GetTotalMediaCount()
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "the old file's rows go with it")
+}
+
+// Indexing some systems must never discard the rest, whatever the page size.
+func TestHandleGenerateMedia_SelectiveIndexKeepsOutdatedPageSize(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	ClearIndexingStatus()
+	env, db := newOutdatedPageSizeEnv(t, `{"systems":["NES"]}`)
+
+	_, err := HandleGenerateMedia(env)
+	require.NoError(t, err)
+	waitForIndexingFinished(t)
+
+	assert.True(t, db.MediaDB.StoragePageSizeOutdated())
+	count, err := db.MediaDB.GetTotalMediaCount()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "a selective index must not replace the database")
 }

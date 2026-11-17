@@ -65,7 +65,7 @@ func scrapeJobsForSources(
 		}
 		var systems []string
 		for _, source := range sources {
-			if source.Files <= 0 {
+			if !source.HasFiles {
 				continue
 			}
 			// A scraper bound to launchers reads what those launchers keep,
