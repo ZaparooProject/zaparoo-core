@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 )
 
 // newBenchUserDB opens a UserDB with the production connection settings on
@@ -42,6 +43,11 @@ func newBenchUserDB(b testing.TB) *UserDB {
 
 func newBenchUserDBWithParams(b testing.TB, connParams string) *UserDB {
 	b.Helper()
+	// go test prints a benchmark's name before it runs, so a log line written
+	// during setup lands on the result line and benchstat cannot read it.
+	level := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	b.Cleanup(func() { zerolog.SetGlobalLevel(level) })
 	pl := mocks.NewMockPlatform()
 	pl.On("ID").Return("bench-platform")
 	path := filepath.Join(b.TempDir(), "user.db")
@@ -297,10 +303,19 @@ func BenchmarkUserDB_HistoryIndexBuild(b *testing.B) {
 					b.Fatal(err)
 				}
 				b.StartTimer()
-				_, err = sqlDB.ExecContext(db.ctx,
+				// One transaction for both, as the migration runs them.
+				tx, err := sqlDB.BeginTx(db.ctx, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, err = tx.ExecContext(db.ctx,
 					`CREATE INDEX idx_media_history_media ON MediaHistory (MediaPath, SystemID, DBID);
 					CREATE INDEX idx_media_history_end_time ON MediaHistory (EndTime)`)
 				if err != nil {
+					_ = tx.Rollback()
+					b.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
 					b.Fatal(err)
 				}
 			}
