@@ -3939,6 +3939,22 @@ func (m *MockMediaDBI) SetScanMarker(ctx context.Context, systemID, marker strin
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) ScanGameIDMisses(ctx context.Context, systemID string) (string, error) {
+	if !m.hasExpectation("ScanGameIDMisses") {
+		return "", nil
+	}
+	args := m.Called(ctx, systemID)
+	return args.String(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) SetScanGameIDMisses(ctx context.Context, systemID, record string) error {
+	if !m.hasExpectation("SetScanGameIDMisses") {
+		return nil
+	}
+	args := m.Called(ctx, systemID, record)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetScrapeRunMediaIDs(
 	ctx context.Context, scraperID, runID string, systemDBID int64,
 ) (map[int64]struct{}, error) {

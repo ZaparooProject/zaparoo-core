@@ -45,7 +45,7 @@ func TestStagedPropertiesFromPath_IdentifiesDiscImage(t *testing.T) {
 		"HasMediaPropertyForPath", mock.Anything, systemdefs.SystemPSX, path, string(tags.TagPropertyGameID),
 	).Return(false, nil).Once()
 
-	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path)
+	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, nil)
 
 	require.Equal(t, []database.ScanStagedProperty{{
 		Type: string(tags.TagTypeProperty),
@@ -66,7 +66,7 @@ func TestStagedPropertiesFromPath_PropertyCheckErrorStillIdentifies(t *testing.T
 		"HasMediaPropertyForPath", mock.Anything, systemdefs.SystemPSX, path, string(tags.TagPropertyGameID),
 	).Return(false, context.Canceled).Once()
 
-	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path)
+	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, nil)
 
 	require.Len(t, props, 1)
 	require.Equal(t, "SCES-01420", props[0].Text)

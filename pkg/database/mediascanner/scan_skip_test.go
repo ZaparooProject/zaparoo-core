@@ -83,17 +83,24 @@ func (f *scanSkipFixture) breakTitles(t *testing.T, systemID string) {
 
 func newScanSkipFixture(t *testing.T) *scanSkipFixture {
 	t.Helper()
+	return newScanSkipFixtureFor(t, ".bin", systemdefs.SystemNES, systemdefs.SystemSNES)
+}
+
+// newScanSkipFixtureFor indexes one "Alpha Game" file with the given
+// extension in each of the given systems.
+func newScanSkipFixtureFor(t *testing.T, ext string, systemIDs ...string) *scanSkipFixture {
+	t.Helper()
 	db, cleanup := testhelpers.NewTestDatabase(t)
 	t.Cleanup(cleanup)
 
 	fixture := &scanSkipFixture{db: db, dirs: map[string]string{}}
-	launchers := make([]platforms.Launcher, 0, 2)
-	for _, systemID := range []string{systemdefs.SystemNES, systemdefs.SystemSNES} {
+	launchers := make([]platforms.Launcher, 0, len(systemIDs))
+	for _, systemID := range systemIDs {
 		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "Alpha Game.bin"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Alpha Game"+ext), []byte("x"), 0o600))
 		fixture.dirs[systemID] = dir
 		launchers = append(launchers, platforms.Launcher{
-			ID: "custom-" + systemID, SystemID: systemID, Folders: []string{dir}, Extensions: []string{".bin"},
+			ID: "custom-" + systemID, SystemID: systemID, Folders: []string{dir}, Extensions: []string{ext},
 		})
 		fixture.systems = append(fixture.systems, systemdefs.System{ID: systemID})
 	}

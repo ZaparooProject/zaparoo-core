@@ -76,6 +76,52 @@ func (db *MediaDB) SetScanMarker(ctx context.Context, systemID, marker string) e
 	return nil
 }
 
+// dbConfigScanGameIDMissPrefix prefixes the per-system record of disc images
+// the scanner read and found no game ID in. The scanner checks each entry
+// against the file before trusting it, so nothing has to clear the record
+// when rows change.
+const dbConfigScanGameIDMissPrefix = "ScanGameIDMiss:"
+
+// ScanGameIDMisses returns the scanner's record of a system's disc images
+// that carry no game ID, or "" when it has stored none.
+func (db *MediaDB) ScanGameIDMisses(ctx context.Context, systemID string) (string, error) {
+	if db.sql.Load() == nil {
+		return "", ErrNullSQL
+	}
+	var value string
+	err := db.conn().QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?", dbConfigScanGameIDMissPrefix+systemID,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get gameid miss record: %w", err)
+	}
+	return value, nil
+}
+
+// SetScanGameIDMisses stores that record, or forgets it when record is empty.
+// It runs in the open indexing transaction.
+func (db *MediaDB) SetScanGameIDMisses(ctx context.Context, systemID, record string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	name := dbConfigScanGameIDMissPrefix + systemID
+	if record == "" {
+		if _, err := db.conn().ExecContext(ctx, "DELETE FROM DBConfig WHERE Name = ?", name); err != nil {
+			return fmt.Errorf("failed to clear gameid miss record: %w", err)
+		}
+		return nil
+	}
+	if _, err := db.conn().ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)", name, record,
+	); err != nil {
+		return fmt.Errorf("failed to set gameid miss record: %w", err)
+	}
+	return nil
+}
+
 // sqlClearScanMarkers forgets the scan record of the given systems, or of
 // every system when none are named.
 func sqlClearScanMarkers(ctx context.Context, db sqlQueryable, systemIDs []string) error {

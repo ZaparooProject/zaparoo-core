@@ -1850,6 +1850,12 @@ type MediaDBI interface {
 	// SetScanMarker records what the scanner reconciled a system from, inside
 	// the open indexing transaction. An empty marker forgets the record.
 	SetScanMarker(ctx context.Context, systemID, marker string) error
+	// ScanGameIDMisses returns the scanner's record of a system's disc images
+	// that carry no game ID, or "" when it has stored none.
+	ScanGameIDMisses(ctx context.Context, systemID string) (string, error)
+	// SetScanGameIDMisses stores that record inside the open indexing
+	// transaction. An empty record forgets it.
+	SetScanGameIDMisses(ctx context.Context, systemID, record string) error
 
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.

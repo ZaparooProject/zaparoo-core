@@ -79,6 +79,9 @@ type StageMediaPathParams struct {
 	ProvidedName string
 	// LinkTarget is the path of the media this file is a symlink alias of.
 	LinkTarget string
+	// GameIDMisses, when set, remembers disc images that were read and carry
+	// no game ID, so they are not read again while they stay as they are.
+	GameIDMisses *gameIDMisses
 	// GameIDUnresolved, when set, is incremented for a file that could carry
 	// a game ID, has none stored, and could not be identified this time. The
 	// scanner reads such a file again on every index.
@@ -113,7 +116,8 @@ func StageMediaPath(params *StageMediaPathParams) error {
 				Msg("ignoring invalid media source provenance")
 		}
 	}
-	properties, gameIDUnresolved := stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path)
+	properties, gameIDUnresolved := stagedPropertiesFromPath(
+		params.DB, params.SystemID, pf.Path, params.GameIDMisses)
 	if gameIDUnresolved && params.GameIDUnresolved != nil {
 		*params.GameIDUnresolved++
 	}
@@ -244,7 +248,7 @@ func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*data
 }
 
 func stagedPropertiesFromPath(
-	db database.MediaDBI, systemID, path string,
+	db database.MediaDBI, systemID, path string, misses *gameIDMisses,
 ) (properties []database.ScanStagedProperty, unresolved bool) {
 	if !gameid.IsCandidate(path, systemID) {
 		return nil, false
@@ -259,7 +263,13 @@ func stagedPropertiesFromPath(
 		return nil, false
 	}
 
+	if misses.isKnown(path) {
+		log.Debug().Str("system", systemID).Str("path", path).Msg("gameid already known to be absent")
+		return nil, false
+	}
+
 	started := time.Now()
+	fileState, fileStateOK := gameIDFileStateOf(path)
 	log.Debug().Str("system", systemID).Str("path", path).Msg("gameid identification started")
 	id, err := gameid.IdentifyPathForSystem(path, systemID)
 	duration := time.Since(started)
@@ -270,11 +280,11 @@ func stagedPropertiesFromPath(
 			Str("path", path).
 			Dur("duration", duration).
 			Msg("gameid identification skipped")
-		return nil, true
+		return nil, !misses.record(path, fileState, fileStateOK, err)
 	}
 	if id == "" {
 		log.Debug().Str("system", systemID).Str("path", path).Dur("duration", duration).Msg("gameid not found")
-		return nil, true
+		return nil, !misses.record(path, fileState, fileStateOK, nil)
 	}
 
 	log.Debug().Str("system", systemID).Str("path", path).Str("gameid", id).Dur("duration", duration).

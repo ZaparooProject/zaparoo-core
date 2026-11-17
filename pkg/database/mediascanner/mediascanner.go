@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -2069,6 +2070,10 @@ func NewNamesIndexWithSources(
 			continue
 		}
 		gameIDUnresolved := 0
+		var discMisses *gameIDMisses
+		if _, hasGameIDs := gameid.ConsoleForSystem(systemID); hasGameIDs {
+			discMisses = loadGameIDMisses(ctx, db, systemID)
+		}
 
 		// Group files by directory and determine stripping policy per directory
 		filesByDir := make(map[string][]platforms.ScanResult)
@@ -2145,6 +2150,7 @@ func NewNamesIndexWithSources(
 				NoExt:        file.NoExt,
 
 				GameIDUnresolved: &gameIDUnresolved,
+				GameIDMisses:     discMisses,
 			})
 			insertDur += time.Since(insertStart)
 			if addErr != nil {
@@ -2280,6 +2286,9 @@ func NewNamesIndexWithSources(
 			// Record what this reconcile was derived from, in the same
 			// transaction as its rows. A system that still has files to
 			// identify keeps none, so the next index reads them again.
+			if missErr := discMisses.save(ctx, db, systemID); missErr != nil {
+				return 0, missErr
+			}
 			nextMarker := ""
 			if markerUsable && gameIDUnresolved == 0 {
 				nextMarker = walkMarker
