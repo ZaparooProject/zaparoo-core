@@ -101,6 +101,10 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
+	// ErrLaunchNotAdmitted is returned when the device's content policy
+	// refuses a launch or a media download. The policy's own error is
+	// wrapped alongside it and says why.
+	ErrLaunchNotAdmitted = errors.New("launch not admitted")
 	// ErrWriteNotAlone is returned when a write shares a script with other
 	// commands. A write arms the next card scanned, which only works when it
 	// is the token's whole script.
@@ -145,6 +149,7 @@ var expectedRunErrors = []error{
 	// Refusals by configuration are the setting working, not a bug.
 	ErrCommandBlocked,
 	ErrCommandNotPermitted,
+	ErrLaunchNotAdmitted,
 	ErrExecuteNotAllowed,
 	ErrExecuteTimeout,
 	ErrExecuteExitStatus,

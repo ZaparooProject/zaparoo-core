@@ -548,7 +548,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if env.AdmitLaunch != nil {
 		if admitErr := env.AdmitLaunch(platforms.ResolvedLaunch{SystemID: systemID}, true); admitErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("launch not admitted: %w", admitErr)
+			return platforms.CmdResult{}, fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 		}
 	}
 
@@ -1189,7 +1189,7 @@ func getLaunchClosure(
 		// shows a confirmation or runs a hook first.
 		if env.AdmitLaunch != nil {
 			if admitErr := env.AdmitLaunch(resolved, false); admitErr != nil {
-				return fmt.Errorf("launch not admitted: %w", admitErr)
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 			}
 		}
 		if env.PrepareMediaLaunch != nil {
@@ -1222,7 +1222,7 @@ func getLaunchClosure(
 		// is waiting.
 		if env.AdmitLaunch != nil {
 			if admitErr := env.AdmitLaunch(resolved, true); admitErr != nil {
-				return fmt.Errorf("launch not admitted: %w", admitErr)
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 			}
 		}
 
@@ -1323,7 +1323,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
 		if env.AdmitMediaInstall != nil {
 			if admitErr := env.AdmitMediaInstall(); admitErr != nil {
-				return platforms.CmdResult{}, fmt.Errorf("media install not admitted: %w", admitErr)
+				return platforms.CmdResult{}, fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
 			}
 		}
 		installPath, err := installer.InstallRemoteFile(

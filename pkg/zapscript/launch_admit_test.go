@@ -139,7 +139,12 @@ func TestLaunchClosure_RefusedLaunchNeverPreparesOrStarts(t *testing.T) {
 	}
 
 	launch := getLaunchClosure(mockPlatform, env, false)
-	require.ErrorIs(t, launch(launchTarget{path: "/games/NES/Mario.nes", systemID: "NES"}), errNotAdmitted)
+	err := launch(launchTarget{path: "/games/NES/Mario.nes", systemID: "NES"})
+	require.ErrorIs(t, err, errNotAdmitted)
+	// A refusal is the policy working, so it is reported as one and logged
+	// as an expected outcome instead of a failure.
+	require.ErrorIs(t, err, ErrLaunchNotAdmitted)
+	assert.True(t, IsExpectedRunError(err))
 	assert.False(t, prepared, "no confirmation or hook for a launch that will be refused")
 	mockPlatform.AssertNotCalled(t, "LaunchMedia",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
