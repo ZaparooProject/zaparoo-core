@@ -130,25 +130,15 @@ tasks:
             echo "Done: $(ls _build/bench_arm/*.test | wc -l) binaries"'
 
   bench-run:
-    # TMPDIR points at the SD card: /tmp is tmpfs on MiSTer, where database
-    # benchmarks would never pay for a real write.
+    # The run is detached on the device and uses the SD card for TMPDIR; see
+    # scripts/mister/bench-run.sh. MediaDB and the media scanner run only the
+    # benchmarks listed in scripts/mister/bench-patterns.txt: their full sets
+    # take more than ten hours on the card. BENCH_PATTERNS=/dev/null runs all.
     desc: Run benchmark binaries on MiSTer (BENCH_OUT=testdata/benchmarks/baseline-mister.txt replaces the baseline)
     vars:
-      BENCH_COUNT: '{{default "3" .BENCH_COUNT}}'
-      BENCH_PATTERN: '{{default "." .BENCH_PATTERN}}'
       BENCH_OUT: '{{default "/tmp/zaparoo-bench-mister.txt" .BENCH_OUT}}'
-      BENCH_TIMEOUT: '{{default "60m" .BENCH_TIMEOUT}}'
-      SSH_OPTS: -o ServerAliveInterval=30 -o ServerAliveCountMax=120
     cmds:
-      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "mkdir -p /media/fat/zaparoo-bench"
-      - scp _build/bench_arm/*.test root@${MISTER_IP}:/media/fat/zaparoo-bench/
-      - |
-        (for bin in _build/bench_arm/*.test; do
-          name=$(basename $bin)
-          echo "Running $name..." >&2
-          ssh {{.SSH_OPTS}} root@${MISTER_IP} "mkdir -p /media/fat/zaparoo-bench/tmp && TMPDIR=/media/fat/zaparoo-bench/tmp /media/fat/zaparoo-bench/$name -test.run='^\$' -test.bench='{{.BENCH_PATTERN}}' -test.benchmem -test.count={{.BENCH_COUNT}} -test.timeout={{.BENCH_TIMEOUT}}"
-        done) | grep -E "^(Benchmark.* ns/op|goos:|goarch:|pkg:|cpu:)" | tee {{.BENCH_OUT}}
-      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "rm -rf /media/fat/zaparoo-bench"
+      - scripts/mister/bench-run.sh "${MISTER_IP}" "{{.BENCH_OUT}}"
 
   bench:
     desc: Build and run benchmarks on MiSTer
