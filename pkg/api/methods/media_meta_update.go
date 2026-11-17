@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -35,7 +36,9 @@ import (
 )
 
 type mediaMetaUpdatePatch struct {
-	LauncherOverride    *string
+	LauncherOverride *string
+	// Fields are the user-edited metadata fields to set or reset.
+	Fields              []mediaFieldEdit
 	LauncherOverrideSet bool
 }
 
@@ -97,6 +100,10 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		}
 	}
 
+	if err := applyMediaFieldEdits(&env, row, patch.Fields); err != nil {
+		return nil, err
+	}
+
 	return HandleMediaMeta(env)
 }
 
@@ -130,13 +137,39 @@ func parseMediaMetaUpdatePatch(raw json.RawMessage) (mediaMetaUpdatePatch, error
 				return mediaMetaUpdatePatch{}, errors.New("media.launcherOverride cannot be empty; use null to clear")
 			}
 			patch.LauncherOverride = &launcherID
+		case "name":
+			edit, err := parseMediaUserName(value)
+			if err != nil {
+				return mediaMetaUpdatePatch{}, err
+			}
+			patch.Fields = append(patch.Fields, edit)
+		case "description":
+			edit, err := parseMediaUserDescription(value)
+			if err != nil {
+				return mediaMetaUpdatePatch{}, err
+			}
+			patch.Fields = append(patch.Fields, edit)
+		case "tags":
+			edits, err := parseMediaUserTags(value)
+			if err != nil {
+				return mediaMetaUpdatePatch{}, err
+			}
+			patch.Fields = append(patch.Fields, edits...)
+		case "images":
+			edits, err := parseMediaUserImages(value)
+			if err != nil {
+				return mediaMetaUpdatePatch{}, err
+			}
+			patch.Fields = append(patch.Fields, edits...)
 		default:
 			return mediaMetaUpdatePatch{}, fmt.Errorf("unsupported media field: %s", field)
 		}
 	}
-	if !patch.LauncherOverrideSet {
+	if !patch.LauncherOverrideSet && len(patch.Fields) == 0 {
 		return mediaMetaUpdatePatch{}, errors.New("no supported media updates provided")
 	}
+	// A JSON object has no order; apply fields in a fixed one.
+	sort.SliceStable(patch.Fields, func(i, j int) bool { return patch.Fields[i].field < patch.Fields[j].field })
 	return patch, nil
 }
 

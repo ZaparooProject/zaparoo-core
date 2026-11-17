@@ -305,6 +305,48 @@ func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) ListMediaUserFields() ([]database.MediaUserField, error) {
+	args := m.Called()
+	fields, ok := args.Get(0).([]database.MediaUserField)
+	if !ok {
+		fields = nil
+	}
+	if err := args.Error(1); err != nil {
+		return fields, fmt.Errorf("mock UserDBI list media user fields failed: %w", err)
+	}
+	return fields, nil
+}
+
+func (m *MockUserDBI) GetMediaUserFieldsForTitle(
+	systemID, slug string, paths []string,
+) ([]database.MediaUserField, error) {
+	args := m.Called(systemID, slug, paths)
+	fields, ok := args.Get(0).([]database.MediaUserField)
+	if !ok {
+		fields = nil
+	}
+	if err := args.Error(1); err != nil {
+		return fields, fmt.Errorf("mock UserDBI get media user fields for title failed: %w", err)
+	}
+	return fields, nil
+}
+
+func (m *MockUserDBI) SetMediaUserField(field *database.MediaUserField, titlePaths []string) error {
+	args := m.Called(field, titlePaths)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user field failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteMediaUserField(systemID, slug string, paths []string, field string) error {
+	args := m.Called(systemID, slug, paths, field)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete media user field failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) ListMediaUserFlagTimes(flag database.MediaUserFlag) ([]database.MediaUserFlagTime, error) {
 	args := m.Called(flag)
 	if err := args.Error(1); err != nil {
@@ -3564,6 +3606,7 @@ func NewMockUserDBI() *MockUserDBI {
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	m.On("ListMediaUserFlagTimes", mock.Anything).Return([]database.MediaUserFlagTime{}, nil).Maybe()
+	m.On("ListMediaUserFields").Return([]database.MediaUserField{}, nil).Maybe()
 	m.On("GetMediaUserDataForPaths", mock.Anything).
 		Return(map[database.MediaUserRef]database.MediaUserData{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()

@@ -151,6 +151,8 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 | `MediaTitleProperties` | Title-level shared static content | description, XML game ID, GameDataBase identity and raw compilation member IDs |
 | `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
 
+A user can edit a title's name, description and common tags and a file's images by hand (`media.meta.update`). Those values live in UserDB (`MediaUserFields`) and are copied into the same tables, with a `property:user-fields` marker on the title or file listing which fields hold one. Scraper write paths do not look at the marker: a scrape may overwrite a user value, and `database.ReapplyMediaUserFields` puts it back when the run ends, as it does after every index.
+
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
 
 ### Tag rules

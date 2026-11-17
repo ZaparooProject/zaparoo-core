@@ -2134,6 +2134,10 @@ const (
 	TagPropertyGameID           TagValue = "hash-gameid"       // go-gameid disc identity
 	TagPropertyLauncherOverride TagValue = "launcher-override" // Per-media launcher override (launcher ID)
 	TagPropertyMAMESetName      TagValue = "mame-setname"      // MAME/MRA romset identity
+	// TagPropertyUserFields records, on a title or a file, which of its
+	// fields hold a value the user edited (JSON). Internal: never a client's
+	// property.
+	TagPropertyUserFields TagValue = "user-fields"
 )
 
 // Catalog identifiers are title properties, not user-facing tags.

@@ -51,6 +51,9 @@ type Database struct {
 	// changed its flags, from any path that edits them. It is nil where
 	// nothing listens. It must not block.
 	OnMediaUserFlagsChanged func(systemID, path string, data *MediaUserData)
+	// UserImages resolves the images the user set on games by hand. It is nil
+	// where no image folder is attached, and user images are then left alone.
+	UserImages MediaUserImageStore
 	// UserDBRecovery is set when startup found the user database damaged and
 	// replaced it, so the user can be told. It is nil after a normal open.
 	UserDBRecovery *UserDBRecovery
@@ -1564,6 +1567,12 @@ type UserDBI interface {
 	ListMediaUserData() ([]MediaUserData, error)
 	ListMediaUserFlagTimes(flag MediaUserFlag) ([]MediaUserFlagTime, error)
 	GetMediaUserDataForPaths(refs []MediaUserRef) (map[MediaUserRef]MediaUserData, error)
+
+	// User-edited metadata fields. UserDB is their source of truth.
+	ListMediaUserFields() ([]MediaUserField, error)
+	GetMediaUserFieldsForTitle(systemID, slug string, paths []string) ([]MediaUserField, error)
+	SetMediaUserField(field *MediaUserField, titlePaths []string) error
+	DeleteMediaUserField(systemID, slug string, paths []string, field string) error
 
 	// Library sync bookkeeping for personal state.
 	ListLibraryStateSync() ([]LibraryStateSyncRow, error)

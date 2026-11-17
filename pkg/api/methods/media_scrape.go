@@ -371,6 +371,14 @@ func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	InvalidateMediaThumbMemoSystems(systems)
 }
 
+// reapplyMediaUserFieldsAfterScrape restores the metadata the user edited by
+// hand over whatever a scrape wrote in its place.
+func reapplyMediaUserFieldsAfterScrape(env *requests.RequestEnv, db *database.Database) {
+	if _, err := database.ReapplyMediaUserFields(env.State.GetContext(), db); err != nil {
+		log.Warn().Err(err).Msg("failed to re-apply media user fields after scrape")
+	}
+}
+
 // refreshScrapedTags makes tags written by a scrape visible to media.tags.
 // Scrape writes commit incrementally, so this runs on every terminal outcome.
 func refreshScrapedTags(ctx context.Context, mediaDB database.MediaDBI) {
@@ -915,6 +923,10 @@ func startMediaScrapeOperation(
 					terminal.TotalScraped = stored
 				}
 			}
+			// A scrape upserts properties and replaces exclusive tags by type,
+			// which overwrites a value the user set by hand. Put those back
+			// before the caches below are refreshed.
+			reapplyMediaUserFieldsAfterScrape(env, db)
 			// Scrape writes commit incrementally, so changed artwork must be
 			// invalidated on every terminal outcome, including failure/cancellation.
 			mediaImageNoImages.clear()

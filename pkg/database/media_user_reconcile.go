@@ -41,8 +41,9 @@ type mediaUserDataKey struct {
 // the projection still describes the database that was replaced. Live edits
 // and the post-index re-apply only ever need to add.
 //
-// Only the five flag tags and the override property are touched; deck tags
-// and metadata tags stay as they are. A projection already in line writes
+// The fields the user edited by hand follow (see ReapplyMediaUserFields).
+// Beyond those, only the five flag tags and the override property are
+// touched; deck tags and metadata tags stay as they are. A projection already in line writes
 // nothing. Rows whose system or path is not indexed are skipped.
 func ReconcileMediaUserData(ctx context.Context, db *Database) error {
 	mediaUserFlagsMu.Lock()
@@ -83,13 +84,23 @@ func ReconcileMediaUserData(ctx context.Context, db *Database) error {
 	if _, err := projectHiddenDirectoryRows(ctx, db.MediaDB, rows); err != nil {
 		return err
 	}
+	fieldsChanged, fieldsErr := reconcileMediaUserFields(ctx, db)
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	if fieldsChanged > 0 {
+		// A replaced tag set is not in the tag caches yet.
+		if refreshErr := db.MediaDB.RefreshScrapeTagCache(ctx); refreshErr != nil {
+			log.Warn().Err(refreshErr).Msg("failed to refresh the tag cache after reconciling media user fields")
+		}
+	}
 	// No flag write is in flight under mediaUserFlagsMu, so a marker still
 	// saved here was left by one that never finished, and is now answered.
 	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
 		return fmt.Errorf("failed to clear the media user flag write marker: %w", err)
 	}
 	log.Info().Int("rows", len(rows)).Int("flagsChanged", flagsChanged).
-		Int("overridesSet", set).Int("overridesCleared", cleared).
+		Int("overridesSet", set).Int("overridesCleared", cleared).Int("fieldTitlesChanged", fieldsChanged).
 		Msg("reconciled media user data")
 	return nil
 }

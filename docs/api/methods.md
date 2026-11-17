@@ -2672,6 +2672,7 @@ Single requests return the existing single `media` response shape. Batch request
 | properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
 | launcherOverride | string                            | No       | Launcher ID stored for this media row, mirrored from `property:launcher-override` in `properties`. When present, Core uses it for title, search, path, random, and history launches unless ZapScript includes an explicit `launcher` argument. |
 | availableImageTypes | string[]                       | No       | Image types `media.image` can return from this media row, plus the requested directory's own artwork types. Omitted when there are none. |
+| userEdited | string[]                          | No       | Images of this media row the user set by hand with [`media.meta.update`](#mediametaupdate), as `images.<kind>`. Omitted when there are none. |
 | title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
 
 ##### Media meta title object
@@ -2687,6 +2688,7 @@ Single requests return the existing single `media` response shape. Batch request
 | tags          | [TagInfo](#taginfo-object)[] | Yes      | Title-level tags shared by matching media rows.  |
 | properties    | object                       | Yes      | Title-level properties keyed by canonical type tag. |
 | availableImageTypes | string[]               | No       | Image types `media.image` can return from title-level properties. Omitted when there are none. |
+| userEdited | string[]                     | No       | Title fields the user set by hand with [`media.meta.update`](#mediametaupdate): `name`, `description` and `tags.<type>`. Omitted when there are none. |
 
 ##### Media meta property object
 
@@ -2782,11 +2784,18 @@ Property keys are canonical type tags such as `property:description`, `property:
 
 ### media.meta.update
 
-**Access:** All clients.
+**Access:** All clients. An image taken from a file on the Core host needs localhost or admin.
 
 Update writable metadata fields for one indexed media row, then return the same response shape as [`media.meta`](#mediameta).
 
-Use this to store a per-media launcher override. Core validates the launcher exists and supports the media row's system before saving it. Set `launcherOverride` to `null` to clear the override.
+A patch can set a per-media launcher override and edit the game's metadata by hand: its name, description, common tags and images. Every field is optional; a field left out is untouched, and `null` resets a field.
+
+Edited metadata is the user's own. Core keeps it in the user database and copies it into the media database, so it survives a reindex, a media database rebuild and a scrape, including a forced one. [`media.meta`](#mediameta) lists the fields that hold a user value in `userEdited`.
+
+- **Name, description and tags belong to the title**, so every version of the game shows them. The name is what browse and search show and sort by; the slug, and so launching by title, still follows the filename.
+- **Images belong to the one file.** Other versions of the game keep their own art.
+- **Resetting a field** removes the user's value. A name goes back to the one read from the filename. Any other field is left for the scrapers, and Core starts a scrape of that one file with every scraper that fills missing fields.
+- **Images are stored as files** in Core's data directory, never in the user database and never in a backup. A restore onto another device brings back the text and tags; a game whose image file is not there shows its scraped art.
 
 Launcher selection order is:
 
@@ -2804,13 +2813,27 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 | mediaId | number | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system  | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
 | path    | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
-| media   | object | Yes      | Patch object. Currently supports only `launcherOverride`. |
+| media   | object | Yes      | Patch object with at least one field. Unknown fields are rejected. |
 
 ##### Media patch object
 
-| Key              | Type        | Required | Description |
-| :--------------- | :---------- | :------- | :---------- |
-| launcherOverride | string\|null | Yes      | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Use `null` to clear it. Empty strings are rejected. |
+| Key              | Type         | Required | Description |
+| :--------------- | :----------- | :------- | :---------- |
+| launcherOverride | string\|null | No       | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Core validates the launcher exists and supports the row's system. Use `null` to clear it. Empty strings are rejected. |
+| name             | string\|null | No       | The title's display name, 1 to 255 characters after trimming, with no control characters. `null` puts back the name read from the filename. |
+| description      | string\|null | No       | The title's description, up to 10,000 characters. `null` resets it. |
+| tags             | object       | No       | Tag type to a list of values, or `null` to reset that type. The types are `developer`, `publisher`, `year`, `genre` and `players`. A list is the full set the title carries for the type and replaces whatever was there; an empty list is a title with none. `year` and other single-value types take one value. `genre`, `players` and `year` values must be ones Core knows; `developer` and `publisher` take any name. |
+| images           | object       | No       | Image kind to an [image source](#media-image-source-object), or `null` to reset that image. The kinds are `image`, `boxart`, `boxart3d`, `boxartside`, `boxartback`, `screenshot`, `thumbnail`, `marquee`, `wheel`, `fanart`, `titleshot` and `map`, each the `property:image-<kind>` property of the file. |
+
+##### Media image source object
+
+An image must be a JPEG, PNG, GIF or WebP of at most 10 MiB. Core copies it into its own folder.
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| kind     | string | Yes      | `file` for an image on the Core host, `upload` for a finished [upload](#uploads). |
+| path     | string | No       | Absolute path of the image on the Core host. Required for `file`, which needs localhost or admin. |
+| uploadId | string | No       | ID of a finished upload of purpose `media-image`. Required for `upload`. The upload is used up. |
 
 #### Result
 
@@ -2850,6 +2873,45 @@ While indexing, database optimization, maintenance or recovery owns the media da
     "path": "/roms/snes/Super Mario World.sfc",
     "media": {
       "launcherOverride": null
+    }
+  }
+}
+```
+
+##### Edit metadata
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "media.meta.update",
+  "params": {
+    "mediaId": 42,
+    "media": {
+      "name": "Chrono Trigger",
+      "description": "A group of adventurers travels through time.",
+      "tags": { "genre": ["rpg"], "year": ["1995"], "developer": ["Square"] },
+      "images": {
+        "boxart": { "kind": "file", "path": "/media/usb0/covers/chrono-trigger.png" }
+      }
+    }
+  }
+}
+```
+
+##### Reset fields
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "media.meta.update",
+  "params": {
+    "mediaId": 42,
+    "media": {
+      "name": null,
+      "tags": { "genre": null },
+      "images": { "boxart": null }
     }
   }
 }
@@ -3724,6 +3786,133 @@ See [System object](#system-object).
   }
 }
 ```
+
+## Uploads
+
+A client that cannot name a file on the Core host sends one in chunks, then hands the finished upload to the method that wants it. Uploads run over the same connection as every other method.
+
+1. [`uploads.begin`](#uploadsbegin) with the file's purpose, size and SHA-256 returns an `uploadId` and the chunk size.
+2. [`uploads.chunk`](#uploadschunk) sends the bytes in order, each chunk at the offset the last response returned in `received`.
+3. [`uploads.finish`](#uploadsfinish) checks the size, the SHA-256 and the content.
+4. The finished upload is named by its `uploadId` in the method it was made for, which uses it up.
+
+A purpose sets what may be uploaded. The one purpose today:
+
+| Purpose       | Largest file | Content                    | Used by |
+| :------------ | :----------- | :------------------------- | :------ |
+| `media-image` | 10 MiB       | JPEG, PNG, GIF or WebP     | [`media.meta.update`](#mediametaupdate) `images` |
+
+A session belongs to the client that began it and lives in Core's memory: it ends after 10 minutes without a request, and when Core restarts. A client that lost its connection asks [`uploads.status`](#uploadsstatus) where the upload is and carries on from there. Core holds at most four uploads at once.
+
+### Upload object
+
+| Key       | Type    | Required | Description |
+| :-------- | :------ | :------- | :---------- |
+| uploadId  | string  | Yes      | ID of the upload session. |
+| purpose   | string  | Yes      | Purpose the upload was begun for. |
+| size      | number  | Yes      | Declared size of the file in bytes. |
+| received  | number  | Yes      | Bytes received so far: the offset of the next chunk. |
+| chunkSize | number  | Yes      | Largest chunk accepted, in raw bytes (131072). |
+| finished  | boolean | Yes      | True once `uploads.finish` accepted the upload. |
+
+### uploads.begin
+
+**Access:** Localhost or any authenticated client.
+
+Open an upload session.
+
+#### Parameters
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| purpose | string | Yes      | What the file is for. See the purposes above. |
+| size    | number | Yes      | Size of the file in bytes. Greater than zero and no larger than the purpose allows. |
+| sha256  | string | Yes      | SHA-256 of the whole file, 64 hex characters. |
+
+#### Result
+
+An [upload object](#upload-object).
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "uploads.begin",
+  "params": {
+    "purpose": "media-image",
+    "size": 204800,
+    "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  }
+}
+```
+
+### uploads.chunk
+
+**Access:** Localhost or any authenticated client.
+
+Append one chunk to an upload. Chunks arrive in order: `offset` must equal the `received` of the previous response. A chunk at any other offset is refused and changes nothing.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| uploadId | string | Yes      | ID from `uploads.begin`. |
+| offset   | number | Yes      | Zero-based byte offset of this chunk in the file. |
+| data     | string | Yes      | The chunk's bytes, base64 encoded. At most `chunkSize` raw bytes, and never past the declared size. |
+
+#### Result
+
+An [upload object](#upload-object).
+
+### uploads.status
+
+**Access:** Localhost or any authenticated client.
+
+Report an upload session, so a client can resume from `received`.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| uploadId | string | Yes      | ID from `uploads.begin`. |
+
+#### Result
+
+An [upload object](#upload-object).
+
+### uploads.finish
+
+**Access:** Localhost or any authenticated client.
+
+Check a fully received upload against its declared size, its SHA-256 and its purpose's content rule. An upload that fails the SHA-256 or the content rule is discarded. An upload that is not complete is refused and kept.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| uploadId | string | Yes      | ID from `uploads.begin`. |
+
+#### Result
+
+An [upload object](#upload-object) with `finished` true.
+
+### uploads.cancel
+
+**Access:** Localhost or any authenticated client.
+
+Discard an upload session and its bytes.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| uploadId | string | Yes      | ID from `uploads.begin`. |
+
+#### Result
+
+Returns `null` on success.
 
 ## Playlists
 

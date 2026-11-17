@@ -20,30 +20,20 @@
 package decks
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
-const (
-	// CoverMaxBytes is the largest cover image a deck keeps, and the largest
-	// one fetched for a deck from elsewhere.
-	CoverMaxBytes = 10 << 20
-	// coverPruneGrace keeps a cover file written moments ago through a
-	// prune: its deck row may not have been committed yet.
-	coverPruneGrace = 10 * time.Minute
-)
+// CoverMaxBytes is the largest cover image a deck keeps, and the largest
+// one fetched for a deck from elsewhere.
+const CoverMaxBytes = imagefiles.MaxBytes
 
 var (
 	// ErrCoverNotImage reports cover bytes that are not a supported image.
@@ -53,15 +43,6 @@ var (
 	// ErrCoverNotFound reports a cover file that is not stored.
 	ErrCoverNotFound = errors.New("cover image not found")
 )
-
-// coverExtensions maps the image types a cover may be to the extension its
-// file is stored with.
-var coverExtensions = map[string]string{
-	"image/jpeg": ".jpg",
-	"image/png":  ".png",
-	"image/gif":  ".gif",
-	"image/webp": ".webp",
-}
 
 // Covers stores deck cover images on this device: user data in the data
 // directory, never the thumbnail cache, which may be emptied at any time. A
@@ -77,73 +58,62 @@ func NewCovers(pl platforms.Platform) *Covers {
 	return &Covers{FS: afero.NewOsFs(), Dir: filepath.Join(helpers.DataDir(pl), "decks", "covers")}
 }
 
+func (c *Covers) store() *imagefiles.Store {
+	return &imagefiles.Store{FS: c.FS, Dir: c.Dir}
+}
+
+// coverError gives an image store error its deck cover wording.
+func coverError(err error) error {
+	switch {
+	case errors.Is(err, imagefiles.ErrNotImage):
+		return ErrCoverNotImage
+	case errors.Is(err, imagefiles.ErrTooLarge):
+		return ErrCoverTooLarge
+	case errors.Is(err, imagefiles.ErrNotFound):
+		return ErrCoverNotFound
+	default:
+		return err
+	}
+}
+
 // CoverContentType reports the image type of cover bytes, or
 // ErrCoverNotImage.
 func CoverContentType(data []byte) (string, error) {
-	contentType := http.DetectContentType(data)
-	if _, ok := coverExtensions[contentType]; !ok {
-		return "", ErrCoverNotImage
+	contentType, err := imagefiles.ContentType(data)
+	if err != nil {
+		return "", coverError(err)
 	}
 	return contentType, nil
 }
 
 // Save stores a deck's cover and returns the file name to keep on the deck.
 func (c *Covers) Save(deckID string, data []byte) (string, error) {
-	if len(data) > CoverMaxBytes {
-		return "", ErrCoverTooLarge
-	}
-	contentType, err := CoverContentType(data)
+	name, err := c.store().Save(deckID, data)
 	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	name := strings.ToLower(deckID) + "-" + hex.EncodeToString(sum[:8]) + coverExtensions[contentType]
-	if !validCoverName(name) {
-		return "", fmt.Errorf("invalid deck id for a cover: %q", deckID)
-	}
-	if err = c.FS.MkdirAll(c.Dir, 0o750); err != nil {
-		return "", fmt.Errorf("create deck covers folder: %w", err)
-	}
-	tmp, err := afero.TempFile(c.FS, c.Dir, ".cover-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create deck cover file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = c.FS.Remove(tmpPath) }()
-	if _, err = tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return "", fmt.Errorf("write deck cover file: %w", err)
-	}
-	if err = tmp.Close(); err != nil {
-		return "", fmt.Errorf("close deck cover file: %w", err)
-	}
-	if err = c.FS.Rename(tmpPath, filepath.Join(c.Dir, name)); err != nil {
-		return "", fmt.Errorf("store deck cover file: %w", err)
+		if mapped := coverError(err); !errors.Is(mapped, err) {
+			return "", mapped
+		}
+		return "", fmt.Errorf("store deck cover: %w", err)
 	}
 	return name, nil
 }
 
 // Path returns the full path of a stored cover file, or ErrCoverNotFound.
 func (c *Covers) Path(name string) (string, error) {
-	if !validCoverName(name) {
-		return "", ErrCoverNotFound
-	}
-	path := filepath.Join(c.Dir, name)
-	info, err := c.FS.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", ErrCoverNotFound
+	path, err := c.store().Path(name)
+	if err != nil {
+		return "", coverError(err)
 	}
 	return path, nil
 }
 
 // Read returns a stored cover's bytes, or ErrCoverNotFound.
 func (c *Covers) Read(name string) ([]byte, error) {
-	path, err := c.Path(name)
+	data, err := c.store().Read(name)
 	if err != nil {
-		return nil, err
-	}
-	data, err := afero.ReadFile(c.FS, path)
-	if err != nil {
+		if mapped := coverError(err); !errors.Is(mapped, err) {
+			return nil, mapped
+		}
 		return nil, fmt.Errorf("read deck cover: %w", err)
 	}
 	return data, nil
@@ -152,28 +122,5 @@ func (c *Covers) Read(name string) ([]byte, error) {
 // Prune removes cover files no deck names. Files written in the last few
 // minutes stay, since the deck that names one may not be stored yet.
 func (c *Covers) Prune(keep map[string]struct{}, now time.Time) {
-	entries, err := afero.ReadDir(c.FS, c.Dir)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			log.Debug().Err(err).Msg("failed to read deck covers folder")
-		}
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || now.Sub(entry.ModTime()) < coverPruneGrace {
-			continue
-		}
-		if _, kept := keep[entry.Name()]; kept {
-			continue
-		}
-		if err := c.FS.Remove(filepath.Join(c.Dir, entry.Name())); err != nil {
-			log.Debug().Err(err).Str("file", entry.Name()).Msg("failed to remove unused deck cover")
-		}
-	}
-}
-
-// validCoverName accepts a bare file name, never a path.
-func validCoverName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`) &&
-		filepath.Base(name) == name
+	c.store().Prune(keep, now)
 }

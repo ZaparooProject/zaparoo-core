@@ -563,6 +563,37 @@ type MediaMetaUpdateParams struct {
 	Media   json.RawMessage `json:"media,omitempty"`
 }
 
+// Image sources for a media.meta.update image.
+const (
+	MediaImageKindFile   = "file"
+	MediaImageKindUpload = "upload"
+)
+
+// MediaImageInput names the image a media.meta.update image field takes: a
+// file on the Core host (path) or a finished upload (uploadId).
+type MediaImageInput struct {
+	Kind     string `json:"kind" validate:"required,oneof=file upload"`
+	Path     string `json:"path,omitempty"`
+	UploadID string `json:"uploadId,omitempty"`
+}
+
+type UploadsBeginParams struct {
+	Purpose string `json:"purpose" validate:"required,min=1,max=64"`
+	SHA256  string `json:"sha256" validate:"required,len=64,hexadecimal"`
+	Size    int64  `json:"size" validate:"required,gt=0"`
+}
+
+type UploadsChunkParams struct {
+	Offset   *int64 `json:"offset" validate:"required,gte=0"`
+	UploadID string `json:"uploadId" validate:"required,min=1,max=64"`
+	// Data is the chunk's bytes, base64 encoded.
+	Data string `json:"data" validate:"required,min=1"`
+}
+
+type UploadsIDParams struct {
+	UploadID string `json:"uploadId" validate:"required,min=1,max=64"`
+}
+
 type MediaAssetParams struct {
 	MediaID   *int64 `json:"mediaId,omitempty"`
 	Offset    *int64 `json:"offset,omitempty"`

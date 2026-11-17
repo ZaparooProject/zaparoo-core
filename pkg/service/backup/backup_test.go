@@ -850,6 +850,28 @@ func TestManagerCreateListRestore(t *testing.T) {
 	}
 }
 
+// TestZaparooBackupLeavesUserImagesOut covers the images a user sets on games
+// by hand. UserDB records which image a game uses; the files themselves stay
+// on the device, so they never count against an online backup's quota.
+func TestZaparooBackupLeavesUserImagesOut(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "data")
+	image := filepath.Join(dataDir, "media", "images-user", "img-0123456789abcdef.png")
+
+	for _, def := range zaparooBackupDefinitions(filepath.Join(base, "cfg"), dataDir) {
+		rel, err := filepath.Rel(def.SourceRoot, image)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		if def.NonRecursive && strings.Contains(rel, string(filepath.Separator)) {
+			continue
+		}
+		assert.Falsef(t, backupPatternsMatch(rel, def.Include),
+			"the definition rooted at %s collects user images", def.SourceRoot)
+	}
+}
+
 func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	t.Parallel()
 	// Restore policy validates against the same definitions collection

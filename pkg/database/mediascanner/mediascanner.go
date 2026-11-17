@@ -2615,6 +2615,15 @@ func NewNamesIndexWithSources(
 			}
 		}
 	}
+	// The fields the user edited by hand: the scan rewrote every title's name
+	// from its filename, and a rebuilt database holds none of them.
+	if _, fieldsErr := database.ReapplyMediaUserFields(ctx, fdb); fieldsErr != nil {
+		if maintenanceErr := bestEffortMaintenanceError(
+			fieldsErr, "failed to re-apply media user fields",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
+		}
+	}
 	// Hidden folders are projected whole, so one already in line writes nothing.
 	if syncErr := database.SyncHiddenDirectories(ctx, fdb.UserDB, db); syncErr != nil {
 		if maintenanceErr := bestEffortMaintenanceError(
