@@ -145,3 +145,52 @@ func runWritePattern(b *testing.B, pageSize int, checkpoint string) (commit, che
 	}
 	return commit, checkpointing, size
 }
+
+// BenchmarkSQLiteSmallCommit prices one small write transaction by page size
+// on the storage under TMPDIR: a single tag link added to a database that
+// already holds 50,000 media rows and 100,000 links. It is the shape of a
+// favorite edit or a slug resolution cache write, the opposite case to the
+// bulk load in BenchmarkSQLiteWritePattern, where larger pages win.
+func BenchmarkSQLiteSmallCommit(b *testing.B) {
+	for _, pageSize := range []int{4096, 16384, 65536} {
+		b.Run(fmt.Sprintf("page_%d", pageSize), func(b *testing.B) {
+			ctx := context.Background()
+			db, err := sql.Open("sqlite3", filepath.Join(b.TempDir(), "small.db"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			db.SetMaxOpenConns(1)
+			for _, stmt := range []string{
+				fmt.Sprintf("PRAGMA page_size=%d", pageSize),
+				"PRAGMA journal_mode=WAL",
+				"PRAGMA synchronous=NORMAL",
+				`CREATE TABLE Media(DBID INTEGER PRIMARY KEY, SystemDBID INTEGER, Path TEXT,
+					UNIQUE(SystemDBID, Path))`,
+				"CREATE TABLE MediaTags(MediaDBID INTEGER, TagDBID INTEGER, PRIMARY KEY(MediaDBID, TagDBID))",
+				"CREATE INDEX mediatags_tag ON MediaTags(TagDBID, MediaDBID)",
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 50000)
+					INSERT INTO Media
+					SELECT i, i % 40, '/media/fat/games/Sys' || (i % 40) || '/Game ' || i || '.bin' FROM n`,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 100000)
+					INSERT INTO MediaTags SELECT 1 + (i * 7919) % 50000, i % 300 FROM n`,
+				"PRAGMA wal_checkpoint(TRUNCATE)",
+			} {
+				if _, err := db.ExecContext(ctx, stmt); err != nil {
+					b.Fatalf("%s: %v", stmt, err)
+				}
+			}
+			rng := rand.New(rand.NewPCG(3, 4)) //nolint:gosec // deterministic benchmark data
+			next := 1000
+			b.ResetTimer()
+			for b.Loop() {
+				next++
+				if _, err := db.ExecContext(ctx,
+					"INSERT INTO MediaTags VALUES(?, ?)", 1+rng.IntN(50_000), next,
+				); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
