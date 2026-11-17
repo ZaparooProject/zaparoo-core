@@ -40,6 +40,8 @@ settings.backup.remote.list settings.backup.remote.restore
 settings.playtime.limits settings.playtime.limits.update playtime playtime.extend
 clients clients.current clients.delete clients.pair.start clients.pair.cancel
 profiles profiles.new profiles.update profiles.delete profiles.active profiles.switch profiles.verify
+profiles.content profiles.content.update
+kiosk kiosk.enable kiosk.disable kiosk.unlock kiosk.lock kiosk.update kiosk.allow
 decks decks.get decks.new decks.update decks.delete decks.open decks.image
 systems launchers launchers.refresh tokens.history mappings mappings.new mappings.delete
 mappings.update mappings.reload readers readers.write readers.write.cancel version health

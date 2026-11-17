@@ -62,6 +62,11 @@ type RunCommandOptions struct {
 	RecordMediaStop    func(reason string) (cancel func())
 	StopSeq            func() uint64
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
+	// AdmitLaunch and AdmitMediaInstall carry the device's content policy
+	// to the launch path. See platforms.CmdEnv.
+	AdmitLaunch        func(target platforms.ResolvedLaunch, final bool) error
+	AdmitMediaInstall  func() error
+	SystemPermitted    func(systemID string) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
@@ -753,6 +758,9 @@ func RunCommand(
 		RecordMediaStop:    opts.RecordMediaStop,
 		StopSeq:            opts.StopSeq,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
+		AdmitLaunch:        opts.AdmitLaunch,
+		AdmitMediaInstall:  opts.AdmitMediaInstall,
+		SystemPermitted:    opts.SystemPermitted,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,

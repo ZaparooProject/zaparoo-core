@@ -58,6 +58,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -322,6 +323,48 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
 }
 
+// kioskAllowedMethods is everything a caller held to the kiosk role may
+// call. It is default-deny: a method added to the API is refused on a locked
+// device until it is listed here, and a test fails until it is listed here
+// or in kioskDeniedMethods.
+//
+// What is in: reading state, browsing, starting and stopping media, moving
+// between profiles, and the calls that open the lock. Launches made through
+// these still answer to the content rule and the command bound.
+//
+//nolint:gochecknoglobals // immutable method policy
+var kioskAllowedMethods = map[string]bool{
+	models.MethodLaunch: true, models.MethodRun: true, models.MethodStop: true,
+	models.MethodConfirm: true,
+	models.MethodUI:      true, models.MethodUIRespond: true, models.MethodUIShown: true,
+	models.MethodTokens: true, models.MethodHistory: true,
+	models.MethodMedia: true, models.MethodScrapers: true,
+	models.MethodMediaSearch: true, models.MethodMediaBrowse: true,
+	models.MethodMediaBrowseIndex: true, models.MethodMediaTags: true,
+	models.MethodMediaActive: true, models.MethodMediaActiveImage: true,
+	models.MethodMediaHistory: true, models.MethodMediaHistoryLatest: true,
+	models.MethodMediaHistoryTop: true, models.MethodMediaLookup: true,
+	models.MethodMediaLookupCandidates: true, models.MethodMediaMeta: true,
+	models.MethodMediaImage: true, models.MethodMediaAsset: true,
+	models.MethodMediaScrapeStatus: true, models.MethodMediaControl: true,
+	models.MethodMediaTitleParse: true, models.MethodPlaylistsUpdate: true,
+	models.MethodInbox: true, models.MethodSettingsBackupStatus: true,
+	models.MethodDeviceEndpoints: true,
+	models.MethodSettings:        true, models.MethodPlaytimeLimits: true,
+	models.MethodPlaytime: true,
+	models.MethodSystems:  true, models.MethodLaunchers: true,
+	models.MethodReaders: true,
+	models.MethodVersion: true, models.MethodHealthCheck: true,
+	models.MethodClientsCurrent: true,
+	models.MethodProfiles:       true, models.MethodProfilesActive: true,
+	models.MethodProfilesSwitch: true,
+	models.MethodDecks:          true, models.MethodDecksGet: true, models.MethodDecksOpen: true,
+	models.MethodDecksImage:         true,
+	models.MethodSettingsAuthStatus: true, models.MethodOnlineStatus: true,
+	models.MethodUpdateStatus: true, models.MethodDeviceStatus: true,
+	models.MethodKiosk: true, models.MethodKioskUnlock: true, models.MethodKioskLock: true,
+}
+
 func (m *MethodMap) Store(key, value any) {
 	m.Map.Store(key, value)
 }
@@ -511,13 +554,22 @@ func NewMethodMap() *MethodMap {
 		models.MethodClientsCurrent: methods.HandleClientsCurrent,
 		models.MethodClientsDelete:  methods.HandleClientsDelete,
 
-		models.MethodProfiles:       methods.HandleProfiles,
-		models.MethodProfilesNew:    methods.HandleProfilesNew,
-		models.MethodProfilesUpdate: methods.HandleProfilesUpdate,
-		models.MethodProfilesDelete: methods.HandleProfilesDelete,
-		models.MethodProfilesActive: methods.HandleProfilesActive,
-		models.MethodProfilesSwitch: methods.HandleProfilesSwitch,
-		models.MethodProfilesVerify: methods.HandleProfilesVerify,
+		models.MethodProfiles:              methods.HandleProfiles,
+		models.MethodProfilesNew:           methods.HandleProfilesNew,
+		models.MethodProfilesUpdate:        methods.HandleProfilesUpdate,
+		models.MethodProfilesDelete:        methods.HandleProfilesDelete,
+		models.MethodProfilesActive:        methods.HandleProfilesActive,
+		models.MethodProfilesSwitch:        methods.HandleProfilesSwitch,
+		models.MethodProfilesVerify:        methods.HandleProfilesVerify,
+		models.MethodKiosk:                 methods.HandleKiosk,
+		models.MethodKioskEnable:           methods.HandleKioskEnable,
+		models.MethodKioskDisable:          methods.HandleKioskDisable,
+		models.MethodKioskUnlock:           methods.HandleKioskUnlock,
+		models.MethodKioskLock:             methods.HandleKioskLock,
+		models.MethodKioskUpdate:           methods.HandleKioskUpdate,
+		models.MethodKioskAllow:            methods.HandleKioskAllow,
+		models.MethodProfilesContent:       methods.HandleProfilesContent,
+		models.MethodProfilesContentUpdate: methods.HandleProfilesContentUpdate,
 		// decks
 		models.MethodDecks:       methods.HandleDecks,
 		models.MethodDecksGet:    methods.HandleDecksGet,
@@ -594,17 +646,27 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 	}
 }
 
+// pairingRequired reports whether a remote client has to hold a pairing to
+// be served. The encryption setting says so permanently; kiosk mode says so
+// for as long as it is on, locked or temporarily unlocked, without touching
+// the stored setting. A temporary unlock is for the person at the device,
+// and must not also reopen it to the network.
+func pairingRequired(cfg *config.Instance, st *state.State) bool {
+	return cfg.EncryptionEnabled() || st.Kiosk().Active()
+}
+
 // legacyAdmissionMiddleware rejects unauthenticated remote API transports on
 // platforms without an explicit compatibility policy. It runs after API-key
 // middleware so a valid key is recognized as admin authority.
 func legacyAdmissionMiddleware(
+	st *state.State,
 	platformID string,
 	rejections *remoteRejectionLog,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if apimiddleware.IsLocalRequest(r) ||
-				apimiddleware.APIKeyAuthenticated(r) || permissions.LegacyEnabled(platformID) {
+			if apimiddleware.IsLocalRequest(r) || apimiddleware.APIKeyAuthenticated(r) ||
+				(permissions.LegacyEnabled(platformID) && !st.Kiosk().Active()) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -667,14 +729,25 @@ func handleRequest(
 		log.Warn().Str("method", req.Method).Msg("unknown method")
 		return nil, &JSONRPCErrorMethodNotFound
 	}
+	if env.Kiosk == nil {
+		env.Kiosk = env.State.Kiosk()
+	}
 	grant := methods.GrantForRequest(&env)
 	if grant.Access() == permissions.AccessLegacy {
 		bootstrapAllowed := unauthenticatedBootstrapMethods[strings.ToLower(req.Method)]
-		legacyAllowed := permissions.LegacyEnabled(env.PlatformID) && definition.legacyAllowed
+		// Kiosk mode withdraws the compatibility grant for as long as it is
+		// on: a device somebody locked cannot also be open to whoever is on
+		// the network.
+		legacyAllowed := permissions.LegacyEnabled(env.PlatformID) && definition.legacyAllowed &&
+			!env.Kiosk.Active()
 		if !bootstrapAllowed && !legacyAllowed {
 			rpcError := makeJSONRPCError(1, methods.ErrForbidden.Error())
 			return nil, &rpcError
 		}
+	}
+	if grant.Capped() && !kioskAllowedMethods[strings.ToLower(req.Method)] {
+		rpcError := makeJSONRPCError(1, methods.ErrKioskLocked.Error())
+		return nil, &rpcError
 	}
 
 	if env.State != nil && !apiMethodManagesRestoreAccess(req.Method) {
@@ -1241,7 +1314,8 @@ var notificationCapabilities = map[string]permissions.Capability{
 //
 //nolint:gochecknoglobals // immutable lookup table
 var authenticatedNotifications = map[string]bool{
-	models.NotificationDeviceChanged: true,
+	models.NotificationKioskLaunchRefused: true,
+	models.NotificationDeviceChanged:      true,
 }
 
 // notificationGated reports whether only some clients may receive a
@@ -1269,6 +1343,32 @@ func notificationAudience(method, platformID string) func(*melody.Session) bool 
 	}
 	return func(s *melody.Session) bool {
 		return notificationAllowed(method, sessionGrant(s.Request, getClientSession(s), platformID))
+	}
+}
+
+// closeUnpairedSessions drops every WebSocket session that holds no pairing,
+// API key or local address. Kiosk mode stops admitting such clients; this
+// is what stops the ones that were already connected when it was turned on.
+// A paired client caught mid-handshake is dropped with them and reconnects.
+func closeUnpairedSessions(session *melody.Melody, platformID string) {
+	sessions, err := session.Sessions()
+	if err != nil {
+		logWSWriteError(err, "fetching sessions to close for kiosk mode")
+		return
+	}
+	closed := 0
+	for _, s := range sessions {
+		if s == nil || s.IsClosed() {
+			continue
+		}
+		if sessionGrant(s.Request, getClientSession(s), platformID).Access() != permissions.AccessLegacy {
+			continue
+		}
+		closeSession(s)
+		closed++
+	}
+	if closed > 0 {
+		log.Info().Int("sessions", closed).Msg("kiosk: closed unpaired connections")
 	}
 }
 
@@ -1416,6 +1516,13 @@ func handleSSE(notifBroker *broker.Broker, st *state.State, platformID string) h
 				return
 			case notif, ok := <-notifs:
 				if !ok {
+					return
+				}
+				// Kiosk mode stops admitting unpaired clients. Its own state
+				// notification arrives here as it turns on, which ends a
+				// stream that was opened before.
+				if grant.Access() == permissions.AccessLegacy && st.Kiosk().Active() {
+					log.Info().Int("subscriber_id", subID).Msg("kiosk: closing unpaired SSE client")
 					return
 				}
 				if !notificationAllowed(notif.Method, grant) {
@@ -1600,7 +1707,7 @@ func handleWSMessage(
 		if clientIP != nil {
 			sourceIP = clientIP.String()
 		}
-		encryptionEnabled := cfg.EncryptionEnabled()
+		encryptionEnabled := pairingRequired(cfg, st)
 
 		// An unparseable RemoteAddr would collapse all such clients onto a
 		// shared empty-string rate-limit bucket — a false positive could
@@ -2591,6 +2698,13 @@ func StartWithListener(
 			}
 		}
 	})
+	if lock := st.Kiosk(); lock != nil {
+		lock.OnChange(func(status kiosk.Status) {
+			if status.Active() {
+				closeUnpairedSessions(session, platform.ID())
+			}
+		})
+	}
 	wsNotifications, wsSubID := notifBroker.Subscribe(100)
 	go func() {
 		broadcastNotifications(st, session, platform.ID(), wsNotifications)
@@ -2625,7 +2739,7 @@ func StartWithListener(
 	// decryption proves the client holds a valid pairing key. Localhost is
 	// always exempt.
 	wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
-		if !cfg.EncryptionEnabled() {
+		if !pairingRequired(cfg, st) {
 			if !apimiddleware.WebSocketAuthHandler(authConfig, r) {
 				if !apimiddleware.IsLocalRequest(r) {
 					remoteRejections.record(r, rejectReasonAPIKey)
@@ -2653,7 +2767,7 @@ func StartWithListener(
 		// they are queued instead until the first frame settles the mode or
 		// the settle grace runs out.
 		authState := webSocketAuthUnsettled
-		if cfg.EncryptionEnabled() && !apimiddleware.IsLocalRequest(r) {
+		if pairingRequired(cfg, st) && !apimiddleware.IsLocalRequest(r) {
 			authState = webSocketAuthPending
 		}
 		err := session.HandleRequestWithKeys(w, r, map[string]any{
@@ -2724,7 +2838,7 @@ func StartWithListener(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
-		r.Use(legacyAdmissionMiddleware(platform.ID(), remoteRejections))
+		r.Use(legacyAdmissionMiddleware(st, platform.ID(), remoteRejections))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 

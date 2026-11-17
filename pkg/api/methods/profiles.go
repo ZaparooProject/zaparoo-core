@@ -40,7 +40,8 @@ var errProfilesUnavailable = errors.New("profiles service not available")
 // a PIN-free switch on every path — so they are only exposed where the
 // card-writing UX needs them.
 func canSeeSwitchIDs(env *requests.RequestEnv) bool {
-	return env.IsLocal || requestGrant(env).Has(permissions.CapProfilesManage)
+	grant := requestGrant(env)
+	return (env.IsLocal && !grant.Capped()) || grant.Has(permissions.CapProfilesManage)
 }
 
 // profileResponse renders a profile for API responses. SwitchID is a
@@ -75,6 +76,7 @@ func profileError(err error) error {
 		errors.Is(err, profiles.ErrAdminPINRequired),
 		errors.Is(err, profiles.ErrInvalidRole),
 		errors.Is(err, profiles.ErrLastAdmin),
+		errors.Is(err, profiles.ErrKioskLocked),
 		errors.Is(err, profiles.ErrNotFound):
 		return models.ClientErrf("%w", err)
 	default:

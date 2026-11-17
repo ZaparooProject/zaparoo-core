@@ -546,6 +546,12 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, nil
 	}
 
+	if env.AdmitLaunch != nil {
+		if admitErr := env.AdmitLaunch(platforms.ResolvedLaunch{SystemID: systemID}, true); admitErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("launch not admitted: %w", admitErr)
+		}
+	}
+
 	if launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher); launcherID != "" {
 		return cmdSystemWithLauncher(pl, &env, systemID, launcherID)
 	}
@@ -761,7 +767,7 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
+			systemTiers = [][]systemdefs.System{permittedSystems(env, systemdefs.AllImplicitSystems())}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -875,6 +881,21 @@ func launchRandomGameWithRetry(
 		randomLaunchSelectionAttempts,
 		launchErr,
 	)
+}
+
+// permittedSystems drops the systems the device's content policy closes, so
+// a pick across every system is made from what could actually launch.
+func permittedSystems(env *platforms.CmdEnv, systems []systemdefs.System) []systemdefs.System {
+	if env == nil || env.SystemPermitted == nil {
+		return systems
+	}
+	permitted := make([]systemdefs.System, 0, len(systems))
+	for i := range systems {
+		if env.SystemPermitted(systems[i].ID) {
+			permitted = append(permitted, systems[i])
+		}
+	}
+	return permitted
 }
 
 func orderedSystemTiers(systems []systemdefs.System) [][]systemdefs.System {
@@ -1164,6 +1185,13 @@ func getLaunchClosure(
 		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
 			return errMediaLaunchSkipped
 		}
+		// Asked before preparation, so a launch that will be refused never
+		// shows a confirmation or runs a hook first.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(resolved, false); admitErr != nil {
+				return fmt.Errorf("launch not admitted: %w", admitErr)
+			}
+		}
 		if env.PrepareMediaLaunch != nil {
 			proceed, prepareErr := env.PrepareMediaLaunch(resolved)
 			if prepareErr != nil {
@@ -1189,6 +1217,13 @@ func getLaunchClosure(
 		// Allowlist policy may have changed while waiting for confirmation.
 		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
 			return errors.New("file not allowed: " + allowListPath)
+		}
+		// So may the content policy: a device can lock while a confirmation
+		// is waiting.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(resolved, true); admitErr != nil {
+				return fmt.Errorf("launch not admitted: %w", admitErr)
+			}
 		}
 
 		// The outgoing media's before_exit hook. Everything that can reject this
@@ -1286,6 +1321,11 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 
 	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
+		if env.AdmitMediaInstall != nil {
+			if admitErr := env.AdmitMediaInstall(); admitErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("media install not admitted: %w", admitErr)
+			}
+		}
 		installPath, err := installer.InstallRemoteFile(
 			env.LauncherCtx,
 			env.Cfg, pl, env.UI,
@@ -1591,7 +1631,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
+		systemTiers = [][]systemdefs.System{permittedSystems(&env, systemdefs.AllImplicitSystems())}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {

@@ -308,6 +308,15 @@ const DeviceStateKeyMediaPreferencesRevision = "media_preferences_revision"
 // skip the table walk entirely.
 const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
 
+// DeviceStateKeyKiosk is the DeviceState key holding kiosk mode's lock state
+// and settings, as versioned JSON.
+const DeviceStateKeyKiosk = "kiosk"
+
+// DeviceStateKeyPINAttempts is the DeviceState key holding recent failed
+// profile PIN attempts, as JSON, so a restart does not hand out a fresh set
+// of guesses.
+const DeviceStateKeyPINAttempts = "pin_attempts"
+
 // DeviceStateKeyPlaytimeExtensions is the DeviceState key holding granted
 // playtime extensions: the current session's duration grant and any
 // unexpired per-profile day waivers, as versioned JSON. It stores resolved
@@ -1450,6 +1459,8 @@ type UserDBI interface {
 	SetDeviceState(key, value string) error
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
+	GetContentRule(profileID string) (ContentRule, error)
+	ReplaceContentRule(profileID string, rule *ContentRule) error
 	ClaimRemoteCommand(command *RemoteCommand) (*RemoteCommand, bool, error)
 	TransitionRemoteCommand(commandID, fromState, toState string, executionExpiresAt *time.Time) (bool, error)
 	StoreRemoteCommandResult(

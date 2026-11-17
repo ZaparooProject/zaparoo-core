@@ -159,6 +159,12 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	t.ScanTime = time.Now()
 	t.Source = tokens.SourceAPI
 	t.Completion = tokens.NewCompletion()
+	// A capped caller's script is card text as far as the kiosk lock goes.
+	// A paired admin's is not: it runs as it would on an unlocked device,
+	// though what it launches still answers to the content rule.
+	if requestGrant(&env).Capped() {
+		env.Kiosk.BoundToken(&t)
+	}
 
 	env.State.SetActiveCard(t)
 	select {
@@ -303,6 +309,9 @@ func HandleRunRest(
 			ScanTime: time.Now(),
 			Source:   tokens.SourceAPI,
 		}
+		// The REST run endpoint carries no paired identity, so on a locked
+		// device its text is always held to the kiosk command policy.
+		st.Kiosk().BoundToken(&t)
 
 		st.SetActiveCard(t)
 		select {

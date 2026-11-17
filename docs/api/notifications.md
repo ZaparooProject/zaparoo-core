@@ -747,6 +747,72 @@ data side.
 }
 ```
 
+## Kiosk
+
+### kiosk.state
+
+Sent whenever the kiosk lock changes: turned on or off, temporarily unlocked, locked again, or its settings changed.
+
+#### Parameters
+
+The same object [`kiosk`](./methods.md#kiosk-1) returns.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "kiosk.state",
+  "params": {
+    "state": "unlocked",
+    "unlockUntil": "2026-11-17T09:35:00Z",
+    "settings": {
+      "preset": "family",
+      "deviceUnlock": true,
+      "defaultContentMode": "allowed",
+      "profileSwitching": true,
+      "extensionCard": true,
+      "downloads": "none",
+      "idleReset": false,
+      "idleTimeout": 600,
+      "unlockDuration": 300
+    },
+    "seal": {
+      "sealed": false,
+      "unsealed": ["hostMenus"]
+    }
+  }
+}
+```
+
+### kiosk.launch.refused
+
+Sent to authenticated clients when the kiosk lock refuses a launch. A paired admin can approve that one launch with [`kiosk.allow`](./methods.md#kioskallow).
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                                 |
+| :-------- | :----- | :------- | :--------------------------------------------------------------------------- |
+| systemId  | string | Yes      | System the launch was judged as. Empty when none could be resolved.         |
+| path      | string | Yes      | Media path. Empty for a launch of the system itself and for a refused download. |
+| profileId | string | Yes      | Profile whose rule refused it. Empty for the shared profile.                |
+| reason    | string | Yes      | `hidden`, `denied`, `notAllowed` or `download`.                             |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "kiosk.launch.refused",
+  "params": {
+    "systemId": "Genesis",
+    "path": "/media/fat/games/Genesis/Sonic.md",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "reason": "notAllowed"
+  }
+}
+```
+
 ## Decks
 
 ### decks.changed

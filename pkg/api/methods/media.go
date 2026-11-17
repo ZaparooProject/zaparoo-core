@@ -1247,6 +1247,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
 
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	_, kioskCapped := kioskScope(&env)
 	system := params.Systems
 	var query string
 	if params.Query != nil {
@@ -1313,7 +1319,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	visibility, err := validateSearchVisibility(
-		&env, cursorStr, !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+		&env, cursorStr, kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden),
 	)
 	if err != nil {
 		return nil, err

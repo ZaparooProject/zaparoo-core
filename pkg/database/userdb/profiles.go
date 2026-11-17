@@ -319,6 +319,10 @@ func sqlDeleteProfile(ctx context.Context, db *sql.DB, profileID string) error {
 		}
 	}
 
+	if err := sqlDeleteContentRule(ctx, tx, profileID); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit profile delete transaction: %w", err)
 	}

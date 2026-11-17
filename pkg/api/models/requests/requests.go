@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -41,13 +42,16 @@ type RequestEnv struct {
 	// state context (st.GetContext()) with config.APIRequestTimeout, so it
 	// cancels on app shutdown and on timeout. For HTTP, it should also cancel
 	// when the HTTP connection closes.
-	Context         context.Context
-	Platform        platforms.Platform
-	Config          *config.Instance
-	State           *state.State
-	Database        *database.Database
-	LimitsManager   *playtime.LimitsManager
-	Profiles        *profiles.Service
+	Context       context.Context
+	Platform      platforms.Platform
+	Config        *config.Instance
+	State         *state.State
+	Database      *database.Database
+	LimitsManager *playtime.LimitsManager
+	Profiles      *profiles.Service
+	// Kiosk is the device's kiosk lock. Nil means the device has none, which
+	// every query on it reports as off.
+	Kiosk           *kiosk.Service
 	LauncherCache   *helpers.LauncherCache
 	Player          audio.Player
 	PlaybackManager audio.PlaybackManager

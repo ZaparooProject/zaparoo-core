@@ -430,6 +430,13 @@ func executeTokenZapScript(
 				RecordMediaStop:    svc.State.RecordMediaStop,
 				StopSeq:            svc.State.UserStopSeq,
 				SkipMediaLaunch:    skipLaunch,
+				AdmitLaunch: func(target platforms.ResolvedLaunch, final bool) error {
+					return admitKioskLaunch(runCtx, svc, target, final)
+				},
+				AdmitMediaInstall: func() error {
+					return admitKioskMediaInstall(svc, &token)
+				},
+				SystemPermitted:    kioskSystemPermitted(svc),
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
@@ -1419,6 +1426,7 @@ func handleQueuedToken(
 	}
 
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
+	boundScannedToken(svc, &t, hasMapping)
 	scriptText := t.Text
 	if hasMapping {
 		// The token's own text was bounded above, but the override that

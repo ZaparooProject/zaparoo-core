@@ -1012,6 +1012,26 @@ func (m *MockUserDBI) DeleteDeviceState(key string) error {
 	return nil
 }
 
+func (m *MockUserDBI) GetContentRule(profileID string) (database.ContentRule, error) {
+	args := m.Called(profileID)
+	var rule database.ContentRule
+	if got, ok := args.Get(0).(database.ContentRule); ok {
+		rule = got
+	}
+	if err := args.Error(1); err != nil {
+		return rule, fmt.Errorf("mock UserDBI get content rule failed: %w", err)
+	}
+	return rule, nil
+}
+
+func (m *MockUserDBI) ReplaceContentRule(profileID string, rule *database.ContentRule) error {
+	args := m.Called(profileID, rule)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI replace content rule failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) ClaimRemoteCommand(
 	command *database.RemoteCommand,
 ) (*database.RemoteCommand, bool, error) {
@@ -3280,6 +3300,10 @@ func NewMockUserDBI() *MockUserDBI {
 	m.On("GetMediaUserDataForPaths", mock.Anything).
 		Return(map[database.MediaUserRef]database.MediaUserData{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
+	m.On("GetDeviceState", database.DeviceStateKeyKiosk).Return("", false, nil).Maybe()
+	m.On("GetDeviceState", database.DeviceStateKeyPINAttempts).Return("", false, nil).Maybe()
+	m.On("SetDeviceState", database.DeviceStateKeyPINAttempts, mock.Anything).Return(nil).Maybe()
+	m.On("DeleteDeviceState", database.DeviceStateKeyPINAttempts).Return(nil).Maybe()
 	// Startup checks for a reconcile left pending by a restore; default to none.
 	m.On("GetDeviceState", database.DeviceStateKeyMediaUserDataReconcile).Return("", false, nil).Maybe()
 	return m

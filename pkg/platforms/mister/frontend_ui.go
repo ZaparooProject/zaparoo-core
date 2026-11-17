@@ -57,7 +57,9 @@ const (
 
 type frontendStatus struct {
 	Active bool `json:"active"`
-	PID    int  `json:"pid"`
+	// Kiosk is set by a frontend that follows Core's kiosk lock.
+	Kiosk bool `json:"kiosk"`
+	PID   int  `json:"pid"`
 }
 
 // frontendActive reports whether Main_MiSTer runs the Zaparoo frontend. A
