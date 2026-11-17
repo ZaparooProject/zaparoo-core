@@ -147,19 +147,25 @@ func TestScanSkip_UnchangedSystemIsLeftAloneAndChangedOneIsReconciled(t *testing
 	assert.Equal(t, []string{"Alpha Game"}, fixture.titleNames(t, systemdefs.SystemNES))
 }
 
-// The Core version stands in for the parsing code, so an upgrade reconciles
-// systems whose files did not change.
-func TestScanSkip_CoreVersionChangeReconcilesUnchangedSystems(t *testing.T) {
-	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and config.AppVersion.
+// A change to the parsing rules reconciles systems whose files did not
+// change, and a Core upgrade that leaves the rules alone does not.
+func TestScanSkip_RulesVersionChangeReconcilesUnchangedSystems(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache, config.AppVersion and scanRulesVersion.
 	fixture := newScanSkipFixture(t)
 	fixture.index(t)
 	fixture.breakTitles(t, systemdefs.SystemNES)
 
-	original := config.AppVersion
-	config.AppVersion = original + "-next"
-	t.Cleanup(func() { config.AppVersion = original })
+	originalApp := config.AppVersion
+	config.AppVersion = originalApp + "-next"
+	t.Cleanup(func() { config.AppVersion = originalApp })
 	fixture.index(t)
+	assert.Equal(t, []string{"Edited Behind The Scanner"}, fixture.titleNames(t, systemdefs.SystemNES),
+		"a Core upgrade with the same parsing rules must not reconcile an unchanged system")
 
+	originalRules := scanRulesVersion
+	scanRulesVersion = originalRules + 1
+	t.Cleanup(func() { scanRulesVersion = originalRules })
+	fixture.index(t)
 	assert.Equal(t, []string{"Alpha Game"}, fixture.titleNames(t, systemdefs.SystemNES))
 }
 

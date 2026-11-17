@@ -28,21 +28,30 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/arcadenames"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scummvmnames"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// scanWalkMarkerVersion is bumped when the scanner starts deriving stored
-// rows from something the marker does not cover.
-const scanWalkMarkerVersion = 1
+// scanRulesVersion identifies the code that turns a walked entry into stored
+// rows: filename, title, slug and tag parsing, and the reconcile that writes
+// them. Bump it with any change to what a file is stored as, so the next
+// index reconciles systems whose files did not change.
+// TestScanRules_VersionCoversParsedOutput fails when the parsed form of its
+// sample files changes without a bump.
+//
+// It is a variable so a test can stand in for a later release.
+var scanRulesVersion = 2
 
 // scanWalkMarker describes everything a system's reconcile is derived from:
-// each walked entry as the scanners reported it, and the settings and code
-// that turn an entry into rows. A system whose walk produces the marker its
-// last reconcile stored has nothing for another reconcile to change.
+// each walked entry as the scanners reported it, and the settings, code and
+// name catalogs that turn an entry into rows. A system whose walk produces
+// the marker its last reconcile stored has nothing for another reconcile to
+// change.
 //
-// The Core version stands in for the parser, slug, title and tag code and the
-// embedded name catalogs, none of which carry a version of their own, so the
-// first index after any upgrade reconciles every system.
+// The catalogs carry their own versions and the code carries
+// scanRulesVersion, so a Core upgrade that changes neither leaves unchanged
+// systems alone.
 //
 // ok is false for a system the scanner must always reconcile: one with linked
 // media, whose rows also follow their link targets' scraped data.
@@ -64,8 +73,9 @@ func scanWalkMarker(cfg *config.Instance, files []platforms.ScanResult) (marker 
 	sort.Strings(records)
 
 	digest := sha256.New()
-	_, _ = fmt.Fprintf(digest, "v%d\ncore=%s\nfilenameTags=%t\nentries=%d\n",
-		scanWalkMarkerVersion, config.AppVersion, cfg != nil && cfg.FilenameTags(), len(records))
+	_, _ = fmt.Fprintf(digest, "rules=%d\narcade=%s\nscummvm=%s\nfilenameTags=%t\nentries=%d\n",
+		scanRulesVersion, arcadenames.Version(), scummvmnames.Version(),
+		cfg != nil && cfg.FilenameTags(), len(records))
 	for _, record := range records {
 		_, _ = digest.Write([]byte(record))
 		_, _ = digest.Write([]byte{'\n'})
