@@ -396,6 +396,38 @@ func TestSyncInventory_IdleStates(t *testing.T) {
 	assert.Zero(t, f.online.count(postResolve))
 }
 
+// A scrape that starts while the inventory is being walked ends the walk at
+// the next page: carrying on would contend with the scrape for the writer and
+// produce a result that is discarded anyway.
+func TestSyncInventory_StopsWhenScrapeStartsMidWalk(t *testing.T) {
+	paths := make([]string, 0, 1200)
+	for i := range 1200 {
+		paths = append(paths, nesPath(fmt.Sprintf("Game %04d (USA).nes", i)))
+	}
+	f := newSyncFixture(t, paths...)
+	var started atomic.Bool
+	f.online.resolveHook = func() {
+		if started.CompareAndSwap(false, true) {
+			assert.NoError(t, f.db.MediaDB.SetScrapingStatus("running"))
+		}
+	}
+
+	_, err := f.svc.SyncInventory(f.ctx, false)
+
+	require.ErrorIs(t, err, librarysync.ErrNotSettled)
+	stopped := f.online.count(postResolve)
+
+	require.NoError(t, f.db.MediaDB.SetScrapingStatus("completed"))
+	f.online.resolveHook = nil
+	f.online.resetCalls()
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 1200, result.ItemCount)
+	assert.Less(t, stopped, f.online.count(postResolve),
+		"the interrupted walk must have stopped before asking about every page")
+}
+
 // TestSyncInventory_BusyDatabaseDefers covers a batch transaction held open
 // without the indexing status being set, which the settled check cannot see.
 // The ordinal cache write refuses to join it, and that refusal must read as

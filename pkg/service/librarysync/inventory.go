@@ -288,6 +288,12 @@ func (s *Service) buildInventory(
 		if err := s.pauser.Wait(ctx); err != nil {
 			return nil, result, fmt.Errorf("library inventory walk: %w", err)
 		}
+		// An index or scrape that starts during the walk makes its result
+		// unusable, and the walk's cache writes would queue behind the same
+		// writer for as long as it carried on.
+		if !mediaDBSettled(mediaDB) {
+			return nil, result, ErrNotSettled
+		}
 		page, err := mediaDB.LibraryMediaPage(ctx, after, inventoryPageSize)
 		if err != nil {
 			return nil, result, fmt.Errorf("read library media page: %w", err)
