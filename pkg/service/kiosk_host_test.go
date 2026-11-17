@@ -22,6 +22,8 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +33,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
@@ -132,9 +136,24 @@ func startHostSync(
 	return mediaStarted
 }
 
+// collapse drops consecutive repeats. The host's lock is offered again
+// whenever it may have been lost, and a change that lands while the worker
+// is starting is applied once from the state it reads and once from the
+// change itself, so a repeat is the contract working and not a second
+// transition.
+func collapse(calls []bool) []bool {
+	out := make([]bool, 0, len(calls))
+	for i, call := range calls {
+		if i == 0 || call != calls[i-1] {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
 func eventuallySeen(t *testing.T, pl *kioskHostPlatform, want []bool) {
 	t.Helper()
-	assert.Eventually(t, func() bool { return assert.ObjectsAreEqual(want, pl.seen()) },
+	assert.Eventually(t, func() bool { return assert.ObjectsAreEqual(want, collapse(pl.seen())) },
 		2*time.Second, time.Millisecond, "host lock calls")
 }
 
@@ -189,8 +208,11 @@ func TestKioskHostSyncReassertsWhenMediaStarts(t *testing.T) {
 	eventuallySeen(t, pl, []bool{true})
 
 	// A core load replaces the host's process, and with it the lock.
+	before := len(pl.seen())
 	mediaStarted <- models.Notification{Method: models.NotificationStarted}
-	eventuallySeen(t, pl, []bool{true, true})
+	assert.Eventually(t, func() bool { return len(pl.seen()) > before },
+		2*time.Second, time.Millisecond, "the lock was not offered again")
+	eventuallySeen(t, pl, []bool{true})
 }
 
 func TestKioskHostSyncRetriesAHostThatRefused(t *testing.T) {
@@ -389,4 +411,165 @@ func TestKioskIdleResetIsOffUnlessLockedAndTurnedOn(t *testing.T) {
 		h.expectNoStop(t)
 		assert.False(t, kiosk.IdleResetSupported(h.pl))
 	})
+}
+
+// setupFixture is what setupKiosk needs: a platform with a data directory,
+// state, a real user database with an admin and a member profile, and the
+// profiles service over them.
+type setupFixture struct {
+	st            *state.State
+	db            *database.Database
+	pl            *mocks.MockPlatform
+	profiles      *profiles.Service
+	notifications <-chan models.Notification
+	dataDir       string
+}
+
+func newSetupFixture(t *testing.T) *setupFixture {
+	t.Helper()
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir, HostManagedPaths: true})
+	pl.On("ID").Return("mock-platform").Maybe()
+
+	userDB, cleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(cleanup)
+	db := &database.Database{UserDB: userDB}
+	hash, err := profiles.HashPIN("4321")
+	require.NoError(t, err)
+	require.NoError(t, userDB.CreateProfile(&database.Profile{
+		ProfileID: "admin-1", Name: "Parent", Role: profiles.ProfileRoleAdmin, SwitchID: "a-b-c", PINHash: hash,
+	}))
+	require.NoError(t, userDB.CreateProfile(&database.Profile{
+		ProfileID: "kid-1", Name: "Kid", Role: profiles.ProfileRoleMember, SwitchID: "d-e-f",
+	}))
+
+	st, notifications := state.NewState(pl, "boot")
+	return &setupFixture{
+		st: st, db: db, pl: pl, profiles: profiles.NewService(db, st),
+		notifications: notifications, dataDir: dataDir,
+	}
+}
+
+func (f *setupFixture) setup() *kiosk.Service {
+	return setupKiosk(f.st, f.db, f.pl, f.profiles)
+}
+
+func TestSetupKioskAttachesTheLockAndWritesTheRecoveryToken(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t)
+	st, dataDir := f.st, f.dataDir
+
+	lock := f.setup()
+	require.NotNil(t, lock)
+	assert.Same(t, lock, st.Kiosk())
+	assert.False(t, lock.Active())
+
+	raw, err := os.ReadFile(kiosk.RecoveryTokenPath(dataDir))
+	require.NoError(t, err)
+	assert.True(t, lock.CheckRecoveryToken(strings.TrimSpace(string(raw))))
+}
+
+func TestSetupKioskAnnouncesEveryChange(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t)
+	lock := f.setup()
+
+	enableHostLock(t, lock, nil)
+	select {
+	case notif := <-f.notifications:
+		assert.Equal(t, models.NotificationKioskState, notif.Method)
+		assert.Contains(t, string(notif.Params), `"state":"locked"`)
+		assert.Contains(t, string(notif.Params), platforms.KioskUnsealedHostMenus)
+	case <-time.After(2 * time.Second):
+		t.Fatal("no kiosk.state notification after locking")
+	}
+}
+
+func TestSetupKioskDropsAnAdminProfileWhenTheLockEngages(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t)
+	st, profilesSvc := f.st, f.profiles
+	lock := f.setup()
+	_, err := profilesSvc.ActivateByID("admin-1", "4321")
+	require.NoError(t, err)
+
+	enableHostLock(t, lock, nil)
+	assert.Nil(t, st.ActiveProfile(), "a locked device is not left on an admin profile")
+
+	// The same on the relock that ends a temporary unlock.
+	require.NoError(t, lock.Unlock(time.Minute))
+	_, err = profilesSvc.ActivateByID("admin-1", "4321")
+	require.NoError(t, err)
+	require.NoError(t, lock.Lock())
+	assert.Nil(t, st.ActiveProfile())
+}
+
+func TestSetupKioskStartsLockedAndDropsAStoredAdminProfile(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t)
+	st, db, profilesSvc := f.st, f.db, f.profiles
+
+	// A device that was locked when it stopped, with an admin profile still
+	// recorded as active.
+	previous := kiosk.NewService(db, clockwork.NewFakeClock())
+	enableHostLock(t, previous, nil)
+	_, err := profilesSvc.ActivateByID("admin-1", "4321")
+	require.NoError(t, err)
+
+	lock := f.setup()
+	assert.True(t, lock.Locked())
+	assert.Nil(t, st.ActiveProfile())
+}
+
+func TestSetupKioskLeavesAMemberProfileActive(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t)
+	st, profilesSvc := f.st, f.profiles
+	lock := f.setup()
+	_, err := profilesSvc.ActivateBySwitchID("d-e-f")
+	require.NoError(t, err)
+
+	enableHostLock(t, lock, nil)
+	require.NotNil(t, st.ActiveProfile())
+	assert.Equal(t, "kid-1", st.ActiveProfile().ProfileID)
+}
+
+func TestKioskIdleStopStopsTheRunningMedia(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	pl.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Once()
+	st, notifications := state.NewState(pl, "boot")
+	t.Cleanup(func() {
+		for {
+			select {
+			case <-notifications:
+			default:
+				return
+			}
+		}
+	})
+
+	kioskIdleStop(&ServiceContext{Platform: pl, State: st})
+	pl.AssertExpectations(t)
+}
+
+func TestKioskIdleStopSurvivesAFailedStop(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	pl.On("StopActiveLauncher", platforms.StopForMenu).Return(errors.New("launcher is gone")).Once()
+	st, notifications := state.NewState(pl, "boot")
+	t.Cleanup(func() {
+		for {
+			select {
+			case <-notifications:
+			default:
+				return
+			}
+		}
+	})
+
+	// The idle watcher keeps running whatever the stop returned.
+	kioskIdleStop(&ServiceContext{Platform: pl, State: st})
+	pl.AssertExpectations(t)
 }

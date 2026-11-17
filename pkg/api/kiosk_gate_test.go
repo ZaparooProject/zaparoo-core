@@ -20,6 +20,9 @@
 package api
 
 import (
+	"bufio"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -291,4 +294,76 @@ func TestLegacyAdmissionMiddlewareRefusesUnpairedWhileKioskIsOn(t *testing.T) {
 
 	require.NoError(t, lock.Unlock(time.Minute))
 	assert.Equal(t, http.StatusUnauthorized, serve("192.168.1.50:1234"), "temporarily unlocked")
+}
+
+func TestSSEEndsForUnpairedClientsWhenKioskTurnsOn(t *testing.T) {
+	t.Parallel()
+	st, lock := newKioskState(t)
+	notifications := make(chan models.Notification, 8)
+	notifBroker := newTestBroker(st.GetContext(), notifications)
+	t.Cleanup(st.StopService)
+
+	handler := handleSSE(notifBroker, st, platformids.Mister)
+	open := func(remoteAddr string) *http.Response {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.RemoteAddr = remoteAddr
+			handler(w, r)
+		}))
+		t.Cleanup(server.Close)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // test hitting local test server
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	unpaired := open("192.168.1.50:1234") //nolint:bodyclose // closed by the helper's cleanup
+	local := open("127.0.0.1:1234")       //nolint:bodyclose // closed by the helper's cleanup
+
+	// Both streams are subscribed once their headers have arrived.
+	lockDevice(t, lock)
+	status := lock.Status()
+	payload, err := json.Marshal(methods.KioskStatusResponse(nil, &status))
+	require.NoError(t, err)
+	notifications <- models.Notification{Method: models.NotificationKioskState, Params: payload}
+
+	// The unpaired stream is ended without being sent anything.
+	body := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(unpaired.Body)
+		body <- data
+	}()
+	select {
+	case data := <-body:
+		assert.Empty(t, data)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the unpaired stream stayed open after kiosk mode was turned on")
+	}
+
+	// The device's own stream stays open and gets the notification.
+	line := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(local.Body)
+		for scanner.Scan() {
+			if text := scanner.Text(); text != "" {
+				line <- text
+				return
+			}
+		}
+	}()
+	select {
+	case text := <-line:
+		assert.Contains(t, text, models.NotificationKioskState)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the local stream did not receive kiosk.state")
+	}
+}
+
+func TestCloseUnpairedSessionsWithNothingConnected(t *testing.T) {
+	t.Parallel()
+	session := newWebSocketSession()
+	t.Cleanup(func() { _ = session.Close() })
+	// Nothing is connected, so there is nothing to close and nothing to
+	// fail on.
+	closeUnpairedSessions(session, platformids.Mister)
 }

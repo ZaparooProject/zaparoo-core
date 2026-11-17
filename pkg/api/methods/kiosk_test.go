@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -29,12 +30,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -618,4 +621,211 @@ func TestKioskNarrowSystems(t *testing.T) {
 	got, err = kioskNarrowSystems(&admin, &requested)
 	require.NoError(t, err)
 	assert.Equal(t, &requested, got)
+}
+
+func TestKioskHandlersWithoutALock(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	env := f.local()
+	env.Kiosk = nil
+
+	for name, handler := range map[string]func(requests.RequestEnv) (any, error){
+		"enable":  HandleKioskEnable,
+		"update":  HandleKioskUpdate,
+		"disable": HandleKioskDisable,
+		"unlock":  HandleKioskUnlock,
+		"lock":    HandleKioskLock,
+		"allow":   HandleKioskAllow,
+	} {
+		_, err := handler(env)
+		require.ErrorIs(t, err, errKioskUnavailable, name)
+	}
+
+	// Status still answers: a device with no lock is one that is off.
+	result, err := HandleKiosk(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.KioskResponse)
+	require.True(t, ok)
+	assert.Equal(t, "off", resp.State)
+}
+
+func TestKioskHandlersRejectBadParams(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	bad := f.local()
+	bad.Params = []byte(`{"preset":"arcade"}`)
+	_, err := HandleKioskEnable(bad)
+	require.Error(t, err)
+
+	bad.Params = []byte(`{"settings":{"unlockDuration":5}}`)
+	_, err = HandleKioskUpdate(bad)
+	require.Error(t, err)
+
+	bad.Params = []byte(`{"duration":1}`)
+	_, err = HandleKioskUnlock(bad)
+	require.Error(t, err)
+
+	bad.Params = []byte(`{"systemId":""}`)
+	_, err = HandleKioskAllow(bad)
+	require.Error(t, err)
+
+	bad.Params = []byte(`{`)
+	_, err = HandleProfilesContent(bad)
+	require.Error(t, err)
+	_, err = HandleProfilesContentUpdate(bad)
+	require.Error(t, err)
+	assert.False(t, f.lock.Active())
+}
+
+func TestKioskTransitionsNeedKioskOn(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	env := f.local()
+	on := true
+
+	_, err := HandleKioskDisable(env)
+	require.ErrorIs(t, err, kiosk.ErrNotEnabled)
+	_, err = HandleKioskUnlock(env)
+	require.ErrorIs(t, err, kiosk.ErrNotEnabled)
+	_, err = HandleKioskLock(env)
+	require.ErrorIs(t, err, kiosk.ErrNotEnabled)
+	_, err = HandleKioskUpdate(withKioskParams(t, env, models.KioskUpdateParams{
+		Settings: models.KioskSettingsPatch{IdleReset: &on},
+	}))
+	require.ErrorIs(t, err, kiosk.ErrNotEnabled)
+	_, err = HandleKioskAllow(withKioskParams(t, env, models.KioskAllowParams{SystemID: "NES", Path: "/a.nes"}))
+	require.ErrorIs(t, err, kiosk.ErrNotEnabled)
+}
+
+func TestKioskUpdateChangesOnlyWhatIsSent(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	f.lockOpen(t)
+	admin := f.paired("admin")
+	off, on := false, true
+	idle, unlock := 120, 600
+	mode, downloads := database.ContentModeAllowed, kiosk.DownloadsNone
+
+	result, err := HandleKioskUpdate(withKioskParams(t, admin, models.KioskUpdateParams{
+		Settings: models.KioskSettingsPatch{
+			ExtensionCard: &off, IdleReset: &on, IdleTimeout: &idle, UnlockDuration: &unlock,
+			DefaultContentMode: &mode, Downloads: &downloads, DeviceUnlock: &on, ProfileSwitching: &off,
+		},
+	}))
+	require.NoError(t, err)
+	resp, ok := result.(models.KioskResponse)
+	require.True(t, ok)
+	assert.Equal(t, "locked", resp.State, "changing settings does not unlock")
+	assert.False(t, resp.Settings.ExtensionCard)
+	assert.False(t, resp.Settings.ProfileSwitching)
+	assert.True(t, resp.Settings.IdleReset)
+	assert.Equal(t, 120, resp.Settings.IdleTimeout)
+	assert.Equal(t, 600, resp.Settings.UnlockDuration)
+	assert.Equal(t, database.ContentModeAllowed, resp.Settings.DefaultContentMode)
+	assert.Equal(t, kiosk.PresetFamily, resp.Settings.Preset, "the preset name is not a setting to change")
+
+	// Dropping on-device unlock with no admin client would leave no way in.
+	_, err = HandleKioskUpdate(withKioskParams(t, admin, models.KioskUpdateParams{
+		Settings: models.KioskSettingsPatch{DeviceUnlock: &off},
+	}))
+	require.ErrorIs(t, err, kiosk.ErrNoAdminClient)
+}
+
+func TestKioskUnlockNeedsAProfileAndPIN(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	f.lockOpen(t)
+	env := f.local()
+
+	_, err := HandleKioskUnlock(env)
+	require.Error(t, err, "no credential at all")
+	_, err = HandleKioskUnlock(withKioskParams(t, env, models.KioskUnlockParams{ProfileID: kioskStr(kioskAdminID)}))
+	require.ErrorIs(t, err, profiles.ErrPINRequired)
+	_, err = HandleKioskUnlock(withKioskParams(t, env, unlockParams("nobody", kioskAdminPIN)))
+	require.ErrorIs(t, err, profiles.ErrNotFound)
+
+	noProfiles := env
+	noProfiles.Profiles = nil
+	_, err = HandleKioskUnlock(withKioskParams(t, noProfiles, unlockParams(kioskAdminID, kioskAdminPIN)))
+	require.ErrorIs(t, err, errProfilesUnavailable)
+	assert.True(t, f.lock.Locked())
+}
+
+func TestProfilesContentUnknownProfile(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	_, err := HandleProfilesContent(withKioskParams(t, f.local(), models.ProfilesContentParams{ProfileID: "nobody"}))
+	require.ErrorIs(t, err, profiles.ErrNotFound)
+
+	noProfiles := f.local()
+	noProfiles.Profiles = nil
+	_, err = HandleProfilesContent(withKioskParams(t, noProfiles, models.ProfilesContentParams{ProfileID: kioskKidID}))
+	require.ErrorIs(t, err, errProfilesUnavailable)
+}
+
+func TestKioskStatusResponseListsWhatThePlatformLeavesOpen(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	settings, _ := kiosk.PresetSettings(kiosk.PresetPublic)
+
+	off := kiosk.Status{State: kiosk.StateOff}
+	resp := KioskStatusResponse(pl, &off)
+	assert.False(t, resp.Seal.Sealed)
+	assert.Empty(t, resp.Seal.Unsealed, "nothing is unsealed while nothing is locked")
+
+	// The mock platform has no lock of its own and cannot see input, and
+	// the public preset turns idle reset on.
+	until := time.Date(2026, 11, 17, 9, 30, 0, 0, time.UTC)
+	unlocked := kiosk.Status{State: kiosk.StateUnlocked, Settings: settings, UnlockUntil: until}
+	resp = KioskStatusResponse(pl, &unlocked)
+	assert.False(t, resp.Seal.Sealed)
+	assert.Equal(t, []string{platforms.KioskUnsealedHostMenus, platforms.KioskUnsealedIdleReset}, resp.Seal.Unsealed)
+	require.NotNil(t, resp.UnlockUntil)
+	assert.Equal(t, "2026-11-17T09:30:00Z", *resp.UnlockUntil)
+	require.NotNil(t, resp.Settings)
+	assert.Equal(t, kiosk.PresetPublic, resp.Settings.Preset)
+}
+
+func TestKioskErrorPassesOtherErrorsThrough(t *testing.T) {
+	t.Parallel()
+	other := errors.New("disk full")
+	require.Equal(t, other, kioskError(other))
+	require.ErrorIs(t, kioskError(kiosk.ErrNoAdminProfile), kiosk.ErrNoAdminProfile)
+}
+
+func TestKioskScopeFollowsTheActiveProfile(t *testing.T) {
+	t.Parallel()
+	f := newKioskFixture(t)
+	require.NoError(t, f.db.UserDB.ReplaceContentRule(kioskKidID, &database.ContentRule{
+		Mode: database.ContentModeAllowed,
+		Entries: []database.ContentRuleEntry{
+			{Effect: database.ContentEffectAllow, Kind: database.ContentKindSystem, SystemID: "SNES"},
+		},
+	}))
+	f.lockOpen(t)
+	local := f.local()
+
+	scope, capped := kioskScope(&local)
+	require.True(t, capped)
+	assert.False(t, scope.Limited(), "the shared profile's open rule limits nothing")
+
+	_, err := f.profs.ActivateByID(kioskKidID, kioskKidPIN)
+	require.NoError(t, err)
+	scope, capped = kioskScope(&local)
+	require.True(t, capped)
+	assert.True(t, scope.Permits("SNES"))
+	assert.False(t, scope.Permits("NES"))
+
+	// With every system open but one, asking for nothing comes back as
+	// every system except that one.
+	require.NoError(t, f.db.UserDB.ReplaceContentRule(kioskKidID, &database.ContentRule{
+		Mode: database.ContentModeAll,
+		Entries: []database.ContentRuleEntry{
+			{Effect: database.ContentEffectDeny, Kind: database.ContentKindSystem, SystemID: "Genesis"},
+		},
+	}))
+	narrowed, err := kioskNarrowSystems(&local, nil)
+	require.NoError(t, err)
+	assert.NotContains(t, *narrowed, "Genesis")
+	assert.Contains(t, *narrowed, "NES")
 }

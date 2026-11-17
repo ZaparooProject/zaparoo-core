@@ -383,7 +383,7 @@ func allowedSystemIDs(entries []models.ContentRuleEntry) []string {
 // withAllowedSystems replaces a rule's system allow entries and keeps every
 // other entry, so entries this page does not edit survive a save.
 func withAllowedSystems(entries []models.ContentRuleEntry, systemIDs []string) []models.ContentRuleEntry {
-	out := make([]models.ContentRuleEntry, 0, len(entries)+len(systemIDs))
+	out := make([]models.ContentRuleEntry, 0, len(entries))
 	for i := range entries {
 		if entries[i].Effect == database.ContentEffectAllow && entries[i].Kind == database.ContentKindSystem {
 			continue
