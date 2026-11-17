@@ -39,9 +39,19 @@ if [ ${#bins[@]} -eq 0 ]; then
     exit 1
 fi
 
+# A patterns file that cannot be read must stop the run: falling back to the
+# default pattern would start the whole suite, which takes hours on the card.
+if [ ! -r "$patterns" ]; then
+    echo "cannot read benchmark patterns file $patterns" >&2
+    exit 1
+fi
+
 pattern_for() {
     local found
-    found="$(awk -v name="$1" '$1 == name { sub(/^[^ \t]+[ \t]+/, ""); print; exit }' "$patterns")"
+    if ! found="$(awk -v name="$1" '$1 == name { sub(/^[^ \t]+[ \t]+/, ""); print; exit }' "$patterns")"; then
+        echo "failed to read a pattern for $1 from $patterns" >&2
+        return 1
+    fi
     printf '%s' "${found:-$default_pattern}"
 }
 
@@ -59,11 +69,23 @@ trap 'rm -f "$runner"' EXIT
     echo '}'
     for bin in "${bins[@]}"; do
         name="$(basename "$bin")"
-        printf "run %q %q\n" "$name" "$(pattern_for "$name")"
+        pattern="$(pattern_for "$name")"
+        printf "run %q %q\n" "$name" "$pattern"
     done
     echo 'touch out/done'
 } > "$runner"
 
+# The run is detached, so one started earlier may still be going after its
+# observer stopped. Starting again would delete its binaries, output and
+# TMPDIR; refuse instead. A finished or abandoned run leaves no process.
+running="$(ssh "${ssh_opts[@]}" "root@$ip" "for p in /proc/[0-9]*; do
+    tr '\\0' ' ' < \$p/cmdline 2> /dev/null | grep -q '^sh $remote/run.sh' && echo \${p#/proc/}
+done; true")"
+if [ -n "$running" ]; then
+    echo "a benchmark run is already active on $ip (pid $running);" \
+        "wait for it, or stop it there before starting another" >&2
+    exit 1
+fi
 ssh "${ssh_opts[@]}" "root@$ip" "rm -rf $remote && mkdir -p $remote"
 scp "${ssh_opts[@]}" "${bins[@]}" "root@$ip:$remote/"
 scp "${ssh_opts[@]}" "$runner" "root@$ip:$remote/run.sh"
