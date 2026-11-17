@@ -98,6 +98,8 @@ var ErrNoActiveGame = errors.New("no active Playnite game")
 type librarySnapshot struct {
 	fetched time.Time
 	games   []Game
+	// session is the server connection the library was read over.
+	session uint64
 	valid   bool
 }
 
@@ -244,10 +246,17 @@ func (i *Integration) cachedLibrary(ctx context.Context) ([]Game, error) {
 	defer i.libraryMu.Unlock()
 
 	now := i.deps.Clock.Now()
+	// A snapshot belongs to the connection it was read over. Playnite
+	// restarting is a new connection with possibly another library, and the
+	// disconnect handler that drops the snapshot runs after the server has
+	// already let go of the old connection, or not at all when the new one
+	// replaced it first.
+	session := i.server.Session()
 	i.mu.Lock()
 	snapshot := i.snapshot
 	i.mu.Unlock()
-	if snapshot.valid && now.Sub(snapshot.fetched) < i.deps.Timeouts.LibraryCache {
+	if snapshot.valid && snapshot.session == session &&
+		now.Sub(snapshot.fetched) < i.deps.Timeouts.LibraryCache {
 		return snapshot.games, nil
 	}
 
@@ -257,10 +266,10 @@ func (i *Integration) cachedLibrary(ctx context.Context) ([]Game, error) {
 	}
 	log.Debug().Int("games", len(games)).Msg("read Playnite library")
 	i.mu.Lock()
-	// A disconnect while the request was out has already dropped the
-	// snapshot; what came back may be from the previous Playnite session.
-	if i.server.Connected() {
-		i.snapshot = librarySnapshot{games: games, fetched: now, valid: true}
+	// A disconnect or reconnect while the request was out means what came
+	// back may be from the previous Playnite session.
+	if i.server.Connected() && i.server.Session() == session {
+		i.snapshot = librarySnapshot{games: games, fetched: now, session: session, valid: true}
 	}
 	i.mu.Unlock()
 	return games, nil

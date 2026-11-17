@@ -91,9 +91,16 @@ type Server struct {
 	handlers Handlers
 	hello    Event
 	wg       sync.WaitGroup
+	// session counts accepted connections, so what was read over one can be
+	// told from what a later one would answer.
+	session  uint64
 	nextID   int
 	stopOnce sync.Once
 	connMu   syncutil.Mutex
+	// handoverMu is held while a closed connection is cleaned up and while a
+	// new one is installed, so the two never interleave. It is taken before
+	// connMu.
+	handoverMu syncutil.Mutex
 	// pendingMu guards the request maps, nextID and hello.
 	pendingMu syncutil.Mutex
 }
@@ -155,6 +162,15 @@ func (s *Server) Connected() bool {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	return s.conn != nil
+}
+
+// Session identifies the current connection: it changes each time the
+// extension connects, including when a new connection replaces one that had
+// not been seen to close.
+func (s *Server) Session() uint64 {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.session
 }
 
 // Hello returns what the connected extension announced about itself.
@@ -355,16 +371,22 @@ func (s *Server) accept(listener net.Listener) {
 			continue
 		}
 
+		// A connection that just closed finishes telling everyone before
+		// the next one is installed; see serveConn.
+		s.handoverMu.Lock()
 		s.connMu.Lock()
 		if s.stopping() {
 			s.connMu.Unlock()
+			s.handoverMu.Unlock()
 			_ = conn.Close()
 			return
 		}
 		previous := s.conn
 		s.conn = conn
+		s.session++
 		s.writer = bufio.NewWriter(conn)
 		s.connMu.Unlock()
+		s.handoverMu.Unlock()
 		if previous != nil {
 			// Closing it ends its reader, which then finds it is no longer
 			// the current connection and leaves the new one alone.
@@ -410,6 +432,13 @@ func (s *Server) serveConn(conn net.Conn) {
 	_ = conn.Close()
 	<-readDone
 
+	// Failing what was pending and reporting the disconnect happen after the
+	// connection is let go, so without handoverMu a reconnect could slip in
+	// between: its first request would be failed as though it had been sent
+	// to the old connection, and its library would be dropped by a disconnect
+	// that was not its own.
+	s.handoverMu.Lock()
+	defer s.handoverMu.Unlock()
 	s.connMu.Lock()
 	current := s.conn == conn
 	if current {
