@@ -708,6 +708,10 @@ func startServiceWithOptions(
 		log.Error().Err(restoreErr).Msg("error restoring active profile")
 	}
 
+	// The kiosk lock is loaded once the active profile is known, and before
+	// anything that serves requests or reads cards is started.
+	kioskLock := setupKiosk(st, db, pl, profilesSvc)
+
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
@@ -1125,6 +1129,22 @@ func startServiceWithOptions(
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut, publisherFanOutDone := startPublishers(st, cfg, publisherNotifications)
 
+	kioskHost := newKioskHostSync(kioskLock, pl, clockwork.NewRealClock(), db)
+	kioskMediaStarted, _ := notifBroker.Subscribe(8, models.NotificationStarted)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		kioskHost.run(st.GetContext(), kioskMediaStarted)
+	}()
+	kioskIdle := newKioskIdleReset(kioskLock, pl, clockwork.NewRealClock(),
+		func() bool { return st.ActiveMedia() != nil },
+		func() { kioskIdleStop(svc) })
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		kioskIdle.run(st.GetContext())
+	}()
+
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
@@ -1310,6 +1330,8 @@ func startServiceWithOptions(
 			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
 		) error {
+			// A remote operation is card text to a locked device.
+			svc.State.Kiosk().GuardToken(&token)
 			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
 		},
 	}, backgroundWG)

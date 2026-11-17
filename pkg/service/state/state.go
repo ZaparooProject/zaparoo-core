@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -35,6 +36,7 @@ import (
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/device"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
@@ -96,6 +98,7 @@ type State struct {
 	pendingWrite           *PendingWrite
 	backupCoordinator      *backupcoordinator.Coordinator
 	launcherManager        *LauncherManager
+	kiosk                  atomic.Pointer[kiosk.Service]
 	readerWrites           map[string]*readerWriteState
 	softwareToken          *tokens.Token
 	readers                map[string]readers.Reader
@@ -1511,6 +1514,21 @@ func (*State) safeNotifyReader(reader readers.Reader, media *models.ActiveMedia)
 
 func (s *State) GetContext() context.Context {
 	return s.ctx
+}
+
+// SetKiosk attaches the device's kiosk lock. It is set once at startup.
+func (s *State) SetKiosk(k *kiosk.Service) {
+	s.kiosk.Store(k)
+}
+
+// Kiosk returns the device's kiosk lock. It is nil-safe at both ends: a nil
+// State, or one never given a lock, returns a nil service, whose queries
+// all report the lock as off.
+func (s *State) Kiosk() *kiosk.Service {
+	if s == nil {
+		return nil
+	}
+	return s.kiosk.Load()
 }
 
 func (s *State) LauncherManager() *LauncherManager {

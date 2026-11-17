@@ -62,6 +62,14 @@ type RunCommandOptions struct {
 	RecordMediaStop    func(reason string) (cancel func())
 	StopSeq            func() uint64
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
+	// AdmitLaunch and AdmitMediaInstall carry the device's content policy
+	// to the launch path. See platforms.CmdEnv.
+	AdmitLaunch       func(target platforms.ResolvedLaunch, final bool) error
+	AdmitMediaInstall func() error
+	SystemPermitted   func(systemID string) bool
+	// GuardPermits is asked, for a guarded token, whether the device
+	// currently lets it run a command. Nil permits everything.
+	GuardPermits       func(command string) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
@@ -96,6 +104,10 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
+	// ErrLaunchNotAdmitted is returned when the device's content policy
+	// refuses a launch or a media download. The policy's own error is
+	// wrapped alongside it and says why.
+	ErrLaunchNotAdmitted = errors.New("launch not admitted")
 	// ErrWriteNotAlone is returned when a write shares a script with other
 	// commands. A write arms the next card scanned, which only works when it
 	// is the token's whole script.
@@ -140,6 +152,7 @@ var expectedRunErrors = []error{
 	// Refusals by configuration are the setting working, not a bug.
 	ErrCommandBlocked,
 	ErrCommandNotPermitted,
+	ErrLaunchNotAdmitted,
 	ErrExecuteNotAllowed,
 	ErrExecuteTimeout,
 	ErrExecuteExitStatus,
@@ -753,6 +766,9 @@ func RunCommand(
 		RecordMediaStop:    opts.RecordMediaStop,
 		StopSeq:            opts.StopSeq,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
+		AdmitLaunch:        opts.AdmitLaunch,
+		AdmitMediaInstall:  opts.AdmitMediaInstall,
+		SystemPermitted:    opts.SystemPermitted,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
@@ -807,6 +823,15 @@ func RunCommand(
 		// this, and the command alone does not say why it was refused.
 		log.Warn().Str("command", cmd.Name).Strs("permitted", token.AllowedCommands.Names()).
 			Msg("command is outside the bound this token carries")
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
+	}
+
+	// A guarded token also answers to what the device enforces right now,
+	// not only to the bound it was given on the way in. A device that
+	// locked while this script was running, or waiting to run, stops it at
+	// the next command the lock does not allow.
+	if token.AllowedCommands.Guarded() && opts.GuardPermits != nil && !opts.GuardPermits(cmd.Name) {
+		log.Warn().Str("command", cmd.Name).Msg("command is not permitted while the device is locked")
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
 	}
 

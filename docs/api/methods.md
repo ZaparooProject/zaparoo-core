@@ -5073,6 +5073,233 @@ Exactly one of `profileId` or `switchId` is required.
 
 Verification failure (wrong PIN, unknown profile or switch ID, rate limited) returns an error, using the same errors as `profiles.switch`.
 
+## Kiosk
+
+Kiosk mode locks a device so that the person at its controls, a card, or a client on the network cannot change it or launch what its owner has not allowed. Core holds the lock and enforces it on every route; clients show it.
+
+The lock has three states: `off`, `locked`, and `unlocked` (a temporary unlock that ends on its own). A device that restarts while locked or temporarily unlocked comes back locked.
+
+While the state is `locked`:
+
+- Every caller except a client paired as admin is held to a fixed list of methods: reading state, browsing, starting and stopping media, switching between non-admin profiles, [`kiosk`](#kiosk-1), [`kiosk.unlock`](#kioskunlock) and [`kiosk.lock`](#kiosklock). This includes localhost and API keys. Any other method returns `the device is locked`. [`clients.current`](#clientscurrent) reports such a caller with `access` `member` and no capabilities.
+- ZapScript from a card, from the run endpoints, from a remote operation, or from a [`run`](#run) by anyone but a paired admin may only use launch, stop, playlist, delay, echo and control commands, plus `profile` and `playtime.extend` when the settings allow them. This is checked as each command runs, so it also stops a script that was already running when the device locked. A script a stored mapping substitutes for a card runs as written.
+- Every launch is checked against the active profile's content rule, whatever started it. See [`profiles.content`](#profilescontent).
+- A card cannot download media.
+- The active profile cannot be changed to an admin profile or to the shared profile.
+- Browse, search and system listings returned to a capped caller leave out hidden media and systems the active profile's rule closes.
+
+For as long as kiosk mode is on, `locked` or `unlocked`, remote clients must be paired: Core behaves as if `service.encryption` were enabled, without changing the stored setting. Unpaired connections are closed when kiosk mode is turned on.
+
+A static API key is an admin credential set in the device's own configuration, and is not affected by that rule on the HTTP endpoints: a remote caller with a valid key is still admitted to HTTP POST and SSE. It is capped like any other caller while the state is `locked`, and has admin rights again during a temporary unlock. The WebSocket endpoint does not accept an API key in place of pairing while kiosk mode is on.
+
+### kiosk
+
+**Access:** Localhost or any authenticated client.
+
+Return the lock's state, settings and seal status.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key         | Type   | Required | Description                                                                 |
+| :---------- | :----- | :------- | :--------------------------------------------------------------------------- |
+| state       | string | Yes      | `off`, `locked` or `unlocked`.                                              |
+| settings    | object | No       | [Kiosk settings](#kiosk-settings). Present whenever kiosk mode is on.       |
+| unlockUntil | string | No       | RFC 3339 time a temporary unlock ends. Present only when `state` is `unlocked`. |
+| seal        | object | Yes      | [Seal status](#seal-status).                                                |
+
+##### Kiosk settings
+
+| Key                | Type    | Description                                                                                 |
+| :----------------- | :------ | :------------------------------------------------------------------------------------------- |
+| preset             | string  | `family` or `public`: the preset the settings started from.                                 |
+| deviceUnlock       | boolean | An admin profile's PIN entered on the device unlocks it. Off, only a paired admin client can. |
+| defaultContentMode | string  | Content mode of a profile with none of its own: `all` or `allowed`.                         |
+| profileSwitching   | boolean | The active profile can be changed between non-admin profiles while locked.                  |
+| extensionCard      | boolean | The playtime extension card keeps working while locked.                                     |
+| downloads          | string  | Which media downloads a card may ask for while locked. Only `none` is defined.              |
+| idleReset          | boolean | Stop the running media after `idleTimeout` without input.                                   |
+| idleTimeout        | number  | Seconds without input before idle reset stops the media. At least 30.                       |
+| unlockDuration     | number  | Seconds a temporary unlock lasts. 30 to 3600.                                               |
+
+The `family` preset sets `deviceUnlock`, `profileSwitching` and `extensionCard` on, `idleReset` off and `defaultContentMode` to `allowed`. The `public` preset sets those three off, `idleReset` on and `defaultContentMode` to `all`.
+
+##### Seal status
+
+| Key      | Type     | Description                                                                 |
+| :------- | :------- | :--------------------------------------------------------------------------- |
+| sealed   | boolean  | `true` when nothing outside Zaparoo can be reached from the device's own controls. Always `false` while kiosk mode is off. |
+| unsealed | string[] | Why the device is not sealed. Empty when it is.                             |
+
+Values of `unsealed`:
+
+| Value          | Meaning                                                                          |
+| :------------- | :------------------------------------------------------------------------------- |
+| `hostMenus`    | The host's own interface (a frontend's menus, a desktop, an overlay) is not locked. |
+| `mainLock`     | The MiSTer Main binary running now cannot lock its menu.                        |
+| `mainControls` | MiSTer Main locks its menu but still answers controls that leave the running core. |
+| `frontend`     | The Zaparoo frontend on this device does not yet hide what a locked device should not offer. |
+| `idleReset`    | Idle reset is on but this device cannot tell when it is being used.             |
+
+Clients should show unknown values as given.
+
+#### Example
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5d-4c6f-8b0a-3f2d1c4b5a69",
+  "result": {
+    "state": "locked",
+    "settings": {
+      "preset": "family",
+      "deviceUnlock": true,
+      "defaultContentMode": "allowed",
+      "profileSwitching": true,
+      "extensionCard": true,
+      "downloads": "none",
+      "idleReset": false,
+      "idleTimeout": 600,
+      "unlockDuration": 300
+    },
+    "seal": {
+      "sealed": false,
+      "unsealed": ["hostMenus"]
+    }
+  }
+}
+```
+
+### kiosk.enable
+
+**Access:** Localhost or admin.
+
+Turn kiosk mode on, locked, from a preset. Returns the same result as [`kiosk`](#kiosk-1).
+
+Refused when no admin profile exists, and when `deviceUnlock` is off and no client is paired as admin, since nothing could then unlock the device. Refused with `a profile is limited to allowed content but nothing is allowed` when the shared profile or a non-admin profile would be able to launch nothing; send `confirmEmpty` to lock anyway.
+
+#### Parameters
+
+| Key          | Type    | Required | Description                                                          |
+| :----------- | :------ | :------- | :-------------------------------------------------------------------- |
+| preset       | string  | Yes      | `family` or `public`.                                                |
+| settings     | object  | No       | Any [kiosk settings](#kiosk-settings) that should differ from the preset. `preset` itself cannot be set here. |
+| confirmEmpty | boolean | No       | Accept a lock under which some profile can launch nothing.           |
+
+### kiosk.update
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Change the settings of an enabled lock. Returns the same result as [`kiosk`](#kiosk-1).
+
+#### Parameters
+
+| Key      | Type   | Required | Description                                             |
+| :------- | :----- | :------- | :------------------------------------------------------- |
+| settings | object | Yes      | The [kiosk settings](#kiosk-settings) to change. Others are left as they are. |
+
+### kiosk.disable
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Turn kiosk mode off. Returns the same result as [`kiosk`](#kiosk-1).
+
+### kiosk.unlock
+
+**Access:** Paired admin; or localhost with an admin profile's PIN or the recovery token.
+
+Lift the lock for a while. It locks again when the time is up, on [`kiosk.lock`](#kiosklock), and on restart. Returns the same result as [`kiosk`](#kiosk-1).
+
+A client paired as admin sends no credential. A caller on the device sends an admin profile and its PIN, which is accepted only when `deviceUnlock` is on. A PIN is never accepted from a remote client. Wrong PINs share the per-profile rate limiter with [`profiles.switch`](#profilesswitch), and failed attempts persist across restarts.
+
+The recovery token is for a forgotten PIN. Core writes it to `kiosk-recovery-token` in its data directory at every start, readable only by the user Core runs as. `-profile-reset-pin` uses it automatically.
+
+#### Parameters
+
+| Key           | Type   | Required | Description                                                      |
+| :------------ | :----- | :------- | :---------------------------------------------------------------- |
+| profileId     | string | No       | Admin profile to unlock as. Requires `pin`.                      |
+| pin           | string | No       | That profile's PIN.                                              |
+| recoveryToken | string | No       | The device's recovery token, in place of a profile and PIN.      |
+| duration      | number | No       | Seconds to unlock for, 30 to 3600. Defaults to `unlockDuration`. |
+
+### kiosk.lock
+
+**Access:** Localhost or any authenticated client.
+
+End a temporary unlock early. Returns the same result as [`kiosk`](#kiosk-1).
+
+### kiosk.allow
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Approve the next launch of one media path that the content rule would refuse. The device stays locked. The approval covers that path only and expires unused after five minutes. It is typically sent in answer to a [`kiosk.launch.refused`](./notifications.md#kiosklaunchrefused) notification.
+
+#### Parameters
+
+| Key      | Type   | Required | Description                     |
+| :------- | :----- | :------- | :------------------------------ |
+| systemId | string | Yes      | System of the media to approve. |
+| path     | string | Yes      | Path of the media to approve.   |
+
+#### Result
+
+Returns `null` on success.
+
+### profiles.content
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Return what a profile may launch while the device is locked. Content rules are stored whether or not kiosk mode is on, and are enforced only while it is locked.
+
+A rule has a mode and a list of entries. Under mode `all` everything launches except what a `deny` entry or the hidden flag excludes. Under mode `allowed` only what an `allow` entry matches launches. A `deny` entry always wins. Anything that cannot be matched is refused under `allowed`, including media the index has no data for during a reindex.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                      |
+| :-------- | :----- | :------- | :------------------------------------------------ |
+| profileId | string | No       | Profile to read. Omitted or empty is the shared profile. |
+
+#### Result
+
+| Key           | Type     | Required | Description                                                        |
+| :------------ | :------- | :------- | :------------------------------------------------------------------ |
+| profileId     | string   | Yes      | The profile, empty for the shared profile.                         |
+| mode          | string   | Yes      | The profile's own mode, `all` or `allowed`, or empty when it has none. |
+| effectiveMode | string   | Yes      | The mode that applies: `mode`, or the lock's `defaultContentMode`. |
+| entries       | object[] | Yes      | [Content rule entries](#content-rule-entry).                       |
+
+##### Content rule entry
+
+| Key      | Type   | Required | Description                                                  |
+| :------- | :----- | :------- | :------------------------------------------------------------ |
+| effect   | string | Yes      | `allow` or `deny`.                                           |
+| kind     | string | Yes      | `system`, `deck`, `media` or `tags`.                         |
+| systemId | string | No       | System ID. Required for `system` and `media`.                |
+| path     | string | No       | Media path. Required for `media`.                            |
+| value    | string | No       | Deck ID for `deck`; comma-separated tag filters for `tags`, written as for a `tags` argument (`rating:adult`, `-unfinished:demo`). |
+
+A `tags` entry matches only media the index holds tags for.
+
+### profiles.content.update
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Replace a profile's whole content rule. Returns the same result as [`profiles.content`](#profilescontent).
+
+#### Parameters
+
+| Key       | Type     | Required | Description                                                       |
+| :-------- | :------- | :------- | :----------------------------------------------------------------- |
+| profileId | string   | No       | Profile to change. Omitted or empty is the shared profile.        |
+| mode      | string   | No       | `all` or `allowed`. Omitted or empty leaves the profile on the lock's default mode. |
+| entries   | object[] | No       | [Content rule entries](#content-rule-entry). Replaces every existing entry. |
+
 ## Mappings
 
 Mappings are used to modify the contents of tokens before they're launched, based on different types of matching parameters. Stored mappings are queried before every launch and applied to the token if there's a match. This allows, for example, adding ZapScript to a read-only NFC tag based on its UID.

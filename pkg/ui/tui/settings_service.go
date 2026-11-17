@@ -147,6 +147,21 @@ type SettingsService interface {
 	// VerifyProfileManagement verifies one admin credential as a UI gate.
 	VerifyProfileManagement(ctx context.Context, profileID, pin string) error
 
+	// GetKiosk returns the kiosk lock's state, settings and seal status.
+	GetKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// EnableKiosk turns kiosk mode on from a preset.
+	EnableKiosk(ctx context.Context, preset string, confirmEmpty bool) (*models.KioskResponse, error)
+	// DisableKiosk turns kiosk mode off.
+	DisableKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// UnlockKiosk lifts the lock with an admin profile's PIN.
+	UnlockKiosk(ctx context.Context, profileID, pin string) (*models.KioskResponse, error)
+	// LockKiosk ends a temporary unlock.
+	LockKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// GetProfileContent returns what a profile may launch while locked.
+	GetProfileContent(ctx context.Context, profileID string) (*models.ProfilesContentResponse, error)
+	// UpdateProfileContent replaces a profile's content rule.
+	UpdateProfileContent(ctx context.Context, params *models.ProfilesContentUpdateParams) error
+
 	// GetActiveProfile fetches the active profile, or nil when the device
 	// is on the shared profile.
 	GetActiveProfile(ctx context.Context) (*models.ActiveProfile, error)

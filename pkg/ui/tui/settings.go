@@ -132,6 +132,9 @@ func BuildSettingsMainMenuWithService(
 		AddNavAction("Profiles", "Profile-wide launch behavior", func() {
 			buildProfilesSettingsMenu(svc, pages, app)
 		}).
+		AddNavAction("Kiosk mode", "Lock this device for kids or for public use", func() {
+			buildKioskSettingsMenu(svc, pages, app, rebuildMainPage)
+		}).
 		AddNavAction("TUI", "Theme and display preferences", func() {
 			buildTUISettingsMenu(pages, app, pl, rebuildSettingsMain)
 		}).

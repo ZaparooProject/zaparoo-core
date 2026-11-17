@@ -299,6 +299,18 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	_, kioskCapped := kioskScope(&env)
+	// A live browse lists the disk itself, hidden folders and files outside
+	// the library included, which is more than a locked device shows.
+	if params.Live && kioskCapped {
+		return nil, models.ClientErrf("%w", ErrKioskLocked)
+	}
+
 	// A live browse reads the disk rather than SQLite, so it takes its own
 	// concurrency slots instead of browseSem.
 	if params.Live {
@@ -319,7 +331,7 @@ func browseMedia(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
+	env.ExcludeHidden = kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden)
 
 	return runBrowseVisibility(&env, params.Cursor, func(revision string) (any, error) {
 		return browseMediaRequest(&env, &params, tagFilters, revision)

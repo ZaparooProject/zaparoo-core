@@ -292,8 +292,22 @@ type CmdEnv struct {
 	RecordMediaStop func(reason string) (cancel func())
 	// StopSeq returns the count of stops of the primary media Core has been
 	// asked to make, so a playlist update can be stamped with it when issued.
-	StopSeq            func() uint64
-	SkipMediaLaunch    func(ResolvedLaunch) bool
+	StopSeq         func() uint64
+	SkipMediaLaunch func(ResolvedLaunch) bool
+	// AdmitLaunch asks the device's content policy whether a resolved
+	// launch may go ahead, and returns the refusal when it may not. It is
+	// asked twice for a launch that waits on a confirmation: once before
+	// anything is shown, and again with final set just before the launch,
+	// so a lock that engaged in between still counts. Nil admits everything.
+	AdmitLaunch func(target ResolvedLaunch, final bool) error
+	// SystemPermitted reports whether the device's content policy leaves a
+	// system open, for narrowing a pick across every system before it is
+	// made. It is a shortcut only: AdmitLaunch still judges what is picked.
+	// Nil permits every system.
+	SystemPermitted func(systemID string) bool
+	// AdmitMediaInstall asks whether this command may download media onto
+	// the device, and returns the refusal when it may not. Nil admits.
+	AdmitMediaInstall  func() error
 	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
 	AcquireLaunch      func() (func(), error)
 	// LaunchInProgress reports whether another launch holds the exclusive

@@ -66,6 +66,12 @@ const (
 	// operation runs with must always be visible in roleCapabilities, not
 	// borrowed from a role that can change independently.
 	RoleRemote Role = "remote"
+	// RoleKiosk is what every caller except a paired admin client is held
+	// to while the device's kiosk lock is enforcing. It is set per request
+	// from the lock state, never stored and never chosen at pairing. It
+	// holds no capability; which methods it may call is a separate,
+	// default-deny list in the API server.
+	RoleKiosk Role = "kiosk"
 )
 
 // ValidRole reports whether s is a recognized pairing role name. RoleLegacy
@@ -132,6 +138,7 @@ var roleCapabilities = map[Role]map[Capability]bool{
 	},
 	RoleLegacy: {},
 	RoleRemote: {},
+	RoleKiosk:  {},
 }
 
 // legacyCapabilities freezes compatibility grants for released appliance
@@ -191,8 +198,9 @@ type Grant struct {
 	// Role is the paired client's stored role, RoleRemote for internal remote
 	// operations, or empty when no role-bearing identity exists.
 	Role Role
-	// SessionRole is a voluntary downgrade declared by the client for this
-	// session. Empty means no downgrade. Reserved for kiosk mode.
+	// SessionRole caps the request below what its identity would grant.
+	// Empty means no cap. RoleKiosk is applied while the kiosk lock is
+	// enforcing; RoleMember is a downgrade a client may declare for itself.
 	SessionRole Role
 	// PlatformID selects the audited legacy compatibility policy.
 	PlatformID string
@@ -222,7 +230,18 @@ func (g Grant) EffectiveRole() Role {
 	if g.SessionRole == RoleMember && role == RoleAdmin {
 		role = RoleMember
 	}
+	// The kiosk cap reaches localhost and API keys too: on a locked device
+	// the person at the controls is not assumed to be its owner. A legacy
+	// request stays legacy, so the legacy gate still gets to refuse it.
+	if g.SessionRole == RoleKiosk && role != RoleLegacy {
+		role = RoleKiosk
+	}
 	return role
+}
+
+// Capped reports whether the kiosk lock is holding this request down.
+func (g Grant) Capped() bool {
+	return g.EffectiveRole() == RoleKiosk
 }
 
 // Access returns the request's effective public authority. AccessRemote is
@@ -234,7 +253,9 @@ func (g Grant) Access() Access {
 			return AccessLocalhost
 		}
 		return AccessAdmin
-	case RoleMember:
+	case RoleMember, RoleKiosk:
+		// A capped caller reads as a member with no capabilities, a value
+		// every released client already understands.
 		return AccessMember
 	case RoleRemote:
 		return AccessRemote

@@ -60,7 +60,8 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		tagged = len(tagFilters) > 0
 	}
 
-	excludeHidden := !filters.IncludesHidden(tagFilters, params.IncludeHidden)
+	scope, kioskCapped := kioskScope(&env)
+	excludeHidden := kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden)
 	countsStarted := time.Now()
 	mediaCounts := make(map[string]int)
 	mediaCountsAvailable := false
@@ -201,6 +202,19 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 			applyVirtualSystemCategories(&responseSystem, categoryResolver, system.Categories)
 			respSystems = append(respSystems, responseSystem)
 		}
+	}
+
+	if scope.Limited() {
+		// A locked device lists only the systems the active profile may
+		// open. Virtual systems have no place in a content rule, so a
+		// scope limited to a list leaves them out with everything else.
+		visible := respSystems[:0]
+		for i := range respSystems {
+			if scope.Permits(respSystems[i].ID) {
+				visible = append(visible, respSystems[i])
+			}
+		}
+		respSystems = visible
 	}
 
 	log.Debug().

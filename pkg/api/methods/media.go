@@ -1247,6 +1247,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
 
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	kioskSystems, kioskCapped := kioskScope(&env)
 	system := params.Systems
 	var query string
 	if params.Query != nil {
@@ -1313,7 +1319,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	visibility, err := validateSearchVisibility(
-		&env, cursorStr, !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+		&env, cursorStr, kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden),
 	)
 	if err != nil {
 		return nil, err
@@ -1367,6 +1373,17 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		versions, foldErr := foldContainerVersions(ctx, env.Database.MediaDB, searchResults)
 		if foldErr != nil {
 			return nil, fmt.Errorf("error folding title versions: %w", foldErr)
+		}
+		// A title's versions are looked up by title alone, so the system
+		// scope a locked device holds its callers to is applied here.
+		if kioskSystems.Limited() {
+			open := versions[:0]
+			for i := range versions {
+				if kioskSystems.Permits(versions[i].SystemID) {
+					open = append(open, versions[i])
+				}
+			}
+			versions = open
 		}
 		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
 	case addedFlag != "":

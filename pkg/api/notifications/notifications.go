@@ -147,6 +147,14 @@ func PlaytimeExtended(ns chan<- models.Notification, payload *models.PlaytimeExt
 	sendNotification(ns, models.NotificationPlaytimeExtended, payload)
 }
 
+func KioskState(ns chan<- models.Notification, payload *models.KioskResponse) {
+	sendNotification(ns, models.NotificationKioskState, payload)
+}
+
+func KioskLaunchRefused(ns chan<- models.Notification, payload *models.KioskLaunchRefusedParams) {
+	sendNotification(ns, models.NotificationKioskLaunchRefused, payload)
+}
+
 func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
 }

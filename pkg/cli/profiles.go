@@ -27,10 +27,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
+	"github.com/spf13/afero"
 )
 
 const generatedProfilePINLength = 8
@@ -100,6 +103,45 @@ func resetProfilePIN(
 		return "", fmt.Errorf("failed to reset profile PIN: %w", err)
 	}
 	return pin, nil
+}
+
+// unlockKioskForRecovery opens a locked device for a recovery command. The
+// lock holds local callers too, so resetting a forgotten PIN would be
+// refused like anything else. Core writes a recovery token into its data
+// directory for this: being able to read it is the proof of ownership, the
+// same access that could wipe the device anyway. The unlock is the ordinary
+// temporary one and ends on its own.
+func unlockKioskForRecovery(
+	ctx context.Context,
+	cfg *config.Instance,
+	fs afero.Fs,
+	tokenPath string,
+	call profileAPICaller,
+) error {
+	resp, err := call(ctx, cfg, models.MethodKiosk, "")
+	if err != nil {
+		return fmt.Errorf("failed to read kiosk state: %w", err)
+	}
+	var state models.KioskResponse
+	if parseErr := json.Unmarshal([]byte(resp), &state); parseErr != nil {
+		return fmt.Errorf("failed to parse kiosk state: %w", parseErr)
+	}
+	if state.State != string(kiosk.StateLocked) {
+		return nil
+	}
+	raw, err := afero.ReadFile(fs, tokenPath)
+	if err != nil {
+		return fmt.Errorf("device is locked and its recovery token could not be read: %w", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	params, err := json.Marshal(models.KioskUnlockParams{RecoveryToken: &token})
+	if err != nil {
+		return fmt.Errorf("failed to encode kiosk unlock: %w", err)
+	}
+	if _, err := call(ctx, cfg, models.MethodKioskUnlock, string(params)); err != nil {
+		return fmt.Errorf("failed to unlock the device for recovery: %w", err)
+	}
+	return nil
 }
 
 func resetProfileSwitchID(

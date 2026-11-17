@@ -73,7 +73,7 @@ func TestLegacyAdmissionMiddleware(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusNoContent)
 			})
-			handler := apimiddleware.HTTPAuthMiddleware(auth)(legacyAdmissionMiddleware(tt.platformID, nil)(next))
+			handler := apimiddleware.HTTPAuthMiddleware(auth)(legacyAdmissionMiddleware(nil, tt.platformID, nil)(next))
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.key != "" {

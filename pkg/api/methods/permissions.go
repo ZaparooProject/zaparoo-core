@@ -31,14 +31,27 @@ import (
 // capability a method requires.
 var ErrForbidden = errors.New("client role does not permit this method")
 
+// ErrKioskLocked is returned when the kiosk lock refuses a method or an
+// action that the caller's own role would otherwise allow.
+var ErrKioskLocked = errors.New("the device is locked")
+
 // GrantForRequest builds the permission grant for a request.
+//
+// While the kiosk lock is enforcing, every request is capped except one
+// from a client paired as admin. ClientRole is only ever set from an
+// established encrypted session, so that exception cannot be claimed by a
+// request that merely says it is an admin.
 func GrantForRequest(env *requests.RequestEnv) permissions.Grant {
-	return permissions.Grant{
+	grant := permissions.Grant{
 		Role:                permissions.Role(env.ClientRole),
 		PlatformID:          env.PlatformID,
 		IsLocal:             env.IsLocal,
 		APIKeyAuthenticated: env.APIKeyAuthenticated,
 	}
+	if env.Kiosk.Locked() && grant.Role != permissions.RoleAdmin {
+		grant.SessionRole = permissions.RoleKiosk
+	}
+	return grant
 }
 
 func requestGrant(env *requests.RequestEnv) permissions.Grant {
@@ -69,7 +82,8 @@ func requireAuthenticated(env *requests.RequestEnv) error {
 // the profile-management capability from remote clients. Local profile PIN
 // prompts are a UI nuisance barrier, not API authorization.
 func requireProfileManagement(env *requests.RequestEnv) error {
-	if env.IsLocal || requestGrant(env).Has(permissions.CapProfilesManage) {
+	grant := requestGrant(env)
+	if (env.IsLocal && !grant.Capped()) || grant.Has(permissions.CapProfilesManage) {
 		return nil
 	}
 	return models.ClientErrf("%w", ErrForbidden)

@@ -32,6 +32,7 @@
 package profiles
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -77,6 +78,10 @@ var (
 	ErrAdminPINRequired = errors.New("admin profiles require a PIN")
 	// ErrLastAdmin is returned when deleting or demoting the final admin.
 	ErrLastAdmin = userdb.ErrLastProfileAdmin
+	// ErrKioskLocked is returned when the kiosk lock refuses a profile
+	// change: to an admin profile, to the shared profile, or any change when
+	// the lock fixes the device to one profile.
+	ErrKioskLocked = errors.New("the profile cannot be changed while the device is locked")
 	// ErrInvalidRole is returned for unknown profile roles.
 	ErrInvalidRole = errors.New("invalid profile role")
 )
@@ -101,12 +106,14 @@ type Service struct {
 // NewService creates a profiles service backed by the user database and
 // service state.
 func NewService(db *database.Database, st *state.State) *Service {
-	return &Service{
+	s := &Service{
 		db:          db,
 		st:          st,
 		now:         time.Now,
 		pinAttempts: make(map[string][]time.Time),
 	}
+	s.loadPINAttempts()
+	return s
 }
 
 // SetDataSwap attaches the data swap coordinator. Optional: without it,
@@ -303,6 +310,9 @@ func (s *Service) ActivateByID(profileID, pin string) (*models.ActiveProfile, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to get profile: %w", err)
 	}
+	if err := s.kioskGuard(p); err != nil {
+		return nil, err
+	}
 	if err := s.checkPIN(p, pin); err != nil {
 		return nil, err
 	}
@@ -318,6 +328,9 @@ func (s *Service) ActivateBySwitchID(switchID string) (*models.ActiveProfile, er
 	p, err := s.db.UserDB.GetProfileBySwitchID(switchID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get profile by switch ID: %w", err)
+	}
+	if err := s.kioskGuard(p); err != nil {
+		return nil, err
 	}
 	return s.activate(p)
 }
@@ -352,7 +365,52 @@ func (s *Service) VerifyBySwitchID(switchID string) (*database.Profile, error) {
 // Deactivate clears the active profile. Leaving a profile is always free
 // (PINs gate entry only); restricting what a profile-less device can do is
 // handled by the require-profile launch setting.
+//
+// A locked kiosk is the exception. The shared profile cannot carry a PIN,
+// so leaving to it would be a way out of whatever the active profile is
+// held to.
 func (s *Service) Deactivate() error {
+	// Asked here so a locked device answers before anything else, and again
+	// inside clearActive once the change can no longer race the lock.
+	if err := s.kioskGuard(nil); err != nil {
+		return err
+	}
+	return s.clearActive(func(*models.ActiveProfile) (bool, error) {
+		return true, s.kioskGuard(nil)
+	})
+}
+
+// DeactivateForKioskLock drops an admin profile that is active when the
+// kiosk lock engages, so the device is not left on a profile nobody could
+// have switched to while it was locked. Other profiles stay as they are.
+func (s *Service) DeactivateForKioskLock() error {
+	return s.clearActive(func(active *models.ActiveProfile) (bool, error) {
+		return active != nil && active.Role == ProfileRoleAdmin, nil
+	})
+}
+
+// kioskGuard refuses a profile change the kiosk lock does not allow. target
+// is nil for leaving to the shared profile. While locked, nothing switches
+// to an admin profile or to the shared one, and nothing switches at all
+// when the lock fixes the device to one profile.
+func (s *Service) kioskGuard(target *database.Profile) error {
+	lock := s.st.Kiosk()
+	if !lock.Locked() {
+		return nil
+	}
+	if target == nil || target.Role == ProfileRoleAdmin || !lock.Status().Settings.ProfileSwitching {
+		return ErrKioskLocked
+	}
+	return nil
+}
+
+// clearActive leaves the active profile for the shared one when decide,
+// asked with the profile that is active once no other switch can be in
+// progress, says to. Deciding under the activation lock is what keeps a
+// switch that lands in between from being undone, and what makes the kiosk
+// guard hold: the lock engages before its listeners run, so a change either
+// sees the device locked here or is seen by the listener that follows.
+func (s *Service) clearActive(decide func(active *models.ActiveProfile) (bool, error)) error {
 	release, err := s.st.TryAcquireRestoreAccess()
 	if err != nil {
 		return fmt.Errorf("cannot deactivate profile during backup restore: %w", err)
@@ -361,6 +419,11 @@ func (s *Service) Deactivate() error {
 
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
+
+	clearIt, err := decide(s.st.ActiveProfile())
+	if err != nil || !clearIt {
+		return err
+	}
 
 	if err := s.db.UserDB.DeleteDeviceState(database.DeviceStateKeyActiveProfile); err != nil {
 		return fmt.Errorf("failed to clear active profile state: %w", err)
@@ -419,6 +482,14 @@ func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
 
+	// The kiosk guard is asked again here, where the switch can no longer
+	// race the lock. A device that locked after the caller's own check
+	// refuses now; one that locks after this point runs its lock listener
+	// once this switch is done, which drops an admin profile again.
+	if err := s.kioskGuard(p); err != nil {
+		return nil, err
+	}
+
 	lastUsedAt := s.now().Unix()
 	if err := s.db.UserDB.ActivateProfile(p.ProfileID, lastUsedAt); err != nil {
 		return nil, fmt.Errorf("failed to persist active profile: %w", err)
@@ -432,6 +503,70 @@ func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
 		s.dataSwap.RequestSwitch(platforms.ProfileRef{ID: p.ProfileID, Name: p.Name})
 	}
 	return snap, nil
+}
+
+// loadPINAttempts restores failed attempts recorded before a restart, so
+// restarting the device is not a way to get a fresh set of guesses. A
+// timestamp ahead of the clock, as after a boot without a real-time clock,
+// is pulled back to now: it then ages out normally instead of blocking
+// until the clock catches up.
+func (s *Service) loadPINAttempts() {
+	raw, found, err := s.db.UserDB.GetDeviceState(database.DeviceStateKeyPINAttempts)
+	if err != nil || !found {
+		if err != nil {
+			log.Warn().Err(err).Msg("profiles: failed to read stored PIN attempts")
+		}
+		return
+	}
+	var stored map[string][]int64
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		log.Warn().Err(err).Msg("profiles: stored PIN attempts are unreadable")
+		return
+	}
+	now := s.now()
+	for profileID, stamps := range stored {
+		attempts := make([]time.Time, 0, len(stamps))
+		for _, stamp := range stamps {
+			at := time.UnixMilli(stamp)
+			if at.After(now) {
+				at = now
+			}
+			attempts = append(attempts, at)
+		}
+		if recent := recentAttempts(attempts, now); len(recent) > 0 {
+			s.pinAttempts[profileID] = recent
+		}
+	}
+}
+
+// savePINAttemptsLocked stores the current failed attempts. s.mu must be
+// held. A failure to store only costs the restart protection, so it is
+// logged and the attempt still counts in memory.
+func (s *Service) savePINAttemptsLocked() {
+	stored := make(map[string][]int64, len(s.pinAttempts))
+	for profileID, attempts := range s.pinAttempts {
+		if len(attempts) == 0 {
+			continue
+		}
+		stamps := make([]int64, len(attempts))
+		for i, at := range attempts {
+			stamps[i] = at.UnixMilli()
+		}
+		stored[profileID] = stamps
+	}
+	var err error
+	if len(stored) == 0 {
+		err = s.db.UserDB.DeleteDeviceState(database.DeviceStateKeyPINAttempts)
+	} else {
+		var raw []byte
+		raw, err = json.Marshal(stored)
+		if err == nil {
+			err = s.db.UserDB.SetDeviceState(database.DeviceStateKeyPINAttempts, string(raw))
+		}
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("profiles: failed to store PIN attempts")
+	}
 }
 
 // checkPIN enforces a profile's PIN with per-profile rate limiting. A
@@ -460,12 +595,16 @@ func (s *Service) checkPIN(p *database.Profile, pin string) error {
 		s.mu.Lock()
 		now = s.now()
 		s.pinAttempts[p.ProfileID] = append(recentAttempts(s.pinAttempts[p.ProfileID], now), now)
+		s.savePINAttemptsLocked()
 		s.mu.Unlock()
 		return ErrPINIncorrect
 	}
 
 	s.mu.Lock()
-	delete(s.pinAttempts, p.ProfileID)
+	if _, had := s.pinAttempts[p.ProfileID]; had {
+		delete(s.pinAttempts, p.ProfileID)
+		s.savePINAttemptsLocked()
+	}
 	s.mu.Unlock()
 	return nil
 }

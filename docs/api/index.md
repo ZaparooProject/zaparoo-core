@@ -404,6 +404,15 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | profiles.active                 | Return active profile.                                                                | All clients |
 | profiles.switch                 | Switch active profile.                                                                | All clients |
 | profiles.verify                 | Verify profile PIN.                                                                   | All clients |
+| profiles.content                | Return a profile's kiosk content rule.                                                | Admin |
+| profiles.content.update         | Replace a profile's kiosk content rule.                                               | Admin |
+| kiosk                           | Return kiosk lock state, settings and seal status.                                    | Authenticated |
+| kiosk.enable                    | Turn kiosk mode on from a preset.                                                     | Localhost or admin |
+| kiosk.update                    | Change kiosk settings.                                                                | Admin |
+| kiosk.disable                   | Turn kiosk mode off.                                                                  | Admin |
+| kiosk.unlock                    | Temporarily unlock a locked device.                                                   | Admin, or local PIN |
+| kiosk.lock                      | End a temporary unlock.                                                               | Authenticated |
+| kiosk.allow                     | Approve one launch the content rule would refuse.                                     | Admin |
 | decks                           | List decks.                                                                           | All clients |
 | decks.get                       | Return one deck with its items.                                                       | All clients |
 | decks.new                       | Create a deck.                                                                        | All clients |
@@ -455,6 +464,8 @@ Notifications let a server or client know an event has occurred. See the [API No
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
 | playtime.extended      | Extra playtime was granted to the session currently being limited.                |
+| kiosk.state            | The kiosk lock was turned on or off, locked, unlocked, or reconfigured.           |
+| kiosk.launch.refused   | The kiosk lock refused a launch.                                                  |
 | inbox.added            | A new inbox message was added to the server.                                      |
 | decks.changed          | A deck was created, edited, deleted or refreshed from its source.                 |
 | update.state           | Progress of an update being applied.                                              |
