@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -193,6 +194,62 @@ func TestScanSkip_SystemWithUnidentifiedDiscIsLeftAlone(t *testing.T) {
 
 	assert.Equal(t, []string{"Edited Behind The Scanner"}, fixture.titleNames(t, systemdefs.SystemPSX),
 		"an unchanged system must not be reconciled")
+}
+
+// A system left alone as unchanged never reaches the code that checks its
+// recorded misses, so the marker itself has to move when a missed disc is
+// replaced or the identification code changes.
+func TestScanSkip_ReplacedUnidentifiedDiscIsReadAgain(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache.
+	fixture := newScanSkipFixtureFor(t, ".iso", systemdefs.SystemPSX)
+	disc := filepath.Join(fixture.dirs[systemdefs.SystemPSX], "Alpha Game.iso")
+	fixture.index(t)
+	fixture.index(t)
+	stored, err := fixture.db.MediaDB.ScanGameIDMisses(context.Background(), systemdefs.SystemPSX)
+	require.NoError(t, err)
+	require.Contains(t, stored, "Alpha Game.iso")
+
+	// Same path, new contents: the walk the marker is built from is unchanged.
+	require.NoError(t, os.WriteFile(disc, minimalScannerPSXISO("SCES-01420", "SCES_014.20;1"), 0o600))
+	later := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(disc, later, later))
+	fixture.index(t)
+
+	has, err := fixture.db.MediaDB.HasMediaPropertyForPath(
+		context.Background(), systemdefs.SystemPSX, disc, string(tags.TagPropertyGameID))
+	require.NoError(t, err)
+	assert.True(t, has, "a replaced disc must be identified by the next index")
+	stored, err = fixture.db.MediaDB.ScanGameIDMisses(context.Background(), systemdefs.SystemPSX)
+	require.NoError(t, err)
+	assert.Empty(t, stored)
+}
+
+// A record from other identification code makes the marker stale too, so a
+// go-gameid release that reads more discs gets to try them.
+func TestGameIDMisses_MarkerSuffixFollowsFilesAndVersion(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "game.iso")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	state, ok := gameIDFileStateOf(path)
+	require.True(t, ok)
+
+	var none *gameIDMisses
+	assert.Empty(t, none.currentMarkerSuffix())
+	assert.Empty(t, (&gameIDMisses{}).currentMarkerSuffix())
+
+	recorded := &gameIDMisses{next: map[string]gameIDFileState{path: state}}
+	storedWith := recorded.nextMarkerSuffix()
+	require.NotEmpty(t, storedWith)
+
+	unchanged := &gameIDMisses{known: map[string]gameIDFileState{path: state}, stored: "record"}
+	assert.Equal(t, storedWith, unchanged.currentMarkerSuffix())
+
+	require.NoError(t, os.WriteFile(path, []byte("longer"), 0o600))
+	assert.NotEqual(t, storedWith, unchanged.currentMarkerSuffix(), "a changed file moves the marker")
+
+	otherVersion := &gameIDMisses{stored: "record"}
+	assert.NotEqual(t, storedWith, otherVersion.currentMarkerSuffix(),
+		"a record this version does not trust moves the marker")
 }
 
 // A system with no files has no row to reconcile, but used to open and commit

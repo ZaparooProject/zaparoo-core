@@ -2059,7 +2059,17 @@ func NewNamesIndexWithSources(
 		} else {
 			storedMarker = stored
 		}
-		if markerUsable && storedMarker != "" && storedMarker == walkMarker {
+		// Disc images that were read and carry no game ID are part of what
+		// the stored marker stands for, so they are loaded before deciding.
+		var discMisses *gameIDMisses
+		if _, hasGameIDs := gameid.ConsoleForSystem(systemID); hasGameIDs {
+			listing := ""
+			if markerUsable {
+				listing = walkMarker
+			}
+			discMisses = loadGameIDMisses(ctx, db, systemID, listing)
+		}
+		if markerUsable && storedMarker != "" && storedMarker == walkMarker+discMisses.currentMarkerSuffix() {
 			collectDur += time.Since(collectStart)
 			completedSystems[systemID] = true
 			log.Info().
@@ -2070,14 +2080,6 @@ func NewNamesIndexWithSources(
 			continue
 		}
 		gameIDUnresolved := 0
-		var discMisses *gameIDMisses
-		if _, hasGameIDs := gameid.ConsoleForSystem(systemID); hasGameIDs {
-			listing := ""
-			if markerUsable {
-				listing = walkMarker
-			}
-			discMisses = loadGameIDMisses(ctx, db, systemID, listing)
-		}
 
 		// Group files by directory and determine stripping policy per directory
 		filesByDir := make(map[string][]platforms.ScanResult)
@@ -2295,7 +2297,7 @@ func NewNamesIndexWithSources(
 			}
 			nextMarker := ""
 			if markerUsable && gameIDUnresolved == 0 {
-				nextMarker = walkMarker
+				nextMarker = walkMarker + discMisses.nextMarkerSuffix()
 			}
 			if nextMarker != storedMarker {
 				if markerErr := db.SetScanMarker(ctx, systemID, nextMarker); markerErr != nil {
@@ -2313,6 +2315,9 @@ func NewNamesIndexWithSources(
 			// leaves it alone instead of opening a transaction to find that
 			// out again.
 			completedSystems[systemID] = true
+			if missErr := discMisses.save(ctx, db, systemID); missErr != nil {
+				return 0, missErr
+			}
 			if markerUsable && walkMarker != storedMarker {
 				if markerErr := db.SetScanMarker(ctx, systemID, walkMarker); markerErr != nil {
 					return 0, fmt.Errorf("failed to record scan marker for %s: %w", systemID, markerErr)

@@ -21,12 +21,16 @@ package mediascanner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -183,6 +187,64 @@ func namedFileUnusable(pathErr *fs.PathError) bool {
 		errors.Is(pathErr, syscall.ENAMETOOLONG) ||
 		errors.Is(pathErr, syscall.ENOTDIR) ||
 		errors.Is(pathErr, syscall.EINVAL)
+}
+
+// gameIDMarkerSuffix is what a system's scan marker carries for its recorded
+// misses: the identification version and each missed file's size and
+// modification time. A system is only left alone while its marker matches, so
+// without this a replaced disc image, or a go-gameid release that could read
+// what the last one could not, would never be read again: the walk the rest
+// of the marker is built from names files, not their contents.
+func gameIDMarkerSuffix(states map[string]gameIDFileState) string {
+	if len(states) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(states))
+	for path := range states {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	var suffix strings.Builder
+	_, _ = fmt.Fprintf(&suffix, "|gameid=%s", gameIDMissVersion())
+	for _, path := range paths {
+		_, _ = fmt.Fprintf(&suffix, "|%s:%d:%d", path, states[path].Size, states[path].ModTime)
+	}
+	digest := sha256.Sum256([]byte(suffix.String()))
+	return "+" + hex.EncodeToString(digest[:8])
+}
+
+// currentMarkerSuffix describes the recorded misses as the files are now. It
+// equals the suffix the record was stored with only while every missed file
+// is unchanged and the record is from this identification version.
+func (m *gameIDMisses) currentMarkerSuffix() string {
+	if m == nil {
+		return ""
+	}
+	if len(m.known) == 0 {
+		if m.stored != "" {
+			// A record this version does not trust: never equal to what it
+			// was stored with.
+			return "+stale"
+		}
+		return ""
+	}
+	states := make(map[string]gameIDFileState, len(m.known))
+	for path := range m.known {
+		state, ok := gameIDFileStateOf(path)
+		if !ok {
+			state = gameIDFileState{Size: -1}
+		}
+		states[path] = state
+	}
+	return gameIDMarkerSuffix(states)
+}
+
+// nextMarkerSuffix describes the misses this reconcile is about to store.
+func (m *gameIDMisses) nextMarkerSuffix() string {
+	if m == nil {
+		return ""
+	}
+	return gameIDMarkerSuffix(m.next)
 }
 
 // save stores the misses of the files this reconcile staged, in the open
