@@ -4,7 +4,7 @@ Optimize slug search cache substring matching. Priority #1 — furthest from tar
 
 MiSTer target: < 100ms per search query at 500k entries
 MiSTer baseline: 281ms (single-word query at 500k)
-x86 CI threshold: < 2.9ms (100ms / 35x search multiplier)
+x86 CI threshold: < 2.1ms (100ms / 47x search multiplier)
 Gap: ~3x over target
 
 ## The Problem

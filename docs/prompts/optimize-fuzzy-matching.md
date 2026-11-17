@@ -5,7 +5,7 @@ Optimize fuzzy matching performance. Priority #2 — worst-case full scan exceed
 MiSTer target: < 100ms per query (on the tap path as search fallback)
 MiSTer baseline (best case, match found): ~44ms at 129k titles — within target
 MiSTer baseline (worst case, no match): ~331ms at 129k titles — 3x over target
-x86 CI threshold: < 2.9ms (100ms / 35x search multiplier)
+x86 CI threshold: < 2.1ms (100ms / 47x search multiplier)
 Gap: Worst case is ~3x over target. Exceeds 100ms above ~296k titles even in best case.
 
 ## The Problem
