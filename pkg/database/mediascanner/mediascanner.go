@@ -2072,7 +2072,11 @@ func NewNamesIndexWithSources(
 		gameIDUnresolved := 0
 		var discMisses *gameIDMisses
 		if _, hasGameIDs := gameid.ConsoleForSystem(systemID); hasGameIDs {
-			discMisses = loadGameIDMisses(ctx, db, systemID)
+			listing := ""
+			if markerUsable {
+				listing = walkMarker
+			}
+			discMisses = loadGameIDMisses(ctx, db, systemID, listing)
 		}
 
 		// Group files by directory and determine stripping policy per directory
@@ -2305,7 +2309,15 @@ func NewNamesIndexWithSources(
 				reconcileStats.TitlesInserted + reconcileStats.TouchedTitles
 		} else {
 			// System has no DB row and produced no files — nothing to commit.
+			// Its empty walk is recorded all the same, so the next index
+			// leaves it alone instead of opening a transaction to find that
+			// out again.
 			completedSystems[systemID] = true
+			if markerUsable && walkMarker != storedMarker {
+				if markerErr := db.SetScanMarker(ctx, systemID, walkMarker); markerErr != nil {
+					return 0, fmt.Errorf("failed to record scan marker for %s: %w", systemID, markerErr)
+				}
+			}
 		}
 		reconcileDur += time.Since(reconcileStart)
 

@@ -48,7 +48,7 @@ func reloadGameIDMisses(t *testing.T, misses *gameIDMisses) *gameIDMisses {
 	t.Cleanup(cleanup)
 	ctx := context.Background()
 	require.NoError(t, misses.save(ctx, db.MediaDB, systemdefs.SystemPSX))
-	return loadGameIDMisses(ctx, db.MediaDB, systemdefs.SystemPSX)
+	return loadGameIDMisses(ctx, db.MediaDB, systemdefs.SystemPSX, misses.listing)
 }
 
 // A disc image with no game ID is read once. The next index trusts the record
@@ -101,6 +101,34 @@ func TestGameIDMisses_UnopenableDiscStaysUnresolved(t *testing.T) {
 	assert.Empty(t, misses.next)
 }
 
+// A cue sheet whose track file is missing cannot be read however often it is
+// tried, so it is settled against the system's current files and read again
+// only when those change.
+func TestGameIDMisses_MissingTrackIsSettledUntilTheFilesChange(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "game.cue")
+	require.NoError(t, os.WriteFile(path,
+		[]byte("FILE \"game.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"), 0o600))
+	mockDB := newGameIDMissMockDB()
+
+	first := &gameIDMisses{next: map[string]gameIDFileState{}, listing: "walk-1"}
+	props, unresolved := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, first)
+	require.Empty(t, props)
+	require.False(t, unresolved, "a disc naming a missing file is settled while the files stay as they are")
+	require.Equal(t, "walk-1", first.next[path].Listing)
+
+	same := reloadGameIDMisses(t, first)
+	require.True(t, same.isKnown(path))
+
+	changed := reloadGameIDMisses(t, first)
+	changed.listing = "walk-2"
+	assert.False(t, changed.isKnown(path), "a change to the system's files must have the disc read again")
+
+	untrusted := &gameIDMisses{next: map[string]gameIDFileState{}}
+	_, unresolved = stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, untrusted)
+	assert.True(t, unresolved, "without a trustworthy walk the missing file settles nothing")
+}
+
 // A record written by other identification code is not trusted.
 func TestGameIDMisses_RecordFromAnotherVersionIsIgnored(t *testing.T) {
 	t.Parallel()
@@ -110,7 +138,7 @@ func TestGameIDMisses_RecordFromAnotherVersionIsIgnored(t *testing.T) {
 	require.NoError(t, db.MediaDB.SetScanGameIDMisses(ctx, systemdefs.SystemPSX,
 		`{"files":{"/games/psx/a.iso":{"size":1,"modTime":2}},"version":"0/older"}`))
 
-	misses := loadGameIDMisses(ctx, db.MediaDB, systemdefs.SystemPSX)
+	misses := loadGameIDMisses(ctx, db.MediaDB, systemdefs.SystemPSX, "")
 
 	assert.Empty(t, misses.known)
 	require.NoError(t, misses.save(ctx, db.MediaDB, systemdefs.SystemPSX))
@@ -135,4 +163,23 @@ func TestScanSkip_SystemWithUnidentifiedDiscIsLeftAlone(t *testing.T) {
 
 	assert.Equal(t, []string{"Edited Behind The Scanner"}, fixture.titleNames(t, systemdefs.SystemPSX),
 		"an unchanged system must not be reconciled")
+}
+
+// A system with no files has no row to reconcile, but used to open and commit
+// a transaction on every index to find that out.
+func TestScanSkip_EmptySystemIsRecordedAndLeftAlone(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache.
+	fixture := newScanSkipFixtureFor(t, ".bin", systemdefs.SystemNES)
+	require.NoError(t, os.Remove(filepath.Join(fixture.dirs[systemdefs.SystemNES], "Alpha Game.bin")))
+	fixture.index(t)
+
+	marker, err := fixture.db.MediaDB.ScanMarker(context.Background(), systemdefs.SystemNES)
+	require.NoError(t, err)
+	require.NotEmpty(t, marker, "an empty walk is still a walk the next index can match")
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(fixture.dirs[systemdefs.SystemNES], "Beta Game.bin"), []byte("x"), 0o600))
+	fixture.index(t)
+	assert.Equal(t, []string{"Beta Game"}, fixture.titleNames(t, systemdefs.SystemNES),
+		"a file added to an empty system must be indexed")
 }

@@ -60,8 +60,13 @@ var gameIDMissVersion = sync.OnceValue(func() string {
 
 // gameIDFileState is what a disc image looked like when it was read.
 type gameIDFileState struct {
-	Size    int64 `json:"size"`
-	ModTime int64 `json:"modTime"`
+	// Listing is set for a disc that could not be read because a file it
+	// names was not there, such as a cue sheet whose track is missing. It is
+	// the system's walk marker at the time, so the disc is read again once
+	// the system's files change.
+	Listing string `json:"listing,omitempty"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"modTime"`
 }
 
 type gameIDMissRecord struct {
@@ -78,13 +83,16 @@ type gameIDMissRecord struct {
 // A miss stands while the file keeps its size and modification time and the
 // identification code keeps its version.
 type gameIDMisses struct {
-	known  map[string]gameIDFileState
-	next   map[string]gameIDFileState
-	stored string
+	known map[string]gameIDFileState
+	next  map[string]gameIDFileState
+	// listing is the walk marker of the system being staged, or "" when its
+	// walk cannot be trusted to describe the system's files.
+	listing string
+	stored  string
 }
 
-func loadGameIDMisses(ctx context.Context, db database.MediaDBI, systemID string) *gameIDMisses {
-	misses := &gameIDMisses{next: map[string]gameIDFileState{}}
+func loadGameIDMisses(ctx context.Context, db database.MediaDBI, systemID, listing string) *gameIDMisses {
+	misses := &gameIDMisses{next: map[string]gameIDFileState{}, listing: listing}
 	stored, err := db.ScanGameIDMisses(ctx, systemID)
 	if err != nil {
 		log.Debug().Err(err).Str("system", systemID).Msg("gameid miss record unreadable, reading discs again")
@@ -124,9 +132,13 @@ func (m *gameIDMisses) isKnown(path string) bool {
 		return false
 	}
 	state, ok := gameIDFileStateOf(path)
-	if !ok || state != known {
+	if !ok || state.Size != known.Size || state.ModTime != known.ModTime {
 		return false
 	}
+	if known.Listing != "" && known.Listing != m.listing {
+		return false
+	}
+	state.Listing = known.Listing
 	m.next[path] = state
 	return true
 }
@@ -135,18 +147,27 @@ func (m *gameIDMisses) isKnown(path string) bool {
 // state when the read started. It reports whether the miss was recorded: a
 // file that could not be opened or read, or that changed during the read,
 // says nothing about its contents and is read again by the next index.
+//
+// A disc that names a file which is not there is recorded against the
+// system's current files instead: nothing but a change to those files can
+// make it readable.
 func (m *gameIDMisses) record(path string, before gameIDFileState, beforeOK bool, identifyErr error) bool {
 	if m == nil || !beforeOK {
 		return false
 	}
+	listing := ""
 	var pathErr *fs.PathError
 	if errors.As(identifyErr, &pathErr) {
-		return false
+		if !errors.Is(identifyErr, fs.ErrNotExist) || m.listing == "" {
+			return false
+		}
+		listing = m.listing
 	}
 	after, ok := gameIDFileStateOf(path)
 	if !ok || after != before {
 		return false
 	}
+	after.Listing = listing
 	m.next[path] = after
 	return true
 }
