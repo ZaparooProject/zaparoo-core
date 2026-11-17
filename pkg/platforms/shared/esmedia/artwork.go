@@ -303,6 +303,37 @@ func FindFileFS(
 	return FindFileIn(fs, nil, fallbackNames, candidates, availableDirs)
 }
 
+// cleanRelativeSplit reports where a relative path that filepath.Clean would
+// return unchanged splits into directory and file name: the index of its last
+// separator, or -1 when it has none. It returns -2 for any other path, which
+// the caller then cleans the slow way.
+func cleanRelativeSplit(name string) int {
+	last := -1
+	start := 0
+	for i := 0; i <= len(name); i++ {
+		if i < len(name) {
+			if name[i] == '/' && filepath.Separator != '/' {
+				return -2
+			}
+			if name[i] != filepath.Separator {
+				continue
+			}
+		}
+		segment := name[start:i]
+		if segment == "" || segment == "." || segment == ".." {
+			return -2
+		}
+		if i < len(name) {
+			last = i
+		}
+		start = i + 1
+	}
+	if filepath.VolumeName(name) != "" {
+		return -2
+	}
+	return last
+}
+
 // FindFileIn is FindFileFS with a directory name cache, for a caller that
 // searches the same directories for many files. names may be nil.
 func FindFileIn(
@@ -326,11 +357,15 @@ func FindFileIn(
 		if name == "" || name == "." || name == ".." {
 			continue
 		}
-		// Nearly every name is a bare file name, which is already clean and
-		// has no directory part: cleaning and splitting those was most of
-		// what remained of this function's time.
-		if !strings.ContainsRune(name, filepath.Separator) && !strings.ContainsRune(name, '/') {
-			lookups = append(lookups, lookup{name: name, dir: ".", base: name})
+		// Callers build these names with filepath.Join, so nearly all of
+		// them are already clean. Cleaning each one again, and again inside
+		// filepath.Dir, was a third of the artwork scraper's CPU time.
+		if sep := cleanRelativeSplit(name); sep >= -1 {
+			if sep == -1 {
+				lookups = append(lookups, lookup{name: name, dir: ".", base: name})
+			} else {
+				lookups = append(lookups, lookup{name: name, dir: name[:sep], base: name[sep+1:]})
+			}
 			continue
 		}
 		cleanName := filepath.Clean(name)

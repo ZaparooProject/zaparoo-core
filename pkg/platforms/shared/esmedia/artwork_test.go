@@ -534,3 +534,35 @@ func TestArtworkDirCandidates_AcceptsLibretroAndCommonFolderNames(t *testing.T) 
 		}
 	}
 }
+
+// cleanRelativeSplit must agree with filepath.Clean, Dir and Base wherever it
+// claims a path is already clean, since FindFileIn trusts it instead of them.
+func TestCleanRelativeSplit_AgreesWithFilepath(t *testing.T) {
+	t.Parallel()
+	sep := string(filepath.Separator)
+	names := []string{
+		"cover.png", "a" + sep + "cover.png", "a" + sep + "b" + sep + "c.png", "1 US - A-M" + sep + "Game (USA).png",
+		".hidden.png", "a.b" + sep + "c.d.png", "..png", "a" + sep + "..b",
+		"", ".", "..", "." + sep + "cover.png", ".." + sep + "cover.png", "a" + sep + sep + "cover.png",
+		"a" + sep + "." + sep + "cover.png", "a" + sep + ".." + sep + "cover.png", sep + "abs" + sep + "cover.png",
+		"a" + sep, sep, "a" + sep + "b" + sep,
+	}
+	for _, name := range names {
+		split := cleanRelativeSplit(name)
+		if split == -2 {
+			continue
+		}
+		require.Equal(t, name, filepath.Clean(name), "%q was reported clean", name)
+		dir, base := ".", name
+		if split >= 0 {
+			dir, base = name[:split], name[split+1:]
+		}
+		assert.Equal(t, filepath.Dir(name), dir, "%q", name)
+		assert.Equal(t, filepath.Base(name), base, "%q", name)
+	}
+	assert.Equal(t, -1, cleanRelativeSplit("cover.png"))
+	assert.Equal(t, 1, cleanRelativeSplit("a"+sep+"cover.png"))
+	for _, unclean := range []string{"", ".", "..", "." + sep + "x", "a" + sep + sep + "x", sep + "x", "a" + sep} {
+		assert.Equal(t, -2, cleanRelativeSplit(unclean), "%q", unclean)
+	}
+}
