@@ -169,14 +169,18 @@ func sqlLoadVersionKeys(ctx context.Context, db sqlQueryable, scope versionKeySc
 		clause, args = scope.condition("t.SystemDBID", "t.DBID")
 		// A scoped read walks the scope's titles and probes each for the
 		// property; an unscoped one walks the property instead.
+		// A title whose media is all missing holds no key, as with every
+		// other identity, so it cannot push a shared ID past the size bound.
+		const present = ` AND EXISTS (SELECT 1 FROM Media m
+			WHERE m.MediaTitleDBID = t.DBID AND m.IsMissing = 0)`
 		query := `SELECT t.SystemDBID, t.DBID, NULL, p.Text
 			FROM MediaTitles t CROSS JOIN MediaTitleProperties p
 			  ON p.MediaTitleDBID = t.DBID AND p.TypeTagDBID = ?
-			WHERE p.Text != ''` + clause
+			WHERE p.Text != ''` + present + clause
 		if clause == "" {
 			query = `SELECT t.SystemDBID, t.DBID, NULL, p.Text
 				FROM MediaTitleProperties p CROSS JOIN MediaTitles t ON t.DBID = p.MediaTitleDBID
-				WHERE p.TypeTagDBID = ? AND p.Text != ''`
+				WHERE p.TypeTagDBID = ? AND p.Text != ''` + present
 		}
 		readErr := read(database.VersionKeyGameDatabaseID, query, append([]any{gameID}, args...)...)
 		if readErr != nil {
@@ -229,9 +233,13 @@ func versionGroupsFromKeys(keys []versionKeyRow) map[int64]int64 {
 	holders := make(map[keyID][]int64)
 	for i := range keys {
 		id := keyID{system: keys[i].system, keyType: keys[i].keyType, key: keys[i].key}
-		if !slices.Contains(holders[id], keys[i].title) {
-			holders[id] = append(holders[id], keys[i].title)
+		held := holders[id]
+		// A key past the bound is ignored whatever else holds it, so its
+		// holders stop being tracked, and the check stays a short scan.
+		if len(held) > versionKeyMaxTitles || slices.Contains(held, keys[i].title) {
+			continue
 		}
+		holders[id] = append(held, keys[i].title)
 	}
 	ids := make([]keyID, 0, len(holders))
 	for id, titles := range holders {
@@ -239,7 +247,7 @@ func versionGroupsFromKeys(keys []versionKeyRow) map[int64]int64 {
 			continue
 		}
 		if len(titles) > versionKeyMaxTitles {
-			log.Debug().Str("keyType", id.keyType).Str("key", id.key).Int("titles", len(titles)).
+			log.Debug().Str("keyType", id.keyType).Str("key", id.key).Int("maxTitles", versionKeyMaxTitles).
 				Msg("version key shared by too many titles, ignored")
 			continue
 		}

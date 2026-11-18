@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -190,12 +191,33 @@ func titleVersionCounts(
 		if rowsErr != nil {
 			return nil, fmt.Errorf("read version rows: %w", rowsErr)
 		}
-		versions, foldErr := foldVersions(ctx, mediaDB, rows)
-		if foldErr != nil {
-			return nil, foldErr
+		// Each game is folded on its own rows, so one game's container can
+		// never take in another's tracks because both are on the page.
+		gameOf := make(map[int64]int64, len(readTitles))
+		for _, id := range titleIDs {
+			if game, ok := games[id]; ok {
+				for _, member := range game {
+					gameOf[member] = game[0]
+				}
+			}
 		}
-		for i := range versions {
-			perTitle[versions[i].MediaTitleID]++
+		byGame := make(map[int64][]database.SearchResultWithCursor)
+		var order []int64
+		for i := range rows {
+			game := gameOf[rows[i].MediaTitleID]
+			if _, seen := byGame[game]; !seen {
+				order = append(order, game)
+			}
+			byGame[game] = append(byGame[game], rows[i])
+		}
+		for _, game := range order {
+			versions, foldErr := foldVersions(ctx, mediaDB, byGame[game])
+			if foldErr != nil {
+				return nil, foldErr
+			}
+			for i := range versions {
+				perTitle[versions[i].MediaTitleID]++
+			}
 		}
 	}
 
@@ -208,6 +230,42 @@ func titleVersionCounts(
 		counts[id] = total
 	}
 	return counts, nil
+}
+
+// currentVersionID returns the version that stands for the asked-for media.
+// An alias folds into its target and a container member into its launch
+// file, so asking about one marks what it folded into, when that is listed.
+func currentVersionID(
+	ctx context.Context, mediaDB database.MediaDBI, current *database.Media, systemID string,
+	versions []database.SearchResultWithCursor,
+) (int64, error) {
+	listed := func(id int64) bool {
+		return slices.ContainsFunc(versions, func(row database.SearchResultWithCursor) bool {
+			return row.MediaID == id
+		})
+	}
+	if listed(current.DBID) {
+		return current.DBID, nil
+	}
+	target, linked, err := mediaDB.GetMediaLinkTarget(ctx, current.DBID)
+	if err != nil {
+		return 0, fmt.Errorf("error reading linked media: %w", err)
+	}
+	if linked && listed(target) {
+		return target, nil
+	}
+	if container.MayHaveContainerTarget(current.Path) {
+		if dir := container.ParentDir(current.Path); dir != "" {
+			launch, launchErr := mediaDB.FindSingleContainerLaunchMediaBySystemID(ctx, systemID, dir)
+			if launchErr != nil {
+				return 0, fmt.Errorf("error reading container launch media: %w", launchErr)
+			}
+			if launch != nil && listed(launch.DBID) {
+				return launch.DBID, nil
+			}
+		}
+	}
+	return current.DBID, nil
 }
 
 // versionGroupTitles returns the titles whose rows are versions of titleID's
@@ -442,16 +500,9 @@ func HandleMediaVersions(env requests.RequestEnv) (any, error) {
 		})
 	}
 
-	// An alias folds into its target, so asking about one marks the target.
-	currentID := current.DBID
-	if !slices.ContainsFunc(versions, func(row database.SearchResultWithCursor) bool {
-		return row.MediaID == currentID
-	}) {
-		if target, linked, linkErr := mediaDB.GetMediaLinkTarget(ctx, currentID); linkErr != nil {
-			return nil, fmt.Errorf("error reading linked media: %w", linkErr)
-		} else if linked {
-			currentID = target
-		}
+	currentID, err := currentVersionID(ctx, mediaDB, &current.Media, current.System.SystemID, versions)
+	if err != nil {
+		return nil, err
 	}
 
 	var sources map[int64][]string

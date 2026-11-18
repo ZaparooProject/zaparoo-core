@@ -176,9 +176,11 @@ func defaultTitleVersions(
 		results = append(results, chosen)
 		count := len(versions)
 		if groupCount, ok := linked[groups[i].TitleDBID]; ok {
-			// The group read applies the same filters, but not the search's
-			// words, so the title's own rows can only match or exceed it.
-			count = max(count, groupCount)
+			// The group read applies the same filters but not the search's
+			// words, and folds every alias into its target. The rows the
+			// words matched can hold an alias without its target, so they
+			// do not count the game.
+			count = groupCount
 		}
 		counts = append(counts, count)
 	}

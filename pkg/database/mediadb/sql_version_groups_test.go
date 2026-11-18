@@ -335,6 +335,34 @@ func TestRecomputeVersionGroups_IgnoresMissingMedia(t *testing.T) {
 	assert.Equal(t, lib.titles["ASO"], groups["ASO"])
 }
 
+// A title whose files are all gone holds no game ID, so it cannot push a
+// shared ID past the size bound and part the titles that are present.
+func TestRecomputeVersionGroups_MissingTitleDoesNotOversizeGameID(t *testing.T) {
+	t.Parallel()
+	names := make([]string, versionKeyMaxTitles+1)
+	for i := range names {
+		names[i] = fmt.Sprintf("Contra %03d", i)
+	}
+	lib := newVersionTestLibrary(t, names...)
+	for _, name := range names {
+		lib.scrape(t, name, &database.ScrapeWrite{TitleProps: []database.MediaProperty{{
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameDatabaseID), Text: "contra",
+		}}})
+	}
+	gone := names[len(names)-1]
+	_, err := lib.db.sql.Load().ExecContext(context.Background(),
+		`UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, lib.media[gone].DBID)
+	require.NoError(t, err)
+	lib.regroup(t)
+
+	groups := lib.groups(t, names...)
+	want := groups[names[0]]
+	for _, name := range names[:len(names)-1] {
+		assert.Equal(t, want, groups[name], name)
+	}
+	assert.Equal(t, lib.titles[gone], groups[gone])
+}
+
 // A scrape replaces exactly the keys its own source wrote for a row.
 func TestScrapeVersionKeys_ReplacePerSource(t *testing.T) {
 	t.Parallel()

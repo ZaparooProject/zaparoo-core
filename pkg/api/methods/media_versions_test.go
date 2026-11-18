@@ -26,6 +26,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -228,6 +229,33 @@ func TestHandleMediaVersions_AliasFoldsIntoItsTarget(t *testing.T) {
 	assert.ElementsMatch(t, []int64{201, 203}, versionIDs(response.Versions))
 	for i := range response.Versions {
 		assert.Equal(t, response.Versions[i].MediaID == 201, response.Versions[i].Current)
+	}
+}
+
+// Asking about a track marks the cue it folds into as the current version.
+func TestHandleMediaVersions_ContainerMemberMarksItsLaunchFile(t *testing.T) {
+	t.Parallel()
+	mediaDB := helpers.NewMockMediaDBI()
+	track := database.MediaFullRow{
+		System: database.System{DBID: 2, SystemID: "PSX"},
+		Media:  database.Media{DBID: 21, MediaTitleDBID: 20, Path: discTrack1},
+		Title:  database.MediaTitle{DBID: 20},
+	}
+	mediaDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{21}).
+		Return(map[int64]database.MediaFullRow{21: track}, nil)
+	mediaDB.On("GetVersionGroupMembers", mock.Anything, []int64{20}).Return(map[int64][]int64{}, nil)
+	mediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).Return(discRows(), nil)
+	mediaDB.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "PSX", discDir).
+		Return(&database.Media{DBID: 22}, nil)
+	mediaDB.On("GetMediaLinkTarget", mock.Anything, int64(21)).Return(int64(0), false, nil)
+
+	mediaID := int64(21)
+	response := callVersions(t, versionsEnv(t, mediaDB, models.MediaVersionsParams{MediaID: &mediaID}))
+
+	assert.ElementsMatch(t, []int64{22, 24}, versionIDs(response.Versions))
+	for i := range response.Versions {
+		assert.Equal(t, response.Versions[i].MediaID == 22, response.Versions[i].Current,
+			"media %d", response.Versions[i].MediaID)
 	}
 }
 
@@ -611,6 +639,36 @@ func TestHandleMediaSearch_GroupedCountsLinkedTitles(t *testing.T) {
 	assert.Equal(t, 1, *response.Results[1].VersionCount)
 }
 
+// Words matching only aliases, and not the file they point to, do not count
+// more versions than the whole game has.
+func TestHandleMediaSearch_GroupedCountIgnoresOrphanedAliases(t *testing.T) {
+	t.Parallel()
+	mediaDB := helpers.NewMockMediaDBI()
+	alias := func(id int64) database.SearchResultWithCursor {
+		return versionRow(id, contraTitle, "Contra", "/roms/NES/_Favorites/Contra "+strconv.FormatInt(id, 10)+".nes")
+	}
+	mediaDB.On("SearchMediaTitleGroups", mock.Anything, mock.Anything).Return([]database.SearchTitleGroup{
+		{TitleDBID: contraTitle, Rows: []database.SearchResultWithCursor{alias(103), alias(104), alias(105)}},
+	}, nil)
+	mediaDB.On("GetVersionGroupMembers", mock.Anything, []int64{contraTitle}).
+		Return(map[int64][]int64{contraTitle: {contraTitle, probotectorTitle}}, nil)
+	mediaDB.On("GetTitleVersionRows", mock.Anything, []int64{contraTitle, probotectorTitle}, mock.Anything).
+		Return([]database.SearchResultWithCursor{
+			contraRows()[0], alias(103), alias(104), alias(105), contraRows()[2],
+		}, nil)
+	mediaDB.On("GetMediaLinkTargets", mock.Anything, mock.Anything).
+		Return(map[int64]int64{103: 101, 104: 101, 105: 101}, nil)
+
+	groupBy := "title"
+	result, err := HandleMediaSearch(searchEnv(t, mediaDB, &models.SearchParams{GroupBy: &groupBy}))
+	require.NoError(t, err)
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, response.Results, 1)
+	require.NotNil(t, response.Results[0].VersionCount)
+	assert.Equal(t, 2, *response.Results[0].VersionCount, "Contra and Probotector")
+}
+
 func TestHandleMediaSearch_TitleVersionsListTheWholeGroup(t *testing.T) {
 	t.Parallel()
 	mediaDB := helpers.NewMockMediaDBI()
@@ -772,6 +830,12 @@ func TestStoredVersionCountsMatchLiveCounts(t *testing.T) {
 		game("Gamma (USA).chd"),
 		game("Gamma (USA) (Rev 1).chd"),
 		game("Delta.chd"),
+		// One folder holding Epsilon's disc and another game's tracks: a
+		// page holding both counts each game on its own rows.
+		game("Shared", "Epsilon.cue"),
+		game("Shared", "Epsilon (Track 1).bin"),
+		game("Shared", "Zeta (Track 1).bin"),
+		game("Shared", "Zeta (Track 2).bin"),
 	)
 	require.NoError(t, mediaDB.RecomputeVersionGroups(ctx, []string{"PSX"}))
 

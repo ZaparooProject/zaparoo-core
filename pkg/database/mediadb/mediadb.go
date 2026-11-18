@@ -2834,8 +2834,9 @@ func (db *MediaDB) ReconcileStagedSystem(
 		db.txLibraryChanged = true
 	}
 	// The reconcile may have added, removed or relinked the system's media,
-	// so its version counts are worked out again at the next regroup.
-	if stats.SystemKnown {
+	// so its version counts are worked out again at the next regroup. One
+	// that changed nothing leaves counts that are still right alone.
+	if stats.SystemKnown && stats.LibraryRowsChanged > 0 {
 		if _, staleErr := db.conn().ExecContext(ctx, markVersionCountsStaleSQL+`DBID = ?`,
 			stats.SystemDBID); staleErr != nil {
 			return stats, fmt.Errorf("mark version counts stale for %s: %w", systemID, staleErr)

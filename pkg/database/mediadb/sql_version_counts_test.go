@@ -209,6 +209,37 @@ func TestRecomputeVersionCounts(t *testing.T) {
 	assert.Zero(t, countedSystems)
 }
 
+// Re-indexing a system whose files did not change leaves its counts
+// current, so the next regroup does not recount it.
+func TestRecomputeVersionCounts_UnchangedReindexKeepsCounts(t *testing.T) {
+	t.Parallel()
+	lib := newVersionTestLibrary(t, "ASO", "Alpha Mission")
+	ctx := context.Background()
+	files := func() []database.ScanStagedMedia {
+		return []database.ScanStagedMedia{
+			stagedLinkTestMedia(arcadeLinkPath("ASO.mra"), "ASO", ""),
+			stagedLinkTestMedia(arcadeLinkPath("Alpha Mission.mra"), "Alpha Mission", ""),
+		}
+	}
+	indexLinkTestMedia(t, lib.db, database.ScanReconcileOpts{}, files()...)
+	lib.scrape(t, "ASO", setNameWrite("aso", ""))
+	lib.scrape(t, "Alpha Mission", setNameWrite("alphamis", "aso"))
+	lib.regroup(t)
+
+	conn := lib.db.sql.Load()
+	state := func() int {
+		var value int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`SELECT VersionCountsState FROM Systems WHERE SystemID = ?`, systemdefs.SystemArcade).Scan(&value))
+		return value
+	}
+	require.Equal(t, 1, state())
+
+	stats := indexLinkTestMedia(t, lib.db, database.ScanReconcileOpts{}, files()...)
+	require.Zero(t, stats.LibraryRowsChanged, "the re-index changed nothing")
+	assert.Equal(t, 1, state(), "an unchanged system's counts stay current")
+}
+
 func TestGetStoredVersionCounts_HiddenVersionsAreRecounted(t *testing.T) {
 	t.Parallel()
 	lib := newVersionTestLibrary(t, "ASO", "Alpha Mission", "Ikari", "Rygar")
