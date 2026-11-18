@@ -210,6 +210,32 @@ func (m *MockKodiClient) GetMovies(ctx context.Context) ([]kodi.Movie, error) {
 	return nil, nil
 }
 
+// GetMovieDetails mocks retrieving one movie from Kodi's library
+func (m *MockKodiClient) GetMovieDetails(ctx context.Context, movieID int) (*kodi.Movie, error) {
+	args := m.Called(ctx, movieID)
+	var movie *kodi.Movie
+	if v, ok := args.Get(0).(*kodi.Movie); ok {
+		movie = v
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMovieDetails error: %w", err)
+	}
+	return movie, nil
+}
+
+// GetEpisodeDetails mocks retrieving one episode from Kodi's library
+func (m *MockKodiClient) GetEpisodeDetails(ctx context.Context, episodeID int) (*kodi.Episode, error) {
+	args := m.Called(ctx, episodeID)
+	var episode *kodi.Episode
+	if v, ok := args.Get(0).(*kodi.Episode); ok {
+		episode = v
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetEpisodeDetails error: %w", err)
+	}
+	return episode, nil
+}
+
 // GetTVShows mocks retrieving all TV shows from Kodi's library
 func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]kodi.TVShow, error) {
 	args := m.Called(ctx)
@@ -358,6 +384,8 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("GetActivePlayers", mock.Anything).Return([]kodi.Player{}, nil).Maybe()
 	m.On("GetPlayerItem", mock.Anything, mock.AnythingOfType("int")).Return((*kodi.PlayerItem)(nil), nil).Maybe()
 	m.On("GetMovies", mock.Anything).Return([]kodi.Movie{}, nil).Maybe()
+	m.On("GetMovieDetails", mock.Anything, mock.AnythingOfType("int")).Return((*kodi.Movie)(nil), nil).Maybe()
+	m.On("GetEpisodeDetails", mock.Anything, mock.AnythingOfType("int")).Return((*kodi.Episode)(nil), nil).Maybe()
 	m.On("GetTVShows", mock.Anything).Return([]kodi.TVShow{}, nil).Maybe()
 	m.On("GetEpisodes", mock.Anything, mock.AnythingOfType("int")).Return([]kodi.Episode{}, nil).Maybe()
 	m.On("GetSongs", mock.Anything).Return([]kodi.Song{}, nil).Maybe()

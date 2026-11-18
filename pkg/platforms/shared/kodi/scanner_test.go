@@ -121,6 +121,24 @@ func (m *MockKodiClient) GetMovies(ctx context.Context) ([]Movie, error) {
 	return nil, nil
 }
 
+func (m *MockKodiClient) GetMovieDetails(ctx context.Context, movieID int) (*Movie, error) {
+	args := m.Called(ctx, movieID)
+	var movie *Movie
+	if v, ok := args.Get(0).(*Movie); ok {
+		movie = v
+	}
+	return movie, args.Error(1) //nolint:wrapcheck // test mock
+}
+
+func (m *MockKodiClient) GetEpisodeDetails(ctx context.Context, episodeID int) (*Episode, error) {
+	args := m.Called(ctx, episodeID)
+	var episode *Episode
+	if v, ok := args.Get(0).(*Episode); ok {
+		episode = v
+	}
+	return episode, args.Error(1) //nolint:wrapcheck // test mock
+}
+
 func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]TVShow, error) {
 	args := m.Called(ctx)
 	if shows, ok := args.Get(0).([]TVShow); ok {
@@ -350,14 +368,16 @@ func TestScanTV(t *testing.T) {
 
 	// Check Breaking Bad episodes
 	assert.Equal(t, "Breaking Bad - Pilot", results[0].Name)
-	assert.Equal(t, "kodi-episode://101/Breaking%20Bad%20-%20Pilot", results[0].Path)
+	assert.Equal(t, "kodi-episode://101/Breaking%20Bad%20-%20Pilot;season=1;episode=1", results[0].Path)
 
 	assert.Equal(t, "Breaking Bad - Cat's in the Bag...", results[1].Name)
-	assert.Equal(t, "kodi-episode://102/Breaking%20Bad%20-%20Cat%27s%20in%20the%20Bag...", results[1].Path)
+	assert.Equal(t,
+		"kodi-episode://102/Breaking%20Bad%20-%20Cat%27s%20in%20the%20Bag...;season=1;episode=2",
+		results[1].Path)
 
 	// Check The Wire episode
 	assert.Equal(t, "The Wire - The Target", results[2].Name)
-	assert.Equal(t, "kodi-episode://201/The%20Wire%20-%20The%20Target", results[2].Path)
+	assert.Equal(t, "kodi-episode://201/The%20Wire%20-%20The%20Target;season=1;episode=1", results[2].Path)
 
 	// Verify all mocks were called
 	mockClient.AssertExpectations(t)
@@ -480,13 +500,13 @@ func TestScanTVShows(t *testing.T) {
 	assert.Len(t, results, 3)
 
 	assert.Equal(t, "Breaking Bad", results[0].Name)
-	assert.Equal(t, "kodi-show://1/Breaking%20Bad?tvdb=81189&imdb=tt0903747", results[0].Path)
+	assert.Equal(t, "kodi-show://1/Breaking%20Bad;tvdb=81189;imdb=tt0903747", results[0].Path)
 
 	assert.Equal(t, "The Wire", results[1].Name)
 	assert.Equal(t, "kodi-show://2/The%20Wire", results[1].Path)
 
 	assert.Equal(t, "Better Call Saul", results[2].Name)
-	assert.Equal(t, "kodi-show://3/Better%20Call%20Saul?tmdb=60059", results[2].Path)
+	assert.Equal(t, "kodi-show://3/Better%20Call%20Saul;tmdb=60059", results[2].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)

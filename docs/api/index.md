@@ -426,7 +426,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | settings.auth.claim             | Claim API credentials from remote server.                                             | All clients |
 | settings.auth.status            | Return credential link status.                                                        | All clients |
 | settings.auth.unlink            | Remove online account credentials.                                                    | Local/admin |
-| settings.auth.link              | Start online account link, or a RomM server link (local/admin only).                 | All clients |
+| settings.auth.link              | Start online account link, or a RomM, Plex or Jellyfin server link (local/admin only). | All clients |
 | settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
 | settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
 | online.status                   | Return online account link state and reported account features.                      | All clients |

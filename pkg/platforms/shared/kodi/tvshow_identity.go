@@ -22,7 +22,6 @@ package kodi
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -49,19 +48,8 @@ type tvShowReference struct {
 }
 
 func createTVShowVirtualPath(show TVShow) string {
-	path := virtualpath.CreateVirtualPath(shared.SchemeKodiShow, strconv.Itoa(show.ID), show.Label)
-	query := make([]string, 0, len(tvShowIdentityProviders))
-	for _, provider := range tvShowIdentityProviders {
-		value, found := lookupTVShowUniqueID(show.UniqueIDs, provider)
-		if !found || strings.TrimSpace(value) == "" {
-			continue
-		}
-		query = append(query, provider+"="+url.QueryEscape(value))
-	}
-	if len(query) == 0 {
-		return path
-	}
-	return path + "?" + strings.Join(query, "&")
+	return virtualpath.CreateVirtualPathWithParams(
+		shared.SchemeKodiShow, strconv.Itoa(show.ID), show.Label, identityQuery("", show.UniqueIDs))
 }
 
 func parseTVShowReference(path string) (tvShowReference, error) {
@@ -82,7 +70,11 @@ func parseTVShowReference(path string) (tvShowReference, error) {
 		return tvShowReference{}, fmt.Errorf("failed to parse show ID %q: %w", parsed.ID, err)
 	}
 
-	uniqueIDs, err := parseTVShowUniqueIDs(virtualpath.ParseURIComponents(path).Query)
+	params, err := virtualpath.ParseParams(path)
+	if err != nil {
+		return tvShowReference{}, fmt.Errorf("failed to parse TV show identity: %w", err)
+	}
+	uniqueIDs, err := identityFromQuery(params, "")
 	if err != nil {
 		return tvShowReference{}, err
 	}
@@ -92,39 +84,6 @@ func parseTVShowReference(path string) (tvShowReference, error) {
 		Name:      parsed.Name,
 		LegacyID:  legacyID,
 	}, nil
-}
-
-func parseTVShowUniqueIDs(rawQuery string) (map[string]string, error) {
-	if rawQuery == "" {
-		return map[string]string{}, nil
-	}
-
-	values, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse TV show identity query: %w", err)
-	}
-
-	uniqueIDs := make(map[string]string, len(tvShowIdentityProviders))
-	for _, provider := range tvShowIdentityProviders {
-		var providerValues []string
-		for key, queryValues := range values {
-			if strings.EqualFold(key, provider) {
-				providerValues = append(providerValues, queryValues...)
-			}
-		}
-
-		for _, value := range providerValues {
-			value = strings.TrimSpace(value)
-			if value == "" {
-				continue
-			}
-			if existing, found := uniqueIDs[provider]; found && !strings.EqualFold(existing, value) {
-				return nil, fmt.Errorf("conflicting %s TV show identities", provider)
-			}
-			uniqueIDs[provider] = value
-		}
-	}
-	return uniqueIDs, nil
 }
 
 func resolveTVShowID(reference tvShowReference, shows []TVShow) (int, error) {
@@ -168,20 +127,7 @@ func resolveTVShowID(reference tvShowReference, shows []TVShow) (int, error) {
 func matchingTVShowsByIdentity(uniqueIDs map[string]string, shows []TVShow) []TVShow {
 	matches := make([]TVShow, 0, 1)
 	for _, show := range shows {
-		matched := false
-		conflicted := false
-		for provider, expected := range uniqueIDs {
-			actual, found := lookupTVShowUniqueID(show.UniqueIDs, provider)
-			if !found || strings.TrimSpace(actual) == "" {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(actual), strings.TrimSpace(expected)) {
-				matched = true
-			} else {
-				conflicted = true
-			}
-		}
-		if matched && !conflicted {
+		if matched, conflicted := identityAgreement(uniqueIDs, show.UniqueIDs); matched && !conflicted {
 			matches = append(matches, show)
 		}
 	}

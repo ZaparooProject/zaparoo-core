@@ -171,6 +171,11 @@ const (
 const (
 	// InstanceKodi identifies launchers that send commands to a running Kodi instance
 	InstanceKodi = "kodi"
+	// InstanceJellyfin identifies launchers that drive a player through a
+	// Jellyfin server.
+	InstanceJellyfin = "jellyfin"
+	// InstancePlex identifies launchers that drive a Plex player.
+	InstancePlex = "plex"
 )
 
 // Control action identifiers for active media control.

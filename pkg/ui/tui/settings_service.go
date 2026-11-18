@@ -106,8 +106,10 @@ type SettingsService interface {
 	// RestoreRemoteBackup restores a remote backup snapshot.
 	RestoreRemoteBackup(ctx context.Context, id string) error
 
-	// StartAuthLink starts the reverse device link flow.
-	StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error)
+	// StartAuthLink starts the reverse device link flow. An empty provider
+	// links Zaparoo Online; serverURL names the server for providers that
+	// need one.
+	StartAuthLink(ctx context.Context, provider, serverURL string) (*models.AuthLinkStatusResponse, error)
 
 	// GetAuthLinkStatus reports the active link flow's state.
 	GetAuthLinkStatus(ctx context.Context) (*models.AuthLinkStatusResponse, error)
@@ -374,8 +376,18 @@ func (s *DefaultSettingsService) RestoreRemoteBackup(ctx context.Context, id str
 }
 
 // StartAuthLink starts the reverse device link flow.
-func (s *DefaultSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
-	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLink, "")
+func (s *DefaultSettingsService) StartAuthLink(
+	ctx context.Context, provider, serverURL string,
+) (*models.AuthLinkStatusResponse, error) {
+	params := ""
+	if provider != "" || serverURL != "" {
+		data, err := json.Marshal(&models.SettingsAuthLinkParams{Provider: provider, URL: serverURL})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal device link params: %w", err)
+		}
+		params = string(data)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLink, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start device link: %w", err)
 	}

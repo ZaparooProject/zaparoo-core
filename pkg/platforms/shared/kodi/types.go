@@ -31,9 +31,10 @@ type Player struct {
 
 // Movie represents a movie in Kodi's library
 type Movie struct {
-	Label string `json:"label"`
-	File  string `json:"file,omitempty"`
-	ID    int    `json:"movieid"`
+	UniqueIDs map[string]string `json:"uniqueid,omitempty"`
+	Label     string            `json:"label"`
+	File      string            `json:"file,omitempty"`
+	ID        int               `json:"movieid"`
 }
 
 // TVShow represents a TV show in Kodi's library
@@ -45,12 +46,14 @@ type TVShow struct {
 
 // Episode represents a TV episode in Kodi's library
 type Episode struct {
-	Label    string `json:"label"`
-	File     string `json:"file,omitempty"`
-	ID       int    `json:"episodeid"`
-	TVShowID int    `json:"tvshowid"`
-	Season   int    `json:"season"`
-	Episode  int    `json:"episode"`
+	UniqueIDs map[string]string `json:"uniqueid,omitempty"`
+	Label     string            `json:"label"`
+	ShowTitle string            `json:"showtitle,omitempty"`
+	File      string            `json:"file,omitempty"`
+	ID        int               `json:"episodeid"`
+	TVShowID  int               `json:"tvshowid"`
+	Season    int               `json:"season"`
+	Episode   int               `json:"episode"`
 }
 
 // Song represents a song in Kodi's library
@@ -93,6 +96,9 @@ const (
 	APIMethodVideoLibraryGetTVShows  APIMethod = "VideoLibrary.GetTVShows"
 	APIMethodVideoLibraryGetEpisodes APIMethod = "VideoLibrary.GetEpisodes"
 
+	APIMethodVideoLibraryGetMovieDetails   APIMethod = "VideoLibrary.GetMovieDetails"
+	APIMethodVideoLibraryGetEpisodeDetails APIMethod = "VideoLibrary.GetEpisodeDetails"
+
 	// Audio Library
 	APIMethodAudioLibraryGetSongs   APIMethod = "AudioLibrary.GetSongs"
 	APIMethodAudioLibraryGetAlbums  APIMethod = "AudioLibrary.GetAlbums"
@@ -124,6 +130,41 @@ type APIPayload struct {
 type APIError struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+}
+
+// Kodi answers a details request for a library ID that names no item with
+// InvalidParams up to Kodi 21 and with its own NotFound code from Kodi 22.
+const (
+	apiErrorInvalidParams = -32602
+	apiErrorNotFound      = -32098
+)
+
+func (e *APIError) Error() string { return e.Message }
+
+// VideoLibraryGetMovieDetailsParams represents parameters for
+// VideoLibrary.GetMovieDetails.
+type VideoLibraryGetMovieDetailsParams struct {
+	Properties []string `json:"properties,omitempty"`
+	MovieID    int      `json:"movieid"`
+}
+
+// VideoLibraryGetMovieDetailsResponse represents the response from
+// VideoLibrary.GetMovieDetails.
+type VideoLibraryGetMovieDetailsResponse struct {
+	Movie Movie `json:"moviedetails"`
+}
+
+// VideoLibraryGetEpisodeDetailsParams represents parameters for
+// VideoLibrary.GetEpisodeDetails.
+type VideoLibraryGetEpisodeDetailsParams struct {
+	Properties []string `json:"properties,omitempty"`
+	EpisodeID  int      `json:"episodeid"`
+}
+
+// VideoLibraryGetEpisodeDetailsResponse represents the response from
+// VideoLibrary.GetEpisodeDetails.
+type VideoLibraryGetEpisodeDetailsResponse struct {
+	Episode Episode `json:"episodedetails"`
 }
 
 // APIResponse represents a Kodi JSON-RPC response

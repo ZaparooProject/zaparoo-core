@@ -669,6 +669,40 @@ func TestClient_GetEpisodes_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, 1, int(tvshowid))
 }
 
+func TestClient_GetEpisodes_SortsBySeasonAndEpisode(t *testing.T) {
+	t.Parallel()
+
+	episode := func(id, season, number int) map[string]any {
+		return map[string]any{"episodeid": id, "tvshowid": 1, "season": season, "episode": number}
+	}
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result": map[string]any{
+				"episodes": []any{
+					episode(10, 1, 1),
+					episode(30, 2, 1),
+					episode(12, 1, 3),
+					episode(11, 1, 2),
+				},
+			},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	episodes, err := client.GetEpisodes(context.Background(), 1)
+	require.NoError(t, err)
+	ids := make([]int, 0, len(episodes))
+	for _, e := range episodes {
+		ids = append(ids, e.ID)
+	}
+	assert.Equal(t, []int{10, 11, 12, 30}, ids)
+}
+
 func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 	t.Parallel()
 

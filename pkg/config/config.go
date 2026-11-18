@@ -557,6 +557,12 @@ func (c *Instance) reloadAuth() {
 // given domain. Creates the file with 0600 permissions if it doesn't exist.
 // Preserves existing entries and reloads the in-memory auth config.
 func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
+	return c.SaveAuthEntries(map[string]CredentialEntry{domain: entry})
+}
+
+// SaveAuthEntries writes or updates several credential entries in one
+// auth.toml write, so either all of them change or none do.
+func (c *Instance) SaveAuthEntries(entries map[string]CredentialEntry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -581,8 +587,9 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 		return fmt.Errorf("failed to read auth file: %w", readErr)
 	}
 
-	// Upsert the entry
-	existing[domain] = entry
+	for domain, entry := range entries {
+		existing[domain] = entry
+	}
 
 	// Build the output: API keys first, then credential entries
 	data, err := marshalAuthFile(existing, existingKeys)

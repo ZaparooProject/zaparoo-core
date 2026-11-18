@@ -120,6 +120,24 @@ func (m *MockKodiClient) GetMovies(ctx context.Context) ([]kodi.Movie, error) {
 	return nil, nil
 }
 
+func (m *MockKodiClient) GetMovieDetails(ctx context.Context, movieID int) (*kodi.Movie, error) {
+	args := m.Called(ctx, movieID)
+	var movie *kodi.Movie
+	if v, ok := args.Get(0).(*kodi.Movie); ok {
+		movie = v
+	}
+	return movie, args.Error(1) //nolint:wrapcheck // test mock
+}
+
+func (m *MockKodiClient) GetEpisodeDetails(ctx context.Context, episodeID int) (*kodi.Episode, error) {
+	args := m.Called(ctx, episodeID)
+	var episode *kodi.Episode
+	if v, ok := args.Get(0).(*kodi.Episode); ok {
+		episode = v
+	}
+	return episode, args.Error(1) //nolint:wrapcheck // test mock
+}
+
 func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]kodi.TVShow, error) {
 	args := m.Called(ctx)
 	if shows, ok := args.Get(0).([]kodi.TVShow); ok {

@@ -21,6 +21,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -147,6 +148,9 @@ func BuildSettingsMainMenuWithService(
 		}).
 		AddNavAction("Online", "Zaparoo Online account and cloud features", func() {
 			buildOnlineSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
+		}).
+		AddNavAction("Media servers", "Link Plex, Jellyfin and RomM servers", func() {
+			buildMediaServersMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
 		})
 
 	right.AddHeader("System").
@@ -770,44 +774,102 @@ func backupProgressText(message string, started time.Time) string {
 
 const authLinkModalPage = "authLinkModal"
 
+// authLinkRequest describes one link flow: which service, the server it
+// lives on, and what to show once it is approved.
+type authLinkRequest struct {
+	onApproved func(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func())
+	message    func(link *models.AuthLinkStatusResponse) string
+	provider   string
+	serverURL  string
+	title      string
+}
+
 // startAuthLinkFlow runs the reverse device link flow: display the user code
 // and verification URL, then wait for the link to be approved online. onDone
 // rebuilds the caller's menu when the flow ends, whatever the outcome.
 func startAuthLinkFlow(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func()) {
-	ctx, cancel := tuiContext()
-	defer cancel()
-	link, err := svc.StartAuthLink(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("error starting device link")
-		ShowErrorModal(pages, app, "Failed to start device linking", onDone)
-		return
-	}
+	runAuthLinkFlow(svc, pages, app, &authLinkRequest{
+		title:      "Link with Zaparoo Online",
+		onApproved: showLinkedDialog,
+	}, onDone)
+}
 
+func runAuthLinkFlow(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	req *authLinkRequest,
+	onDone func(),
+) {
 	done := make(chan struct{})
 	closeModal := func() {
 		pages.HidePage(authLinkModalPage)
 		pages.RemovePage(authLinkModalPage)
 	}
 
+	// The link starts off the UI goroutine, since the server may be slow to
+	// answer. These are only touched on the UI goroutine.
+	var started, dismissed bool
 	dialog := NewDialog().
-		SetText(authLinkMessage(link.VerificationURL, link.UserCode)).
+		SetText("Starting link...").
 		SetTextAlign(tview.AlignLeft).
-		SetTitle("Link with Zaparoo Online").
-		AddButtons([]string{"Cancel"}).
-		SetDoneFunc(func(_ int) {
+		SetTitle(req.title).
+		AddButtons([]string{"Cancel"})
+	dialog.SetDoneFunc(func(_ int) {
+		if dismissed {
+			return
+		}
+		dismissed = true
+		closeModal()
+		if started {
 			close(done)
-			cancelCtx, cancelCancel := tuiContext()
-			defer cancelCancel()
-			if cancelErr := svc.CancelAuthLink(cancelCtx); cancelErr != nil {
-				log.Warn().Err(cancelErr).Msg("error cancelling device link")
-			}
-			closeModal()
-			onDone()
-		})
+			cancelAuthLink(svc)
+		}
+		onDone()
+	})
 	pages.AddPage(authLinkModalPage, dialog, true, true)
 	app.SetFocus(dialog)
 
-	go pollAuthLinkStatus(svc, pages, app, done, closeModal, onDone)
+	go func() {
+		ctx, cancel := tuiContext()
+		link, err := svc.StartAuthLink(ctx, req.provider, req.serverURL)
+		cancel()
+		app.QueueUpdateDraw(func() {
+			if dismissed {
+				// Cancelled while starting: stop the link this call began.
+				if err == nil {
+					go cancelAuthLink(svc)
+				}
+				return
+			}
+			if err != nil {
+				dismissed = true
+				closeModal()
+				log.Warn().Err(err).Str("provider", req.provider).Msg("error starting device link")
+				message := "Failed to start device linking"
+				if rpcErr, ok := errors.AsType[*client.RPCError](err); ok && req.provider != "" {
+					message = "Failed to start linking: " + rpcErr.Message
+				}
+				ShowErrorModal(pages, app, message, onDone)
+				return
+			}
+			started = true
+			text := authLinkMessage(link.VerificationURL, link.UserCode)
+			if req.message != nil {
+				text = req.message(link)
+			}
+			dialog.SetText(text)
+			go pollAuthLinkStatus(svc, pages, app, done, closeModal, req.onApproved, onDone)
+		})
+	}()
+}
+
+func cancelAuthLink(svc SettingsService) {
+	ctx, cancel := tuiContext()
+	defer cancel()
+	if err := svc.CancelAuthLink(ctx); err != nil {
+		log.Warn().Err(err).Msg("error cancelling device link")
+	}
 }
 
 // authLinkMessage lays out the link instructions so the two things the user
@@ -833,6 +895,7 @@ func pollAuthLinkStatus(
 	app *tview.Application,
 	done <-chan struct{},
 	closeModal func(),
+	onApproved func(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func()),
 	onDone func(),
 ) {
 	ticker := time.NewTicker(2 * time.Second)
@@ -858,7 +921,7 @@ func pollAuthLinkStatus(
 		case models.AuthLinkStatusApproved:
 			app.QueueUpdateDraw(func() {
 				closeModal()
-				showLinkedDialog(svc, pages, app, onDone)
+				onApproved(svc, pages, app, onDone)
 			})
 			return
 		default:

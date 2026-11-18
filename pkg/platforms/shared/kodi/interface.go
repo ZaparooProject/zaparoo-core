@@ -70,6 +70,12 @@ type KodiClient interface {
 	// GetMovies retrieves all movies from Kodi's library
 	GetMovies(ctx context.Context) ([]Movie, error)
 
+	// GetMovieDetails retrieves one movie by ID, or nil when Kodi has none
+	GetMovieDetails(ctx context.Context, movieID int) (*Movie, error)
+
+	// GetEpisodeDetails retrieves one episode by ID, or nil when Kodi has none
+	GetEpisodeDetails(ctx context.Context, episodeID int) (*Episode, error)
+
 	// GetTVShows retrieves all TV shows from Kodi's library
 	GetTVShows(ctx context.Context) ([]TVShow, error)
 

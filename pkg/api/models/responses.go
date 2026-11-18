@@ -1283,8 +1283,10 @@ type SettingsAuthUnlinkResponse struct {
 
 // Auth link providers (settings.auth.link).
 const (
-	AuthLinkProviderZaparoo = "zaparoo"
-	AuthLinkProviderRomM    = "romm"
+	AuthLinkProviderZaparoo  = "zaparoo"
+	AuthLinkProviderRomM     = "romm"
+	AuthLinkProviderPlex     = "plex"
+	AuthLinkProviderJellyfin = "jellyfin"
 )
 
 // Auth link session statuses (settings.auth.link).
@@ -1307,7 +1309,8 @@ type AuthLinkStatusResponse struct {
 	VerificationURL         string     `json:"verificationUrl,omitempty"`
 	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
 	Error                   string     `json:"error,omitempty"`
-	// Provider is the service the flow links to: zaparoo or romm.
+	// Provider is the service the flow links to: zaparoo, romm, plex or
+	// jellyfin.
 	Provider string `json:"provider,omitempty"`
 }
 

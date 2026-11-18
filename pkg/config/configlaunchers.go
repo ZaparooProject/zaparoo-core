@@ -67,6 +67,9 @@ type LaunchersDefault struct {
 	InstallDir       string `toml:"install_dir,omitempty"`
 	ServerURL        string `toml:"server_url,omitempty"`
 	RenderResolution string `toml:"render_resolution,omitempty"`
+	// Client names the player a media server launcher plays on, matched
+	// against the player names the server reports (Jellyfin and Plex).
+	Client string `toml:"client,omitempty"`
 	// Action specifies the default launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
@@ -269,6 +272,9 @@ func mergeLauncherDefault(dst, entry *LaunchersDefault) {
 	}
 	if entry.ServerURL != "" {
 		dst.ServerURL = entry.ServerURL
+	}
+	if entry.Client != "" {
+		dst.Client = entry.Client
 	}
 	if entry.Action != "" {
 		dst.Action = entry.Action

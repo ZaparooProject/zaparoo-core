@@ -272,7 +272,7 @@ func TestDefaultSettingsService_AuthLinkAPIContracts(t *testing.T) {
 		Return(`{}`, nil).Once()
 
 	svc := NewSettingsService(mockClient)
-	started, err := svc.StartAuthLink(ctx)
+	started, err := svc.StartAuthLink(ctx, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, models.AuthLinkStatusPending, started.Status)
 	assert.Equal(t, "ABCD-EFGH", started.UserCode)
@@ -282,6 +282,22 @@ func TestDefaultSettingsService_AuthLinkAPIContracts(t *testing.T) {
 	assert.Equal(t, models.AuthLinkStatusApproved, status.Status)
 	require.NoError(t, svc.CancelAuthLink(ctx))
 	require.NoError(t, svc.Unlink(ctx))
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_StartAuthLinkSendsProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsAuthLink,
+		`{"url":"http://jf.lan:8096","provider":"jellyfin"}`).
+		Return(`{"status":"pending","userCode":"123456","provider":"jellyfin"}`, nil).Once()
+
+	svc := NewSettingsService(mockClient)
+	started, err := svc.StartAuthLink(ctx, models.AuthLinkProviderJellyfin, "http://jf.lan:8096")
+	require.NoError(t, err)
+	assert.Equal(t, "123456", started.UserCode)
+	assert.Equal(t, models.AuthLinkProviderJellyfin, started.Provider)
 	mockClient.AssertExpectations(t)
 }
 

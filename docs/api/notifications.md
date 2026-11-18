@@ -851,7 +851,7 @@ Sent on every state transition of a device link flow started with `settings.auth
 | Key       | Type   | Required | Description                                                     |
 | :-------- | :----- | :------- | :-------------------------------------------------------------- |
 | status    | string | Yes      | One of `pending`, `approved`, `failed`, or `cancelled`.         |
-| provider  | string | No       | `zaparoo` or `romm`: what the flow links to.                    |
+| provider  | string | No       | `zaparoo`, `romm`, `plex` or `jellyfin`: what the flow links to. |
 | expiresAt | string | No       | RFC 3339 time when the link request expires.                    |
 | error     | string | No       | Human-readable reason when `status` is `failed`.                |
 
