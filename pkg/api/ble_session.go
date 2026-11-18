@@ -292,6 +292,10 @@ func (s *bleSession) handleChunk(h apigatt.Header, payload []byte, mtu int) bleC
 	}
 	msgs, err := s.reasm.Push(h, payload)
 	s.watchGapLocked()
+	// The idle timer restarts before the messages are queued: a handler can
+	// answer one before this goroutine runs again, and the client may then
+	// stay quiet for a full timeout counted from that answer.
+	s.resetIdleLocked()
 	queued := true
 	// Queued under the lock so messages are handled in the order the
 	// reassembler released them.
@@ -312,7 +316,6 @@ func (s *bleSession) handleChunk(h apigatt.Header, payload []byte, mtu int) bleC
 		s.shutdown("inbound queue overflow")
 		return bleChunkHandled
 	}
-	s.touchIdle()
 	return bleChunkHandled
 }
 
@@ -368,16 +371,21 @@ func (s *bleSession) reader() {
 // touchIdle restarts the idle timer for the session's current state.
 func (s *bleSession) touchIdle() {
 	s.mu.Lock()
+	s.resetIdleLocked()
+	s.mu.Unlock()
+}
+
+// resetIdleLocked restarts the idle timer for the session's current state.
+// The caller holds s.mu.
+func (s *bleSession) resetIdleLocked() {
+	if s.closed || s.idleTimer == nil {
+		return
+	}
 	timeout := blePendingIdleTimeout
 	if s.state == bleAuthEncrypted {
 		timeout = bleAuthenticatedIdleTimeout
 	}
-	timer := s.idleTimer
-	closed := s.closed
-	s.mu.Unlock()
-	if !closed && timer != nil {
-		timer.Reset(timeout)
-	}
+	s.idleTimer.Reset(timeout)
 }
 
 // handleMessage dispatches one reassembled message the same way
