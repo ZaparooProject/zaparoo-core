@@ -688,6 +688,7 @@ func startServiceWithOptions(
 			System: systemID, Path: path, Tags: data.UserTags(),
 		})
 	}
+	db.UserImages = methods.NewUserImages(pl)
 	mediaUserReconcile := newMediaUserReconciler(db)
 	db.MediaUserData = mediaUserReconcile
 

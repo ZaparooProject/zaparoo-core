@@ -238,6 +238,10 @@ func TestScanSkip_ScannerOwnedTablesHaveKnownWriters(t *testing.T) {
 		filepath.Join("database", "mediadb", "sql_parent_dir_repair.go"),
 		// The reconcile itself.
 		filepath.Join("database", "mediadb", "sql_scan_reconcile.go"),
+		// User-edited names: every index re-applies them after the scan, and
+		// a reset puts back the name the scanner wrote, so a skipped system
+		// ends up as a reconciled one would.
+		filepath.Join("database", "mediadb", "sql_user_fields.go"),
 		// Version group and count recompute write columns derived from the
 		// version keys and the present media; the reconcile never sets them.
 		filepath.Join("database", "mediadb", "sql_version_counts.go"),

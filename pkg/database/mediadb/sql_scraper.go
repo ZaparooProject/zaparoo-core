@@ -2519,6 +2519,10 @@ func containsImageProperty(props []database.MediaProperty) bool {
 // resolvePropertyTypeTag looks up the DBID of the Tags row for the given full
 // tag string (e.g. "property:description"). The tag must already exist in the DB
 // (seeded by SeedCanonicalTags). Returns an error if not found.
+// errPropertyTypeTagNotFound reports a property type tag the Tags table does
+// not hold.
+var errPropertyTypeTagNotFound = errors.New("property type tag not found")
+
 func resolvePropertyTypeTag(ctx context.Context, db sqlQueryable, typeTag string) (int64, error) {
 	// typeTag format: "type:value" — split on first colon.
 	idx := strings.Index(typeTag, ":")
@@ -2538,7 +2542,10 @@ func resolvePropertyTypeTag(ctx context.Context, db sqlQueryable, typeTag string
 		LIMIT 1
 	`, tagType, tagValue, unpadded).Scan(&tagDBID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("property type tag %q not found in Tags table (run SeedCanonicalTags first)", typeTag)
+		return 0, fmt.Errorf(
+			"property type tag %q not found in Tags table (run SeedCanonicalTags first): %w",
+			typeTag, errPropertyTypeTagNotFound,
+		)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve property type tag %q: %w", typeTag, err)

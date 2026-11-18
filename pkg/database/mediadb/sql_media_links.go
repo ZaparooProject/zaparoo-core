@@ -59,6 +59,7 @@ var linkedMediaCopiesProperty = map[tags.TagValue]bool{
 	tags.TagPropertyMAMESetName:          true,
 	tags.TagPropertyGameID:               false,
 	tags.TagPropertyLauncherOverride:     false,
+	tags.TagPropertyUserFields:           false,
 }
 
 // linkedOwnPropertyFilter is a predicate on a TypeTagDBID column that is true

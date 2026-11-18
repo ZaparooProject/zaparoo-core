@@ -1319,6 +1319,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyGameID,
 		TagPropertyLauncherOverride,
 		TagPropertyMAMESetName,
+		TagPropertyUserFields,
 	},
 
 	// Types with a format rule and no list. Listed so seeding creates them.

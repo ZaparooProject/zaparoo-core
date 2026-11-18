@@ -600,8 +600,11 @@ type MediaMetaTitleResponse struct {
 	Name                string                           `json:"name"`
 	Tags                []database.TagInfo               `json:"tags"`
 	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
-	SlugLength          int                              `json:"slugLength"`
-	SlugWordCount       int                              `json:"slugWordCount"`
+	// UserEdited lists the title's fields that hold a value the user set by
+	// hand: "name", "description" and "tags.<type>".
+	UserEdited    []string `json:"userEdited,omitempty"`
+	SlugLength    int      `json:"slugLength"`
+	SlugWordCount int      `json:"slugWordCount"`
 }
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
@@ -614,12 +617,15 @@ type MediaMetaMediaResponse struct {
 	Path    string  `json:"path"`
 	// ZapScript is the title command that launches this media. Omitted for
 	// a missing media row.
-	ZapScript           string                 `json:"zapScript,omitempty"`
-	ParentDir           string                 `json:"parentDir"`
-	Tags                []database.TagInfo     `json:"tags"`
-	AvailableImageTypes []string               `json:"availableImageTypes,omitempty"`
-	Title               MediaMetaTitleResponse `json:"title"`
-	IsMissing           bool                   `json:"isMissing"`
+	ZapScript           string             `json:"zapScript,omitempty"`
+	ParentDir           string             `json:"parentDir"`
+	Tags                []database.TagInfo `json:"tags"`
+	AvailableImageTypes []string           `json:"availableImageTypes,omitempty"`
+	// UserEdited lists the file's images the user set by hand, as
+	// "images.<kind>".
+	UserEdited []string               `json:"userEdited,omitempty"`
+	Title      MediaMetaTitleResponse `json:"title"`
+	IsMissing  bool                   `json:"isMissing"`
 }
 
 // MediaMetaResponse is the response envelope for the media.meta method.
@@ -634,6 +640,18 @@ type MediaMetaBatchItemResponse struct {
 
 type MediaMetaBatchResponse struct {
 	Items []MediaMetaBatchItemResponse `json:"items"`
+}
+
+// UploadResponse describes an upload session.
+type UploadResponse struct {
+	UploadID string `json:"uploadId"`
+	Purpose  string `json:"purpose"`
+	Size     int64  `json:"size"`
+	// Received is how many bytes the session holds: the offset of the next
+	// chunk.
+	Received  int64 `json:"received"`
+	ChunkSize int   `json:"chunkSize"`
+	Finished  bool  `json:"finished"`
 }
 
 // MediaAssetResponse is one bounded chunk from an indexed media asset.

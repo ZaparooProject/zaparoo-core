@@ -30,6 +30,7 @@ media.generate media.generate.cancel media.generate.resume media.index
 media.search media.versions media.similar media.recommended media.tags media.tags.update media.meta.update media.active
 media.history media.history.latest media.history.top media.lookup media.lookup.candidates
 media.meta media.image media.asset media.artwork.random
+uploads.begin uploads.chunk uploads.status uploads.finish uploads.cancel
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
 media.browse media.browse.index media.control media.active.update media.clean.orphans
 media.active.image playlists.update

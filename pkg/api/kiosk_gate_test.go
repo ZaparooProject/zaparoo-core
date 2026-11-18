@@ -53,7 +53,11 @@ var kioskDeniedMethods = map[string]bool{
 	models.MethodMediaScrape: true, models.MethodMediaScrapeCancel: true,
 	models.MethodMediaScrapeResume: true, models.MethodMediaActiveUpdate: true,
 	models.MethodMediaCleanOrphans: true,
-	models.MethodSettingsUpdate:    true, models.MethodSettingsZapScriptHold: true,
+	// Uploads only feed media.meta.update.
+	models.MethodUploadsBegin: true, models.MethodUploadsChunk: true,
+	models.MethodUploadsStatus: true, models.MethodUploadsFinish: true,
+	models.MethodUploadsCancel:  true,
+	models.MethodSettingsUpdate: true, models.MethodSettingsZapScriptHold: true,
 	models.MethodSettingsReload: true, models.MethodSettingsLogsDownload: true,
 	models.MethodSettingsBackup: true, models.MethodSettingsBackupList: true,
 	models.MethodSettingsBackupInspect: true, models.MethodSettingsBackupDelete: true,
