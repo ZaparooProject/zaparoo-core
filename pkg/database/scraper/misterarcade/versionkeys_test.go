@@ -114,7 +114,8 @@ func TestVersionKeys(t *testing.T) {
 		}
 		assert.Equal(t, []database.VersionKey{
 			key(database.VersionKeyMAMESet, "shollow"),
-		}, versionKeys(row, mra.Identity{SetName: "shollow"}))
+		}, versionKeys(row, mra.Identity{SetName: "shollow", Parent: "tron"}),
+			"nor under the parent set it shares with the folder's game")
 	})
 
 	t.Run("a parent that repeats the set is written once", func(t *testing.T) {

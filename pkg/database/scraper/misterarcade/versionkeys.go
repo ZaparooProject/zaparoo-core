@@ -63,7 +63,8 @@ func alternativesFolder(path string) (folder string, ok bool) {
 // The catalog's parent title names a series, which would make Street Fighter
 // II and its Champion Edition one game. And an alternate that is another
 // game's, such as Satan's Hollow on Tron hardware filed under Tron, belongs
-// to that game and not to the folder.
+// to that game and not to the folder, through neither its folder nor the
+// parent set it shares with the folder's game.
 func versionKeys(row *descriptorRow, identity mra.Identity) []database.VersionKey {
 	var keys []database.VersionKey
 	add := func(keyType, key string) {
@@ -82,12 +83,16 @@ func versionKeys(row *descriptorRow, identity mra.Identity) []database.VersionKe
 		add(database.VersionKeyAltFolder, row.titleSlug)
 		return keys
 	}
+	// Another game's alternate meets its own game through the title it
+	// shares with that game's main. Its parent set names the folder's
+	// hardware, as a main's does, so it is left out too.
+	if row.otherGame {
+		return keys
+	}
 	if identity.Parent != identity.SetName {
 		addSet(identity.Parent)
 	}
-	if !row.otherGame {
-		add(database.VersionKeyAltFolder, slugs.Slugify(slugs.MediaTypeGame, folder))
-	}
+	add(database.VersionKeyAltFolder, slugs.Slugify(slugs.MediaTypeGame, folder))
 	return keys
 }
 

@@ -169,13 +169,19 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 			fresh[files[i].Path] = cached[files[i].Path]
 		} else {
 			parsed++
+			// The file is stated on both sides of the read: one replaced
+			// in between would pin the old identity to the new metadata,
+			// and answer from the cache until it changed again.
+			before, beforeErr := os.Stat(files[i].Path)
 			var parseOK bool
 			var parent string
 			setName, parent, parseOK = c.parseSetName(files[i].Path)
 			if !parseOK {
 				parseFailures++
 			}
-			if entry, statOK := statCacheEntry(files[i].Path, setName, parent); statOK {
+			entry, statOK := statCacheEntry(files[i].Path, setName, parent)
+			if statOK && beforeErr == nil && before.Size() == entry.Size &&
+				before.ModTime().UnixNano() == entry.MtimeNs {
 				fresh[files[i].Path] = entry
 			}
 		}
@@ -251,7 +257,12 @@ func (c *arcadeSystemCache) parseSetName(path string) (setName, parent string, o
 		log.Debug().Err(err).Str("path", path).Msg("unable to classify arcade MRA")
 		return "", "", false
 	}
-	return mra.SetName, mra.Parent, true
+	// A repeated parent is ambiguous and reads as none, as it does for the
+	// scraper's own identity reader, so a cached answer matches a fresh one.
+	if len(mra.Parents) == 1 {
+		parent = mra.Parents[0]
+	}
+	return mra.SetName, parent, true
 }
 
 // statCacheEntry builds a cache entry pinning setName and parent to the file's
