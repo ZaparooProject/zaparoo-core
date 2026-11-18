@@ -214,7 +214,7 @@ func TestFolderPlaylistItems_SkipsAudioPlaylistFiles(t *testing.T) {
 
 func TestReadPlaylistFolder_SkipsAudioPlaylistFiles(t *testing.T) {
 	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
-		{ID: "audio", SystemID: "Audio", Extensions: []string{".mp3", ".pls", ".m3u"}},
+		{ID: platforms.NativeAudioLauncherID, SystemID: "Audio", Extensions: []string{".mp3", ".pls", ".m3u"}},
 	})
 	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(nil) })
 

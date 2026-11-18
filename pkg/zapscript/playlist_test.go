@@ -223,7 +223,7 @@ TitleB=Song 1`,
 			err := os.WriteFile(plsFile, []byte(tt.plsContent), 0o600)
 			require.NoError(t, err)
 
-			media, err := readPlsFile(plsFile)
+			media, err := readPlaylistFile(nil, nil, plsFile)
 			if tt.expectedErrMsg != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectedErrMsg)

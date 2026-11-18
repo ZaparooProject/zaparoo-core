@@ -1158,6 +1158,9 @@ func TestScanBehavior_Hold_DiscControlCardPreservesMedia(t *testing.T) {
 			controlled := make(chan struct{}, 1)
 			helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{{
 				ID: "disc-test",
+				// A disc system takes its .m3u disc sets, so the scan launches
+				// the game rather than reading the file as a playlist.
+				Extensions: []string{".m3u"},
 				Controls: map[string]platforms.Control{action: {
 					Func: func(context.Context, *config.Instance, platforms.ControlParams) error {
 						controlled <- struct{}{}
