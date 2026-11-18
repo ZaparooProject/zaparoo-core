@@ -172,6 +172,20 @@ func (f *syncFixture) heldOrdinals() []uint32 {
 	return held
 }
 
+// TestSyncInventory_ResolveRetriedAfterEdgeError pins that a resolve, a
+// lookup that changes nothing, is sent again after a CDN error instead of
+// failing the sync.
+func TestSyncInventory_ResolveRetriedAfterEdgeError(t *testing.T) {
+	f := newSyncFixture(t, nesPath("Metroid (USA).nes"))
+	f.online.failWithBadGateway(postResolve, 1)
+
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 1, result.Resolved)
+	assert.Equal(t, 2, f.online.count(postResolve))
+}
+
 func TestSyncInventory_FirstSyncUploadsEveryGame(t *testing.T) {
 	f := newSyncFixture(t,
 		nesPath("Metroid (USA).nes"),

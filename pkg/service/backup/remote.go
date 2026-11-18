@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -782,7 +783,9 @@ func locateRemotePacks(
 		req := remoteLocateRequest{Hashes: hashes[start:end]}
 		if err := client.retryRateLimited(ctx, func() error {
 			resp = remoteLocateResponse{}
-			return client.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/locate", &req, &resp)
+			return client.doJSON(
+				httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/backup-objects/locate", &req, &resp,
+			)
 		}); err != nil {
 			return nil, err
 		}
@@ -1218,7 +1221,7 @@ func (m *Manager) newAuthenticatedRemoteClient(
 		// Timeouts are applied per request (scaled to transfer size for
 		// uploads/downloads), not on the client, so a large pack on a slow
 		// uplink is not killed at the base timeout.
-		httpClient:     &http.Client{Transport: useragent.Transport(nil)},
+		httpClient:     &http.Client{Transport: useragent.Transport(httpretry.Transport(nil))},
 		onUnauthorized: unauthorizedCallback,
 		baseURL:        baseURL,
 		bearer:         bearer,
@@ -1747,7 +1750,7 @@ func (c *remoteClient) heartbeat(ctx context.Context, capabilities map[string]an
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,
 	}
-	return c.doJSON(ctx, http.MethodPost, "/v1/device/heartbeat", body, nil)
+	return c.doJSON(httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/heartbeat", body, nil)
 }
 
 func (c *remoteClient) deviceMe(ctx context.Context) (*remoteDeviceMeResponse, error) {
@@ -1769,7 +1772,7 @@ func (c *remoteClient) checkMissing(ctx context.Context, hashes []string) ([]str
 		req := remoteCheckRequest{Hashes: hashes[start:end]}
 		if err := c.retryRateLimited(ctx, func() error {
 			resp = remoteCheckResponse{}
-			return c.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/check", &req, &resp)
+			return c.doJSON(httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/backup-objects/check", &req, &resp)
 		}); err != nil {
 			return nil, err
 		}

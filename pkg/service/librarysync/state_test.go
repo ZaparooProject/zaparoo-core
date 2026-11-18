@@ -144,6 +144,24 @@ func TestSyncState_LocalFavoritePushes(t *testing.T) {
 	assert.Equal(t, 1, f.online.count(getState), "every pass pulls first")
 }
 
+// TestSyncState_PushNotRepeatedAfterEdgeError pins that a state push, which
+// the service merges against what it holds, is not sent twice when a CDN
+// error leaves its outcome unknown. The next pass pushes it again.
+func TestSyncState_PushNotRepeatedAfterEdgeError(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
+	f.online.failWithBadGateway(postState, 1)
+
+	_, err := f.svc.SyncState(f.ctx)
+	require.Error(t, err)
+	assert.Equal(t, 1, f.online.count(postState))
+	assert.Nil(t, f.online.stateRow("Game", "NES", "metroid"))
+
+	result := f.syncState(t)
+	assert.Equal(t, 1, result.Pushed)
+	assert.NotNil(t, f.online.stateRow("Game", "NES", "metroid"))
+}
+
 func TestSyncState_UnfavoriteClearsTheAccountRow(t *testing.T) {
 	f := newSyncFixture(t, metroidUSA)
 	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)

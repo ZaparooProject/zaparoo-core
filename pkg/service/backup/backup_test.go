@@ -1277,6 +1277,43 @@ func TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRef
 	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
 }
 
+// TestRemoteClientRetriesOnlyRepeatableRequestsAfterEdgeError pins which
+// requests the client sends again after a 502 from the CDN: a heartbeat says
+// the same thing however often it arrives, a backup commit creates one.
+func TestRemoteClientRetriesOnlyRepeatableRequestsAfterEdgeError(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var heartbeats, commits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			if heartbeats.Add(1) == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			commits.Add(1)
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	client, err := env.Manager.newRemoteClient()
+	require.NoError(t, err)
+
+	require.NoError(t, client.heartbeat(context.Background(), HeartbeatCapabilities(env.Manager.cfg)))
+	assert.Equal(t, int32(2), heartbeats.Load())
+
+	err = client.doJSON(context.Background(), http.MethodPost, "/v1/device/backups", map[string]any{}, nil)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.Status)
+	assert.Equal(t, int32(1), commits.Load())
+}
+
 func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)
