@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -154,4 +155,30 @@ func TestHydrateRecommendedPlan_KioskDropsClosedSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, response.Sections[0].Items[0].Seed)
 	assert.Equal(t, "Gradius", response.Sections[0].Items[0].Seed.Name)
+}
+
+// A locked device samples artwork only from systems its profile can see,
+// never from hidden media, and refuses a request for closed systems only.
+func TestHandleMediaArtworkRandom_KioskScope(t *testing.T) {
+	t.Parallel()
+	f, mediaDB := newSuggestKioskFixture(t)
+	mediaDB.On("SampleArtworkMedia", mock.Anything, mock.MatchedBy(func(q *database.ArtworkSampleQuery) bool {
+		return q.ExcludeHidden && len(q.Systems) > 0 && !slices.Contains(q.Systems, "NES")
+	})).Return([]database.ArtworkSample{}, nil).Once()
+
+	params := models.MediaArtworkRandomParams{ImageTypes: []string{"boxart"}, IncludeHidden: true}
+	_, err := HandleMediaArtworkRandom(withKioskParams(t, f.local(), params))
+	require.NoError(t, err)
+
+	closed := models.MediaArtworkRandomParams{ImageTypes: []string{"boxart"}, Systems: &[]string{"nes"}}
+	_, err = HandleMediaArtworkRandom(withKioskParams(t, f.local(), closed))
+	require.ErrorIs(t, err, ErrKioskLocked)
+
+	// A paired admin is not held to the scope and gets hidden media on request.
+	mediaDB.On("SampleArtworkMedia", mock.Anything, mock.MatchedBy(func(q *database.ArtworkSampleQuery) bool {
+		return !q.ExcludeHidden && len(q.Systems) == 0
+	})).Return([]database.ArtworkSample{}, nil).Once()
+	_, err = HandleMediaArtworkRandom(withKioskParams(t, f.paired("admin"), params))
+	require.NoError(t, err)
+	mediaDB.AssertExpectations(t)
 }

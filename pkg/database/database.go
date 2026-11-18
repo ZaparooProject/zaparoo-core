@@ -1303,6 +1303,33 @@ type MediaQuery struct {
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 }
 
+// ArtworkSampleQuery asks for random media that have indexed artwork. A row
+// qualifies when it matches the embedded MediaQuery filters and holds at least
+// one of ImageTypes on its media row or its title. Indexed artwork metadata
+// counts as available; no file or URL is checked.
+type ArtworkSampleQuery struct {
+	// ImageTypes holds property type tags such as "property:image-boxart".
+	ImageTypes []string
+	// ExcludeDBIDs are Media DBIDs the caller has already seen.
+	ExcludeDBIDs []int64
+	MediaQuery
+	Limit int
+	// ExcludeHidden drops user-hidden media and media in hidden folders.
+	ExcludeHidden bool
+}
+
+// ArtworkSample is one media row picked by SampleArtworkMedia. MediaID is
+// valid only until the next index or rebuild; SystemID and Path survive both.
+type ArtworkSample struct {
+	SystemID string
+	Name     string
+	Path     string
+	// ImageTypes are the requested property type tags this row has on its
+	// media row or its title, in request order.
+	ImageTypes []string
+	MediaID    int64
+}
+
 type SearchCursor struct {
 	SortValue string
 	Sort      string
@@ -1820,6 +1847,7 @@ type MediaDBI interface {
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
+	SampleArtworkMedia(ctx context.Context, query *ArtworkSampleQuery) ([]ArtworkSample, error)
 	GetTotalMediaCount() (int, error)
 	HasAnyMedia() (bool, error)
 	GetMissingMediaCount() (int, error)

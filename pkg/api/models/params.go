@@ -488,6 +488,20 @@ type MediaHistoryTopParams struct {
 	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
+// MediaArtworkRandomParams asks for random media that have indexed artwork.
+// The library filters mean the same as in SearchParams.
+type MediaArtworkRandomParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix  *string   `json:"pathPrefix,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=50"`
+	ImageTypes  []string  `json:"imageTypes" validate:"required,min=1,max=12,dive,min=1"`
+	Tags        []string  `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	ExcludeIDs  []int64   `json:"excludeIds,omitempty" validate:"omitempty,max=500,dive,gt=0"`
+	// IncludeHidden returns user-hidden media and media in hidden folders.
+	IncludeHidden bool `json:"includeHidden,omitempty"`
+}
+
 type MediaMetaParams struct {
 	MediaID *int64 `json:"mediaId,omitempty"`
 	System  string `json:"system" validate:"omitempty,min=1"`

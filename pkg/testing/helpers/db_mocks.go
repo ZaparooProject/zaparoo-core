@@ -3474,6 +3474,20 @@ func (m *MockMediaDBI) RandomGameWithQuery(
 	return database.SearchResult{}, nil
 }
 
+func (m *MockMediaDBI) SampleArtworkMedia(
+	ctx context.Context, query *database.ArtworkSampleQuery,
+) ([]database.ArtworkSample, error) {
+	args := m.Called(ctx, query)
+	var result []database.ArtworkSample
+	if samples, ok := args.Get(0).([]database.ArtworkSample); ok {
+		result = samples
+	}
+	if err := args.Error(1); err != nil {
+		return result, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return result, nil
+}
+
 // ExpectHistoryInsert sets up expectations for history insertion
 func ExpectHistoryInsert(mockDB sqlmock.Sqlmock, entry *database.HistoryEntry) {
 	mockDB.ExpectExec(regexp.QuoteMeta("INSERT INTO history")).

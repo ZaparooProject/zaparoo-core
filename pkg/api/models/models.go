@@ -135,6 +135,7 @@ const (
 	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
+	MethodMediaArtworkRandom          = "media.artwork.random"
 	MethodMediaAsset                  = "media.asset"
 	MethodScrapers                    = "scrapers"
 	MethodMediaScrape                 = "media.scrape"

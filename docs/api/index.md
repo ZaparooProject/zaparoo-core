@@ -350,6 +350,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.lookup.candidates         | Return up to five ranked canonical titles in one system.                              | All clients |
 | media.meta                      | Return metadata for indexed media.                                                    | All clients |
 | media.image                     | Return best matching image for indexed media.                                         | All clients |
+| media.artwork.random            | Return random indexed media that have artwork.                                        | Localhost or any authenticated client |
 | scrapers                        | List available metadata scrapers.                                                     | All clients |
 | media.scrape                    | Start metadata scraping.                                                              | All clients |
 | media.scrape.status             | Return latest metadata scraping status.                                               | All clients |

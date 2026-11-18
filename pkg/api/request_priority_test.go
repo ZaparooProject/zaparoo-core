@@ -149,6 +149,17 @@ func TestMusicMethodsWiringAndLegacyPolicy(t *testing.T) {
 	assert.Nil(t, globalSlotPoolForAPIMethod(models.MethodPlaylistsUpdate))
 }
 
+func TestMediaArtworkRandomWiringAndLegacyPolicy(t *testing.T) {
+	t.Parallel()
+
+	_, ok := NewMethodMap().GetMethod(models.MethodMediaArtworkRandom)
+	assert.True(t, ok)
+	assert.False(t, legacyAllowedMethods[models.MethodMediaArtworkRandom],
+		"media.artwork.random is new, so legacy clients cannot reach it")
+	assert.Equal(t, mediaDBLockRead, mediaDBLockModeForAPIMethod(models.MethodMediaArtworkRandom))
+	assert.Nil(t, globalSlotPoolForAPIMethod(models.MethodMediaArtworkRandom))
+}
+
 func TestMethodFromAPIRequestPayload(t *testing.T) {
 	t.Parallel()
 

@@ -559,6 +559,21 @@ type MediaHistoryTopResponse struct {
 	Entries []MediaHistoryTopEntry `json:"entries"`
 }
 
+// MediaArtworkRandomItem is one media entry with indexed artwork. MediaID is
+// valid until the next media index or rebuild; System.ID and Path survive both.
+type MediaArtworkRandomItem struct {
+	System System `json:"system"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	// ImageTypes are the requested image types this entry has, in request order.
+	ImageTypes []string `json:"imageTypes"`
+	MediaID    int64    `json:"mediaId"`
+}
+
+type MediaArtworkRandomResponse struct {
+	Items []MediaArtworkRandomItem `json:"items"`
+}
+
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
 // Binary payloads are intentionally not included; use media.image to fetch image bytes.
 type MediaMetaPropertyItem struct {
