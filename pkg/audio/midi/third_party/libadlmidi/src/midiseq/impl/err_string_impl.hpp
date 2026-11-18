@@ -27,6 +27,8 @@
 #define BW_MIDISEQ_ERRORSTR_IMPL_HPP
 
 #include <cstdarg>
+#include <cstdio>
+#include <cstring>
 
 #include "../midi_sequencer.hpp"
 
@@ -70,11 +72,35 @@ void BW_MidiSequencer::ErrString::append(const char *str, size_t len)
     err[size] = 0;
 }
 
+/* Zaparoo: the upstream code assigned vsnprintf's result to size, so appendFmt
+ * lost the earlier text's length, and a truncated result (the untruncated
+ * length, or -1 from some Windows C runtimes) pushed size past the buffer.
+ * Advance size by what was actually written and keep it within the buffer. */
+static void bwErrStringAppendV(char *err, size_t &size, const char *fmt, va_list args)
+{
+    if(size >= 1000)
+        return;
+
+    int written = vsnprintf(err + size, 1001 - size, fmt, args);
+    err[1000] = 0;
+
+    if(written < 0)
+        size += std::strlen(err + size);
+    else
+        size += static_cast<size_t>(written);
+
+    if(size > 1000)
+        size = 1000;
+    err[size] = 0;
+}
+
 void BW_MidiSequencer::ErrString::setFmt(const char *fmt, ...)
 {
     va_list args;
+    size = 0;
+    err[0] = 0;
     va_start(args, fmt);
-    size = vsnprintf(err, 1001, fmt, args);
+    bwErrStringAppendV(err, size, fmt, args);
     va_end(args);
 }
 
@@ -82,7 +108,7 @@ void BW_MidiSequencer::ErrString::appendFmt(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    size = vsnprintf(err + size, 1001 - size, fmt, args);
+    bwErrStringAppendV(err, size, fmt, args);
     va_end(args);
 }
 
