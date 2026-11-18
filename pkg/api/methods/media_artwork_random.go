@@ -70,6 +70,13 @@ func HandleMediaArtworkRandom(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	_, kioskCapped := kioskScope(&env)
+
 	var systemIDs []string
 	if params.Systems != nil && len(*params.Systems) > 0 {
 		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
@@ -130,7 +137,7 @@ func HandleMediaArtworkRandom(env requests.RequestEnv) (any, error) {
 		ImageTypes:    typeTags,
 		ExcludeDBIDs:  params.ExcludeIDs,
 		Limit:         limit,
-		ExcludeHidden: !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+		ExcludeHidden: kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden),
 	})
 	if err != nil {
 		if !apidiag.IsContextFailure(env.Context, err) {
