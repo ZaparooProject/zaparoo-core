@@ -1219,3 +1219,31 @@ scan_duplicates = false
 	require.NotNil(t, snes.ScanDuplicates, "a saved false must reload as set, not unset")
 	assert.False(t, snes.ScanDuplicatesEnabled())
 }
+
+func TestSetLauncherServerURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("adds an entry", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{vals: Values{Launchers: Launchers{Default: []LaunchersDefault{
+			{Launcher: "Kodi", ServerURL: "http://kodi"},
+		}}}}
+		cfg.SetLauncherServerURL("RomM", "http://romm.local")
+		assert.Equal(t, "http://romm.local", cfg.LookupLauncherDefaults("RomM", nil).ServerURL)
+		assert.Equal(t, "http://kodi", cfg.LookupLauncherDefaults("Kodi", nil).ServerURL)
+		assert.Len(t, cfg.vals.Launchers.Default, 2)
+	})
+
+	t.Run("updates exact entries and keeps their other settings", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Instance{vals: Values{Launchers: Launchers{Default: []LaunchersDefault{
+			{Launcher: "romm", ServerURL: "http://old", Action: "details"},
+			{Launcher: "RomM", ServerURL: "http://older"},
+		}}}}
+		cfg.SetLauncherServerURL("RomM", "http://new")
+		got := cfg.LookupLauncherDefaults("RomM", nil)
+		assert.Equal(t, "http://new", got.ServerURL)
+		assert.Equal(t, "details", got.Action)
+		assert.Len(t, cfg.vals.Launchers.Default, 2)
+	})
+}

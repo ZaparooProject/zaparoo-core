@@ -125,6 +125,13 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 	}
+	switch params.Provider {
+	case "", models.AuthLinkProviderZaparoo:
+	case models.AuthLinkProviderRomM:
+		return startRomMAuthLink(&env, params.URL)
+	default:
+		return nil, models.ClientErrf("unknown link provider %q", params.Provider)
+	}
 	// Linking targets the configured online service unless the caller names
 	// another server explicitly.
 	baseURL := params.URL
@@ -156,6 +163,7 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 
 	status := models.AuthLinkStatusResponse{
 		Status:                  models.AuthLinkStatusPending,
+		Provider:                models.AuthLinkProviderZaparoo,
 		UserCode:                created.UserCode,
 		VerificationURL:         created.VerificationURL,
 		VerificationURLComplete: created.VerificationURLComplete,

@@ -4184,15 +4184,18 @@ None.
 
 Start a reverse device link flow (device-authorization style): Core requests a link from the auth server, returns a user code and verification URLs to display, then polls in the background until the user approves the link in their account. On approval the resulting claim token is redeemed through the same pipeline as `settings.auth.claim` and the credential is stored in `auth.toml`.
 
+With `provider` set to `romm`, Core instead links to a RomM server (5.0 or later) using RomM's device flow: the user approves the device in RomM's web interface, then the token is stored in `auth.toml` for the server URL and the server becomes the RomM launcher's `server_url`. A RomM link changes where Core gets games from and makes Core contact the server named in `url`, so it requires a local or admin client.
+
 This method is deliberately available before client authentication. Remote HTTP POST still requires an address allowed by `allowed_ips`. Only one link flow can be pending at a time; starting another while one is pending returns an error. Progress is pushed via the [`auth.link.status`](./notifications.md#authlinkstatus) notification (with user code and verification URLs omitted) and can be polled with `settings.auth.link.status`.
 
 #### Parameters
 
 An object (optional):
 
-| Key | Type   | Required | Description                                                                                          |
-| :-- | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
-| url | string | No       | Auth server base URL. Defaults to the configured online base URL, which is the official Zaparoo API unless changed. HTTP is allowed only for loopback, private, or link-local development endpoints. |
+| Key      | Type   | Required | Description                                                                                          |
+| :------- | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
+| url      | string | No       | Auth server base URL. Defaults to the configured online base URL, which is the official Zaparoo API unless changed. For `zaparoo`, HTTP is allowed only for loopback, private, or link-local development endpoints. Required for `romm`, where it is the RomM server URL and may use HTTP or HTTPS; an address without a scheme is taken as HTTP. |
+| provider | string | No       | `zaparoo` (default) to link a Zaparoo Online account, or `romm` to link a RomM server.                 |
 
 #### Result
 
@@ -4201,6 +4204,7 @@ A link status object:
 | Key                     | Type   | Required | Description                                                       |
 | :---------------------- | :----- | :------- | :---------------------------------------------------------------- |
 | status                  | string | Yes      | One of `none`, `pending`, `approved`, `failed`, or `cancelled`.   |
+| provider                | string | No       | `zaparoo` or `romm`: what the flow links to.                      |
 | userCode                | string | No       | Short code the user enters at the verification URL.               |
 | verificationUrl         | string | No       | URL where the user approves the link.                             |
 | verificationUrlComplete | string | No       | Verification URL with the user code included, for QR display.     |

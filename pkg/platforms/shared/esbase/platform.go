@@ -20,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -872,10 +873,108 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 // esAPILaunch launches path through EmulationStation's API, which returns no
 // process handle.
 func (p *Platform) esAPILaunch(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-	if err := p.api().Launch(p.esPath(path)); err != nil {
+	esPath := p.esPath(path)
+	ctx := context.Background()
+	if p.launcherManager != nil {
+		ctx = p.launcherManager.GetContext()
+	}
+	p.awaitESGame(ctx, esPath)
+	// A stop while waiting for ES to list the game cancels the launch; a
+	// lookup or reload failure still launches.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("stopped before launch: %w", err)
+	}
+	if err := p.api().Launch(esPath); err != nil {
 		return nil, fmt.Errorf("failed to launch via API: %w", err)
 	}
 	return nil, nil //nolint:nilnil // API launches don't return a process handle
+}
+
+// esReloadWait bounds how long a launch waits for EmulationStation to list a
+// game after asking it to reload its game lists, and esReloadPoll is how
+// often it asks. A reload walks every system's ROM folder.
+const (
+	esReloadWait = 60 * time.Second
+	esReloadPoll = 250 * time.Millisecond
+)
+
+// awaitESGame makes sure EmulationStation lists the game at esPath before it
+// is launched. ES ignores a launch for a file it has not loaded, such as one
+// Core has just downloaded or one copied in since ES started, so such a game
+// has ES reload its game lists first. Any doubt, such as an ES without the
+// routes to ask, leaves the launch to go ahead as before.
+func (p *Platform) awaitESGame(ctx context.Context, esPath string) {
+	system := p.esSystemName(esPath)
+	if system == "" {
+		return
+	}
+	api := p.api()
+	known, err := api.GameKnown(system, esPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", esPath).Msg("could not ask EmulationStation whether it lists the game")
+		return
+	}
+	if known {
+		return
+	}
+	log.Info().Str("path", esPath).Msg("EmulationStation does not list the game yet, reloading its game lists")
+	if reloadErr := api.ReloadGames(); reloadErr != nil {
+		log.Warn().Err(reloadErr).Msg("failed to have EmulationStation reload its game lists")
+		return
+	}
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	deadline := clock.Now().Add(esReloadWait)
+	for clock.Now().Before(deadline) {
+		if p.settle(ctx, esReloadPoll) != nil {
+			return
+		}
+		known, err = api.GameKnown(system, esPath)
+		if err == nil && known {
+			return
+		}
+	}
+	log.Warn().Str("path", esPath).Msg("EmulationStation still does not list the game after reloading")
+}
+
+// esSystemName returns the EmulationStation system whose ROM folder holds
+// esPath, the deepest one when systems nest. Without a system list naming
+// it, such as Batocera's, which Core does not read, the folder under the
+// default ROM root names the system, as ES names its systems by folder. It
+// returns "" for a path outside them all.
+func (p *Platform) esSystemName(esPath string) string {
+	best, bestPath := "", ""
+	var systems map[string]ESSystem
+	if esCfg := p.getESConfig(); esCfg != nil {
+		systems = esCfg.Systems
+	}
+	for key, sys := range systems {
+		sysPath := expandPath(sys.Path, p.opts.DefaultROMRoot)
+		if sysPath == "" || !strings.HasPrefix(esPath, sysPath+string(filepath.Separator)) {
+			continue
+		}
+		name := sys.Name
+		if name == "" {
+			name = key
+		}
+		if len(sysPath) > len(bestPath) || (len(sysPath) == len(bestPath) && name < best) {
+			best, bestPath = name, sysPath
+		}
+	}
+	if best != "" || p.opts.DefaultROMRoot == "" {
+		return best
+	}
+	rel, err := filepath.Rel(p.opts.DefaultROMRoot, esPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	folder, _, nested := strings.Cut(rel, string(filepath.Separator))
+	if !nested {
+		return ""
+	}
+	return folder
 }
 
 // esPath spells path the way EmulationStation knows the game. Its launch API
@@ -1152,12 +1251,14 @@ func (p *Platform) ManagedByPackageManager() bool {
 	return p.opts.ManagedByPackageManager != nil && p.opts.ManagedByPackageManager()
 }
 
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (*Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 }

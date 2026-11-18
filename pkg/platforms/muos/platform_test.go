@@ -84,7 +84,7 @@ func TestTrivialReturns(t *testing.T) {
 	require.NoError(t, p.ScanHook(nil))
 	assert.False(t, p.ManagedByPackageManager())
 	assert.Equal(t, platforms.NoOpConsoleManager{}, p.ConsoleManager())
-	assert.Len(t, p.Scrapers(nil), 4)
+	assert.Len(t, p.Scrapers(nil), 5)
 	p.SetTrackedProcess(nil)
 }
 

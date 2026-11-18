@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
@@ -1087,6 +1088,30 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
+		explicit := explicitLauncher
+		// rommMediaID is the RomM row the game was launched from. The
+		// installed file does not take its identity, but a launcher override
+		// set on it still applies when the file has none of its own.
+		var rommMediaID int64
+		if romm.IsRomPath(target.path) {
+			// A RomM game is fetched into its system's game folder and
+			// launched from there like any local file, with the launcher
+			// chosen for its system rather than the RomM placeholder.
+			localPath, systemID, err := romm.Install(env.LauncherCtx, env.Cfg, pl, env.UI, target.path)
+			if err != nil {
+				return fmt.Errorf("failed to install romm game: %w", err)
+			}
+			rommMediaID = target.mediaID
+			target.path = localPath
+			target.systemID = systemID
+			target.mediaID = 0
+			target.resolveMediaByPath = true
+			target.guideLauncherBySystem = true
+			if !explicit || strings.EqualFold(env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), romm.LauncherID) {
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+				explicit = false
+			}
+		}
 		if isPlaylistFileTarget(pl, env, &target) {
 			return &playlistFileLaunchError{path: target.path}
 		}
@@ -1095,7 +1120,7 @@ func getLaunchClosure(
 			backgroundSlot = true
 		}
 		switch {
-		case explicitLauncher:
+		case explicit:
 		case target.audioStream != nil:
 			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, platforms.NativeAudioLauncherID)
 		case backgroundSlot:
@@ -1116,6 +1141,9 @@ func getLaunchClosure(
 				_, overridden = mediaLauncherOverride(pl, env, target.mediaID, target.systemID, true)
 			} else if target.resolveMediaByPath {
 				_, overridden = mediaLauncherOverrideForPath(pl, env, target.path, true)
+			}
+			if !overridden && rommMediaID != 0 && target.systemID != "" {
+				_, overridden = mediaLauncherOverride(pl, env, rommMediaID, target.systemID, true)
 			}
 			if target.systemID != "" {
 				applySystemDefaultLauncher(pl, env, target.systemID)

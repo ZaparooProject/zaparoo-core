@@ -33,6 +33,8 @@ const (
 	// ImageLibretroDir holds the libretro thumbnail scraper's downloads and
 	// the pictures a user drops in beside them.
 	ImageLibretroDir = "libretro"
+	// ImageRomMDir holds the artwork the RomM scraper downloads.
+	ImageRomMDir = "romm"
 	// ImageThumbsDir holds the generated thumbnail cache. Core owns it and
 	// removes anything in it that is not the live cache version.
 	ImageThumbsDir = "thumbs"

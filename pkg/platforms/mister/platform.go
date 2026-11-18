@@ -25,6 +25,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/misterdocs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -2073,7 +2074,8 @@ func (*Platform) ManagedByPackageManager() bool {
 	return hasTapto || hasAll
 }
 
-func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	docs := misterdocs.NewPlatformScraper(misterdocs.SetNameCache(NewArcadeSetNameCache(p)))
@@ -2082,7 +2084,8 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	catalog := gamedatabase.NewPlatformScraper(gamedatabase.SetNameCache(NewArcadeSetNameCache(p)))
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade, thumbnails.ID: thumbnails,
-		catalog.ID: catalog,
+		catalog.ID:    catalog,
+		rommServer.ID: rommServer,
 	}
 }
 
