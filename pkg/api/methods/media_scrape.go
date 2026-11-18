@@ -372,10 +372,13 @@ func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 }
 
 // reapplyMediaUserFieldsAfterScrape restores the metadata the user edited by
-// hand over whatever a scrape wrote in its place.
+// hand over whatever a scrape wrote in its place. A restore that fails is
+// handed to the media user data reconcile, which saves the request and
+// retries it, across a restart too.
 func reapplyMediaUserFieldsAfterScrape(env *requests.RequestEnv, db *database.Database) {
 	if _, err := database.ReapplyMediaUserFields(env.State.GetContext(), db); err != nil {
-		log.Warn().Err(err).Msg("failed to re-apply media user fields after scrape")
+		log.Warn().Err(err).Msg("failed to re-apply media user fields after scrape; queueing a reconcile")
+		db.QueueMediaUserDataReconcile()
 	}
 }
 

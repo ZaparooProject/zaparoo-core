@@ -36,18 +36,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 const (
 	// MaxDirEntries caps how many entries of one folder are read. A larger
 	// folder is listed in part and reported as truncated.
 	MaxDirEntries = 10000
-	// ReadTimeout bounds one folder read, so a share that stopped answering
-	// fails the request instead of holding it.
+	// ReadTimeout bounds one request's filesystem work, waiting for a slot
+	// included, so a share that stopped answering fails the request instead
+	// of holding it.
 	ReadTimeout = 5 * time.Second
-	// maxConcurrentReads caps folder reads in flight. A read that timed out
-	// keeps its slot until the filesystem answers.
-	maxConcurrentReads = 4
+	// maxConcurrentReads caps filesystem reads in flight. A read that timed
+	// out keeps its slot until the filesystem answers.
+	maxConcurrentReads = 8
+	// maxConcurrentRootReads caps the reads in flight under one root, so a
+	// root that stopped answering cannot take every slot from the others.
+	maxConcurrentRootReads = 2
 	// ImagesRootID is the ID of the root for Core's image folder.
 	ImagesRootID = "images"
 )
@@ -94,13 +100,91 @@ type Listing struct {
 	Truncated bool
 }
 
-// Browser resolves and lists paths under a set of roots.
+// Browser resolves and lists paths under a set of roots. Every method that
+// touches the filesystem runs it under ReadTimeout and a read slot.
 type Browser struct {
-	roots []Root
+	roots   []Root
+	timeout time.Duration
 }
 
-// reads holds a slot for every folder read in flight, across browsers.
-var reads = make(chan struct{}, maxConcurrentReads)
+// readSlots counts the filesystem reads in flight, across browsers, in all
+// and per root path.
+type readSlots struct {
+	perRoot map[string]int
+	// freed is closed and replaced whenever a slot is released.
+	freed chan struct{}
+	mu    syncutil.Mutex
+	total int
+}
+
+//nolint:gochecknoglobals // one budget for every browser
+var reads = &readSlots{perRoot: make(map[string]int), freed: make(chan struct{})}
+
+// acquire takes a slot for a read under root, waiting for one until ctx ends.
+func (r *readSlots) acquire(ctx context.Context, root string) error {
+	for {
+		r.mu.Lock()
+		if r.total < maxConcurrentReads && r.perRoot[root] < maxConcurrentRootReads {
+			r.total++
+			r.perRoot[root]++
+			r.mu.Unlock()
+			return nil
+		}
+		freed := r.freed
+		r.mu.Unlock()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return ErrBusy
+		}
+	}
+}
+
+func (r *readSlots) release(root string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.total--
+	r.perRoot[root]--
+	if r.perRoot[root] <= 0 {
+		delete(r.perRoot, root)
+	}
+	close(r.freed)
+	r.freed = make(chan struct{})
+}
+
+// bounded runs fn, which reads under root, in a slot and under the browser's
+// timeout. A call that times out returns, but fn keeps its slot until the
+// filesystem answers it.
+func bounded[T any](ctx context.Context, b *Browser, root string, fn func() (T, error)) (T, error) {
+	var zero T
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+	if err := reads.acquire(ctx, root); err != nil {
+		if parentErr := context.Cause(ctx); parentErr != nil && !errors.Is(parentErr, context.DeadlineExceeded) {
+			return zero, fmt.Errorf("wait for a read slot: %w", parentErr)
+		}
+		return zero, err
+	}
+	type result struct {
+		err   error
+		value T
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer reads.release(root)
+		value, err := fn()
+		done <- result{value: value, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.value, r.err
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return zero, ErrTimeout
+		}
+		return zero, fmt.Errorf("read folder: %w", ctx.Err())
+	}
+}
 
 // rootID names a root by its path, so the ID is stable between requests and
 // reveals nothing a client could use as a path.
@@ -110,10 +194,10 @@ func rootID(path string) string {
 }
 
 // NewBrowser returns a browser over the index roots and Core's image folder.
-// Folders that do not exist are left out, and a folder named twice appears
-// once.
+// A folder named twice appears once. It does not touch the filesystem: Roots
+// leaves out the folders that do not exist.
 func NewBrowser(indexRoots []string, imageDir string) *Browser {
-	b := &Browser{}
+	b := &Browser{timeout: ReadTimeout}
 	seen := make(map[string]struct{})
 	add := func(id, path string) {
 		if path == "" || !filepath.IsAbs(path) {
@@ -121,10 +205,6 @@ func NewBrowser(indexRoots []string, imageDir string) *Browser {
 		}
 		path = filepath.Clean(path)
 		if _, dup := seen[path]; dup {
-			return
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
 			return
 		}
 		seen[path] = struct{}{}
@@ -140,35 +220,77 @@ func NewBrowser(indexRoots []string, imageDir string) *Browser {
 	return b
 }
 
-// Roots returns the folders a client may browse.
-func (b *Browser) Roots() []Root {
-	return slices.Clone(b.roots)
+// Roots returns the folders a client may browse: those that exist and
+// answered in time. Each is checked on its own, so one that stopped answering
+// is left out without holding up the rest.
+func (b *Browser) Roots(ctx context.Context) []Root {
+	exists := make([]bool, len(b.roots))
+	done := make(chan struct{}, len(b.roots))
+	for i := range b.roots {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			path := b.roots[i].Path
+			isDir, err := bounded(ctx, b, path, func() (bool, error) {
+				info, err := os.Stat(path)
+				return err == nil && info.IsDir(), nil
+			})
+			exists[i] = err == nil && isDir
+		}()
+	}
+	for range b.roots {
+		<-done
+	}
+	roots := make([]Root, 0, len(b.roots))
+	for i, root := range b.roots {
+		if exists[i] {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// root returns the root with the given ID.
+func (b *Browser) root(id string) (Root, error) {
+	index := slices.IndexFunc(b.roots, func(r Root) bool { return r.ID == id })
+	if index < 0 {
+		return Root{}, ErrUnknownRoot
+	}
+	return b.roots[index], nil
 }
 
 // Resolve returns the real path of rel under the root with the given ID. rel
 // uses forward slashes; empty is the root itself. A path that leaves its
 // root, by ".." or through a symlink, is refused.
-func (b *Browser) Resolve(id, rel string) (string, error) {
-	index := slices.IndexFunc(b.roots, func(r Root) bool { return r.ID == id })
-	if index < 0 {
-		return "", ErrUnknownRoot
+func (b *Browser) Resolve(ctx context.Context, id, rel string) (string, error) {
+	root, err := b.root(id)
+	if err != nil {
+		return "", err
 	}
 	clean, err := cleanRel(rel)
 	if err != nil {
 		return "", err
 	}
-	rootReal, err := filepath.EvalSymlinks(b.roots[index].Path)
+	return bounded(ctx, b, root.Path, func() (string, error) {
+		_, resolved, resolveErr := resolveUnder(root.Path, clean)
+		return resolved, resolveErr
+	})
+}
+
+// resolveUnder returns the real paths of root and of clean under it. It
+// touches the filesystem, so it runs inside bounded.
+func resolveUnder(rootPath, clean string) (rootReal, resolved string, err error) {
+	rootReal, err = filepath.EvalSymlinks(rootPath)
 	if err != nil {
-		return "", ErrNotFound
+		return "", "", ErrNotFound
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(rootReal, clean))
+	resolved, err = filepath.EvalSymlinks(filepath.Join(rootReal, clean))
 	if err != nil {
-		return "", ErrNotFound
+		return "", "", ErrNotFound
 	}
 	if !within(rootReal, resolved) {
-		return "", ErrInvalidPath
+		return "", "", ErrInvalidPath
 	}
-	return resolved, nil
+	return rootReal, resolved, nil
 }
 
 // cleanRel validates a client's path and returns it in the host's form.
@@ -202,70 +324,57 @@ func within(root, path string) bool {
 }
 
 // ResolveImage is Resolve for a regular file with an image extension.
-func (b *Browser) ResolveImage(id, rel string) (string, error) {
-	path, err := b.Resolve(id, rel)
+func (b *Browser) ResolveImage(ctx context.Context, id, rel string) (string, error) {
+	root, err := b.root(id)
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(path)
+	clean, err := cleanRel(rel)
 	if err != nil {
-		return "", ErrNotFound
+		return "", err
 	}
-	if !info.Mode().IsRegular() || !IsImageName(path) {
-		return "", ErrNotFile
-	}
-	return path, nil
+	return bounded(ctx, b, root.Path, func() (string, error) {
+		_, path, resolveErr := resolveUnder(root.Path, clean)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return "", ErrNotFound
+		}
+		if !info.Mode().IsRegular() || !IsImageName(path) {
+			return "", ErrNotFile
+		}
+		return path, nil
+	})
 }
 
 // ListImages lists the folders and image files of one folder under a root,
 // folders first, each group by name. Hidden entries and anything a symlink
 // leads out of the root are left out.
 func (b *Browser) ListImages(ctx context.Context, id, rel string) (Listing, error) {
-	dir, err := b.Resolve(id, rel)
+	root, err := b.root(id)
 	if err != nil {
 		return Listing{}, err
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		return Listing{}, ErrNotFound
-	}
-	if !info.IsDir() {
-		return Listing{}, ErrNotDir
 	}
 	clean, err := cleanRel(rel)
 	if err != nil {
 		return Listing{}, err
 	}
-	root, err := b.Resolve(id, "")
-	if err != nil {
-		return Listing{}, err
-	}
-
-	select {
-	case reads <- struct{}{}:
-	default:
-		return Listing{}, ErrBusy
-	}
-	type result struct {
-		err     error
-		listing Listing
-	}
-	done := make(chan result, 1)
-	go func() {
-		defer func() { <-reads }()
-		listing, readErr := readImages(root, dir, filepath.ToSlash(clean))
-		done <- result{listing: listing, err: readErr}
-	}()
-	timer := time.NewTimer(ReadTimeout)
-	defer timer.Stop()
-	select {
-	case r := <-done:
-		return r.listing, r.err
-	case <-timer.C:
-		return Listing{}, ErrTimeout
-	case <-ctx.Done():
-		return Listing{}, fmt.Errorf("list folder: %w", ctx.Err())
-	}
+	return bounded(ctx, b, root.Path, func() (Listing, error) {
+		rootReal, dir, resolveErr := resolveUnder(root.Path, clean)
+		if resolveErr != nil {
+			return Listing{}, resolveErr
+		}
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			return Listing{}, ErrNotFound
+		}
+		if !info.IsDir() {
+			return Listing{}, ErrNotDir
+		}
+		return readImages(rootReal, dir, filepath.ToSlash(clean))
+	})
 }
 
 // readImages reads dir and keeps its folders and image files. relDir is

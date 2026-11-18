@@ -21,8 +21,10 @@ package imagefiles_test
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/png"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,4 +103,41 @@ func TestStorePruneKeepsNamedAndRecentFiles(t *testing.T) {
 	require.ErrorIs(t, err, imagefiles.ErrNotFound)
 	_, err = store.Path(recent)
 	require.NoError(t, err, "a file written moments ago may not be named yet")
+}
+
+// statFailFs fails every Stat, as a share that stopped answering does.
+type statFailFs struct {
+	afero.Fs
+}
+
+func (statFailFs) Stat(name string) (os.FileInfo, error) {
+	return nil, &os.PathError{Op: "stat", Path: name, Err: errors.New("input/output error")}
+}
+
+// A folder that cannot be checked is not a missing image: a caller that
+// clears user art for a missing one must not clear it for this.
+func TestStorePathTellsAFailedCheckFromAMissingImage(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	store := &imagefiles.Store{FS: fs, Dir: "images"}
+	name, err := store.Save("user", pngBytes(t, 8))
+	require.NoError(t, err)
+
+	_, err = store.Path("user-" + "0000000000000000000000000000000000000000000000000000000000000000.png")
+	require.ErrorIs(t, err, imagefiles.ErrNotFound)
+
+	store.FS = statFailFs{Fs: fs}
+	_, err = store.Path(name)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, imagefiles.ErrNotFound)
+}
+
+// Holds tells the store's paths from others without touching the disk.
+func TestStoreHolds(t *testing.T) {
+	t.Parallel()
+	store := &imagefiles.Store{FS: afero.NewMemMapFs(), Dir: filepath.Join("data", "images")}
+	assert.True(t, store.Holds(filepath.Join("data", "images", "user-gone.png")))
+	assert.False(t, store.Holds(filepath.Join("data", "scraped", "user-gone.png")))
+	assert.False(t, store.Holds(filepath.Join("data", "images", "nested", "user-gone.png")))
+	assert.False(t, store.Holds(filepath.Join("data", "images")))
 }

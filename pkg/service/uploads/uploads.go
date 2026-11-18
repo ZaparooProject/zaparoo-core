@@ -320,6 +320,30 @@ func (m *Manager) Cancel(id, owner string) error {
 	return nil
 }
 
+// Ready reports whether Take would hand over the upload: a finished upload of
+// owner for the given purpose. It does not use the upload up.
+func (m *Manager) Ready(id, owner, purposeName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.readyLocked(id, owner, purposeName)
+	return err
+}
+
+// readyLocked returns a finished upload of owner for the given purpose.
+func (m *Manager) readyLocked(id, owner, purposeName string) (*session, error) {
+	s, err := m.sessionLocked(id, owner)
+	if err != nil {
+		return nil, err
+	}
+	if s.purpose.Name != purposeName {
+		return nil, ErrWrongPurpose
+	}
+	if !s.finished {
+		return nil, ErrNotFinished
+	}
+	return s, nil
+}
+
 // Take hands a finished upload of the given purpose to use, which gets the
 // staged file's path and may read or move it. The session ends when use
 // returns without an error, and the staged file is removed if it is still
@@ -327,15 +351,9 @@ func (m *Manager) Cancel(id, owner string) error {
 func (m *Manager) Take(id, owner, purposeName string, use func(path string) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, err := m.sessionLocked(id, owner)
+	s, err := m.readyLocked(id, owner, purposeName)
 	if err != nil {
 		return err
-	}
-	if s.purpose.Name != purposeName {
-		return ErrWrongPurpose
-	}
-	if !s.finished {
-		return ErrNotFinished
 	}
 	if err := use(s.path); err != nil {
 		return err

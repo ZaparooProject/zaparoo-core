@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -94,6 +95,20 @@ func uploadEnv(env *requests.RequestEnv) error {
 	return requireAuthenticated(env)
 }
 
+// uploadOwner names who an upload belongs to. A paired client keeps its
+// uploads across reconnects, which come from a new port; any other caller is
+// known by its address without the port. The upload ID itself, which is
+// random, is what keeps one caller from another's upload.
+func uploadOwner(env *requests.RequestEnv) string {
+	if env.PairedClientID != "" {
+		return "client:" + env.PairedClientID
+	}
+	if host, _, err := net.SplitHostPort(env.ClientID); err == nil {
+		return "addr:" + host
+	}
+	return "addr:" + env.ClientID
+}
+
 // HandleUploadsBegin opens an upload session for a file of a given purpose,
 // size and SHA-256.
 func HandleUploadsBegin(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
@@ -112,7 +127,7 @@ func HandleUploadsBegin(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if purpose.AdminOnly && !isLocalOrAdmin(&env) {
 		return nil, models.ClientErrf("%w", ErrForbidden)
 	}
-	info, err := manager.Begin(params.Purpose, env.ClientID, params.Size, params.SHA256)
+	info, err := manager.Begin(params.Purpose, uploadOwner(&env), params.Size, params.SHA256)
 	if err != nil {
 		return nil, uploadClientError(err)
 	}
@@ -135,7 +150,7 @@ func HandleUploadsChunk(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if err != nil {
 		return nil, models.ClientErrf("invalid params: data is not base64: %w", err)
 	}
-	info, err := uploadManager(&env).Chunk(params.UploadID, env.ClientID, *params.Offset, data)
+	info, err := uploadManager(&env).Chunk(params.UploadID, uploadOwner(&env), *params.Offset, data)
 	if err != nil {
 		return nil, uploadClientError(err)
 	}
@@ -146,7 +161,7 @@ func HandleUploadsChunk(env requests.RequestEnv) (any, error) { //nolint:gocriti
 // connection can resume from the received offset.
 func HandleUploadsStatus(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
 	return handleUploadByID(&env, func(manager *uploads.Manager, id string) (uploads.Info, error) {
-		return manager.Status(id, env.ClientID)
+		return manager.Status(id, uploadOwner(&env))
 	})
 }
 
@@ -154,7 +169,7 @@ func HandleUploadsStatus(env requests.RequestEnv) (any, error) { //nolint:gocrit
 // method it was made for can take it by its upload ID.
 func HandleUploadsFinish(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
 	return handleUploadByID(&env, func(manager *uploads.Manager, id string) (uploads.Info, error) {
-		return manager.Finish(id, env.ClientID)
+		return manager.Finish(id, uploadOwner(&env))
 	})
 }
 
@@ -167,7 +182,7 @@ func HandleUploadsCancel(env requests.RequestEnv) (any, error) { //nolint:gocrit
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
-	if err := uploadManager(&env).Cancel(params.UploadID, env.ClientID); err != nil {
+	if err := uploadManager(&env).Cancel(params.UploadID, uploadOwner(&env)); err != nil {
 		return nil, uploadClientError(err)
 	}
 	return NoContent{}, nil

@@ -81,7 +81,7 @@ func HandleFilesBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if params.Path != "" {
 			return nil, models.ClientErrf("invalid params: path needs a root")
 		}
-		roots := browser.Roots()
+		roots := browser.Roots(env.Context)
 		response := models.FilesBrowseResponse{
 			Roots: make([]models.FilesRoot, 0, len(roots)), Entries: []models.FilesEntry{},
 		}
@@ -133,7 +133,7 @@ func HandleFilesImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err != nil {
 		return nil, err
 	}
-	path, err := browser.ResolveImage(params.Root, params.Path)
+	path, err := browser.ResolveImage(env.Context, params.Root, params.Path)
 	if err != nil {
 		return nil, hostFilesClientError(err)
 	}

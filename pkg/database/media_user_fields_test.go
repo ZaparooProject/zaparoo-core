@@ -24,11 +24,15 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,7 +45,22 @@ func (f fakeUserImages) Path(name string) (string, error) {
 	if path, ok := f[name]; ok {
 		return path, nil
 	}
-	return "", errors.New("not stored")
+	return "", imagefiles.ErrNotFound
+}
+
+func (fakeUserImages) Holds(path string) bool {
+	return strings.HasPrefix(path, "/data/media/images-user/")
+}
+
+// failingUserImages fails every lookup the way an unreadable folder does.
+type failingUserImages struct{}
+
+func (failingUserImages) Path(string) (string, error) {
+	return "", errors.New("input/output error")
+}
+
+func (failingUserImages) Holds(path string) bool {
+	return fakeUserImages{}.Holds(path)
 }
 
 func (f *reconcileFixture) row(t *testing.T, name string) *database.MediaFullRow {
@@ -233,6 +252,42 @@ func TestApplyMediaUserFieldImageIsPerFile(t *testing.T) {
 	assert.Len(t, fields, 1, "UserDB still records the image")
 }
 
+// An image folder that cannot be read keeps the user's art and fails the
+// reconcile, so it runs again; only a confirmed missing file clears it.
+func TestReconcileMediaUserDataKeepsImagesItCannotCheck(t *testing.T) {
+	f := newReconcileFixture(t, "Alpha.nes")
+	f.db.UserImages = fakeUserImages{"cover.png": "/data/media/images-user/cover.png"}
+	f.apply(t, "Alpha.nes", database.MediaUserFieldImagePrefix+"boxart", ptr("cover.png"))
+
+	f.db.UserImages = failingUserImages{}
+	require.Error(t, database.ReconcileMediaUserData(context.Background(), f.db))
+	path, present := f.mediaProperty(t, "Alpha.nes", tags.TagPropertyImageBoxart)
+	assert.True(t, present)
+	assert.Equal(t, "/data/media/images-user/cover.png", path)
+}
+
+// A scrape that fills the art a missing user image left empty keeps it: the
+// user image is gone, and the scraped art is not the user's to remove.
+func TestReapplyMediaUserFieldsKeepsArtScrapedOverAMissingUserImage(t *testing.T) {
+	ctx := context.Background()
+	f := newReconcileFixture(t, "Alpha.nes")
+	f.db.UserImages = fakeUserImages{"cover.png": "/data/media/images-user/cover.png"}
+	f.apply(t, "Alpha.nes", database.MediaUserFieldImagePrefix+"boxart", ptr("cover.png"))
+
+	f.db.UserImages = fakeUserImages{}
+	scraped := filepath.Join("data", "scraped", "alpha-boxart.png")
+	err := f.db.MediaDB.UpsertMediaProperties(ctx, f.ids["Alpha.nes"], []database.MediaProperty{{
+		TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: scraped,
+	}})
+	require.NoError(t, err)
+
+	_, err = database.ReapplyMediaUserFields(ctx, f.db)
+	require.NoError(t, err)
+	path, present := f.mediaProperty(t, "Alpha.nes", tags.TagPropertyImageBoxart)
+	assert.True(t, present, "the scraped art survives")
+	assert.Equal(t, scraped, path)
+}
+
 func TestReconcileMediaUserDataRemovesFieldsUserDBNoLongerHolds(t *testing.T) {
 	ctx := context.Background()
 	f := newReconcileFixture(t, "Alpha.nes", "Beta.nes")
@@ -338,6 +393,102 @@ func TestApplyMediaUserFieldLeavesRowsOfAnotherTitlesFile(t *testing.T) {
 	assert.Equal(t, 1, changed, "only Beta's title was out of line")
 	text, _ := f.titleProperty(t, "Beta.nes", tags.TagPropertyDescription)
 	assert.Equal(t, "Beta's own description", text)
+}
+
+// Resetting or replacing a title's field leaves a row recorded under the
+// title's slug whose file is now indexed under another title: that title owns
+// it. A row whose file is gone still follows the slug.
+func TestApplyMediaUserFieldKeepsAMovedFilesRow(t *testing.T) {
+	ctx := context.Background()
+	f := newReconcileFixture(t, "Alpha (USA).nes", "Beta.nes")
+	alpha := f.row(t, "Alpha (USA).nes")
+	description := database.MediaUserFieldDescription
+	setRow := func(name, value string) {
+		t.Helper()
+		require.NoError(t, f.db.UserDB.SetMediaUserField(&database.MediaUserField{
+			SystemID: alpha.System.SystemID, Path: nesPath(name),
+			Field: description, Value: value, Slug: alpha.Title.Slug,
+		}, nil))
+	}
+	// Edited on Alpha, then the file was indexed under Beta.
+	setRow("Beta.nes", "Beta's own description")
+	setRow("Alpha (Japan).nes", "from a file no longer here")
+
+	descriptions := func() map[string]string {
+		t.Helper()
+		all, err := f.db.UserDB.ListMediaUserFields()
+		require.NoError(t, err)
+		got := make(map[string]string, len(all))
+		for i := range all {
+			got[filepath.Base(all[i].Path)] = all[i].Value
+		}
+		return got
+	}
+
+	f.apply(t, "Alpha (USA).nes", description, nil)
+	assert.Equal(t, map[string]string{"Beta.nes": "Beta's own description"}, descriptions(),
+		"a reset clears the gone file's row and keeps Beta's")
+
+	setRow("Alpha (Japan).nes", "from a file no longer here")
+	f.apply(t, "Alpha (USA).nes", description, ptr("Alpha's"))
+	assert.Equal(t, map[string]string{
+		"Alpha (USA).nes": "Alpha's", "Beta.nes": "Beta's own description",
+	}, descriptions(), "a replace clears the gone file's row and keeps Beta's")
+
+	_, err := database.ReapplyMediaUserFields(ctx, f.db)
+	require.NoError(t, err)
+	text, _ := f.titleProperty(t, "Beta.nes", tags.TagPropertyDescription)
+	assert.Equal(t, "Beta's own description", text)
+	text, _ = f.titleProperty(t, "Alpha (USA).nes", tags.TagPropertyDescription)
+	assert.Equal(t, "Alpha's", text)
+}
+
+// A symlink alias shows what its target shows, so an edit on the target
+// reaches the alias straight away, not at the next scrape or index.
+func TestApplyMediaUserFieldReachesLinkedMedia(t *testing.T) {
+	ctx := context.Background()
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	targetPath := filepath.ToSlash(filepath.Join(root, "Alpha.nes"))
+	aliasPath := filepath.ToSlash(filepath.Join(root, "_Organized", "Alpha (Alias).nes"))
+	scantest.IndexScanResults(t, mediaDB, "NES", database.ScanReconcileOpts{},
+		platforms.ScanResult{Path: targetPath},
+		platforms.ScanResult{Path: aliasPath, LinkTarget: targetPath},
+	)
+	system, err := mediaDB.FindSystemBySystemID("NES")
+	require.NoError(t, err)
+	media, err := mediaDB.FindMediaBySystemAndPaths(ctx, system.DBID, []string{targetPath, aliasPath})
+	require.NoError(t, err)
+	target, alias := media[targetPath], media[aliasPath]
+	linkedTo, linked, err := mediaDB.GetMediaLinkTarget(ctx, alias.DBID)
+	require.NoError(t, err)
+	require.True(t, linked)
+	require.Equal(t, target.DBID, linkedTo)
+
+	db := &database.Database{
+		MediaDB: mediaDB, UserDB: userDB,
+		UserImages: fakeUserImages{"cover.png": "/data/media/images-user/cover.png"},
+	}
+	row, err := mediaDB.GetMediaWithTitleAndSystem(ctx, target.DBID)
+	require.NoError(t, err)
+	_, err = database.ApplyMediaUserField(ctx, db, row, database.MediaUserFieldImagePrefix+"boxart", ptr("cover.png"))
+	require.NoError(t, err)
+
+	props, err := mediaDB.GetMediaProperties(ctx, alias.DBID)
+	require.NoError(t, err)
+	text, present := propertyText(props, tags.TagPropertyImageBoxart)
+	assert.True(t, present, "the alias shows the edited art")
+	assert.Equal(t, "/data/media/images-user/cover.png", text)
+
+	_, err = database.ApplyMediaUserField(ctx, db, row, database.MediaUserFieldImagePrefix+"boxart", nil)
+	require.NoError(t, err)
+	props, err = mediaDB.GetMediaProperties(ctx, alias.DBID)
+	require.NoError(t, err)
+	_, present = propertyText(props, tags.TagPropertyImageBoxart)
+	assert.False(t, present, "a reset reaches the alias too")
 }
 
 // failingTitleMediaDB fails to list the files of one title.

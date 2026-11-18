@@ -77,6 +77,9 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	}
 
 	row := resolved[0].Row
+	if prepareErr := prepareMediaImageEdits(&env, patch.Fields); prepareErr != nil {
+		return nil, prepareErr
+	}
 	if patch.LauncherOverrideSet {
 		// The durable truth (UserDB) is written before the media.db projection.
 		// If the projection write fails the truth is still saved and the next

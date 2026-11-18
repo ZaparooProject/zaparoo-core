@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -115,17 +116,32 @@ func (s *Store) Save(prefix string, data []byte) (string, error) {
 	return name, nil
 }
 
-// Path returns the full path of a stored image, or ErrNotFound.
+// Path returns the full path of a stored image, or ErrNotFound when it is
+// not stored. Any other error is a folder that could not be checked, not a
+// missing image.
 func (s *Store) Path(name string) (string, error) {
 	if !validName(name) {
 		return "", ErrNotFound
 	}
 	path := filepath.Join(s.Dir, name)
 	info, err := s.FS.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("check image file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
 		return "", ErrNotFound
 	}
 	return path, nil
+}
+
+// Holds reports whether path names a file in the store, whether or not the
+// file is still there.
+func (s *Store) Holds(path string) bool {
+	name := filepath.Base(path)
+	return validName(name) && filepath.Join(s.Dir, name) == filepath.Clean(path)
 }
 
 // Read returns a stored image's bytes, or ErrNotFound.

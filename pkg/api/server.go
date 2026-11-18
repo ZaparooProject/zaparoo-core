@@ -1783,6 +1783,7 @@ func handleWSMessage(
 		}
 		if cs != nil {
 			env.ClientRole = cs.ClientRole()
+			env.PairedClientID = cs.PairedClientID()
 		}
 		env.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(session.Request)
 

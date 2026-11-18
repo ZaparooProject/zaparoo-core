@@ -224,6 +224,12 @@ func (cs *ClientSession) AuthToken() string {
 	return cs.client.AuthToken
 }
 
+// PairedClientID returns the paired client's stable ID (immutable after
+// construction, no lock needed).
+func (cs *ClientSession) PairedClientID() string {
+	return cs.client.ClientID
+}
+
 // ClientRole returns the paired client's permission role (immutable after
 // construction, no lock needed).
 func (cs *ClientSession) ClientRole() string {

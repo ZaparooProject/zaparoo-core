@@ -66,7 +66,7 @@ func buildTree(t *testing.T) tree {
 
 func rootIDFor(t *testing.T, browser *hostfiles.Browser, path string) string {
 	t.Helper()
-	for _, root := range browser.Roots() {
+	for _, root := range browser.Roots(context.Background()) {
 		if root.Path == path {
 			return root.ID
 		}
@@ -80,7 +80,7 @@ func TestNewBrowserKeepsExistingFoldersOnce(t *testing.T) {
 	tr := buildTree(t)
 	browser, games, images, _ := tr.browser, tr.games, tr.images, tr.outside
 
-	roots := browser.Roots()
+	roots := browser.Roots(context.Background())
 	require.Len(t, roots, 2, "a missing folder, a relative path and a duplicate are left out")
 	assert.Equal(t, hostfiles.ImagesRootID, roots[0].ID)
 	assert.Equal(t, images, roots[0].Path)
@@ -127,13 +127,13 @@ func TestResolveRefusesPathsThatLeaveTheRoot(t *testing.T) {
 		"..", "../private", "SNES/../../private/secret.png", "/etc", filepath.ToSlash(outside),
 		`SNES\covers`, "SNES/\x00",
 	} {
-		_, err := browser.Resolve(root, rel)
+		_, err := browser.Resolve(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
 	}
-	_, err := browser.Resolve(root, "SNES/nothing")
+	_, err := browser.Resolve(context.Background(), root, "SNES/nothing")
 	require.ErrorIs(t, err, hostfiles.ErrNotFound)
 
-	path, err := browser.Resolve(root, "SNES/./covers")
+	path, err := browser.Resolve(context.Background(), root, "SNES/./covers")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(games, "SNES", "covers"), path)
 }
@@ -159,7 +159,7 @@ func TestSymlinksOutOfTheRootAreNeitherListedNorResolved(t *testing.T) {
 	assert.Equal(t, []string{"Zeta", "a.jpg", "b.PNG", "inside.jpg"}, names)
 
 	for _, rel := range []string{"SNES/covers/escape", "SNES/covers/escape/secret.png", "SNES/covers/leak.png"} {
-		_, err = browser.Resolve(root, rel)
+		_, err = browser.Resolve(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
 	}
 }
@@ -170,12 +170,12 @@ func TestResolveImageNeedsAnImageFile(t *testing.T) {
 	browser, games, images, _ := tr.browser, tr.games, tr.images, tr.outside
 	root := rootIDFor(t, browser, games)
 
-	path, err := browser.ResolveImage(hostfiles.ImagesRootID, "thumb.gif")
+	path, err := browser.ResolveImage(context.Background(), hostfiles.ImagesRootID, "thumb.gif")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(images, "thumb.gif"), path)
 
 	for _, rel := range []string{"SNES/game.sfc", "SNES/covers", "SNES/covers/notes.txt"} {
-		_, err = browser.ResolveImage(root, rel)
+		_, err = browser.ResolveImage(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrNotFile, "path %q", rel)
 	}
 }

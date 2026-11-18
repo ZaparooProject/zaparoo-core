@@ -80,9 +80,10 @@ func (db *UserDB) GetMediaUserFieldsForTitle(
 }
 
 // SetMediaUserField records one user-edited field against field.Path. A
-// title-level field is first removed from the title's other files (titlePaths)
-// and from any file that carried the same slug, in the same transaction, so a
-// title has one owner row per field.
+// title-level field is first removed from the other paths whose rows the
+// title owns (titlePaths), in the same transaction, so a title has one owner
+// row per field. Slug is stored, not matched: a file that carried the slug
+// may belong to another title now, and only the caller can tell.
 func (db *UserDB) SetMediaUserField(field *database.MediaUserField, titlePaths []string) error {
 	conn := db.sql.Load()
 	if conn == nil {
@@ -92,7 +93,7 @@ func (db *UserDB) SetMediaUserField(field *database.MediaUserField, titlePaths [
 	now := time.Now().Unix()
 	return mediaUserDataTx(db.ctx, conn, now, func(tx *sql.Tx) error {
 		if database.IsMediaUserFieldTitleLevel(field.Field) {
-			where, args := mediaUserFieldTitleClause(field.SystemID, field.Slug, canonicalMediaPaths(titlePaths))
+			where, args := mediaUserFieldTitleClause(field.SystemID, "", canonicalMediaPaths(titlePaths))
 			args = append(args, field.Field, path)
 			//nolint:gosec // only placeholders are concatenated
 			if _, err := tx.ExecContext(db.ctx,

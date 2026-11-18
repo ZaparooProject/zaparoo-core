@@ -74,8 +74,11 @@ type RequestEnv struct {
 	// "member"), or "" when the request carries no paired identity (local
 	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.
 	ClientRole string
-	Params     json.RawMessage
-	IsLocal    bool
+	// PairedClientID is the paired client's stable ID, the same across its
+	// connections, or "" when the request carries no paired identity.
+	PairedClientID string
+	Params         json.RawMessage
+	IsLocal        bool
 	// APIKeyAuthenticated is true when static API-key middleware authenticated
 	// this non-paired request. It grants admin authority, not localhost access.
 	APIKeyAuthenticated bool
