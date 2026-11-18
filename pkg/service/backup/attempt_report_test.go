@@ -187,7 +187,7 @@ func TestSendHeartbeatCarriesAndClearsPendingAttempt(t *testing.T) {
 }
 
 func TestSendHeartbeatKeepsReportFailedToSend(t *testing.T) {
-	rec := &heartbeatRecorder{statuses: []int{http.StatusServiceUnavailable}}
+	rec := &heartbeatRecorder{statuses: []int{http.StatusInternalServerError}}
 	m := newAttemptTestManager(t, rec)
 	m.RecordScheduledAttempt(AttemptStatusSkipped, AttemptReasonOffline, time.Now())
 

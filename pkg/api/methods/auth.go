@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
@@ -51,7 +52,7 @@ import (
 // It has an explicit timeout to prevent hanging on slow/malicious servers.
 var claimClient = &http.Client{
 	Timeout:   10 * time.Second,
-	Transport: useragent.Transport(nil),
+	Transport: useragent.Transport(httpretry.Transport(nil)),
 }
 
 var revokeRemoteDevice = func(ctx context.Context, manager *backupsvc.Manager) error {
