@@ -616,17 +616,23 @@ func (b *planBuilder) sections() []PlanSection {
 	return sections[:min(len(sections), b.opts.MaxSections)]
 }
 
-// queue lists every pick in one ranking: the games the seeds reach by their
-// score, and the games marked to play later that no seed reached at the play
-// later boost alone. The series and system caps hold across the whole list.
+// queue lists every pick in one list. The seeds take turns, strongest first,
+// each giving its best remaining game, so a seed whose matches score high
+// cannot fill the list; every fourth place goes to a game marked to play
+// later. The series and system caps hold across the whole list.
 func (b *planBuilder) queue() []PlanSection {
 	used := make(map[int64]struct{}, len(b.seeds))
 	for i := range b.seeds {
 		used[b.seeds[i].game.Group] = struct{}{}
 	}
-	entries := make([]*candidate, 0, len(b.candidates))
-	for _, entry := range b.candidates {
-		entries = append(entries, entry)
+	lanes := make([][]*candidate, len(b.seeds))
+	var later []*candidate
+	for group, entry := range b.candidates {
+		if state, ok := b.games[group]; ok && len(state.playLater) > 0 {
+			later = append(later, entry)
+			continue
+		}
+		lanes[entry.topSeed] = append(lanes[entry.topSeed], entry)
 	}
 	for group, state := range b.games {
 		if _, scored := b.candidates[group]; scored || len(state.playLater) == 0 || !b.suggestable(group) {
@@ -640,12 +646,15 @@ func (b *planBuilder) queue() []PlanSection {
 		if profile, ok := b.profiles[game.TitleDBID]; ok {
 			entry.profile, entry.best.SystemID, entry.best.Rating = profile, profile.systemID, profile.rating
 		}
-		entries = append(entries, entry)
+		later = append(later, entry)
 	}
-	slices.SortFunc(entries, compareCandidates)
+	for i := range lanes {
+		slices.SortFunc(lanes[i], compareCandidates)
+	}
+	slices.SortFunc(later, compareCandidates)
 
 	section := PlanSection{Kind: SectionQueue}
-	for _, entry := range capCandidates(entries, used, b.opts.MaxResults+planSpare) {
+	for _, entry := range interleaveCandidates(lanes, later, used, b.opts.MaxResults+planSpare) {
 		item := PlanItem{TitleDBID: entry.best.TitleDBID, Reasons: entry.best.Reasons}
 		if state, ok := b.games[entry.group]; ok && len(state.playLater) > 0 {
 			item.Signal = SignalPlayLater
@@ -659,6 +668,83 @@ func (b *planBuilder) queue() []PlanSection {
 		return []PlanSection{}
 	}
 	return []PlanSection{section}
+}
+
+// queueLaterEvery is how often the queue gives a place to a game marked to
+// play later: every fourth.
+const queueLaterEvery = 4
+
+// interleaveCandidates takes from the lanes in turn, each in its own order,
+// giving every queueLaterEvery-th place to the later lane while it lasts. A
+// game already used or in a full series is skipped; one on a full system is
+// passed over, and those fill the list when the lanes run dry.
+func interleaveCandidates(lanes [][]*candidate, later []*candidate, used map[int64]struct{}, limit int) []*candidate {
+	perSeries := make(map[string]int)
+	perSystem := make(map[string]int)
+	taken := make([]*candidate, 0, limit)
+	var passedOver []*candidate
+	seriesFull := func(entry *candidate) bool {
+		for _, series := range seriesOf(entry) {
+			if perSeries[series] >= maxPerSeries {
+				return true
+			}
+		}
+		return false
+	}
+	take := func(entry *candidate) {
+		for _, series := range seriesOf(entry) {
+			perSeries[series]++
+		}
+		perSystem[entry.best.SystemID]++
+		used[entry.group] = struct{}{}
+		taken = append(taken, entry)
+	}
+	// next takes the first game a lane can give, dropping what it skips.
+	next := func(lane *[]*candidate) bool {
+		for len(*lane) > 0 {
+			entry := (*lane)[0]
+			*lane = (*lane)[1:]
+			if _, done := used[entry.group]; done || seriesFull(entry) {
+				continue
+			}
+			if perSystem[entry.best.SystemID] >= maxPerSystem {
+				passedOver = append(passedOver, entry)
+				continue
+			}
+			take(entry)
+			return true
+		}
+		return false
+	}
+
+	turn := 0
+	for len(taken) < limit {
+		if (len(taken)+1)%queueLaterEvery == 0 && next(&later) {
+			continue
+		}
+		progressed := false
+		for range lanes {
+			lane := turn % len(lanes)
+			turn++
+			if next(&lanes[lane]) {
+				progressed = true
+				break
+			}
+		}
+		if !progressed && !next(&later) {
+			break
+		}
+	}
+	for _, entry := range passedOver {
+		if len(taken) == limit {
+			break
+		}
+		if _, done := used[entry.group]; done || seriesFull(entry) {
+			continue
+		}
+		take(entry)
+	}
+	return taken
 }
 
 // playLaterTitle is the version of a marked game a list shows: the first

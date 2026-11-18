@@ -604,3 +604,61 @@ func TestBuildPlan_QueuePlayLaterOnly(t *testing.T) {
 	assert.Empty(t, planFor(t, newFakeLibrary(), "", Options{Queue: true}).Sections,
 		"no signals, no queue")
 }
+
+// queueEntry is a candidate for the interleave tests: the title ID doubles as
+// the group, and an empty series means none.
+func queueEntry(id int64, total float64, system, series string) *candidate {
+	profile := &titleProfile{systemID: system}
+	if series != "" {
+		profile.series = []string{series}
+	}
+	return &candidate{group: id, total: total, profile: profile, best: Pick{TitleDBID: id, SystemID: system}}
+}
+
+func queueIDs(entries []*candidate) []int64 {
+	ids := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.group)
+	}
+	return ids
+}
+
+// The seeds take turns however high one seed's matches score, and every
+// fourth place goes to a marked game.
+func TestInterleaveCandidates_SeedsTakeTurns(t *testing.T) {
+	t.Parallel()
+	lanes := [][]*candidate{
+		{
+			queueEntry(1, 10, "A", ""), queueEntry(2, 9, "B", ""), queueEntry(3, 8, "C", ""),
+			queueEntry(4, 7, "D", ""), queueEntry(5, 6, "E", ""),
+		},
+		{queueEntry(11, 1, "F", ""), queueEntry(12, 0.9, "G", "")},
+	}
+	later := []*candidate{queueEntry(21, playLaterBoost, "H", ""), queueEntry(22, playLaterBoost, "I", "")}
+
+	got := interleaveCandidates(lanes, later, map[int64]struct{}{}, 9)
+	assert.Equal(t, []int64{1, 11, 2, 21, 12, 3, 4, 22, 5}, queueIDs(got))
+}
+
+// A full system waits until nothing else is left, a full series is skipped,
+// and a game already used is not taken again.
+func TestInterleaveCandidates_Caps(t *testing.T) {
+	t.Parallel()
+	snes := make([]*candidate, 0, 6)
+	for id := int64(1); id <= 6; id++ {
+		snes = append(snes, queueEntry(id, float64(10-id), "SNES", ""))
+	}
+	lanes := [][]*candidate{
+		snes,
+		{
+			queueEntry(11, 3, "NES", "mario"), queueEntry(12, 2, "NES", "mario"),
+			queueEntry(13, 1, "NES", "mario"), queueEntry(14, 0.5, "NES", ""),
+		},
+	}
+	used := map[int64]struct{}{2: {}}
+
+	got := interleaveCandidates(lanes, nil, used, 20)
+	assert.Equal(t, []int64{1, 11, 3, 12, 4, 14, 5, 6}, queueIDs(got),
+		"title 2 is used, a third mario game is skipped, and the fifth SNES game waits for the others")
+	assert.Empty(t, interleaveCandidates(nil, nil, map[int64]struct{}{}, 5))
+}

@@ -1228,7 +1228,7 @@ Optionally, an object:
 | `seed`      | Media like one game the profile showed interest in. Each item's `reasons` say what it shares with `seed`.   |
 | `playLater` | Media marked to play later, the ones most like the seeds first. An item's `reasons` may be empty.           |
 | `series`    | More of the series the seeds lean on most.                                                                  |
-| `queue`     | With `layout: "queue"`: every candidate in one list, best first, including media marked to play later. Each item's `signal` and `seed` say why it is there. |
+| `queue`     | With `layout: "queue"`: one list for "play next". The seeds take turns, strongest first, each adding its best remaining match, and every fourth place goes to media marked to play later. Each item's `signal` and `seed` say why it is there. |
 
 The section for the strongest seed comes first, then `playLater`, then `series`, then the other seeds. A section with too little to show is left out. The `queue` layout returns at most one section, the same series and system caps apply, and a game appears once.
 
