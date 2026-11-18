@@ -678,7 +678,10 @@ func TestOversizedLineDropsTheConnection(t *testing.T) {
 func TestLibraryLargerThanTheLimitIsRefused(t *testing.T) {
 	t.Parallel()
 
-	h := newHarness(t, harnessOptions{})
+	// The fake extension stops reading while it writes the oversized library,
+	// so a real-clock ping would block on the unbuffered pipe and drop the
+	// connection on a slow runner before the limit is reached.
+	h := newHarness(t, harnessOptions{clock: clockwork.NewFakeClock()})
 	ext := h.connect(fixtureGames())
 	chunk := make([]Game, 1000)
 	ext.set(func(f *fakeExtension) {
