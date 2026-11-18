@@ -3080,6 +3080,7 @@ None.
 | id               | string   | Yes      | Stable scraper ID used by `media.scrape`.                                |
 | name             | string   | Yes      | Human-readable scraper name.                                             |
 | supportedSystems | string[] | Yes      | Supported system IDs. Empty means the scraper can run against all systems. |
+| supportsSkipImages | boolean | Yes    | Whether `media.scrape` accepts `skipImages` for this scraper. |
 
 #### Example
 
@@ -3104,17 +3105,20 @@ None.
       {
         "id": "gamelist.xml",
         "name": "ES gamelist.xml",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": true
       },
       {
         "id": "media-folder",
         "name": "ES media folders",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": false
       },
       {
         "id": "mister-docs",
         "name": "MiSTer docs databases",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": true
       }
     ]
   }
@@ -3141,6 +3145,7 @@ An object:
 | systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. Cannot be combined with `scope`. |
 | scope     | object   | No       | Select one indexed media item or one directory subtree; see below. |
 | force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag, within the selected scope. Default is false. |
+| skipImages | boolean | No       | Import metadata (tags, descriptions) without images, videos or manuals. Art already stored is kept, and records are not marked scraped, so a later run without `skipImages` still adds their art. Only for scrapers whose `supportsSkipImages` is true; other scrapers reject it. Default is false. |
 
 #### Scope
 
@@ -3227,6 +3232,7 @@ None.
 | skipped   | integer | Yes      | Number of records skipped.                                 |
 | totalScraped | integer | Yes  | Number of media records already marked scraped.             |
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
+| skipImages | boolean | No      | True while the active run imports metadata without art.    |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
 | paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
 | state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |

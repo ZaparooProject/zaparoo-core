@@ -578,6 +578,9 @@ type MediaScrapeParams struct {
 	ScraperID string            `json:"scraperId" validate:"required,min=1"`
 	Systems   []string          `json:"systems"   validate:"omitempty,dive,min=1"`
 	Force     bool              `json:"force"`
+	// SkipImages imports metadata only, leaving out images, videos and
+	// manuals. Only scrapers reporting supportsSkipImages accept it.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 type MediaLookupCandidatesParams struct {

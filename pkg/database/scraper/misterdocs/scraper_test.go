@@ -865,6 +865,72 @@ func TestScrapeLoop_SkipsDatabaseLoadWithoutRecords(t *testing.T) {
 
 // A forced run whose pack loaded but matched nothing still clears stale docs
 // properties, which needs every row's ID.
+// TestScrapeLoop_ForceSkipImagesKeepsArt checks a forced metadata-only run
+// neither deletes the art earlier runs stored nor remembers the system, so a
+// later run still adds the art it left out.
+func TestScrapeLoop_ForceSkipImagesKeepsArt(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	docsRoot := filepath.Join("media", "fat", "docs")
+	artwork := filepath.Join(docsRoot, "SNES", artworkDirName)
+	manuals := filepath.Join(docsRoot, "SNES", "Manuals")
+	require.NoError(t, fs.MkdirAll(artwork, 0o750))
+	require.NoError(t, fs.MkdirAll(manuals, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(artwork, indexFileName),
+		[]byte("#name\tkey\nGame (USA)\tGame\n"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(artwork, gameInfoFileName),
+		[]byte("#key\tyear\nGame\t1994\n"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(artwork, "Game.jpg"), []byte("image"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(manuals, "Game.pdf"), []byte("pdf"), 0o600))
+
+	mediaDB := newMockMediaDB(t)
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{
+		{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES},
+	}, nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return([]database.MediaWithFullPath{
+		{DBID: 100, MediaTitleDBID: 10, Path: "/games/SNES/Game (USA).sfc"},
+	}, nil)
+	mediaDB.On("ApplyScrapeResult", assertmock.Anything, int64(100), int64(10), assertmock.MatchedBy(
+		func(write *database.ScrapeWrite) bool {
+			return write.SkipImages && len(write.MediaProps) == 0 && len(write.TitleProps) == 0 &&
+				len(write.TitleTags) == 1 && write.TitleTags[0].Tag == "1994"
+		},
+	)).Return(nil).Once()
+	// Registered so a stray cleanup or fingerprint write is recorded and caught below.
+	mediaDB.On("GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, assertmock.Anything).
+		Return(map[int64][]database.MediaProperty{}, nil).Maybe()
+	mediaDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", assertmock.Anything, assertmock.Anything).
+		Return(map[int64][]database.MediaProperty{}, nil).Maybe()
+	mediaDB.On("SetScrapeFingerprint", assertmock.Anything, assertmock.Anything, assertmock.Anything,
+		assertmock.Anything).Return(nil).Maybe()
+
+	impl := &scraperImpl{
+		fs: fs, db: mediaDB, docsRoots: []string{docsRoot},
+		sources: map[string][]sourceDir{systemdefs.SystemSNES: {
+			{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork, Metadata: true},
+			{Path: manuals, SystemID: systemdefs.SystemSNES, Kind: sourceManuals},
+		}},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 8)
+	impl.scrapeLoop(context.Background(), scraper.ScrapeOptions{Force: true, SkipImages: true},
+		[]string{systemdefs.SystemSNES}, ch)
+
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		updates = append(updates, update)
+	}
+	require.NotEmpty(t, updates)
+	assert.True(t, updates[len(updates)-1].Done)
+	require.NoError(t, updates[len(updates)-1].Err)
+	mediaDB.AssertNotCalled(t, "GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, assertmock.Anything)
+	mediaDB.AssertNotCalled(t, "GetMediaTitlePropertyMetadataByMediaTitleDBIDs",
+		assertmock.Anything, assertmock.Anything)
+	mediaDB.AssertNotCalled(t, "SetScrapeFingerprint", assertmock.Anything, assertmock.Anything,
+		assertmock.Anything, assertmock.Anything)
+	mediaDB.AssertExpectations(t)
+}
+
 func TestScrapeLoop_ForceCleanupReadsRowsWithoutRecords(t *testing.T) {
 	t.Parallel()
 

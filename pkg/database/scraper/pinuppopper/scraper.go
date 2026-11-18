@@ -85,6 +85,7 @@ func NewPlatformScraper(locate Locate) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{systemdefs.SystemPinball},
 		SupportsFillMissing: true,
+		SupportsSkipImages:  true,
 		AutoScrapeOrder:     scraper.AutoOrderDevice,
 		AutoScrapeLaunchers: []string{pinup.LauncherID},
 		Scrape: func(
@@ -117,7 +118,7 @@ func NewPlatformScraper(locate Locate) platforms.Scraper {
 			if err != nil {
 				return fmt.Errorf("pinuppopper: %w", err)
 			}
-			impl := &scraperImpl{fs: fs, db: db.MediaDB, lib: lib, install: inst}
+			impl := &scraperImpl{fs: fs, db: db.MediaDB, lib: lib, install: inst, skipArt: opts.SkipImages}
 			go impl.scrapeLoop(ctx, opts, ch)
 			return nil
 		},
@@ -131,6 +132,8 @@ type scraperImpl struct {
 	unmapped scraper.UnmappedValues
 	install  pinup.Install
 	lib      pinup.Library
+	// skipArt leaves the image lookups out of a metadata-only run.
+	skipArt bool
 }
 
 type matchStats struct {
@@ -202,6 +205,7 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 	targets, stats := s.buildTargets(media, scraped, opts.RunID)
 	for i := range targets {
 		targets[i].Write.FillMissing = opts.FillMissing
+		targets[i].Write.SkipImages = opts.SkipImages
 	}
 	report := func(processed, matched, skipped int) {
 		select {
@@ -231,7 +235,9 @@ func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions
 		}
 		return
 	}
-	if opts.Scope == nil {
+	// A metadata-only run leaves the system unremembered, so the next
+	// index-triggered run still looks for the images it skipped.
+	if opts.Scope == nil && !opts.SkipImages {
 		if rememberErr := scraper.RememberSystem(
 			ctx, s.db, scraperID, systemdefs.SystemPinball, fingerprintVersion, sourceState,
 		); rememberErr != nil {
@@ -369,7 +375,9 @@ func (s *scraperImpl) buildWrite(table *pinup.Table, emu *pinup.Emulator, runID 
 			TypeTag: tags.PropertyTypeTag(tags.TagPropertyDescription), Text: notes,
 		})
 	}
-	write.MediaProps = s.imageProps(table, emu)
+	if !s.skipArt {
+		write.MediaProps = s.imageProps(table, emu)
+	}
 	return write
 }
 

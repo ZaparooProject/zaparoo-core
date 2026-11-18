@@ -425,6 +425,7 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
 | totalScraped | number | Yes   | Number of media records already marked scraped, across the scraper/library rather than the current scope. |
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
+| skipImages | boolean | No      | True while the active run imports metadata without art (`skipImages` on `media.scrape`). |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
 | paused    | boolean | Yes      | True when the active scrape is paused.                            |
 | state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |

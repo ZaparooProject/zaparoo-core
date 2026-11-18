@@ -69,6 +69,7 @@ func NewPlatformScraper(library Library) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: playnite.Systems(),
 		SupportsFillMissing: true,
+		SupportsSkipImages:  true,
 		AutoScrapeOrder:     scraper.AutoOrderDevice,
 		AutoScrapeLaunchers: []string{playnite.LauncherID},
 		Scrape: func(
@@ -97,7 +98,7 @@ func NewPlatformScraper(library Library) platforms.Scraper {
 			if err != nil {
 				return fmt.Errorf("playnite: %w", err)
 			}
-			impl := &scraperImpl{fs: fs, db: db.MediaDB, games: indexGames(games)}
+			impl := &scraperImpl{fs: fs, db: db.MediaDB, games: indexGames(games), skipArt: opts.SkipImages}
 			go impl.scrapeLoop(ctx, opts, ch)
 			return nil
 		},
@@ -123,6 +124,8 @@ type scraperImpl struct {
 	games map[string]*playnite.Game
 	// unmapped collects the game values this run had no tag mapping for.
 	unmapped scraper.UnmappedValues
+	// skipArt leaves the image lookups out of a metadata-only run.
+	skipArt bool
 }
 
 type matchStats struct {
@@ -222,6 +225,7 @@ func (s *scraperImpl) scrapeSystem(
 	targets, stats := s.buildTargets(media, scraped, opts.RunID)
 	for i := range targets {
 		targets[i].Write.FillMissing = opts.FillMissing
+		targets[i].Write.SkipImages = opts.SkipImages
 	}
 	report := func(processed, matched int) {
 		select {
@@ -338,7 +342,9 @@ func (s *scraperImpl) buildWrite(game *playnite.Game, runID string) *database.Sc
 			TypeTag: tags.PropertyTypeTag(tags.TagPropertyDescription), Text: description,
 		})
 	}
-	write.MediaProps = s.imageProps(game)
+	if !s.skipArt {
+		write.MediaProps = s.imageProps(game)
+	}
 	return write
 }
 

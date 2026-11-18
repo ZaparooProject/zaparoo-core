@@ -90,7 +90,7 @@ func (g *GamelistXMLScraper) scrapeScoped(
 				Sentinel: scraper.SentinelTagInfo("gamelist.xml"), MediaTags: mapped.MediaTags,
 				MediaProps: mapped.MediaProps, TitleTags: mapped.TitleTags, TitleProps: mapped.TitleProps,
 			}
-			appendRunMarker("gamelist.xml", opts, write)
+			applyRunOptions("gamelist.xml", opts, write)
 			targets = append(targets, database.ScrapeWriteTarget{
 				MediaDBID: record.MatchedMediaDBID, MediaTitleDBID: record.MatchedTitleDBID, Write: write,
 			})
@@ -174,7 +174,7 @@ func (g *GamelistXMLScraper) scopedCompanionTargets(
 			if matched.MediaLevelWriteSafe {
 				write.MediaTags = g.companionChildTags(child)
 			}
-			appendRunMarker("gamelist.xml", opts, write)
+			applyRunOptions("gamelist.xml", opts, write)
 			targets = append(targets, database.ScrapeWriteTarget{
 				MediaDBID: media.DBID, MediaTitleDBID: media.MediaTitleDBID, Write: write,
 			})

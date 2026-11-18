@@ -308,7 +308,7 @@ func TestImageDirSettingRefusedWhileImagesDownload(t *testing.T) {
 
 	ClearScrapingStatus()
 	t.Cleanup(ClearScrapingStatus)
-	require.True(t, scrapingStatusInstance.startIfNotRunning(libretrothumbs.ScraperID, false))
+	require.True(t, scrapingStatusInstance.startIfNotRunning(libretrothumbs.ScraperID, false, false))
 
 	err = update(next)
 	var categorized *models.CategorizedError
@@ -319,7 +319,7 @@ func TestImageDirSettingRefusedWhileImagesDownload(t *testing.T) {
 	require.NoError(t, update(current), "sending the current folder changes nothing")
 
 	ClearScrapingStatus()
-	require.True(t, scrapingStatusInstance.startIfNotRunning("gamelist.xml", false))
+	require.True(t, scrapingStatusInstance.startIfNotRunning("gamelist.xml", false, false))
 	require.NoError(t, update(next), "other scrapers do not write to the image folder")
 	assert.Equal(t, next, cfg.ImageDirSetting())
 }

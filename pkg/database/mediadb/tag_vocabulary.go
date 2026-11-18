@@ -104,7 +104,9 @@ func isFreeTextType(tagType string) bool {
 
 // acceptScrapeTargets applies acceptTagInfos to every target's tags, copying a
 // write only when something in it changes. A sentinel the vocabulary refuses
-// is an error: it is Core's own bookkeeping, never source data.
+// is an error: it is Core's own bookkeeping, never source data. A SkipImages
+// write loses its art properties and its sentinel here, whatever the scraper
+// put in it.
 func acceptScrapeTargets(
 	method string, targets []database.ScrapeWriteTarget,
 ) ([]database.ScrapeWriteTarget, error) {
@@ -112,13 +114,24 @@ func acceptScrapeTargets(
 	copied := false
 	for i := range targets {
 		write := targets[i].Write
+		source := write.Sentinel.Type
+		if write.SkipImages {
+			stripped := stripArt(write)
+			if !copied {
+				out = make([]database.ScrapeWriteTarget, len(targets))
+				copy(out, targets)
+				copied = true
+			}
+			out[i].Write = stripped
+			write = stripped
+		}
 		if write.Sentinel.Type != "" {
 			if err := tags.ValidateTagValue(tags.TagType(write.Sentinel.Type), write.Sentinel.Tag); err != nil {
 				return nil, fmt.Errorf("%s: sentinel: %w", method, err)
 			}
 		}
-		mediaTags := acceptTagInfos(write.Sentinel.Type, write.MediaTags)
-		titleTags := acceptTagInfos(write.Sentinel.Type, write.TitleTags)
+		mediaTags := acceptTagInfos(source, write.MediaTags)
+		titleTags := acceptTagInfos(source, write.TitleTags)
 		if sameTagSlice(mediaTags, write.MediaTags) && sameTagSlice(titleTags, write.TitleTags) {
 			continue
 		}
@@ -133,6 +146,26 @@ func acceptScrapeTargets(
 		out[i].Write = &accepted
 	}
 	return out, nil
+}
+
+// stripArt returns a copy of write without its sentinel or any image, video
+// or manual property.
+func stripArt(write *database.ScrapeWrite) *database.ScrapeWrite {
+	stripped := *write
+	stripped.Sentinel = database.TagInfo{}
+	stripped.MediaProps = withoutArt(write.MediaProps)
+	stripped.TitleProps = withoutArt(write.TitleProps)
+	return &stripped
+}
+
+func withoutArt(props []database.MediaProperty) []database.MediaProperty {
+	var out []database.MediaProperty
+	for i := range props {
+		if !tags.IsArtPropertyTypeTag(props[i].TypeTag) {
+			out = append(out, props[i])
+		}
+	}
+	return out
 }
 
 // sameTagSlice reports whether acceptTagInfos returned its input unchanged.

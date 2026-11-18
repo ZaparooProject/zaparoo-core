@@ -270,6 +270,43 @@ func TestScrapeForceRescrapesAndMarksRun(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetScrapedMediaIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestScrapeSkipImagesWritesMetadataOnly covers a metadata-only run: the
+// table's metadata is written without its images, the write asks the database
+// to leave the row unfinished, and the system is not remembered, so a later
+// run still adds the images.
+func TestScrapeSkipImagesWritesMetadataOnly(t *testing.T) {
+	t.Parallel()
+	inst := writeFixture(t)
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemPinball).Return([]database.TitleWithSystem{
+		{DBID: 1, SystemID: systemdefs.SystemPinball, SystemDBID: 7},
+	}, nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemPinball).Return([]database.MediaWithFullPath{
+		pinballMedia(100, 1, pinup.TablePath(10, "Attack from Mars")),
+	}, nil)
+	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).Return(map[int64]struct{}{}, nil)
+	// Registered so a stray fingerprint write is recorded and caught below.
+	mediaDB.On("SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	writes := captureWrites(t, mediaDB)
+
+	s := NewPlatformScraper(fixtureLocate(&inst))
+	assert.True(t, s.SupportsSkipImages)
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	require.NoError(t, s.Scrape(
+		t.Context(), nil, nil, afero.NewOsFs(), &database.Database{MediaDB: mediaDB},
+		scraper.ScrapeOptions{SkipImages: true}, nil, ch,
+	))
+	drain(t, ch)
+	require.Len(t, *writes, 1)
+	write := (*writes)[0].Write
+	assert.True(t, write.SkipImages)
+	assert.Empty(t, write.MediaProps, "no images are looked up")
+	assert.Equal(t, []string{"1995"}, tagValue(write, string(tags.TagTypeYear)))
+	assert.Equal(t, "Great table", propText(write.TitleProps, tags.TagPropertyDescription))
+	mediaDB.AssertNotCalled(t, "SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestScrapeFillMissingResumesOnlyUnfinishedRows(t *testing.T) {
 	t.Parallel()
 	inst := writeFixture(t)

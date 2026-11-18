@@ -752,6 +752,9 @@ type Scraper struct {
 	// constants.
 	AutoScrapeOrder     int
 	SupportsFillMissing bool
+	// SupportsSkipImages marks a scraper that supplies both metadata and
+	// art and can import the metadata alone.
+	SupportsSkipImages bool
 	// AutoScrapeAllLaunchers opts in the contributions of every launcher, for
 	// a scraper that is not tied to particular ones.
 	AutoScrapeAllLaunchers bool
