@@ -266,6 +266,34 @@ func TestScrapeForceRescrapesAndMarksRun(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "GetMediaBySystemID", systemdefs.SystemPC)
 }
 
+// TestScrapeSkipImagesWritesMetadataOnly covers a metadata-only run: the
+// game's metadata is written without its cover or background, and the write
+// asks the database to leave the row unfinished.
+func TestScrapeSkipImagesWritesMetadataOnly(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	mediaDB := testhelpers.NewMockMediaDBI()
+	expectSystem(mediaDB, systemdefs.SystemNES, 7,
+		media(100, 1, systemdefs.SystemNES, playnite.GamePath(idRich, "Rich Game")))
+	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).Return(map[int64]struct{}{}, nil)
+	writes := captureWrites(t, mediaDB)
+
+	s := NewPlatformScraper(f.library)
+	assert.True(t, s.SupportsSkipImages)
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	require.NoError(t, s.Scrape(
+		t.Context(), nil, nil, f.fs, &database.Database{MediaDB: mediaDB},
+		scraper.ScrapeOptions{SkipImages: true, Systems: []string{"nes"}}, nil, ch,
+	))
+	drain(t, ch)
+	require.Len(t, *writes, 1)
+	write := (*writes)[0].Write
+	assert.True(t, write.SkipImages)
+	assert.Empty(t, write.MediaProps, "no images are looked up")
+	assert.Equal(t, []string{"1989"}, tagValue(write, tags.TagTypeYear))
+	assert.NotEmpty(t, propText(write.TitleProps, tags.TagPropertyDescription))
+}
+
 func TestScrapeFillMissingResumesOnlyUnfinishedRows(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

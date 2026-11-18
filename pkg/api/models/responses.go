@@ -679,6 +679,8 @@ type ScrapingStatusResponse struct {
 	// media plays.
 	Throttled bool `json:"throttled,omitempty"`
 	Force     bool `json:"force"`
+	// SkipImages reports a run importing metadata without art.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 type MediaLookupMatch struct {
@@ -710,6 +712,9 @@ type ScraperInfo struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
 	SupportedSystems []string `json:"supportedSystems"`
+	// SupportsSkipImages reports that media.scrape accepts skipImages for
+	// this scraper.
+	SupportsSkipImages bool `json:"supportsSkipImages"`
 }
 
 // ScrapersResponse is the result returned by the "scrapers" RPC method.

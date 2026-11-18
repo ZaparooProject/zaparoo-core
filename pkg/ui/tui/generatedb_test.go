@@ -623,3 +623,40 @@ func TestProgressBar_BoundaryValues(t *testing.T) {
 	pb.SetProgress(0.999)
 	assert.InDelta(t, 0.999, pb.GetProgress(), 0.001)
 }
+
+func TestAddScrapeOptionTogglesShowsSkipImagesOnlyWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	labels := func(scraper models.ScraperInfo) []string {
+		list := NewSettingsList(tview.NewPages(), "main")
+		force, skipImages := false, false
+		addScrapeOptionToggles(list, scraper, &force, &skipImages)
+		out := make([]string, 0, list.GetItemCount())
+		for i := range list.GetItemCount() {
+			text, _ := list.GetItemText(i)
+			out = append(out, text)
+		}
+		return out
+	}
+
+	unsupported := labels(models.ScraperInfo{ID: "art-only"})
+	require.Len(t, unsupported, 1)
+	assert.Contains(t, unsupported[0], "Re-scrape already scraped games")
+
+	supported := labels(models.ScraperInfo{ID: "mixed", SupportsSkipImages: true})
+	require.Len(t, supported, 2)
+	assert.Contains(t, supported[1], "Metadata only (skip art)")
+}
+
+func TestScrapeParamsSendsSkipImagesOnlyWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	mixed := models.ScraperInfo{ID: "mixed", SupportsSkipImages: true}
+	params := scrapeParams(mixed, []string{"NES"}, true, true)
+	assert.Equal(t, models.MediaScrapeParams{
+		ScraperID: "mixed", Systems: []string{"NES"}, Force: true, SkipImages: true,
+	}, params)
+
+	params = scrapeParams(models.ScraperInfo{ID: "art-only"}, []string{}, false, true)
+	assert.False(t, params.SkipImages, "a choice left over from another scraper is not sent")
+}

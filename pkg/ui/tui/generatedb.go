@@ -505,6 +505,37 @@ func handleMediaManageEscape(
 	}
 }
 
+// addScrapeOptionToggles adds the per-run scrape options. The metadata-only
+// toggle is shown only for scrapers that accept it.
+func addScrapeOptionToggles(list *SettingsList, scraper models.ScraperInfo, force, skipImages *bool) {
+	list.AddToggle(
+		"Re-scrape already scraped games",
+		"Include already scraped games",
+		force,
+		func(_ bool) {})
+	if scraper.SupportsSkipImages {
+		list.AddToggle(
+			"Metadata only (skip art)",
+			"Import metadata without images, videos or manuals",
+			skipImages,
+			func(_ bool) {})
+	}
+}
+
+// scrapeParams builds the media.scrape request for the setup page. A
+// metadata-only choice left over from another scraper is not sent, since the
+// API rejects it for scrapers without support.
+func scrapeParams(
+	scraper models.ScraperInfo, systems []string, force, skipImages bool,
+) models.MediaScrapeParams {
+	return models.MediaScrapeParams{
+		ScraperID:  scraper.ID,
+		Systems:    systems,
+		Force:      force,
+		SkipImages: skipImages && scraper.SupportsSkipImages,
+	}
+}
+
 // BuildGenerateDBPage creates the media management page with PageFrame.
 func BuildGenerateDBPage(
 	cfg *config.Instance,
@@ -565,6 +596,7 @@ func BuildGenerateDBPage(
 		selected     []string
 		scraperIndex int
 		force        bool
+		skipImages   bool
 	}{}
 
 	operationState := struct {
@@ -927,11 +959,7 @@ func BuildGenerateDBPage(
 					app.SetFocus(selector)
 				})
 		}
-		scrapeSetupList.AddToggle(
-			"Re-scrape already scraped games",
-			"Include already scraped games",
-			&scrapeState.force,
-			func(_ bool) {})
+		addScrapeOptionToggles(scrapeSetupList, scraper, &scrapeState.force, &scrapeState.skipImages)
 		if len(scrapeState.systems) == 0 {
 			scrapeSetupList.AddAction("Start scrape", "No supported systems", func() {})
 		} else {
@@ -969,6 +997,7 @@ func BuildGenerateDBPage(
 		scrapeState.scrapers = scrapers.Scrapers
 		scrapeState.scraperIndex = 0
 		scrapeState.force = false
+		scrapeState.skipImages = false
 		scrapeState.selected = nil
 		scrapeState.allSystems = make([]SystemItem, 0, len(systems.Systems))
 		for _, system := range systems.Systems {
@@ -1003,11 +1032,7 @@ func BuildGenerateDBPage(
 		if systems == nil {
 			systems = []string{}
 		}
-		params := models.MediaScrapeParams{
-			ScraperID: scraper.ID,
-			Systems:   systems,
-			Force:     scrapeState.force,
-		}
+		params := scrapeParams(scraper, systems, scrapeState.force, scrapeState.skipImages)
 
 		setOperation(mediaManageScrape)
 		setCancelled("")

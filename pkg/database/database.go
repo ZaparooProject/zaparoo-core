@@ -113,6 +113,8 @@ type ScrapeJob struct {
 	Systems     []string     `json:"systems"`
 	Force       bool         `json:"force"`
 	FillMissing bool         `json:"fillMissing,omitempty"`
+	// SkipImages imports metadata only: no images, videos or manuals.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 // ScrapingOperation retains the legacy current-job fields while adding ordinary
@@ -132,6 +134,8 @@ type ScrapingOperation struct {
 	Version     int          `json:"version,omitempty"`
 	Force       bool         `json:"force"`
 	FillMissing bool         `json:"fillMissing,omitempty"`
+	// SkipImages imports metadata only: no images, videos or manuals.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 // Validate checks persisted job options before any scraper can execute them.
@@ -1215,6 +1219,9 @@ type ScrapeWrite struct {
 	VersionKeys      []VersionKey
 	// FillMissing preserves existing fields; zero retains manual scrape semantics.
 	FillMissing bool
+	// SkipImages drops image, video and manual properties and the Sentinel,
+	// so the record keeps its metadata and a later run can still add art.
+	SkipImages bool
 }
 
 // Version key types. A key is an identity a media row has beyond its title;

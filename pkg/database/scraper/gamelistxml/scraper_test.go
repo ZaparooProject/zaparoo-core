@@ -3846,6 +3846,69 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestScrapeLoop_SkipImagesWritesMetadataOnly checks a metadata-only run leaves
+// out the art gamelist.xml names and the art found next to the ROM, keeps the
+// metadata, and flags the write so the record is not marked done.
+func TestScrapeLoop_SkipImagesWritesMetadataOnly(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name><desc>Plumber</desc>
+    <developer>Nintendo</developer><image>./images/mario.png</image>
+    <video>./videos/mario.mp4</video><manual>./manuals/mario.pdf</manual></game>
+</gameList>`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "images"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "images", "mario.png"), []byte("png"), 0o600))
+
+	const (
+		titleDBID  = int64(1)
+		mediaDBID  = int64(10)
+		systemDBID = int64(100)
+	)
+
+	mockDB := newMockMediaDB(t)
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
+		}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
+	var write *database.ScrapeWrite
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).
+		Run(func(args mock.Arguments) {
+			w, ok := args.Get(3).(*database.ScrapeWrite)
+			require.True(t, ok)
+			write = w
+		}).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB, skipArt: true}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser:     syncutil.NewPauser(),
+		SkipImages: true,
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+	drainChannel(ch)
+
+	require.NotNil(t, write)
+	assert.True(t, write.SkipImages)
+	assert.Empty(t, write.MediaProps)
+	propTypes := make([]string, 0, len(write.TitleProps))
+	for _, p := range write.TitleProps {
+		assert.False(t, tags.IsArtPropertyTypeTag(p.TypeTag), "art property %s written", p.TypeTag)
+		propTypes = append(propTypes, p.TypeTag)
+	}
+	assert.Contains(t, propTypes, tags.PropertyTypeTag(tags.TagPropertyDescription))
+	assert.Contains(t, write.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypeDeveloper), Tag: "nintendo", Label: "Nintendo",
+	})
+	mockDB.AssertExpectations(t)
+}
+
 func TestScrapeLoop_ForceResumeSkipsCompletedRunMedia(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

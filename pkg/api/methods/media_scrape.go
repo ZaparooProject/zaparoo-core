@@ -72,6 +72,7 @@ type scrapingStatus struct {
 	latest          models.ScrapingStatusResponse
 	mu              syncutil.RWMutex
 	force           bool
+	skipImages      bool
 	running         bool
 	cancelRequested bool
 }
@@ -86,6 +87,7 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	s.cancelRequested = false
 	s.scraperID = scraperID
 	s.force = force
+	s.skipImages = false
 	s.countCache = scrapedCountCache{}
 	s.latest = models.ScrapingStatusResponse{
 		ScraperID: scraperID,
@@ -110,6 +112,7 @@ func (s *scrapingStatus) clear() {
 	s.running = false
 	s.scraperID = ""
 	s.force = false
+	s.skipImages = false
 	s.cancelFunc = nil
 	s.latest = models.ScrapingStatusResponse{}
 	s.countCache = scrapedCountCache{}
@@ -127,12 +130,16 @@ func (s *scrapingStatus) clearIfOwner(scraperID string) {
 	s.running = false
 	s.scraperID = ""
 	s.force = false
+	s.skipImages = false
 	s.cancelFunc = nil
 }
 
+// setLatest also stamps the running job's metadata-only flag onto status, so
+// every published update carries it.
 func (s *scrapingStatus) setLatest(status *models.ScrapingStatusResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	status.SkipImages = s.running && s.skipImages && status.ScraperID == s.scraperID
 	s.latest = *status
 }
 
@@ -141,6 +148,7 @@ func (s *scrapingStatus) getLatest() models.ScrapingStatusResponse {
 	defer s.mu.RUnlock()
 	status := s.latest
 	status.Force = s.force
+	status.SkipImages = s.running && s.skipImages
 	return status
 }
 
@@ -634,6 +642,7 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScrapeParams, runID string) (any, error) {
 	return startMediaScrapeOperation(env, &database.ScrapingOperation{
 		ScraperID: params.ScraperID, Systems: params.Systems, Force: params.Force, RunID: runID,
+		SkipImages: params.SkipImages,
 	}, params.Scope, false)
 }
 
@@ -649,6 +658,7 @@ func startMediaScrapeOperation(
 	}
 	params := models.MediaScrapeParams{
 		Scope: requestedScope, ScraperID: operation.ScraperID, Systems: operation.Systems, Force: operation.Force,
+		SkipImages: operation.SkipImages,
 	}
 	// A resumed or queued job already carries a resolved scope; a fresh request
 	// resolves one from its parameters below.
@@ -663,6 +673,8 @@ func startMediaScrapeOperation(
 		startErr = fmt.Errorf("scraper %q has no Scrape function", s.ID)
 	case operation.FillMissing && !s.SupportsFillMissing:
 		startErr = models.ClientErrf("scraper %q does not support fill-missing", s.ID)
+	case operation.SkipImages && !s.SupportsSkipImages:
+		startErr = models.ClientErrf("scraper %q does not support skipImages", s.ID)
 	}
 	if startErr != nil && len(operation.Pending) == 0 && !resume {
 		return nil, startErr
@@ -741,7 +753,7 @@ func startMediaScrapeOperation(
 	throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
 	opts := scraper.ScrapeOptions{
 		Scope: scope, Systems: params.Systems, RunID: runID, Force: params.Force,
-		FillMissing: operation.FillMissing, Pauser: env.ScrapePauser,
+		FillMissing: operation.FillMissing, SkipImages: operation.SkipImages, Pauser: env.ScrapePauser,
 	}
 	ch := make(chan scraper.ScrapeUpdate, 32)
 	// Scraper startup can read/write the database before it returns a channel
@@ -1046,10 +1058,11 @@ func persistedScrapingStatus(env requests.RequestEnv) (models.ScrapingStatusResp
 		return models.ScrapingStatusResponse{}, false
 	}
 	return models.ScrapingStatusResponse{
-		ScraperID: operation.ScraperID,
-		Scraping:  true,
-		State:     scrapeStateRunning,
-		Force:     operation.Force,
+		ScraperID:  operation.ScraperID,
+		Scraping:   true,
+		State:      scrapeStateRunning,
+		Force:      operation.Force,
+		SkipImages: operation.SkipImages,
 	}, true
 }
 
@@ -1096,9 +1109,10 @@ func HandleScrapers(env requests.RequestEnv) (any, error) {
 	infos := make([]models.ScraperInfo, 0, len(platformScrapers))
 	for _, s := range platformScrapers {
 		infos = append(infos, models.ScraperInfo{
-			ID:               s.ID,
-			Name:             s.Name,
-			SupportedSystems: s.SupportedSystemIDs,
+			ID:                 s.ID,
+			Name:               s.Name,
+			SupportedSystems:   s.SupportedSystemIDs,
+			SupportsSkipImages: s.SupportsSkipImages,
 		})
 	}
 	return models.ScrapersResponse{Scrapers: infos}, nil

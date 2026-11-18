@@ -2670,3 +2670,201 @@ func TestScrapingStatusFromUpdate_CancelIsNotAFailure(t *testing.T) {
 	assert.Equal(t, scrapeStateCancelled, status.State)
 	assert.Empty(t, status.Error)
 }
+
+// skipImagesScraper reports the options it was started with and the status a
+// client polling media.scrape.status would see while it runs.
+func skipImagesScraper(
+	id string, supported bool, got chan<- scraper.ScrapeOptions, status chan<- bool,
+) platforms.Scraper {
+	return platforms.Scraper{
+		ID: id, Name: id, SupportsSkipImages: supported,
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			if status != nil {
+				status <- scrapingStatusInstance.getLatest().SkipImages
+			}
+			got <- opts
+			go func() {
+				ch <- scraper.ScrapeUpdate{Done: true}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+}
+
+func TestHandleMediaScrape_RejectsSkipImagesForUnsupportedScraper(t *testing.T) {
+	// Not parallel — calls ClearScrapingStatus which resets shared global state.
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"art-only": skipImagesScraper("art-only", false, nil, nil)},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "art-only", SkipImages: true},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.Error(t, err)
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), `scraper "art-only" does not support skipImages`)
+	assert.False(t, IsScrapingRunning())
+	mockDB.AssertNotCalled(t, "SetScrapingOperation", assertmock.Anything)
+}
+
+func TestHandleMediaScrape_PassesSkipImagesToScraper(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", assertmock.MatchedBy(func(operation database.ScrapingOperation) bool {
+		return operation.SkipImages
+	})).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
+	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "mixed").Return(0, nil)
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	gotOptions := make(chan scraper.ScrapeOptions, 1)
+	gotStatus := make(chan bool, 1)
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"mixed": skipImagesScraper("mixed", true, gotOptions, gotStatus)},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "mixed", SkipImages: true},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.True(t, receiveScrapeOptions(t, gotOptions).SkipImages)
+	assert.True(t, <-gotStatus, "the running status reports a metadata-only run")
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	assert.False(t, scrapingStatusInstance.getLatest().SkipImages, "the flag ends with the run")
+	mockDB.AssertExpectations(t)
+}
+
+// A queued job keeps its scope and metadata-only flag when its turn comes.
+// The scope was dropped here before, so a queued single-file request ran over
+// the whole system.
+func TestStartQueuedScraperKeepsScopeAndSkipImages(t *testing.T) {
+	t.Parallel()
+	scope := &database.ScrapeScope{SystemID: "NES", Path: "/roms/NES", Subtree: true}
+	gotOptions := make(chan scraper.ScrapeOptions, 1)
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"mixed": skipImagesScraper("mixed", true, gotOptions, nil)},
+		testhelpers.NewMockMediaDBI(), nil,
+	)
+	operation := database.ScrapingOperation{
+		ScraperID: "mixed", Systems: []string{"NES"}, Scope: scope, SkipImages: true,
+	}
+
+	ch := startQueuedScraper(t.Context(), &env, &operation)
+	opts := receiveScrapeOptions(t, gotOptions)
+	assert.Equal(t, scope, opts.Scope)
+	assert.True(t, opts.SkipImages)
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+	}
+}
+
+func TestStartQueuedScraperRejectsUnsupportedSkipImages(t *testing.T) {
+	t.Parallel()
+	gotOptions := make(chan scraper.ScrapeOptions, 1)
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"art-only": skipImagesScraper("art-only", false, gotOptions, nil)},
+		testhelpers.NewMockMediaDBI(), nil,
+	)
+	operation := database.ScrapingOperation{ScraperID: "art-only", SkipImages: true}
+
+	ch := startQueuedScraper(t.Context(), &env, &operation)
+	update := <-ch
+	require.Error(t, update.FatalErr)
+	assert.Contains(t, update.FatalErr.Error(), "does not support skipImages")
+	assert.Empty(t, gotOptions, "the scraper must not start")
+}
+
+func TestScrapeQueueAdvanceCarriesSkipImages(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	current := database.ScrapingOperation{
+		Version: 1, ScraperID: "first", Pending: []database.ScrapeJob{
+			{ScraperID: "second", Systems: []string{"NES"}, SkipImages: true},
+		},
+	}
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+			stored = operation
+		}
+	}).Return(nil).Once()
+
+	next, err := scrapingStatusInstance.advance(t.Context(), db, &current)
+	require.NoError(t, err)
+	assert.True(t, next.SkipImages)
+	assert.True(t, stored.SkipImages, "the flag is persisted so a resume keeps it")
+	db.AssertExpectations(t)
+}
+
+func TestScrapeQueueKeepsSkipImagesJobsApart(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	db.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, nil).Once()
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+			stored = operation
+		}
+	}).Return(nil).Once()
+	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+
+	full := database.ScrapeJob{ScraperID: "mixed", Systems: []string{"NES"}}
+	metadataOnly := full
+	metadataOnly.SkipImages = true
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{full, metadataOnly, metadataOnly}, nil))
+	jobs := append([]database.ScrapeJob{{
+		ScraperID: stored.ScraperID, Systems: stored.Systems, SkipImages: stored.SkipImages,
+	}}, stored.Pending...)
+	require.Len(t, jobs, 2, "a metadata-only job is not a duplicate of a full one")
+	assert.NotEqual(t, jobs[0].SkipImages, jobs[1].SkipImages)
+	db.AssertExpectations(t)
+}
+
+// A metadata-only run in flight when an index finishes is folded back into
+// the queue and must stay metadata-only.
+func TestScrapeQueueKeepsRunningSkipImages(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	running := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "mixed", RunID: "retained", Systems: []string{"NES"}, SkipImages: true,
+	}
+	db.On("GetScrapingOperation").Return(running, true, nil).Once()
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+			stored = operation
+		}
+	}).Return(nil).Once()
+	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+
+	wide := database.ScrapeJob{ScraperID: "other", FillMissing: true, Systems: []string{"NES"}}
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}, nil))
+	require.Equal(t, "retained", stored.RunID)
+	assert.True(t, stored.SkipImages, "the running job stays metadata-only")
+	require.Len(t, stored.Pending, 1)
+	assert.False(t, stored.Pending[0].SkipImages)
+	db.AssertExpectations(t)
+}
