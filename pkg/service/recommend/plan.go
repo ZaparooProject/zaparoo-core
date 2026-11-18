@@ -616,16 +616,23 @@ func (b *planBuilder) sections() []PlanSection {
 	return sections[:min(len(sections), b.opts.MaxSections)]
 }
 
-// queue lists every pick in one list. The seeds take turns, strongest first,
-// each giving its best remaining game, so a seed whose matches score high
+// queue lists every pick in one list. The seeds take turns, a stronger seed
+// more often, each giving its next match, so a seed whose matches score high
 // cannot fill the list; every fourth place goes to a game marked to play
-// later. The series and system caps hold across the whole list.
+// later. Only a seed's close matches take turns, in an order that moves on
+// each day so the list does not stay the same while the signals do; the rest
+// fill the list once the turns run out. The series and system caps hold
+// across the whole list.
 func (b *planBuilder) queue() []PlanSection {
 	used := make(map[int64]struct{}, len(b.seeds))
 	for i := range b.seeds {
 		used[b.seeds[i].game.Group] = struct{}{}
 	}
 	lanes := make([][]*candidate, len(b.seeds))
+	weights := make([]float64, len(b.seeds))
+	for i := range b.seeds {
+		weights[i] = b.seeds[i].affinity
+	}
 	var later []*candidate
 	for group, entry := range b.candidates {
 		if state, ok := b.games[group]; ok && len(state.playLater) > 0 {
@@ -648,13 +655,20 @@ func (b *planBuilder) queue() []PlanSection {
 		}
 		later = append(later, entry)
 	}
+
+	day := int(b.now.UTC().Unix() / secondsPerDay)
+	var reserve []*candidate
 	for i := range lanes {
-		slices.SortFunc(lanes[i], compareCandidates)
+		var weak []*candidate
+		lanes[i], weak = queueLane(lanes[i], day)
+		reserve = append(reserve, weak...)
 	}
+	slices.SortFunc(reserve, compareCandidates)
 	slices.SortFunc(later, compareCandidates)
+	later = rotateCandidates(later, day)
 
 	section := PlanSection{Kind: SectionQueue}
-	for _, entry := range interleaveCandidates(lanes, later, used, b.opts.MaxResults+planSpare) {
+	for _, entry := range interleaveCandidates(lanes, weights, reserve, later, used, b.opts.MaxResults+planSpare) {
 		item := PlanItem{TitleDBID: entry.best.TitleDBID, Reasons: entry.best.Reasons}
 		if state, ok := b.games[entry.group]; ok && len(state.playLater) > 0 {
 			item.Signal = SignalPlayLater
@@ -670,15 +684,56 @@ func (b *planBuilder) queue() []PlanSection {
 	return []PlanSection{section}
 }
 
-// queueLaterEvery is how often the queue gives a place to a game marked to
-// play later: every fourth.
-const queueLaterEvery = 4
+const (
+	// queueLaterEvery is how often the queue gives a place to a game marked
+	// to play later: every fourth.
+	queueLaterEvery = 4
+	// queueCloseMatch is how close to a seed's best match a game must score
+	// to take the seed's turns.
+	queueCloseMatch = 0.5
+	secondsPerDay   = 24 * 60 * 60
+)
 
-// interleaveCandidates takes from the lanes in turn, each in its own order,
-// giving every queueLaterEvery-th place to the later lane while it lasts. A
-// game already used or in a full series is skipped; one on a full system is
-// passed over, and those fill the list when the lanes run dry.
-func interleaveCandidates(lanes [][]*candidate, later []*candidate, used map[int64]struct{}, limit int) []*candidate {
+// queueLane splits one seed's matches into the close ones, which take the
+// seed's turns starting at a place that moves on each day, and the rest.
+func queueLane(entries []*candidate, day int) (closeMatches, rest []*candidate) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	slices.SortFunc(entries, compareCandidates)
+	cut := len(entries)
+	for i, entry := range entries {
+		if entry.total < entries[0].total*queueCloseMatch {
+			cut = i
+			break
+		}
+	}
+	return rotateCandidates(entries[:cut], day), entries[cut:]
+}
+
+// rotateCandidates starts the list at a place that moves on by one each day,
+// wrapping round, so each entry leads in turn.
+func rotateCandidates(entries []*candidate, day int) []*candidate {
+	if len(entries) < 2 {
+		return entries
+	}
+	start := day % len(entries)
+	if start < 0 {
+		start += len(entries)
+	}
+	return append(slices.Clone(entries[start:]), entries[:start]...)
+}
+
+// interleaveCandidates fills a list from the lanes by smooth weighted turns:
+// a lane with twice the weight takes twice the places, spread out, not in a
+// run. Every queueLaterEvery-th place goes to the later lane while it lasts.
+// A game already used or in a full series is skipped; one on a full system is
+// passed over. When the lanes run dry, the reserve fills the list, then what
+// was passed over.
+func interleaveCandidates(
+	lanes [][]*candidate, weights []float64, reserve, later []*candidate,
+	used map[int64]struct{}, limit int,
+) []*candidate {
 	perSeries := make(map[string]int)
 	perSystem := make(map[string]int)
 	taken := make([]*candidate, 0, limit)
@@ -716,22 +771,35 @@ func interleaveCandidates(lanes [][]*candidate, later []*candidate, used map[int
 		}
 		return false
 	}
+	current := make([]float64, len(lanes))
+	turn := func() bool {
+		for {
+			best, total := -1, 0.0
+			for i := range lanes {
+				if len(lanes[i]) == 0 {
+					continue
+				}
+				current[i] += weights[i]
+				total += weights[i]
+				if best < 0 || current[i] > current[best] {
+					best = i
+				}
+			}
+			if best < 0 {
+				return false
+			}
+			current[best] -= total
+			if next(&lanes[best]) {
+				return true
+			}
+		}
+	}
 
-	turn := 0
 	for len(taken) < limit {
 		if (len(taken)+1)%queueLaterEvery == 0 && next(&later) {
 			continue
 		}
-		progressed := false
-		for range lanes {
-			lane := turn % len(lanes)
-			turn++
-			if next(&lanes[lane]) {
-				progressed = true
-				break
-			}
-		}
-		if !progressed && !next(&later) {
+		if !turn() && !next(&reserve) && !next(&later) {
 			break
 		}
 	}

@@ -21,6 +21,7 @@ package recommend
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -636,7 +637,7 @@ func TestInterleaveCandidates_SeedsTakeTurns(t *testing.T) {
 	}
 	later := []*candidate{queueEntry(21, playLaterBoost, "H", ""), queueEntry(22, playLaterBoost, "I", "")}
 
-	got := interleaveCandidates(lanes, later, map[int64]struct{}{}, 9)
+	got := interleaveCandidates(lanes, []float64{1, 1}, nil, later, map[int64]struct{}{}, 9)
 	assert.Equal(t, []int64{1, 11, 2, 21, 12, 3, 4, 22, 5}, queueIDs(got))
 }
 
@@ -657,8 +658,48 @@ func TestInterleaveCandidates_Caps(t *testing.T) {
 	}
 	used := map[int64]struct{}{2: {}}
 
-	got := interleaveCandidates(lanes, nil, used, 20)
+	got := interleaveCandidates(lanes, []float64{1, 1}, nil, nil, used, 20)
 	assert.Equal(t, []int64{1, 11, 3, 12, 4, 14, 5, 6}, queueIDs(got),
 		"title 2 is used, a third mario game is skipped, and the fifth SNES game waits for the others")
-	assert.Empty(t, interleaveCandidates(nil, nil, map[int64]struct{}{}, 5))
+	assert.Empty(t, interleaveCandidates(nil, nil, nil, nil, map[int64]struct{}{}, 5))
+}
+
+// A seed twice as strong takes twice the turns, spread out, and the reserve
+// fills the list once the turns run out.
+func TestInterleaveCandidates_WeightedTurns(t *testing.T) {
+	t.Parallel()
+	strong, weak := make([]*candidate, 0, 4), make([]*candidate, 0, 4)
+	for id := int64(1); id <= 4; id++ {
+		strong = append(strong, queueEntry(id, 1, fmt.Sprintf("S%d", id), ""))
+		weak = append(weak, queueEntry(10+id, 1, fmt.Sprintf("W%d", id), ""))
+	}
+	reserve := []*candidate{queueEntry(21, 0.1, "R", "")}
+
+	got := interleaveCandidates([][]*candidate{strong, weak}, []float64{2, 1}, reserve, nil,
+		map[int64]struct{}{}, 9)
+	assert.Equal(t, []int64{1, 11, 2, 3, 12, 4, 13, 14, 21}, queueIDs(got))
+}
+
+// Only a seed's close matches take its turns, and they lead in turn, a day
+// at a time.
+func TestQueueLane(t *testing.T) {
+	t.Parallel()
+	lane := func() []*candidate {
+		return []*candidate{
+			queueEntry(3, 6, "A", ""), queueEntry(1, 10, "A", ""),
+			queueEntry(4, 4, "A", ""), queueEntry(2, 8, "A", ""),
+		}
+	}
+	closeMatches, rest := queueLane(lane(), 0)
+	assert.Equal(t, []int64{1, 2, 3}, queueIDs(closeMatches))
+	assert.Equal(t, []int64{4}, queueIDs(rest))
+
+	closeMatches, _ = queueLane(lane(), 1)
+	assert.Equal(t, []int64{2, 3, 1}, queueIDs(closeMatches))
+	closeMatches, _ = queueLane(lane(), 3)
+	assert.Equal(t, []int64{1, 2, 3}, queueIDs(closeMatches), "the order comes round again")
+
+	closeMatches, rest = queueLane(nil, 5)
+	assert.Empty(t, closeMatches)
+	assert.Empty(t, rest)
 }
