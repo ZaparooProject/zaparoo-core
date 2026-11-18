@@ -145,8 +145,8 @@ func TestHookIntellivisionCFGInsideZip(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		inner   string
-		entries []string
 		wantCFG string
+		entries []string
 	}{
 		{
 			name: "same folder", inner: "Homebrew/Game.bin",
