@@ -81,7 +81,10 @@ func TestResolveItem(t *testing.T) {
 	remakeA := movie("400", "The Thing", 1982, "tmdb://1091")
 	remakeB := movie("401", "The Thing", 1982, "tmdb://1091")
 	noIDs := movie("500", "Home Video", 0)
-	srv.addSection("1", "movie", "Movies", alien, aliens, other, remakeA, noIDs)
+	heatLocal := movie("700", "Heat", 1995)
+	heat := movie("701", "Heat", 1995, "tmdb://949")
+	solo := movie("702", "Solo", 2018)
+	srv.addSection("1", "movie", "Movies", alien, aliens, other, remakeA, noIDs, heatLocal, heat, solo)
 	srv.addSection("2", "movie", "Movies 4K", remakeB)
 	srv.addSection("3", "artist", "Music", Metadata{RatingKey: "600", Type: "artist", Title: "Alien"})
 	client := srv.client("")
@@ -123,6 +126,18 @@ func TestResolveItem(t *testing.T) {
 		md, err := resolveItem(ctx, client, kindMovie, pathFor("300", "Alien (1979)", "tmdb=348"))
 		require.NoError(t, err)
 		assert.Equal(t, "200", md.RatingKey)
+	})
+
+	t.Run("key holding only the name defers to the guid", func(t *testing.T) {
+		md, err := resolveItem(ctx, client, kindMovie, pathFor("700", "Heat (1995)", "tmdb=949"))
+		require.NoError(t, err)
+		assert.Equal(t, "701", md.RatingKey)
+	})
+
+	t.Run("key holding only the name is kept when no guid matches", func(t *testing.T) {
+		md, err := resolveItem(ctx, client, kindMovie, pathFor("702", "Solo (2018)", "tmdb=348348"))
+		require.NoError(t, err)
+		assert.Equal(t, "702", md.RatingKey)
 	})
 
 	t.Run("stale key falls back to title", func(t *testing.T) {

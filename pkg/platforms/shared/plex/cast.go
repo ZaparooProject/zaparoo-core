@@ -78,7 +78,7 @@ type castMessage struct {
 }
 
 func encodeCastMessage(m *castMessage) []byte {
-	b := make([]byte, 0, 64+len(m.SourceID)+len(m.DestinationID)+len(m.Namespace)+len(m.PayloadUTF8))
+	var b []byte
 	b = protowire.AppendTag(b, castFieldProtocolVersion, protowire.VarintType)
 	b = protowire.AppendVarint(b, 0)
 	b = protowire.AppendTag(b, castFieldSourceID, protowire.BytesType)

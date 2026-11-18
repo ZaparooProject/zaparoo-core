@@ -257,7 +257,7 @@ func parseProviderIDs(values url.Values, kind *mediaKind) (map[string]string, er
 func resolveItem(ctx context.Context, c Client, kind *mediaKind, ref reference) (*Item, error) {
 	item, err := c.GetItem(ctx, ref.ID)
 	switch {
-	case err == nil && strings.EqualFold(item.Type, kind.itemType):
+	case err == nil && strings.EqualFold(item.Type, kind.itemType) && !identityConflicts(kind, ref.ProviderIDs, item):
 		return item, nil
 	case err == nil, errors.Is(err, ErrItemNotFound):
 	default:
@@ -342,27 +342,39 @@ func matchingByIdentity(kind *mediaKind, ids map[string]string, items []Item) []
 		if !strings.EqualFold(item.Type, kind.itemType) {
 			continue
 		}
-		matched, conflicted := false, false
-		for _, p := range kind.providers {
-			want, ok := ids[p.key]
-			if !ok {
-				continue
-			}
-			have := strings.TrimSpace(lookupProviderID(item.ProviderIDs, p.jellyfin))
-			if have == "" {
-				continue
-			}
-			if strings.EqualFold(have, want) {
-				matched = true
-			} else {
-				conflicted = true
-			}
-		}
-		if matched && !conflicted {
+		if matched, conflicted := compareIdentity(kind, ids, item); matched && !conflicted {
 			matches = append(matches, *item)
 		}
 	}
 	return matches
+}
+
+// compareIdentity reports whether any provider ID the card and the item both
+// hold agrees, and whether any disagrees.
+func compareIdentity(kind *mediaKind, ids map[string]string, item *Item) (matched, conflicted bool) {
+	for _, p := range kind.providers {
+		want, ok := ids[p.key]
+		if !ok {
+			continue
+		}
+		have := strings.TrimSpace(lookupProviderID(item.ProviderIDs, p.jellyfin))
+		if have == "" {
+			continue
+		}
+		if strings.EqualFold(have, want) {
+			matched = true
+		} else {
+			conflicted = true
+		}
+	}
+	return matched, conflicted
+}
+
+// identityConflicts reports whether the item holds a provider ID that
+// contradicts the card's, which makes it a different item.
+func identityConflicts(kind *mediaKind, ids map[string]string, item *Item) bool {
+	_, conflicted := compareIdentity(kind, ids, item)
+	return conflicted
 }
 
 func matchingByName(kind *mediaKind, name string, items []Item) []Item {

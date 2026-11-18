@@ -27,8 +27,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 )
 
 // ErrPinExpired reports a link PIN plex.tv no longer knows.
@@ -62,7 +60,7 @@ func NewTVClient(baseURL, clientsURL, clientID string, httpClient *http.Client) 
 		clientsURL = ClientsBaseURL
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Transport: useragent.Transport(nil)}
+		httpClient = newHTTPClient()
 	}
 	return &TVClient{
 		http:       httpClient,

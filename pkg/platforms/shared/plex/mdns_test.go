@@ -94,7 +94,8 @@ func TestParseCastResponseIgnoresQueries(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBrowseCast(t *testing.T) {
+// TestBrowseCastLoopback covers the same flow over a real UDP socket.
+func TestBrowseCastLoopback(t *testing.T) {
 	t.Parallel()
 	var lc net.ListenConfig
 	responder, err := lc.ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
@@ -129,6 +130,59 @@ func TestBrowseCast(t *testing.T) {
 	require.Len(t, devices, 2, "repeated answers are merged")
 	assert.Equal(t, "Kitchen", devices[0].Name)
 	assert.Equal(t, "127.0.0.1", devices[0].Host)
+	assert.Equal(t, "Living Room TV", devices[1].Name)
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+// scriptedConn is a net.PacketConn that delivers a fixed list of datagrams
+// and then reports a read timeout.
+type scriptedConn struct {
+	from    net.Addr
+	reads   [][]byte
+	written [][]byte
+}
+
+func (c *scriptedConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	if len(c.reads) == 0 {
+		return 0, nil, timeoutError{}
+	}
+	n := copy(p, c.reads[0])
+	c.reads = c.reads[1:]
+	return n, c.from, nil
+}
+
+func (c *scriptedConn) WriteTo(p []byte, _ net.Addr) (int, error) {
+	c.written = append(c.written, append([]byte(nil), p...))
+	return len(p), nil
+}
+
+func (*scriptedConn) Close() error                     { return nil }
+func (c *scriptedConn) LocalAddr() net.Addr            { return c.from }
+func (*scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (*scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (*scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestBrowseCastScripted(t *testing.T) {
+	t.Parallel()
+	answer := castAnswer(t)
+	conn := &scriptedConn{
+		from:  &net.UDPAddr{IP: net.IPv4(192, 168, 1, 60), Port: 5353},
+		reads: [][]byte{[]byte("garbage"), answer, answer},
+	}
+	devices, err := browseCast(context.Background(), conn, mdnsGroup, time.Second)
+	require.NoError(t, err)
+	require.Len(t, conn.written, 1, "one query is sent")
+	query, err := buildCastQuery()
+	require.NoError(t, err)
+	assert.Equal(t, query, conn.written[0])
+	assert.Empty(t, conn.reads, "every datagram is read before the timeout")
+	require.Len(t, devices, 2, "a malformed datagram is skipped and a repeated answer is merged")
+	assert.Equal(t, castDevice{Name: "Kitchen", ID: "def456", Host: "192.168.1.60", Port: 8010}, devices[0])
 	assert.Equal(t, "Living Room TV", devices[1].Name)
 }
 

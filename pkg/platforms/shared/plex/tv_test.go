@@ -21,6 +21,8 @@ package plex
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,12 +64,16 @@ func TestTVClientPinLifecycle(t *testing.T) {
 
 func TestTVClientCreatePinRejectsIncomplete(t *testing.T) {
 	t.Parallel()
-	tv := newFakeTV(t)
-	// The fake requires client identity headers, so a client without an
-	// identifier is refused.
-	c := NewTVClient(tv.URL, tv.URL, "", tv.Client())
-	_, err := c.CreatePin(context.Background())
-	require.Error(t, err)
+	for _, body := range []string{`{"id":0,"code":"AB12"}`, `{"id":5,"code":" "}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		c := NewTVClient(srv.URL, srv.URL, testClientID, srv.Client())
+		_, err := c.CreatePin(context.Background())
+		require.ErrorContains(t, err, "incomplete link code", body)
+	}
 }
 
 func TestTVClientResourcesIncludeRelays(t *testing.T) {

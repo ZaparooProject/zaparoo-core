@@ -146,7 +146,9 @@ func TestLaunchPlaysEachKind(t *testing.T) {
 			t.Parallel()
 			f := newFakeJellyfin(t)
 			seedLibrary(f)
-			require.NoError(t, launchPath(context.Background(), testClient(t, f, "Living Room"), tt.kind, tt.path))
+			sent, err := launchPath(context.Background(), testClient(t, f, "Living Room"), tt.kind, tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, sent)
 			plays := f.playCalls()
 			require.Len(t, plays, 1)
 			assert.Equal(t, "sess-1", plays[0].session)
@@ -212,8 +214,9 @@ func TestLaunchQueuesLongListsInChunks(t *testing.T) {
 			Album: "Box Set", ParentIndexNumber: intPtr(1), IndexNumber: intPtr(i + 1),
 		}})
 	}
-	require.NoError(t, launchPath(context.Background(), testClient(t, f, ""), kindAlbum,
-		"jellyfin-album://"+albumAID+"/Box%20Set"))
+	_, err := launchPath(context.Background(), testClient(t, f, ""), kindAlbum,
+		"jellyfin-album://"+albumAID+"/Box%20Set")
+	require.NoError(t, err)
 	plays := f.playCalls()
 	require.Len(t, plays, 2)
 	assert.Equal(t, "PlayNow", plays[0].command)
@@ -226,7 +229,7 @@ func TestLaunchFailsWithoutPlayer(t *testing.T) {
 	t.Parallel()
 	f := newFakeJellyfin(t)
 	seedLibrary(f)
-	err := launchPath(context.Background(), testClient(t, f, "Bedroom"), kindMovie,
+	_, err := launchPath(context.Background(), testClient(t, f, "Bedroom"), kindMovie,
 		"jellyfin-movie://"+movieID+"/Heat")
 	require.ErrorIs(t, err, ErrNoPlayer)
 	assert.Contains(t, err.Error(), "Living Room (Jellyfin Android TV)")
@@ -342,6 +345,30 @@ func TestScannerEachKind(t *testing.T) {
 	}
 }
 
+func TestMissingEpisodesAreSkipped(t *testing.T) {
+	t.Parallel()
+	f := newFakeJellyfin(t)
+	seedLibrary(f)
+	f.addItems(fakeItem{seriesID: showID, missing: true, Item: Item{
+		ID: id(105), Name: "Unaired", Type: typeEpisode, SeriesName: "Bluey",
+		ParentIndexNumber: new(9), IndexNumber: new(1),
+	}})
+	c := testClient(t, f, "")
+
+	results, err := scan(context.Background(), c, kindEpisode, nil)
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotContains(t, r.Name, "Unaired", "a scan does not index a missing episode")
+	}
+
+	episodes, err := c.ShowEpisodes(context.Background(), showID)
+	require.NoError(t, err)
+	require.NotEmpty(t, episodes)
+	for _, ep := range episodes {
+		assert.NotEqual(t, id(105), ep.ID, "a show does not queue a missing episode")
+	}
+}
+
 func TestScannerSkipsUnconfigured(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t, "", "")
@@ -434,6 +461,16 @@ func TestStaleIDResolution(t *testing.T) {
 				}})
 			},
 			path: "jellyfin-movie://" + stale + "/Heat?tmdb=949&imdb=tt0113277", want: movieID,
+		},
+		{
+			name: "stored id now holds another item", kind: kindMovie,
+			setup: func(f *fakeJellyfin) {
+				f.addItems(fakeItem{Item: Item{
+					ID: id(104), Name: "Heat", Type: typeMovie, ProductionYear: 1986,
+					ProviderIDs: map[string]string{"Tmdb": "12345"},
+				}})
+			},
+			path: "jellyfin-movie://" + id(104) + "/Heat?tmdb=949", want: movieID,
 		},
 		{
 			name: "name when provider ids are gone", kind: kindMovie,
@@ -532,12 +569,14 @@ func TestStaleIDServerErrorDoesNotFallBack(t *testing.T) {
 // runReady runs a readiness probe against the fake server on a fake clock,
 // calling step before each poll after the first.
 func runReady(
-	t *testing.T, f *fakeJellyfin, kind *mediaKind, media *models.ActiveMedia, polls int, step func(int),
+	t *testing.T, f *fakeJellyfin, kind *mediaKind, record *launchRecord, media *models.ActiveMedia,
+	polls int, step func(int),
 ) error {
 	t.Helper()
 	cfg := testConfig(t, f.URL(), "TV")
 	clock := clockwork.NewFakeClock()
-	probe := waitForPlaying(launcherClient(kind.launcherID, []string{shared.LauncherGroupJellyfin}), kind, clock)
+	probe := waitForPlaying(
+		launcherClient(kind.launcherID, []string{shared.LauncherGroupJellyfin}), kind, clock, record)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// waitCtx ends as soon as the probe returns, so the loop never waits on a
@@ -566,7 +605,7 @@ func TestWaitForReadyLaunchedItem(t *testing.T) {
 	f := newFakeJellyfin(t)
 	f.setSessions(Session{ID: "s", DeviceName: "TV"})
 	media := &models.ActiveMedia{Path: "jellyfin-movie://" + movieID + "/Heat"}
-	err := runReady(t, f, kindMovie, media, 5, func(i int) {
+	err := runReady(t, f, kindMovie, &launchRecord{}, media, 5, func(i int) {
 		if i == 1 {
 			f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: movieID}})
 		}
@@ -579,7 +618,7 @@ func TestWaitForReadyItemChanged(t *testing.T) {
 	f := newFakeJellyfin(t)
 	f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: id(7)}})
 	media := &models.ActiveMedia{Path: "jellyfin-show://" + showID + "/Bluey"}
-	err := runReady(t, f, kindShow, media, 5, func(i int) {
+	err := runReady(t, f, kindShow, &launchRecord{}, media, 5, func(i int) {
 		if i == 0 {
 			f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: ep1ID}})
 		}
@@ -592,7 +631,7 @@ func TestWaitForReadyStaysPendingOnSameItem(t *testing.T) {
 	f := newFakeJellyfin(t)
 	f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: id(7)}})
 	media := &models.ActiveMedia{Path: "jellyfin-movie://" + movieID + "/Heat"}
-	err := runReady(t, f, kindMovie, media, 3, func(int) {})
+	err := runReady(t, f, kindMovie, &launchRecord{}, media, 3, func(int) {})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotErrorIs(t, err, platforms.ErrReadinessUnavailable)
 }
@@ -600,8 +639,8 @@ func TestWaitForReadyStaysPendingOnSameItem(t *testing.T) {
 func TestWaitForReadyPlayerMissing(t *testing.T) {
 	t.Parallel()
 	f := newFakeJellyfin(t)
-	err := runReady(t, f, kindMovie, &models.ActiveMedia{Path: "jellyfin-movie://" + movieID + "/Heat"}, 2,
-		func(int) {})
+	media := &models.ActiveMedia{Path: "jellyfin-movie://" + movieID + "/Heat"}
+	err := runReady(t, f, kindMovie, &launchRecord{}, media, 2, func(int) {})
 	require.ErrorIs(t, err, platforms.ErrReadinessUnavailable)
 }
 
@@ -634,4 +673,64 @@ func TestLaunchersMetadata(t *testing.T) {
 		assert.False(t, l.Test(cfg, w.scheme+":///Name"), l.ID)
 		assert.False(t, l.Test(cfg, "kodi-movie://1/Name"), l.ID)
 	}
+}
+
+func TestWaitForReadyUsesSentIDs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		path    string
+		playing string
+		kind    *mediaKind
+		sent    []string
+		ready   bool
+	}{
+		{
+			name: "show already on a launched episode",
+			kind: kindShow, path: "jellyfin-show://" + showID + "/Bluey",
+			sent: []string{ep1ID, ep2ID}, playing: ep2ID, ready: true,
+		},
+		{
+			name: "movie resolved to a new id by fallback",
+			kind: kindMovie, path: "jellyfin-movie://" + id(99) + "/Heat",
+			sent: []string{movieID}, playing: movieID, ready: true,
+		},
+		{
+			name: "player moved to an unrelated item",
+			kind: kindShow, path: "jellyfin-show://" + showID + "/Bluey",
+			sent: []string{ep1ID}, playing: id(7),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeJellyfin(t)
+			f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: id(8)}})
+			record := &launchRecord{}
+			record.set(tt.path, tt.sent)
+			err := runReady(t, f, tt.kind, record, &models.ActiveMedia{Path: tt.path}, 3, func(i int) {
+				if i == 0 {
+					f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: tt.playing}})
+				}
+			})
+			if tt.ready {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
+func TestWaitForReadyFirstPollMatchesSentID(t *testing.T) {
+	t.Parallel()
+	f := newFakeJellyfin(t)
+	f.setSessions(Session{ID: "s", DeviceName: "TV", NowPlayingItem: &Item{ID: ep1ID}})
+	path := "jellyfin-show://" + showID + "/Bluey"
+	record := &launchRecord{}
+	record.set(path, []string{ep1ID})
+	err := runReady(t, f, kindShow, record, &models.ActiveMedia{Path: path}, 1, func(int) {
+		t.Fatal("the first poll should already be ready")
+	})
+	require.NoError(t, err)
 }

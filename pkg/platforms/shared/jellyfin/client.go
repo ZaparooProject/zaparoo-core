@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
 const (
@@ -78,8 +79,10 @@ var transport = sync.OnceValue(func() http.RoundTripper {
 	})
 })
 
+// newHTTPClient builds a client whose redirects stay on the server's origin,
+// since every request carries the access token.
 func newHTTPClient() *http.Client {
-	return &http.Client{Transport: useragent.Transport(transport())}
+	return &http.Client{Transport: useragent.Transport(transport()), CheckRedirect: shared.SameOriginRedirect}
 }
 
 // Item is the part of a Jellyfin BaseItemDto Core uses.
@@ -228,13 +231,25 @@ func NewClientWithLauncherID(cfg *config.Instance, launcherID string, groups []s
 	if err != nil {
 		return nil, err
 	}
-	// The trailing slash lets a token stored under the base URL with or
-	// without one match.
-	cred := config.LookupAuth(config.GetAuthCfg(), serverURL+"/")
+	cred := serverCredential(config.GetAuthCfg(), serverURL)
 	if cred == nil || cred.Bearer == "" {
 		return nil, ErrNotLinked
 	}
 	return NewClient(serverURL, cred.Bearer, strings.TrimSpace(defaults.Client), DeviceID(cfg))
+}
+
+// serverCredential returns the credential stored for the server's own URL,
+// with or without a trailing slash. Otherwise it falls back to the broader
+// match, where the trailing slash lets an entry for the base URL match.
+// Checking the exact URL first keeps an entry for another service on the
+// same host from being picked by map order.
+func serverCredential(creds map[string]config.CredentialEntry, serverURL string) *config.CredentialEntry {
+	for key, cred := range creds {
+		if strings.EqualFold(strings.TrimRight(key, "/"), serverURL) {
+			return &cred
+		}
+	}
+	return config.LookupAuth(creds, serverURL+"/")
 }
 
 // NewClient returns a client for serverURL authenticated with token, playing
@@ -352,7 +367,9 @@ func (c *HTTPClient) ShowEpisodes(ctx context.Context, showID string) ([]Item, e
 	if err != nil {
 		return nil, err
 	}
-	q := url.Values{"userId": {userID}, "Fields": {itemFields}}
+	// Servers set to show missing episodes list placeholders for episodes
+	// with no file, which cannot be played.
+	q := url.Values{"userId": {userID}, "Fields": {itemFields}, "isMissing": {"false"}}
 	var page ItemsPage
 	if err := c.do(ctx, http.MethodGet, "/Shows/"+showID+"/Episodes", q, nil, &page); err != nil {
 		return nil, err

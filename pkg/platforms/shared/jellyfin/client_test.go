@@ -105,6 +105,25 @@ func TestNewClientWithLauncherIDNotLinked(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotLinked)
 }
 
+func TestServerCredentialPrefersExactURL(t *testing.T) {
+	t.Parallel()
+	creds := map[string]config.CredentialEntry{
+		"http://media.test":           {Bearer: "root-app"},
+		"http://media.test/jellyfin/": {Bearer: "jellyfin"},
+	}
+	for range 20 {
+		cred := serverCredential(creds, "http://media.test/jellyfin")
+		require.NotNil(t, cred)
+		assert.Equal(t, "jellyfin", cred.Bearer, "the server's own entry beats one for the whole host")
+	}
+
+	cred := serverCredential(map[string]config.CredentialEntry{
+		"http://media.test": {Bearer: "host"},
+	}, "http://media.test/jellyfin")
+	require.NotNil(t, cred)
+	assert.Equal(t, "host", cred.Bearer, "a broader entry still applies when the server has none")
+}
+
 func TestNormalizeServerURL(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{

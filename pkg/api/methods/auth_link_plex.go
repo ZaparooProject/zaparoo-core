@@ -54,10 +54,24 @@ type plexLinkClient interface {
 	Resources(ctx context.Context, token string) ([]plex.Resource, error)
 }
 
-// newPlexLinkClient and plexLinkClock are replaced in tests.
+// plexProbeTimeout bounds each check that a server answers at a connection
+// plex.tv advertises.
+const plexProbeTimeout = 5 * time.Second
+
+// newPlexLinkClient, plexServerIdentity and plexLinkClock are replaced in
+// tests.
 var (
 	newPlexLinkClient = func(clientID string) plexLinkClient {
 		return plex.NewTVClient("", "", clientID, nil)
+	}
+	// plexServerIdentity returns the machine identifier of the server that
+	// answers at serverURL.
+	plexServerIdentity = func(ctx context.Context, serverURL, clientID string) (string, error) {
+		id, err := plex.NewClient(serverURL, "", clientID, "", nil).Identity(ctx)
+		if err != nil {
+			return "", err //nolint:wrapcheck // the client error already names the request
+		}
+		return id.MachineIdentifier, nil
 	}
 	plexLinkClock = clockwork.NewRealClock()
 )
@@ -225,9 +239,17 @@ func completePlexLink(
 		log.Warn().Err(err).Msg("plex link approved but servers could not be listed")
 		return "linking failed, the Plex servers on the account could not be listed"
 	}
-	server, connURL, msg := selectPlexServer(resources, serverURL)
+	server, candidates, msg := selectPlexServer(resources, serverURL)
 	if msg != "" {
 		return msg
+	}
+	connURL := serverURL
+	if connURL == "" {
+		connURL = reachablePlexConnection(ctx, server, candidates, plex.ClientIdentifier(cfg))
+		if connURL == "" {
+			return fmt.Sprintf("linking failed, %q did not answer at any address plex.tv lists; pass its url",
+				server.Name)
+		}
 	}
 	serverToken := server.AccessToken
 	if serverToken == "" {
@@ -241,11 +263,12 @@ func completePlexLink(
 }
 
 // selectPlexServer picks the server to link: the one serverURL names, or the
-// account's only one. Only servers the account owns can be linked, since a
-// shared server's token cannot see the libraries the launchers index.
+// account's only one, with the direct connections to try in order. Only
+// servers the account owns can be linked, since a shared server's token
+// cannot see the libraries the launchers index.
 func selectPlexServer(
 	resources []plex.Resource, serverURL string,
-) (server *plex.Resource, connURL, failure string) {
+) (server *plex.Resource, candidates []string, failure string) {
 	var servers []*plex.Resource
 	for i := range resources {
 		if resources[i].ProvidesRole("server") {
@@ -253,22 +276,26 @@ func selectPlexServer(
 		}
 	}
 	if len(servers) == 0 {
-		return nil, "", "linking failed, the Plex account has no servers"
+		return nil, nil, "linking failed, the Plex account has no servers"
 	}
 
 	if serverURL != "" {
-		for _, s := range servers {
-			if !plexServerHasURL(s, serverURL) {
-				continue
-			}
-			if !s.Owned {
-				return nil, "", fmt.Sprintf(
-					"linking failed, the Plex account is not the admin of %q; sign in as its owner", s.Name)
-			}
-			return s, serverURL, ""
+		matches := plexServersAt(servers, serverURL)
+		switch len(matches) {
+		case 0:
+			return nil, nil, fmt.Sprintf("linking failed, no Plex server on the account answers at %s; %s",
+				serverURL, describePlexServers(servers))
+		case 1:
+		default:
+			return nil, nil, fmt.Sprintf("linking failed, several Plex servers on the account list %s; "+
+				"pass one's own address; %s", serverURL, describePlexServers(matches))
 		}
-		return nil, "", fmt.Sprintf("linking failed, no Plex server on the account answers at %s; %s",
-			serverURL, describePlexServers(servers))
+		s := matches[0]
+		if !s.Owned {
+			return nil, nil, fmt.Sprintf(
+				"linking failed, the Plex account is not the admin of %q; sign in as its owner", s.Name)
+		}
+		return s, []string{serverURL}, ""
 	}
 
 	owned := make([]*plex.Resource, 0, len(servers))
@@ -279,58 +306,98 @@ func selectPlexServer(
 	}
 	switch len(owned) {
 	case 0:
-		return nil, "", "linking failed, the Plex account is not the admin of any server; sign in as its owner"
+		return nil, nil, "linking failed, the Plex account is not the admin of any server; sign in as its owner"
 	case 1:
-		conn := plexServerConnection(owned[0].Connections)
-		if conn == "" {
-			return nil, "", fmt.Sprintf("linking failed, %q has no direct connection; pass its url", owned[0].Name)
+		conns := plexServerConnections(owned[0].Connections)
+		if len(conns) == 0 {
+			return nil, nil, fmt.Sprintf("linking failed, %q has no direct connection; pass its url", owned[0].Name)
 		}
-		return owned[0], conn, ""
+		return owned[0], conns, ""
 	default:
-		return nil, "", "linking failed, several Plex servers found, start over with url set to one; " +
+		return nil, nil, "linking failed, several Plex servers found, start over with url set to one; " +
 			describePlexServers(owned)
 	}
 }
 
-// plexServerConnection prefers a local connection, then a remote HTTPS one.
-// Relays are never stored.
-func plexServerConnection(conns []plex.Connection) string {
-	remote := ""
+// plexServersAt returns the servers that list a connection with serverURL
+// as its URI or, when none does, by address and port.
+func plexServersAt(servers []*plex.Resource, serverURL string) []*plex.Resource {
+	var exact, byAddress []*plex.Resource
+	for _, s := range servers {
+		uriMatch, addrMatch := plexServerHasURL(s, serverURL)
+		switch {
+		case uriMatch:
+			exact = append(exact, s)
+		case addrMatch:
+			byAddress = append(byAddress, s)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return byAddress
+}
+
+// reachablePlexConnection returns the first candidate where the server
+// itself answers. plex.tv lists every address a server reported, including
+// ones Core cannot reach, such as a Docker container's internal address.
+func reachablePlexConnection(ctx context.Context, server *plex.Resource, candidates []string, clientID string) string {
+	for _, candidate := range candidates {
+		probeCtx, cancel := context.WithTimeout(ctx, plexProbeTimeout)
+		id, err := plexServerIdentity(probeCtx, candidate, clientID)
+		cancel()
+		switch {
+		case err != nil:
+			log.Debug().Err(err).Msg("plex server did not answer at an advertised connection")
+		case !strings.EqualFold(id, server.ClientIdentifier):
+			log.Debug().Msg("another plex server answered at an advertised connection")
+		default:
+			return candidate
+		}
+	}
+	return ""
+}
+
+// plexServerConnections lists the direct connections to try: local ones
+// first, then remote HTTPS ones. Relays are never stored.
+func plexServerConnections(conns []plex.Connection) []string {
+	var local, remote []string
 	for i := range conns {
 		c := &conns[i]
 		if c.Relay || c.URI == "" {
 			continue
 		}
-		if c.Local {
-			return plex.NormalizeURL(c.URI)
-		}
-		if remote == "" && strings.EqualFold(c.Protocol, "https") {
-			remote = plex.NormalizeURL(c.URI)
+		switch {
+		case c.Local:
+			local = append(local, plex.NormalizeURL(c.URI))
+		case strings.EqualFold(c.Protocol, "https"):
+			remote = append(remote, plex.NormalizeURL(c.URI))
 		}
 	}
-	return remote
+	return append(local, remote...)
 }
 
-// plexServerHasURL reports whether a server lists a connection at serverURL,
-// either as its URI or by address and port, so a plain LAN address matches
-// the plex.direct name plex.tv gives the same connection.
-func plexServerHasURL(s *plex.Resource, serverURL string) bool {
+// plexServerHasURL reports whether a server lists a connection at
+// serverURL as its URI, and whether one matches by address and port, so a
+// plain LAN address matches the plex.direct name plex.tv gives the same
+// connection.
+func plexServerHasURL(s *plex.Resource, serverURL string) (uriMatch, addrMatch bool) {
 	want, err := url.Parse(serverURL)
 	if err != nil {
-		return false
+		return false, false
 	}
 	wantHostPort := plexHostPort(want)
 	for i := range s.Connections {
 		c := &s.Connections[i]
 		if c.URI != "" && strings.EqualFold(plex.NormalizeURL(c.URI), serverURL) {
-			return true
+			uriMatch = true
 		}
 		if c.Address != "" && c.Port > 0 &&
 			strings.EqualFold(net.JoinHostPort(c.Address, strconv.Itoa(int(c.Port))), wantHostPort) {
-			return true
+			addrMatch = true
 		}
 	}
-	return false
+	return uriMatch, addrMatch
 }
 
 func plexHostPort(u *url.URL) string {
@@ -347,8 +414,8 @@ func plexHostPort(u *url.URL) string {
 func describePlexServers(servers []*plex.Resource) string {
 	parts := make([]string, 0, len(servers))
 	for _, s := range servers {
-		if conn := plexServerConnection(s.Connections); conn != "" {
-			parts = append(parts, fmt.Sprintf("%q (%s)", s.Name, conn))
+		if conns := plexServerConnections(s.Connections); len(conns) > 0 {
+			parts = append(parts, fmt.Sprintf("%q (%s)", s.Name, conns[0]))
 		} else {
 			parts = append(parts, strconv.Quote(s.Name))
 		}
@@ -362,10 +429,11 @@ func savePlexLink(cfg *config.Instance, clientsURL, serverURL, serverToken, acco
 	if cfg == nil {
 		return errors.New("no config")
 	}
-	if err := cfg.SaveAuthEntry(serverURL, config.CredentialEntry{Bearer: serverToken}); err != nil {
-		return err //nolint:wrapcheck // the config error already says what failed
-	}
-	if err := cfg.SaveAuthEntry(clientsURL, config.CredentialEntry{Bearer: accountToken}); err != nil {
+	err := cfg.SaveAuthEntries(map[string]config.CredentialEntry{
+		serverURL:  {Bearer: serverToken},
+		clientsURL: {Bearer: accountToken},
+	})
+	if err != nil {
 		return err //nolint:wrapcheck // the config error already says what failed
 	}
 	cfg.SetLauncherServerURL(shared.LauncherGroupPlex, serverURL)

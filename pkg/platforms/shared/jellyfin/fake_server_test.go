@@ -47,6 +47,9 @@ type fakeItem struct {
 	seriesID string
 	artistID string
 	Item
+	// missing is a placeholder for an episode with no file, which the
+	// server lists unless asked not to.
+	missing bool
 }
 
 type playCall struct {
@@ -183,7 +186,7 @@ func (f *fakeJellyfin) serve(w http.ResponseWriter, r *http.Request) {
 		var eps []Item
 		for i := range f.items {
 			it := &f.items[i]
-			if it.Type == typeEpisode && it.seriesID == showID {
+			if it.Type == typeEpisode && it.seriesID == showID && (!it.missing || q.Get("isMissing") != "false") {
 				eps = append(eps, it.Item)
 			}
 		}
@@ -232,6 +235,9 @@ func (f *fakeJellyfin) queryItems(q url.Values) []Item {
 			continue
 		}
 		if ids := q.Get("AnyProviderIdEquals"); ids != "" && !hasAnyProvider(it.ProviderIDs, ids) {
+			continue
+		}
+		if it.missing && q.Get("IsMissing") == "false" {
 			continue
 		}
 		out = append(out, it.Item)

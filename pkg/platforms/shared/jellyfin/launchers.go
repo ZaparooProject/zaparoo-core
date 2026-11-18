@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/jonboulle/clockwork"
@@ -59,22 +60,23 @@ func launcherClient(id string, groups []string) clientFactory {
 
 // launchPath plays the item a card names on the configured player. Shows,
 // albums and artists play all their episodes or tracks in order.
-func launchPath(ctx context.Context, c Client, kind *mediaKind, path string) error {
+// It returns the item IDs sent to the player.
+func launchPath(ctx context.Context, c Client, kind *mediaKind, path string) ([]string, error) {
 	ref, err := parseReference(path, kind)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	item, err := resolveItem(ctx, c, kind, ref)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	session, err := selectSession(ctx, c)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	_, tracks, err := collectionTracks(ctx, c, kind, item)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ids := make([]string, 0, len(tracks))
 	for i := range tracks {
@@ -83,9 +85,43 @@ func launchPath(ctx context.Context, c Client, kind *mediaKind, path string) err
 		}
 	}
 	if len(ids) == 0 {
-		return fmt.Errorf("jellyfin %s %q has nothing to play", kind.label, kind.name(item))
+		return nil, fmt.Errorf("jellyfin %s %q has nothing to play", kind.label, kind.name(item))
 	}
-	return playItems(ctx, c, session.ID, ids)
+	if err := playItems(ctx, c, session.ID, ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// launchRecord holds the item IDs the last launch sent to the player, so
+// readiness checks what was actually played rather than the card's stored
+// ID, which may have been resolved to a different item.
+type launchRecord struct {
+	ids  map[string]struct{}
+	path string
+	mu   syncutil.Mutex
+}
+
+func (r *launchRecord) set(path string, ids []string) {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[strings.ToLower(id)] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.path = path
+	r.ids = set
+}
+
+// sent returns the IDs sent for path, or nil when the last launch was of
+// something else.
+func (r *launchRecord) sent(path string) map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.path != path {
+		return nil
+	}
+	return r.ids
 }
 
 // collect lists the episodes or tracks a show, album or artist card plays.
@@ -115,19 +151,21 @@ func collect(ctx context.Context, c Client, kind *mediaKind, path string) ([]pla
 }
 
 // waitForPlaying returns a readiness probe that polls the player until it
-// plays the launched item. The play command returns before the player acts
-// on it, so a player that was already playing something else is ready once
-// its item changes.
+// plays one of the items the launch sent. The play command returns before
+// the player acts on it. Without a record of the launch, a player that was
+// already playing something else is ready once its item changes.
 func waitForPlaying(
-	newClient clientFactory, kind *mediaKind, clock clockwork.Clock,
+	newClient clientFactory, kind *mediaKind, clock clockwork.Clock, record *launchRecord,
 ) func(context.Context, *config.Instance, *models.ActiveMedia) error {
 	return func(ctx context.Context, cfg *config.Instance, media *models.ActiveMedia) error {
 		c, err := newClient(cfg)
 		if err != nil {
 			return fmt.Errorf("%w: %w", platforms.ErrReadinessUnavailable, err)
 		}
+		var sent map[string]struct{}
 		var launchedID string
 		if media != nil {
+			sent = record.sent(media.Path)
 			if ref, refErr := parseReference(media.Path, kind); refErr == nil {
 				launchedID = ref.ID
 			}
@@ -147,7 +185,14 @@ func waitForPlaying(
 				first = false
 				return false, nil
 			}
-			if media == nil || (launchedID != "" && strings.EqualFold(playing.ID, launchedID)) {
+			if media == nil {
+				return true, nil
+			}
+			if sent != nil {
+				_, ok := sent[strings.ToLower(playing.ID)]
+				return ok, nil
+			}
+			if launchedID != "" && strings.EqualFold(playing.ID, launchedID) {
 				return true, nil
 			}
 			if first {
@@ -210,9 +255,10 @@ func newLauncher(kind *mediaKind, collection bool) platforms.Launcher {
 	groups := []string{shared.LauncherGroupJellyfin}
 	newClient := launcherClient(kind.launcherID, groups)
 	exit := &shared.LaunchExit{}
+	record := &launchRecord{}
 	l := platforms.Launcher{
 		Controls:            playstateControls(newClient, exit),
-		WaitForReady:        waitForPlaying(newClient, kind, clockwork.NewRealClock()),
+		WaitForReady:        waitForPlaying(newClient, kind, clockwork.NewRealClock(), record),
 		ID:                  kind.launcherID,
 		Groups:              groups,
 		SystemID:            kind.systemID,
@@ -227,9 +273,11 @@ func newLauncher(kind *mediaKind, collection bool) platforms.Launcher {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), launchTimeout)
 			defer cancel()
-			if err := launchPath(ctx, c, kind, path); err != nil {
+			ids, err := launchPath(ctx, c, kind, path)
+			if err != nil {
 				return nil, err
 			}
+			record.set(path, ids)
 			exit.Set(opts)
 			return nil, nil //nolint:nilnil // playback runs on a remote player, not a local process
 		},

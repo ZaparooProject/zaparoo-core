@@ -44,6 +44,10 @@ func kindQuery(kind *mediaKind) url.Values {
 		q.Set("Recursive", "true")
 		q.Set("IncludeItemTypes", kind.itemType)
 	}
+	if kind == kindEpisode {
+		// Placeholders for missing episodes have no file to play.
+		q.Set("IsMissing", "false")
+	}
 	return q
 }
 

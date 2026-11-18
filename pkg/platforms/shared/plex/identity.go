@@ -185,7 +185,17 @@ func resolveItem(ctx context.Context, client PlexClient, kind *mediaKind, path s
 			return md, nil
 		}
 		if !matched && !conflicted && (ref.Name == "" || sameName(displayName(kind, md), ref.Name)) {
-			return md, nil
+			// The item at the key only shares the card's name. When the item
+			// the card's identities name still exists elsewhere, that is it.
+			moved, guidErr := findMovedByGUID(ctx, client, kind, ref)
+			switch {
+			case guidErr == nil && moved != nil:
+				return moved, nil
+			case guidErr == nil, errors.Is(guidErr, errAmbiguousGUID):
+				return md, nil
+			default:
+				return nil, guidErr
+			}
 		}
 	case errors.Is(err, ErrNotFound):
 		if len(ref.IDs) == 0 {
@@ -205,14 +215,44 @@ func refLabel(ref itemRef) string {
 	return ref.RatingKey
 }
 
-// findMoved finds an item whose stored rating key no longer names it.
-func findMoved(ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef) (*Metadata, error) {
+var errAmbiguousGUID = errors.New("several plex items hold the identity")
+
+func kindSections(ctx context.Context, client PlexClient, kind *mediaKind) ([]Section, error) {
 	sections, err := client.Sections(ctx)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the client error already names the request
 	}
-	sections = sectionsOfType(sections, kind.sectionType)
+	return sectionsOfType(sections, kind.sectionType), nil
+}
 
+// findMoved finds an item whose stored rating key no longer names it.
+func findMoved(ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef) (*Metadata, error) {
+	sections, err := kindSections(ctx, client, kind)
+	if err != nil {
+		return nil, err
+	}
+	md, err := findByGUID(ctx, client, kind, ref, sections)
+	if err != nil || md != nil {
+		return md, err
+	}
+	return findByName(ctx, client, kind, ref, sections)
+}
+
+// findMovedByGUID finds the item the card's identities name, or nil when
+// none does.
+func findMovedByGUID(ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef) (*Metadata, error) {
+	sections, err := kindSections(ctx, client, kind)
+	if err != nil {
+		return nil, err
+	}
+	return findByGUID(ctx, client, kind, ref, sections)
+}
+
+// findByGUID searches for the card's identities in turn and returns the one
+// item holding the first identity any item has, or nil when none does.
+func findByGUID(
+	ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef, sections []Section,
+) (*Metadata, error) {
 	for _, p := range identityProviders {
 		value, ok := ref.IDs[p.key]
 		if !ok {
@@ -248,10 +288,17 @@ func findMoved(ctx context.Context, client PlexClient, kind *mediaKind, ref item
 			if len(named) == 1 {
 				return &named[0], nil
 			}
-			return nil, fmt.Errorf("multiple plex %ss match %s", kind.typeName, guid)
+			return nil, fmt.Errorf("%w: multiple plex %ss match %s", errAmbiguousGUID, kind.typeName, guid)
 		}
 	}
+	return nil, nil //nolint:nilnil // no item holds any of the identities
+}
 
+// findByName finds the one item with the card's exact name and no
+// conflicting identity.
+func findByName(
+	ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef, sections []Section,
+) (*Metadata, error) {
 	if strings.TrimSpace(ref.Name) == "" {
 		return nil, fmt.Errorf("plex %s %s is no longer available", kind.typeName, ref.RatingKey)
 	}

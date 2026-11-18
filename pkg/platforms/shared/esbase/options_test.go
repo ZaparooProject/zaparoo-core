@@ -223,6 +223,24 @@ func TestStopActiveLauncher_RemoteServerMediaLeavesESAlone(t *testing.T) {
 	assert.Nil(t, (*published)[len(*published)-1])
 }
 
+func TestStopActiveLauncher_RemoteServerMediaLeavesRunningKodiAlone(t *testing.T) {
+	t.Parallel()
+
+	opts := Options{ID: "batocera", API: &fakeAPI{}}
+	p, published := runningPlatform(t, &opts)
+	p.trackerMu.Lock()
+	p.kodiActive = true
+	p.trackerMu.Unlock()
+	media := models.NewActiveMedia("Movie", "Movies", "plex-movie://1/Alien", "Alien",
+		shared.LauncherPlexMovie)
+	p.activeMedia = func() *models.ActiveMedia { return media }
+
+	// Kodi is not reachable here, so reaching its stop path would fail.
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	require.NotEmpty(t, *published)
+	assert.Nil(t, (*published)[len(*published)-1])
+}
+
 func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {
 	t.Parallel()
 

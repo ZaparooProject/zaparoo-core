@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -49,11 +50,30 @@ const (
 // fakePlexLink is plex.tv for the link flow: one PIN and the account's
 // resources.
 type fakePlexLink struct {
-	token     string
-	resources []plex.Resource
-	checks    int
-	mu        syncutil.Mutex
-	expired   bool
+	unreachable map[string]bool
+	token       string
+	resources   []plex.Resource
+	checks      int
+	mu          syncutil.Mutex
+	expired     bool
+}
+
+// identity answers as the server that lists serverURL, unless the test
+// marked that address unreachable.
+func (f *fakePlexLink) identity(_ context.Context, serverURL, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unreachable[serverURL] {
+		return "", errors.New("connection refused")
+	}
+	for i := range f.resources {
+		for _, c := range f.resources[i].Connections {
+			if plex.NormalizeURL(c.URI) == serverURL {
+				return f.resources[i].ClientIdentifier, nil
+			}
+		}
+	}
+	return "", errors.New("no server answers")
 }
 
 func (*fakePlexLink) ClientsURL() string { return fakePlexClientsURL }
@@ -102,12 +122,14 @@ func plexServer(name, token string, owned bool, conns ...plex.Connection) plex.R
 
 func useFakePlexLink(t *testing.T, f *fakePlexLink) *clockwork.FakeClock {
 	t.Helper()
-	origClient, origClock := newPlexLinkClient, plexLinkClock
+	origClient, origIdentity, origClock := newPlexLinkClient, plexServerIdentity, plexLinkClock
 	clock := clockwork.NewFakeClock()
 	newPlexLinkClient = func(string) plexLinkClient { return f }
+	plexServerIdentity = f.identity
 	plexLinkClock = clock
 	t.Cleanup(func() {
 		newPlexLinkClient = origClient
+		plexServerIdentity = origIdentity
 		plexLinkClock = origClock
 	})
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
@@ -357,10 +379,10 @@ func TestSelectPlexServer(t *testing.T) {
 		plex.Connection{URI: "http://8.8.8.8:32400", Protocol: "http"},
 		plex.Connection{URI: "https://8-8-8-8.abc.plex.direct:32400", Protocol: "https"},
 	)
-	server, conn, msg := selectPlexServer([]plex.Resource{remoteOnly}, "")
+	server, conns, msg := selectPlexServer([]plex.Resource{remoteOnly}, "")
 	require.Empty(t, msg)
 	assert.Equal(t, "Remote", server.Name)
-	assert.Equal(t, "https://8-8-8-8.abc.plex.direct:32400", conn, "plain remote http is not stored")
+	assert.Equal(t, []string{"https://8-8-8-8.abc.plex.direct:32400"}, conns, "plain remote http is not stored")
 
 	relayOnly := plexServer("Relay", "t", true,
 		plex.Connection{URI: "https://relay.plex.direct", Protocol: "https", Relay: true})
@@ -373,4 +395,71 @@ func TestSelectPlexServer(t *testing.T) {
 	_, _, msg = selectPlexServer([]plex.Resource{remoteOnly}, "http://10.0.0.1:32400")
 	assert.Contains(t, msg, "no Plex server on the account answers at http://10.0.0.1:32400")
 	assert.Contains(t, msg, `"Remote"`)
+}
+
+func TestSelectPlexServerPrefersExactURI(t *testing.T) {
+	t.Parallel()
+	// A stale server left on the account after a reinstall still lists the
+	// LAN address the new one answers at.
+	stale := plexServer("Old", "old-token", true,
+		plex.Connection{URI: "http://192.168.1.5:32400", Address: "192.168.1.5", Port: 32400, Local: true})
+	current := plexServer("New", "new-token", true,
+		plex.Connection{
+			URI: "https://192-168-1-5.def.plex.direct:32400", Address: "192.168.1.5",
+			Port: 32400, Protocol: "https", Local: true,
+		})
+	resources := []plex.Resource{stale, current}
+
+	server, conns, msg := selectPlexServer(resources, "https://192-168-1-5.def.plex.direct:32400")
+	require.Empty(t, msg)
+	assert.Equal(t, "New", server.Name, "the URI match wins over an address match")
+	assert.Equal(t, []string{"https://192-168-1-5.def.plex.direct:32400"}, conns)
+
+	_, _, msg = selectPlexServer(resources, "http://192.168.1.5:32400")
+	assert.Empty(t, msg, "the stale server's own URI is an exact match")
+
+	_, _, msg = selectPlexServer(resources, "https://192.168.1.5:32400")
+	assert.Contains(t, msg, "several Plex servers on the account list https://192.168.1.5:32400")
+}
+
+func TestSettingsAuthLinkPlex_SkipsUnreachableConnection(t *testing.T) {
+	// Not parallel: swaps the plex.tv client and uses package-level link state.
+	resetAuthLinkState(t)
+	fake := &fakePlexLink{
+		resources: []plex.Resource{plexServer("Home", "server-token", true,
+			plex.Connection{URI: "http://172.17.0.2:32400", Protocol: "http", Local: true},
+			plex.Connection{URI: "http://192.168.1.5:32400", Protocol: "http", Local: true},
+		)},
+		unreachable: map[string]bool{"http://172.17.0.2:32400": true},
+	}
+	clock := useFakePlexLink(t, fake)
+	fake.approve("account-token")
+	cfg, notificationCh := startPlexLink(t, "")
+	pollPlexOnce(t, clock, plexLinkPollInterval)
+
+	done := readAuthLinkNotification(t, notificationCh)
+	require.Equal(t, models.AuthLinkStatusApproved, done.Status, done.Error)
+	assert.Equal(t, "http://192.168.1.5:32400", plexLauncherServerURL(cfg),
+		"the container address the server reported is skipped")
+}
+
+func TestSettingsAuthLinkPlex_NoConnectionAnswers(t *testing.T) {
+	// Not parallel: swaps the plex.tv client and uses package-level link state.
+	resetAuthLinkState(t)
+	fake := &fakePlexLink{
+		resources: []plex.Resource{plexServer("Home", "server-token", true,
+			plex.Connection{URI: "http://172.17.0.2:32400", Protocol: "http", Local: true},
+		)},
+		unreachable: map[string]bool{"http://172.17.0.2:32400": true},
+	}
+	clock := useFakePlexLink(t, fake)
+	fake.approve("account-token")
+	cfg, notificationCh := startPlexLink(t, "")
+	pollPlexOnce(t, clock, plexLinkPollInterval)
+
+	done := readAuthLinkNotification(t, notificationCh)
+	require.Equal(t, models.AuthLinkStatusFailed, done.Status)
+	assert.Contains(t, done.Error, `"Home" did not answer at any address plex.tv lists`)
+	assert.Empty(t, plexLauncherServerURL(cfg))
+	assert.Nil(t, config.LookupAuth(config.GetAuthCfg(), "http://172.17.0.2:32400/identity"))
 }

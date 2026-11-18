@@ -20,6 +20,7 @@
 package jellyfin
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -47,7 +48,9 @@ func FuzzParseReference(f *testing.F) {
 			if err != nil {
 				continue
 			}
-			if !validItemID(ref.ID) {
+			// Checked independently of validItemID: the id goes into a
+			// request path, so only hex digits and dashes may get through.
+			if ref.ID == "" || len(ref.ID) > 64 || strings.Trim(ref.ID, "0123456789abcdefABCDEF-") != "" {
 				t.Fatalf("accepted invalid id %q", ref.ID)
 			}
 			for key, v := range ref.ProviderIDs {

@@ -834,6 +834,25 @@ func TestSaveAuthEntry_PreservesExistingEntries(t *testing.T) {
 	assert.Equal(t, "token2", creds["https://zpr.au"].Bearer)
 }
 
+func TestSaveAuthEntries_WritesAllEntriesTogether(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	require.NoError(t, cfg.SaveAuthEntry("https://zpr.au", CredentialEntry{Bearer: "kept"}))
+
+	err := cfg.SaveAuthEntries(map[string]CredentialEntry{
+		"http://192.168.1.5:32400": {Bearer: "server"},
+		"https://clients.plex.tv":  {Bearer: "account"},
+	})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 3)
+	assert.Equal(t, "kept", creds["https://zpr.au"].Bearer)
+	assert.Equal(t, "server", creds["http://192.168.1.5:32400"].Bearer)
+	assert.Equal(t, "account", creds["https://clients.plex.tv"].Bearer)
+}
+
 func TestSaveAuthEntry_PreservesAPIKeys(t *testing.T) {
 	t.Parallel()
 

@@ -451,16 +451,17 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	trackedGame := p.lastKnownGame != nil
 	p.trackerMu.RUnlock()
 
-	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
-		// Use Kodi-specific stopping mechanism with reason-based behavior
-		return p.stopKodi(p.cfg, reason)
-	}
-
 	// Media playing on a remote server's client has nothing running here, so
-	// signalling EmulationStation would only disturb its UI.
+	// signalling EmulationStation, or stopping a Kodi that happens to be
+	// running, would only disturb it.
 	if activeMedia != nil && isRemoteServerLauncher(activeMedia.LauncherID) {
 		p.setActiveMedia(nil)
 		return nil
+	}
+
+	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
+		// Use Kodi-specific stopping mechanism with reason-based behavior
+		return p.stopKodi(p.cfg, reason)
 	}
 
 	// Nothing active to stop — avoid sending an exit signal to ES, which

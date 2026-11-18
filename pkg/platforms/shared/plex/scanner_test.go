@@ -22,10 +22,14 @@ package plex
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,4 +135,81 @@ func TestCollectOrdersEpisodesAndTracks(t *testing.T) {
 	assert.Equal(t, virtualpath.CreateVirtualPath(shared.SchemePlexSong, "21",
 		"Radiohead - Kid A - Everything In Its Right Place"), items[0].Path)
 	assert.Equal(t, "Radiohead - OK Computer - Airbag", items[2].Name)
+}
+
+func TestPagedListing(t *testing.T) {
+	t.Parallel()
+	items := make([]Metadata, 10)
+	for i := range items {
+		items[i] = movie(strconv.Itoa(i+1), "M"+strconv.Itoa(i), 2000)
+	}
+	tests := []struct {
+		respond func(start int) mediaContainer
+		name    string
+		wantErr string
+		want    int
+	}{
+		{
+			name: "server caps the page size below the one asked for",
+			respond: func(start int) mediaContainer {
+				end := min(start+3, len(items))
+				return mediaContainer{Metadata: items[start:end], TotalSize: FlexInt(len(items))}
+			},
+			want: 10,
+		},
+		{
+			name: "empty page before the total",
+			respond: func(start int) mediaContainer {
+				if start >= 4 {
+					return mediaContainer{TotalSize: 10}
+				}
+				return mediaContainer{Metadata: items[start:4], TotalSize: 10}
+			},
+			want:    4,
+			wantErr: "stopped at 4 of 10",
+		},
+		{
+			name: "server ignores paging and repeats the first page",
+			respond: func(int) mediaContainer {
+				return mediaContainer{Metadata: items[:4], TotalSize: 10}
+			},
+			want:    4,
+			wantErr: "stopped at 4 of 10",
+		},
+		{
+			name: "no total and repeated first page ends the listing",
+			respond: func(int) mediaContainer {
+				return mediaContainer{Metadata: items[:4]}
+			},
+			want: 4,
+		},
+		{
+			name:    "empty listing",
+			respond: func(int) mediaContainer { return mediaContainer{} },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				start, _ := strconv.Atoi(r.URL.Query().Get("X-Plex-Container-Start"))
+				mc := tt.respond(start)
+				writeContainer(w, &mc)
+			}))
+			t.Cleanup(srv.Close)
+			c := NewClient(srv.URL, srv.URL, testClientID, "", srv.Client())
+			got := 0
+			err := c.paged(context.Background(), "/library/sections/1/all", url.Values{}, func(page []Metadata) error {
+				got += len(page)
+				return nil
+			})
+			if tt.wantErr != "" {
+				require.ErrorIs(t, err, platforms.ErrScannerSourceUnreachable)
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

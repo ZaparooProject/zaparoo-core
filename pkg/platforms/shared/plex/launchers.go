@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -31,7 +30,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/jonboulle/clockwork"
@@ -60,7 +58,7 @@ func newDeps() *deps {
 	return &deps{
 		newClient: NewClientWithLauncherID,
 		finder: &playerFinder{
-			http:       &http.Client{Transport: useragent.Transport(nil)},
+			http:       newHTTPClient(),
 			browseCast: discoverCast,
 			dialCast:   dialCastTLS,
 		},

@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
 const (
@@ -113,11 +114,17 @@ func NewClientWithLauncherID(cfg *config.Instance, launcherID string, groups []s
 	return NewClient(serverURL, ClientsBaseURL, ClientIdentifier(cfg), playerName, nil)
 }
 
+// newHTTPClient is the client every Plex request goes through. Requests
+// carry X-Plex-Token, so redirects must stay on the server's origin.
+func newHTTPClient() *http.Client {
+	return &http.Client{Transport: useragent.Transport(nil), CheckRedirect: shared.SameOriginRedirect}
+}
+
 // NewClient builds a client for a server URL. A nil httpClient uses Core's
 // default transport.
 func NewClient(serverURL, clientsURL, clientID, playerName string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Transport: useragent.Transport(nil)}
+		httpClient = newHTTPClient()
 	}
 	return &Client{
 		http:       httpClient,
@@ -316,6 +323,7 @@ func (c *Client) Leaves(ctx context.Context, ratingKey string, fn func([]Metadat
 
 func (c *Client) paged(ctx context.Context, path string, query url.Values, fn func([]Metadata) error) error {
 	start := 0
+	total := 0
 	firstKey := ""
 	for {
 		if err := ctx.Err(); err != nil {
@@ -330,13 +338,18 @@ func (c *Client) paged(ctx context.Context, path string, query url.Values, fn fu
 		if err := c.serverRequest(ctx, http.MethodGet, path, query, header, &resp); err != nil {
 			return fmt.Errorf("failed to list plex items: %w", err)
 		}
-		items := resp.MediaContainer.Metadata
-		if len(items) == 0 {
-			return nil
+		if size := int(resp.MediaContainer.TotalSize); size > 0 {
+			total = size
 		}
+		items := resp.MediaContainer.Metadata
 		// A server that ignores the paging parameters returns the first page
-		// again; stop rather than loop forever.
-		if start > 0 && items[0].RatingKey != "" && items[0].RatingKey == firstKey {
+		// again, so a repeat ends the listing like an empty page does.
+		repeated := start > 0 && len(items) > 0 && items[0].RatingKey != "" && items[0].RatingKey == firstKey
+		if len(items) == 0 || repeated {
+			if start < total {
+				return fmt.Errorf("%w: plex listing stopped at %d of %d items",
+					platforms.ErrScannerSourceUnreachable, start, total)
+			}
 			return nil
 		}
 		if start == 0 {
@@ -346,11 +359,9 @@ func (c *Client) paged(ctx context.Context, path string, query url.Values, fn fu
 			return err
 		}
 		start += len(items)
-		total := int(resp.MediaContainer.TotalSize)
+		// A short page does not end a listing on its own: the server may cap
+		// the page size below the one asked for.
 		if total > 0 && start >= total {
-			return nil
-		}
-		if total <= 0 && len(items) < pageSize {
 			return nil
 		}
 	}
