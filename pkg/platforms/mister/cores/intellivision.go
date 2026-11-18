@@ -85,7 +85,8 @@ func hookIntellivisionWithFS(fs afero.Fs, system *Core, mediaPath string) (strin
 }
 
 // intvSiblingCFG returns the .cfg file sharing the ROM's name in the same
-// folder, inside a zip when the ROM is in one, or "" when there is none.
+// folder, inside a zip when the ROM is in one, or "" when there is none. An
+// empty .cfg is ignored because it holds no mapping for the core to apply.
 func intvSiblingCFG(fs afero.Fs, mediaPath string) string {
 	stem := strings.TrimSuffix(mediaPath, filepath.Ext(mediaPath))
 	if zipPath, inner, ok := splitZipPath(mediaPath); ok {
@@ -98,7 +99,7 @@ func intvSiblingCFG(fs afero.Fs, mediaPath string) string {
 	}
 	for _, ext := range []string{".cfg", ".CFG", ".Cfg"} {
 		candidate := stem + ext
-		if info, err := fs.Stat(candidate); err == nil && info.Mode().IsRegular() {
+		if info, err := fs.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 			return candidate
 		}
 	}
@@ -106,14 +107,18 @@ func intvSiblingCFG(fs afero.Fs, mediaPath string) string {
 }
 
 // splitZipPath splits a path to a file inside a zip into the zip's path and
-// the entry name within it.
+// the entry name within it. Like MiSTer Main, it takes the first ".zip/" in
+// the path as the archive, so folders named *.zip inside it stay part of the
+// entry name.
 func splitZipPath(mediaPath string) (zipPath, inner string, ok bool) {
 	slashed := filepath.ToSlash(mediaPath)
-	idx := strings.LastIndex(strings.ToLower(slashed), ".zip/")
-	if idx < 0 {
-		return "", "", false
+	const marker = ".zip/"
+	for i := 0; i+len(marker) <= len(slashed); i++ {
+		if strings.EqualFold(slashed[i:i+len(marker)], marker) {
+			return slashed[:i+len(".zip")], slashed[i+len(marker):], true
+		}
 	}
-	return mediaPath[:idx+len(".zip")], slashed[idx+len(".zip/"):], true
+	return "", "", false
 }
 
 // zipSiblingEntry returns the name of the .cfg entry for innerStem in a zip,
@@ -139,7 +144,7 @@ func zipSiblingEntry(fs afero.Fs, zipPath, innerStem string) string {
 	}
 	for _, f := range reader.File {
 		name := f.Name
-		if f.FileInfo().IsDir() || !strings.EqualFold(path.Ext(name), ".cfg") {
+		if f.FileInfo().IsDir() || f.UncompressedSize64 == 0 || !strings.EqualFold(path.Ext(name), ".cfg") {
 			continue
 		}
 		if strings.TrimSuffix(name, path.Ext(name)) == innerStem {
