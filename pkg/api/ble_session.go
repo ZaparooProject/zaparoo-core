@@ -503,6 +503,7 @@ func (s *bleSession) handleMessage(msg []byte) {
 		return s.dispatcher.holdZapScript(s.t.core.st.AcquireZapScriptHold)
 	}
 	env.ClientRole = cs.ClientRole()
+	env.PairedClientID = cs.PairedClientID()
 
 	if err := enqueueWSRequest(s.dispatcher, s.t.methodMap, &env, plaintext, cs, tracker); err != nil {
 		var queueFullErr *wsRequestQueueFullError

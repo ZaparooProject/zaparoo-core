@@ -85,6 +85,9 @@ type mediaFieldEdit struct {
 	// image is the source of an image field being set.
 	image *models.MediaImageInput
 	field string
+	// imageData is a file or browse image's bytes, read and checked by
+	// prepareMediaImageEdits before anything is written.
+	imageData []byte
 }
 
 // UserImagesDir is the folder that holds the images users set on games. It is
@@ -249,12 +252,16 @@ func parseMediaUserImages(raw json.RawMessage) ([]mediaFieldEdit, error) {
 		}
 		switch input.Kind {
 		case models.MediaImageKindFile:
-			if input.UploadID != "" || !filepath.IsAbs(input.Path) {
-				return nil, fmt.Errorf("media.images.%s: a file image needs an absolute path and no uploadId", kind)
+			if input.UploadID != "" || input.Root != "" || !filepath.IsAbs(input.Path) {
+				return nil, fmt.Errorf("media.images.%s: a file image needs an absolute path and nothing else", kind)
 			}
 		case models.MediaImageKindUpload:
-			if input.Path != "" || input.UploadID == "" {
-				return nil, fmt.Errorf("media.images.%s: an upload image needs an uploadId and no path", kind)
+			if input.Path != "" || input.Root != "" || input.UploadID == "" {
+				return nil, fmt.Errorf("media.images.%s: an upload image needs an uploadId and nothing else", kind)
+			}
+		case models.MediaImageKindBrowse:
+			if input.UploadID != "" || input.Root == "" || input.Path == "" {
+				return nil, fmt.Errorf("media.images.%s: a browse image needs a root and a path", kind)
 			}
 		default:
 			return nil, fmt.Errorf("media.images.%s: unknown image kind %q", kind, input.Kind)
@@ -269,20 +276,106 @@ func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
-// storeMediaUserImage reads the image an edit names, stores it in the user
-// images folder and hands the file name UserDB keeps to commit. An upload is
+// prepareMediaImageEdits checks every image an update sets before any part
+// of the update is written: a file or browse image is read and checked as an
+// image, and an upload must be a finished one of this caller's. An update
+// whose image is not usable then changes nothing.
+func prepareMediaImageEdits(env *requests.RequestEnv, edits []mediaFieldEdit) error {
+	for i := range edits {
+		edit := &edits[i]
+		if edit.image == nil {
+			continue
+		}
+		if edit.image.Kind == models.MediaImageKindUpload {
+			if err := uploadManager(env).Ready(
+				edit.image.UploadID, uploadOwner(env), UploadPurposeMediaImage,
+			); err != nil {
+				return uploadClientError(err)
+			}
+			continue
+		}
+		data, err := readMediaImageSource(env, edit.image)
+		if err != nil {
+			return err
+		}
+		edit.imageData = data
+	}
+	return nil
+}
+
+// readMediaImageSource reads and checks the image a file or browse edit
+// names.
+func readMediaImageSource(env *requests.RequestEnv, input *models.MediaImageInput) ([]byte, error) {
+	var data []byte
+	var err error
+	switch {
+	case input.Kind == models.MediaImageKindBrowse:
+		data, err = readBrowsedMediaImage(env, input)
+	case !isLocalOrAdmin(env):
+		// A file image reads any image on the Core host.
+		return nil, models.ClientErrf("%w", ErrForbidden)
+	default:
+		data, err = readHostMediaImage(input.Path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = checkMediaUserImage(data); err != nil {
+		return nil, models.ClientErr(err)
+	}
+	return data, nil
+}
+
+// readBrowsedMediaImage reads a browse image: one files.browse listed, inside
+// a browse root, read through the file the root opened.
+func readBrowsedMediaImage(env *requests.RequestEnv, input *models.MediaImageInput) ([]byte, error) {
+	browser, err := hostBrowser(env)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := browser.OpenImage(env.Context, input.Root, input.Path)
+	if err != nil {
+		return nil, hostFilesClientError(err)
+	}
+	defer func() { _ = opened.File.Close() }()
+	data, err := readOpenedMediaFile(opened.File, opened.Info, imagefiles.MaxBytes)
+	return data, mediaImageSourceReadError(err)
+}
+
+// readHostMediaImage reads a file image, named by its path on the Core host.
+func readHostMediaImage(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, models.ClientErrf("image file not found: %s", path)
+	}
+	data, err := readMediaBinaryFile(afero.NewOsFs(), path, imagefiles.MaxBytes)
+	return data, mediaImageSourceReadError(err)
+}
+
+// mediaImageSourceReadError is the client error for a failed image read.
+func mediaImageSourceReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var tooLarge *mediaBinaryTooLargeError
+	if errors.As(err, &tooLarge) {
+		return models.ClientErr(imagefiles.ErrTooLarge)
+	}
+	return models.ClientErrf("image file cannot be read: %w", err)
+}
+
+// storeMediaUserImage stores the image an edit names in the user images
+// folder and hands the file name UserDB keeps to commit. An upload is
 // consumed only once commit succeeds, so a failed write can be retried with
 // the same upload.
-func storeMediaUserImage(
-	env *requests.RequestEnv, input *models.MediaImageInput, commit func(name string) error,
-) error {
+func storeMediaUserImage(env *requests.RequestEnv, edit *mediaFieldEdit, commit func(name string) error) error {
 	store, err := userImages(env)
 	if err != nil {
 		return err
 	}
-	if input.Kind == models.MediaImageKindUpload {
+	if edit.image.Kind == models.MediaImageKindUpload {
 		var commitErr error
-		takeErr := uploadManager(env).Take(input.UploadID, env.ClientID, UploadPurposeMediaImage,
+		takeErr := uploadManager(env).Take(edit.image.UploadID, uploadOwner(env), UploadPurposeMediaImage,
 			func(path string) error {
 				data, readErr := readMediaBinaryFile(afero.NewOsFs(), path, imagefiles.MaxBytes)
 				if readErr != nil {
@@ -304,25 +397,10 @@ func storeMediaUserImage(
 		return nil
 	}
 
-	// A file image reads any image on the Core host.
-	if !isLocalOrAdmin(env) {
-		return models.ClientErrf("%w", ErrForbidden)
+	if edit.imageData == nil {
+		return errors.New("image edit was not prepared")
 	}
-	info, err := os.Stat(input.Path)
-	if err != nil || !info.Mode().IsRegular() {
-		return models.ClientErrf("image file not found: %s", input.Path)
-	}
-	if info.Size() > imagefiles.MaxBytes {
-		return models.ClientErr(imagefiles.ErrTooLarge)
-	}
-	data, err := readMediaBinaryFile(afero.NewOsFs(), input.Path, imagefiles.MaxBytes)
-	if err != nil {
-		return models.ClientErrf("image file cannot be read: %w", err)
-	}
-	if err = checkMediaUserImage(data); err != nil {
-		return models.ClientErr(err)
-	}
-	name, err := store.Save(mediaUserImagePrefix, data)
+	name, err := store.Save(mediaUserImagePrefix, edit.imageData)
 	if err != nil {
 		if errors.Is(err, imagefiles.ErrNotImage) || errors.Is(err, imagefiles.ErrTooLarge) {
 			return models.ClientErr(err)
@@ -417,7 +495,7 @@ func writeMediaFieldEdits(
 		if edit.image == nil {
 			err = apply(edit.field, edit.value)
 		} else {
-			err = storeMediaUserImage(env, edit.image, func(name string) error {
+			err = storeMediaUserImage(env, edit, func(name string) error {
 				return apply(edit.field, &name)
 			})
 		}

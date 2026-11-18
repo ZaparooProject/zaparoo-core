@@ -25,9 +25,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -102,8 +104,12 @@ type MediaUserTitleFields struct {
 	Tags map[string][]MediaUserTagValue
 	// Images maps a file's Media DBID to its image kinds and the path of the
 	// stored image for each.
-	Images    map[int64]map[string]string
-	TitleDBID int64
+	Images map[int64]map[string]string
+	// IsUserImage reports whether an image property's value is a user image,
+	// so a user image that is no longer wanted is removed and art a scraper
+	// wrote in its place is not. Nil counts every value as a user image.
+	IsUserImage func(path string) bool
+	TitleDBID   int64
 	// SkipImages leaves every file's images as they are, for a caller that
 	// cannot tell which stored images exist.
 	SkipImages bool
@@ -176,6 +182,8 @@ type MediaUserFieldsDB interface {
 // its file, with an error when the file is not there.
 type MediaUserImageStore interface {
 	Path(name string) (string, error)
+	// Holds reports whether path names a file in the store, there or not.
+	Holds(path string) bool
 }
 
 // mediaUserFieldsDB returns the media database's user-fields side, false when
@@ -217,17 +225,24 @@ func ApplyMediaUserField(
 	}
 
 	systemID := row.System.SystemID
-	if value == nil {
-		paths := []string{row.Path}
-		if IsMediaUserFieldTitleLevel(field) {
-			paths = titlePaths
+	ownedPaths := []string{row.Path}
+	if IsMediaUserFieldTitleLevel(field) {
+		ownedPaths = titlePaths
+		if hasFieldsDB {
+			owned, err := titleOwnedMediaUserFieldPaths(ctx, db, row, titlePaths, field)
+			if err != nil {
+				return MediaUserFieldsSync{}, err
+			}
+			ownedPaths = owned
 		}
-		if err := db.UserDB.DeleteMediaUserField(systemID, row.Title.Slug, paths, field); err != nil {
+	}
+	if value == nil {
+		if err := db.UserDB.DeleteMediaUserField(systemID, "", ownedPaths, field); err != nil {
 			return MediaUserFieldsSync{}, fmt.Errorf("failed to remove media user field %s: %w", field, err)
 		}
 	} else if err := db.UserDB.SetMediaUserField(&MediaUserField{
 		SystemID: systemID, Path: row.Path, Field: field, Value: *value, Slug: row.Title.Slug,
-	}, titlePaths); err != nil {
+	}, ownedPaths); err != nil {
 		return MediaUserFieldsSync{}, fmt.Errorf("failed to set media user field %s: %w", field, err)
 	}
 	if !hasFieldsDB {
@@ -244,26 +259,75 @@ func ApplyMediaUserField(
 	if err != nil {
 		return MediaUserFieldsSync{}, err
 	}
-	result, err := fieldsDB.SyncMediaUserFields(
-		ctx, foldMediaUserFields(row.Title.DBID, byTitle[row.Title.DBID], files, db.UserImages),
-	)
+	fields, err := foldMediaUserFields(row.Title.DBID, byTitle[row.Title.DBID], files, db.UserImages)
+	if err != nil {
+		db.QueueMediaUserDataReconcile()
+		return MediaUserFieldsSync{}, err
+	}
+	result, err := fieldsDB.SyncMediaUserFields(ctx, fields)
 	if err != nil {
 		return MediaUserFieldsSync{}, fmt.Errorf("failed to write media user fields: %w", err)
+	}
+	if result.Changed {
+		scope := &ScrapeScope{SystemID: systemID, Path: row.Path, MediaID: row.DBID}
+		if scope.Validate() != nil {
+			scope = nil
+		}
+		syncMediaUserFieldLinks(ctx, db, []string{systemID}, scope)
 	}
 	return result, nil
 }
 
+// syncMediaUserFieldLinks copies a title's edited fields onto the symlink
+// aliases of its files, which take their target's data only when synced. A
+// failure leaves the aliases as they were until the next scrape or index
+// syncs them.
+func syncMediaUserFieldLinks(ctx context.Context, db *Database, systemIDs []string, scope *ScrapeScope) {
+	if err := db.MediaDB.SyncLinkedMedia(ctx, systemIDs, scope); err != nil {
+		log.Warn().Err(err).Strs("systems", systemIDs).Msg("failed to copy media user fields onto linked media")
+	}
+}
+
+// titleOwnedMediaUserFieldPaths returns the paths whose row of a title-level
+// field belongs to row's title: the title's own files, and files that carried
+// its slug and no longer resolve. A file that carried the slug but is now
+// indexed under another title keeps its row; that title owns it.
+func titleOwnedMediaUserFieldPaths(
+	ctx context.Context, db *Database, row *MediaFullRow, titlePaths []string, field string,
+) ([]string, error) {
+	rows, err := db.UserDB.GetMediaUserFieldsForTitle(row.System.SystemID, row.Title.Slug, titlePaths)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the title's media user fields: %w", err)
+	}
+	byTitle, err := groupMediaUserFieldsByTitle(ctx, db.MediaDB, rows)
+	if err != nil {
+		return nil, err
+	}
+	paths := slices.Clone(titlePaths)
+	for _, owned := range byTitle[row.Title.DBID] {
+		if owned.Field == field && !slices.Contains(paths, owned.Path) {
+			paths = append(paths, owned.Path)
+		}
+	}
+	return paths, nil
+}
+
 // foldMediaUserFields builds what a title should carry from its UserDB rows,
 // given oldest first so the newest row of a field decides it. An image whose
-// file is not stored is left out, and the file then shows its scraped art.
+// file is not stored is left out, and the file then shows its scraped art. An
+// image folder that cannot be checked fails the fold, so a passing error does
+// not clear user art that is still there.
 func foldMediaUserFields(
 	titleDBID int64, rows []MediaUserField, files []Media, images MediaUserImageStore,
-) *MediaUserTitleFields {
+) (*MediaUserTitleFields, error) {
 	state := &MediaUserTitleFields{
 		TitleDBID:  titleDBID,
 		Tags:       make(map[string][]MediaUserTagValue),
 		Images:     make(map[int64]map[string]string),
 		SkipImages: images == nil,
+	}
+	if images != nil {
+		state.IsUserImage = images.Holds
 	}
 	mediaByPath := make(map[string]int64, len(files))
 	for i := range files {
@@ -284,10 +348,13 @@ func foldMediaUserFields(
 				continue
 			}
 			path, err := images.Path(row.Value)
-			if err != nil {
+			if errors.Is(err, imagefiles.ErrNotFound) {
 				log.Debug().Err(err).Str("path", row.Path).Str("field", row.Field).
 					Msg("user image is not stored; leaving the scraped art")
 				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to find the user image for %s: %w", row.Field, err)
 			}
 			if state.Images[mediaDBID] == nil {
 				state.Images[mediaDBID] = make(map[string]string)
@@ -295,7 +362,7 @@ func foldMediaUserFields(
 			state.Images[mediaDBID][strings.TrimPrefix(row.Field, MediaUserFieldImagePrefix)] = path
 		}
 	}
-	return state
+	return state, nil
 }
 
 // ReapplyMediaUserFields makes the media database carry exactly the user
@@ -345,6 +412,7 @@ func reconcileMediaUserFields(ctx context.Context, db *Database) (changed int, e
 
 	// One title that fails does not hold back the titles after it.
 	var errs []error
+	var linkSystems []string
 	for _, titleDBID := range titleIDs {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			errs = append(errs, fmt.Errorf("re-applying media user fields stopped: %w", ctxErr))
@@ -355,16 +423,26 @@ func reconcileMediaUserFields(ctx context.Context, db *Database) (changed int, e
 			errs = append(errs, fmt.Errorf("failed to list the files of title %d: %w", titleDBID, listErr))
 			continue
 		}
-		result, syncErr := fieldsDB.SyncMediaUserFields(
-			ctx, foldMediaUserFields(titleDBID, byTitle[titleDBID], files, db.UserImages),
-		)
+		fields, foldErr := foldMediaUserFields(titleDBID, byTitle[titleDBID], files, db.UserImages)
+		if foldErr != nil {
+			errs = append(errs, fmt.Errorf("failed to build the user fields of title %d: %w", titleDBID, foldErr))
+			continue
+		}
+		result, syncErr := fieldsDB.SyncMediaUserFields(ctx, fields)
 		if syncErr != nil {
 			errs = append(errs, fmt.Errorf("failed to write the user fields of title %d: %w", titleDBID, syncErr))
 			continue
 		}
 		if result.Changed {
 			changed++
+			if result.SystemID != "" && !slices.Contains(linkSystems, result.SystemID) {
+				linkSystems = append(linkSystems, result.SystemID)
+			}
 		}
+	}
+	if len(linkSystems) > 0 && ctx.Err() == nil {
+		sort.Strings(linkSystems)
+		syncMediaUserFieldLinks(ctx, db, linkSystems, nil)
 	}
 	return changed, errors.Join(errs...)
 }

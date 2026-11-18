@@ -2993,3 +2993,24 @@ func TestScrapeQueueKeepsRunningSkipImages(t *testing.T) {
 	assert.False(t, stored.Pending[0].SkipImages)
 	db.AssertExpectations(t)
 }
+
+func TestReapplyMediaUserFieldsAfterScrape_FailureQueuesReconcile(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB := testhelpers.NewMockUserDBI()
+	userDB.On("ListMediaUserFields").Unset()
+	userDB.On("ListMediaUserFields").Return(nil, errors.New("disk I/O error"))
+	reconciler := &recordingMediaUserDataReconciler{}
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB, MediaUserData: reconciler}
+	st, _ := state.NewState(mocks.NewMockPlatform(), "test")
+	t.Cleanup(st.StopService)
+
+	reapplyMediaUserFieldsAfterScrape(&requests.RequestEnv{State: st}, db)
+	assert.Equal(t, int32(1), reconciler.queued.Load(), "the restore is retried later")
+
+	userDB.On("ListMediaUserFields").Unset()
+	userDB.On("ListMediaUserFields").Return([]database.MediaUserField{}, nil)
+	reapplyMediaUserFieldsAfterScrape(&requests.RequestEnv{State: st}, db)
+	assert.Equal(t, int32(1), reconciler.queued.Load(), "a restore that worked queues nothing")
+}

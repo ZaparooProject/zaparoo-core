@@ -235,6 +235,30 @@ func TestHandleMediaMetaUpdate_ImageFileMustBeAnImage(t *testing.T) {
 	assert.True(t, isClientErr(err))
 }
 
+func TestHandleMediaMetaUpdate_UnusableImageWritesNothing(t *testing.T) {
+	t.Parallel()
+	notImage := filepath.Join(t.TempDir(), "notes.png")
+	require.NoError(t, os.WriteFile(notImage, []byte("plain text"), 0o600))
+	cases := map[string]string{
+		"file that is not an image": fmt.Sprintf(`{"kind": "file", "path": %q}`, notImage),
+		"unknown upload":            `{"kind": "upload", "uploadId": "missing"}`,
+	}
+	for name, image := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newUserFieldsTestEnv(t)
+			// The description sorts before the image, so it would be written
+			// first if the image were only checked in its turn.
+			err := e.updateErr(t, fmt.Sprintf(`{"description": "kept out", "images": {"boxart": %s}}`, image))
+			assert.True(t, isClientErr(err))
+
+			fields, listErr := e.env.Database.UserDB.ListMediaUserFields()
+			require.NoError(t, listErr)
+			assert.Empty(t, fields, "no part of the update was written")
+		})
+	}
+}
+
 // uploadImage sends data through the upload methods in chunks of chunkSize
 // and returns the finished upload's ID.
 func (e *userFieldsTestEnv) uploadImage(t *testing.T, data []byte, chunkSize int) string {
@@ -301,6 +325,62 @@ func TestHandleMediaMetaUpdate_ImageFromUpload(t *testing.T) {
 	staged, err := os.ReadDir(filepath.Join(UserImagesDir(e.env.Platform), uploadStagingDirName))
 	require.NoError(t, err)
 	assert.Empty(t, staged)
+}
+
+func TestHandleUploads_ResumeAfterReconnect(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		pairedClient string
+		otherPaired  string
+		firstAddr    string
+		resumeAddr   string
+		otherAddr    string
+	}{
+		"paired client on a new connection": {
+			pairedClient: "phone", firstAddr: "10.0.0.5:40001", resumeAddr: "10.0.0.9:40002",
+			otherPaired: "tablet", otherAddr: "10.0.0.5:40001",
+		},
+		"unpaired caller from a new port": {
+			firstAddr: "10.0.0.5:40001", resumeAddr: "10.0.0.5:40002", otherAddr: "10.0.0.6:40001",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newUserFieldsTestEnv(t)
+			data := testPNG(t, 64)
+			sum := sha256.Sum256(data)
+			e.env.PairedClientID = tc.pairedClient
+			e.env.ClientID = tc.firstAddr
+			result, err := HandleUploadsBegin(withParams(&e.env, fmt.Sprintf(
+				`{"purpose":"media-image","size":%d,"sha256":%q}`, len(data), hex.EncodeToString(sum[:]),
+			)))
+			require.NoError(t, err)
+			begun, ok := result.(models.UploadResponse)
+			require.True(t, ok)
+			statusParams := fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)
+
+			// Someone else does not see the upload.
+			other := e.env
+			other.PairedClientID = tc.otherPaired
+			other.ClientID = tc.otherAddr
+			_, err = HandleUploadsStatus(withParams(&other, statusParams))
+			require.ErrorIs(t, err, uploads.ErrNotFound)
+
+			// The same caller, reconnected, resumes it.
+			e.env.ClientID = tc.resumeAddr
+			_, err = HandleUploadsStatus(withParams(&e.env, statusParams))
+			require.NoError(t, err)
+			chunk, err := json.Marshal(map[string]any{
+				"uploadId": begun.UploadID, "offset": 0, "data": base64.StdEncoding.EncodeToString(data),
+			})
+			require.NoError(t, err)
+			_, err = HandleUploadsChunk(withParams(&e.env, string(chunk)))
+			require.NoError(t, err)
+			_, err = HandleUploadsFinish(withParams(&e.env, statusParams))
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestHandleUploads_RejectsWhatIsNotAnImage(t *testing.T) {
@@ -497,14 +577,33 @@ func TestHandleMediaMetaUpdate_ResetScrapesTheFileAgain(t *testing.T) {
 	default:
 	}
 
-	// A reset stays written when a later edit in the same request fails, so
-	// the file is still scraped again.
+	// An image that is not usable is refused before anything is written, so
+	// the reset in the same request does not happen either.
 	e.update(t, 0, `{"description": "mine"}`)
 	missing := filepath.Join(t.TempDir(), "missing.png")
 	err := e.updateErr(t, fmt.Sprintf(
 		`{"description": null, "images": {"boxart": {"kind": "file", "path": %q}}}`, missing,
 	))
 	assert.True(t, isClientErr(err))
+	select {
+	case extra := <-gotOptions:
+		require.FailNowf(t, "a refused update started a scrape", "%+v", extra)
+	default:
+	}
+	fields, err := userDB.ListMediaUserFields()
+	require.NoError(t, err)
+	require.Len(t, fields, 1)
+	assert.Equal(t, "mine", fields[0].Value)
+
+	// A reset stays written when a later write in the same request fails, so
+	// the file is still scraped again.
+	image := filepath.Join(t.TempDir(), "cover.png")
+	require.NoError(t, os.WriteFile(image, testPNG(t, 32), 0o600))
+	e.env.Database.UserDB = &failingFieldsUserDB{UserDBI: userDB, fail: true}
+	err = e.updateErr(t, fmt.Sprintf(
+		`{"description": null, "images": {"boxart": {"kind": "file", "path": %q}}}`, image,
+	))
+	assert.False(t, isClientErr(err), "a failed write is the device's fault: %v", err)
 	opts = receiveScrapeOptions(t, gotOptions)
 	assert.Equal(t, ids[0], opts.Scope.MediaID)
 	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)

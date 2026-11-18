@@ -574,14 +574,34 @@ type MediaMetaUpdateParams struct {
 const (
 	MediaImageKindFile   = "file"
 	MediaImageKindUpload = "upload"
+	MediaImageKindBrowse = "browse"
 )
 
 // MediaImageInput names the image a media.meta.update image field takes: a
-// file on the Core host (path) or a finished upload (uploadId).
+// file on the Core host by absolute path (path), a finished upload
+// (uploadId), or an image picked with files.browse (root and path).
 type MediaImageInput struct {
-	Kind     string `json:"kind" validate:"required,oneof=file upload"`
+	Kind     string `json:"kind" validate:"required,oneof=file upload browse"`
 	Path     string `json:"path,omitempty"`
 	UploadID string `json:"uploadId,omitempty"`
+	Root     string `json:"root,omitempty"`
+}
+
+// FilesBrowseParams lists the browse roots when Root is empty, and one
+// folder under a root otherwise.
+type FilesBrowseParams struct {
+	Offset  *int   `json:"offset,omitempty" validate:"omitempty,gte=0"`
+	Limit   *int   `json:"limit,omitempty" validate:"omitempty,gte=1,lte=500"`
+	Purpose string `json:"purpose" validate:"required,oneof=image"`
+	Root    string `json:"root,omitempty" validate:"omitempty,max=64"`
+	Path    string `json:"path,omitempty" validate:"omitempty,max=4096"`
+}
+
+type FilesImageParams struct {
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	Root     string `json:"root" validate:"required,min=1,max=64"`
+	Path     string `json:"path" validate:"required,min=1,max=4096"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
 }
 
 type UploadsBeginParams struct {

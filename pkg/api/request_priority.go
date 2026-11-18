@@ -121,6 +121,8 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodUploadsStatus,
 		models.MethodUploadsFinish,
 		models.MethodUploadsCancel,
+		models.MethodFilesBrowse,
+		models.MethodFilesImage,
 		models.MethodMediaGenerate,
 		models.MethodMediaGenerateCancel,
 		models.MethodMediaGenerateResume,

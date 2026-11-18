@@ -418,6 +418,17 @@ func (s *userFieldsSync) syncImages(ctx context.Context) error {
 				}
 				continue
 			}
+			var current string
+			err = s.tx.QueryRowContext(ctx,
+				`SELECT Text FROM MediaProperties WHERE MediaDBID = ? AND TypeTagDBID = ?`, file.dbid, typeTagDBID,
+			).Scan(&current)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("read user %s image: %w", kind, err)
+			}
+			// Art a scraper wrote over the user image is the file's own now.
+			if err == nil && s.want.IsUserImage != nil && !s.want.IsUserImage(current) {
+				continue
+			}
 			if _, err := s.tx.ExecContext(ctx,
 				`DELETE FROM MediaProperties WHERE MediaDBID = ? AND TypeTagDBID = ?`, file.dbid, typeTagDBID,
 			); err != nil {

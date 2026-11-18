@@ -642,6 +642,36 @@ type MediaMetaBatchResponse struct {
 	Items []MediaMetaBatchItemResponse `json:"items"`
 }
 
+// FilesRoot is one folder of the Core host a client may browse.
+type FilesRoot struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// FilesEntry is one folder or file in a files.browse listing.
+type FilesEntry struct {
+	// Modified is the entry's modification time, RFC 3339.
+	Modified string `json:"modified"`
+	Name     string `json:"name"`
+	// Path is the entry's path under its root, with forward slashes.
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
+}
+
+// FilesBrowseResponse is the roots, or one page of a folder under a root.
+type FilesBrowseResponse struct {
+	Root string `json:"root,omitempty"`
+	Path string `json:"path"`
+	// Roots is set only when the request named no root.
+	Roots   []FilesRoot  `json:"roots,omitempty"`
+	Entries []FilesEntry `json:"entries"`
+	// Total counts the folder's entries across every page.
+	Total int `json:"total"`
+	// Truncated is true for a folder too large to read whole.
+	Truncated bool `json:"truncated"`
+}
+
 // UploadResponse describes an upload session.
 type UploadResponse struct {
 	UploadID string `json:"uploadId"`

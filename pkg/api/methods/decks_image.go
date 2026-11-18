@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/rs/zerolog/log"
@@ -142,9 +143,13 @@ func deckHasImage(env *requests.RequestEnv, deck *database.Deck) bool {
 
 // deckImageSource is the image decks.image serves: a cover file stored here
 // or an image fetched from an https URL.
+// opened, when set, is the file at localPath already opened: it is read
+// instead of opening localPath again.
 type deckImageSource struct {
-	localPath string
-	remoteURL string
+	openedInfo os.FileInfo
+	opened     *os.File
+	localPath  string
+	remoteURL  string
 }
 
 // HandleDecksImage returns a deck's cover, or a card item's art, in the
@@ -217,13 +222,28 @@ func serveDeckImage(
 	var sourceKey string
 	var load func() ([]byte, string, error)
 	if source.localPath != "" {
-		info, err := os.Stat(source.localPath)
-		if err != nil {
-			return models.MediaImageResponse{}, models.ClientErrf(errDeckImageMsg)
+		info := source.openedInfo
+		if source.opened == nil {
+			var err error
+			if info, err = os.Stat(source.localPath); err != nil {
+				return models.MediaImageResponse{}, models.ClientErrf(errDeckImageMsg)
+			}
 		}
 		sourceKey = fileThumbSourceKey(source.localPath, info)
 		load = func() ([]byte, string, error) {
-			data, readErr := readMediaBinaryFile(afero.NewOsFs(), source.localPath, decks.CoverMaxBytes)
+			var data []byte
+			var readErr error
+			if source.opened != nil {
+				// A browsed image is the client's pick: one too large is its
+				// error, and the message does not name the host path.
+				data, readErr = readOpenedMediaFile(source.opened, info, decks.CoverMaxBytes)
+				var tooLarge *mediaBinaryTooLargeError
+				if errors.As(readErr, &tooLarge) {
+					return nil, "", models.ClientErr(imagefiles.ErrTooLarge)
+				}
+			} else {
+				data, readErr = readMediaBinaryFile(afero.NewOsFs(), source.localPath, decks.CoverMaxBytes)
+			}
 			if readErr != nil {
 				return nil, "", fmt.Errorf("read deck cover: %w", readErr)
 			}
