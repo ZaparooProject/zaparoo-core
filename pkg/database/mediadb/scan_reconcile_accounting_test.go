@@ -184,7 +184,7 @@ func TestFlagMissingMediaTiming_ExcludesPacing(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 		return nil
 	}
-	affected, timing, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, yield)
+	affected, timing, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil, yield)
 	require.NoError(t, err)
 	require.EqualValues(t, 5, affected)
 
