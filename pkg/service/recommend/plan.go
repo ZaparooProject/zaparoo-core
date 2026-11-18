@@ -23,6 +23,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
+	"math/rand/v2"
 	"slices"
 	"time"
 
@@ -619,10 +621,10 @@ func (b *planBuilder) sections() []PlanSection {
 // queue lists every pick in one list. The seeds take turns, a stronger seed
 // more often, each giving its next match, so a seed whose matches score high
 // cannot fill the list; every fourth place goes to a game marked to play
-// later. Only a seed's close matches take turns, in an order that moves on
-// each day so the list does not stay the same while the signals do; the rest
-// fill the list once the turns run out. The series and system caps hold
-// across the whole list.
+// later. Each seed's matches are dithered by day: they keep roughly their
+// order, best first, but the ones further down trade places from day to day,
+// so the list does not stay the same while the signals do. The series and
+// system caps hold across the whole list.
 func (b *planBuilder) queue() []PlanSection {
 	used := make(map[int64]struct{}, len(b.seeds))
 	for i := range b.seeds {
@@ -630,8 +632,12 @@ func (b *planBuilder) queue() []PlanSection {
 	}
 	lanes := make([][]*candidate, len(b.seeds))
 	weights := make([]float64, len(b.seeds))
+	strongest := 0.0
 	for i := range b.seeds {
-		weights[i] = b.seeds[i].affinity
+		strongest = max(strongest, b.seeds[i].affinity)
+	}
+	for i := range b.seeds {
+		weights[i] = max(b.seeds[i].affinity, strongest*queueMinTurnShare)
 	}
 	var later []*candidate
 	for group, entry := range b.candidates {
@@ -656,19 +662,14 @@ func (b *planBuilder) queue() []PlanSection {
 		later = append(later, entry)
 	}
 
-	day := int(b.now.UTC().Unix() / secondsPerDay)
-	var reserve []*candidate
+	day := uint64(b.now.UTC().Unix() / secondsPerDay) //nolint:gosec // a day count is never negative
 	for i := range lanes {
-		var weak []*candidate
-		lanes[i], weak = queueLane(lanes[i], day)
-		reserve = append(reserve, weak...)
+		lanes[i] = ditherCandidates(lanes[i], day)
 	}
-	slices.SortFunc(reserve, compareCandidates)
-	slices.SortFunc(later, compareCandidates)
-	later = rotateCandidates(later, day)
+	later = ditherCandidates(later, day)
 
 	section := PlanSection{Kind: SectionQueue}
-	for _, entry := range interleaveCandidates(lanes, weights, reserve, later, used, b.opts.MaxResults+planSpare) {
+	for _, entry := range interleaveCandidates(lanes, weights, later, used, b.opts.MaxResults+planSpare) {
 		item := PlanItem{TitleDBID: entry.best.TitleDBID, Reasons: entry.best.Reasons}
 		if state, ok := b.games[entry.group]; ok && len(state.playLater) > 0 {
 			item.Signal = SignalPlayLater
@@ -688,51 +689,43 @@ const (
 	// queueLaterEvery is how often the queue gives a place to a game marked
 	// to play later: every fourth.
 	queueLaterEvery = 4
-	// queueCloseMatch is how close to a seed's best match a game must score
-	// to take the seed's turns.
-	queueCloseMatch = 0.5
-	secondsPerDay   = 24 * 60 * 60
+	// queueMinTurnShare is the least share of the strongest seed's turns any
+	// seed takes, so a game played but not flagged is not crowded out by the
+	// favorites.
+	queueMinTurnShare = 0.5
+	// queueDither is how far the day's noise moves a match, in log rank: a
+	// match keeps its place against one about this far down on most days.
+	queueDither   = 0.5
+	secondsPerDay = 24 * 60 * 60
 )
 
-// queueLane splits one seed's matches into the close ones, which take the
-// seed's turns starting at a place that moves on each day, and the rest.
-func queueLane(entries []*candidate, day int) (closeMatches, rest []*candidate) {
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	slices.SortFunc(entries, compareCandidates)
-	cut := len(entries)
-	for i, entry := range entries {
-		if entry.total < entries[0].total*queueCloseMatch {
-			cut = i
-			break
-		}
-	}
-	return rotateCandidates(entries[:cut], day), entries[cut:]
-}
-
-// rotateCandidates starts the list at a place that moves on by one each day,
-// wrapping round, so each entry leads in turn.
-func rotateCandidates(entries []*candidate, day int) []*candidate {
+// ditherCandidates orders candidates best first, then shakes the order with
+// noise that is fixed for the day: each scores ln(rank) plus a normal draw
+// seeded by the day and the game. The top places move least, because a few
+// places there are a large step in log rank.
+func ditherCandidates(entries []*candidate, day uint64) []*candidate {
 	if len(entries) < 2 {
 		return entries
 	}
-	start := day % len(entries)
-	if start < 0 {
-		start += len(entries)
+	slices.SortFunc(entries, compareCandidates)
+	keys := make(map[*candidate]float64, len(entries))
+	for rank, entry := range entries {
+		noise := rand.New(rand.NewPCG(day, uint64(entry.group))).NormFloat64() //nolint:gosec // ordering, not security
+		keys[entry] = math.Log(float64(rank+1)) + noise*queueDither
 	}
-	return append(slices.Clone(entries[start:]), entries[:start]...)
+	slices.SortStableFunc(entries, func(a, b *candidate) int {
+		return cmp.Compare(keys[a], keys[b])
+	})
+	return entries
 }
 
 // interleaveCandidates fills a list from the lanes by smooth weighted turns:
 // a lane with twice the weight takes twice the places, spread out, not in a
 // run. Every queueLaterEvery-th place goes to the later lane while it lasts.
 // A game already used or in a full series is skipped; one on a full system is
-// passed over. When the lanes run dry, the reserve fills the list, then what
-// was passed over.
+// passed over, and those fill the list when the lanes run dry.
 func interleaveCandidates(
-	lanes [][]*candidate, weights []float64, reserve, later []*candidate,
-	used map[int64]struct{}, limit int,
+	lanes [][]*candidate, weights []float64, later []*candidate, used map[int64]struct{}, limit int,
 ) []*candidate {
 	perSeries := make(map[string]int)
 	perSystem := make(map[string]int)
@@ -799,7 +792,7 @@ func interleaveCandidates(
 		if (len(taken)+1)%queueLaterEvery == 0 && next(&later) {
 			continue
 		}
-		if !turn() && !next(&reserve) && !next(&later) {
+		if !turn() && !next(&later) {
 			break
 		}
 	}

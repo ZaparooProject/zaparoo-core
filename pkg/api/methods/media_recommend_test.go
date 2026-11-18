@@ -321,9 +321,14 @@ func TestHandleMediaRecommended_Queue(t *testing.T) {
 	assert.Equal(t, recommend.SectionQueue, section.Kind)
 	assert.Nil(t, section.Seed)
 	require.Len(t, section.Items, 4)
+	sectionIDs := make([]int64, 0, len(section.Items))
+	queueIDs := make([]int64, 0, len(section.Items))
 	for i := range section.Items {
-		assert.Equal(t, sections.Sections[0].Items[i].MediaID, section.Items[i].MediaID,
-			"one seed ranks the queue as it ranks its section")
+		sectionIDs = append(sectionIDs, sections.Sections[0].Items[i].MediaID)
+		queueIDs = append(queueIDs, section.Items[i].MediaID)
+	}
+	assert.ElementsMatch(t, sectionIDs, queueIDs, "one seed queues the games of its section")
+	for i := range section.Items {
 		assert.Equal(t, recommend.SignalPlayed, section.Items[i].Signal)
 		require.NotNil(t, section.Items[i].Seed)
 		assert.Equal(t, int64(11), section.Items[i].Seed.MediaID)

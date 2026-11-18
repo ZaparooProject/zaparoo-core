@@ -637,7 +637,7 @@ func TestInterleaveCandidates_SeedsTakeTurns(t *testing.T) {
 	}
 	later := []*candidate{queueEntry(21, playLaterBoost, "H", ""), queueEntry(22, playLaterBoost, "I", "")}
 
-	got := interleaveCandidates(lanes, []float64{1, 1}, nil, later, map[int64]struct{}{}, 9)
+	got := interleaveCandidates(lanes, []float64{1, 1}, later, map[int64]struct{}{}, 9)
 	assert.Equal(t, []int64{1, 11, 2, 21, 12, 3, 4, 22, 5}, queueIDs(got))
 }
 
@@ -658,14 +658,13 @@ func TestInterleaveCandidates_Caps(t *testing.T) {
 	}
 	used := map[int64]struct{}{2: {}}
 
-	got := interleaveCandidates(lanes, []float64{1, 1}, nil, nil, used, 20)
+	got := interleaveCandidates(lanes, []float64{1, 1}, nil, used, 20)
 	assert.Equal(t, []int64{1, 11, 3, 12, 4, 14, 5, 6}, queueIDs(got),
 		"title 2 is used, a third mario game is skipped, and the fifth SNES game waits for the others")
-	assert.Empty(t, interleaveCandidates(nil, nil, nil, nil, map[int64]struct{}{}, 5))
+	assert.Empty(t, interleaveCandidates(nil, nil, nil, map[int64]struct{}{}, 5))
 }
 
-// A seed twice as strong takes twice the turns, spread out, and the reserve
-// fills the list once the turns run out.
+// A seed twice as strong takes twice the turns, spread out.
 func TestInterleaveCandidates_WeightedTurns(t *testing.T) {
 	t.Parallel()
 	strong, weak := make([]*candidate, 0, 4), make([]*candidate, 0, 4)
@@ -673,33 +672,40 @@ func TestInterleaveCandidates_WeightedTurns(t *testing.T) {
 		strong = append(strong, queueEntry(id, 1, fmt.Sprintf("S%d", id), ""))
 		weak = append(weak, queueEntry(10+id, 1, fmt.Sprintf("W%d", id), ""))
 	}
-	reserve := []*candidate{queueEntry(21, 0.1, "R", "")}
 
-	got := interleaveCandidates([][]*candidate{strong, weak}, []float64{2, 1}, reserve, nil,
-		map[int64]struct{}{}, 9)
-	assert.Equal(t, []int64{1, 11, 2, 3, 12, 4, 13, 14, 21}, queueIDs(got))
+	got := interleaveCandidates([][]*candidate{strong, weak}, []float64{2, 1}, nil, map[int64]struct{}{}, 8)
+	assert.Equal(t, []int64{1, 11, 2, 3, 12, 4, 13, 14}, queueIDs(got))
 }
 
-// Only a seed's close matches take its turns, and they lead in turn, a day
-// at a time.
-func TestQueueLane(t *testing.T) {
+// Dithering keeps the best matches near the top, gives the same order all
+// day, and a different one on other days.
+func TestDitherCandidates(t *testing.T) {
 	t.Parallel()
 	lane := func() []*candidate {
-		return []*candidate{
-			queueEntry(3, 6, "A", ""), queueEntry(1, 10, "A", ""),
-			queueEntry(4, 4, "A", ""), queueEntry(2, 8, "A", ""),
+		entries := make([]*candidate, 0, 40)
+		for id := int64(1); id <= 40; id++ {
+			entries = append(entries, queueEntry(id, float64(100-id), "A", ""))
+		}
+		return entries
+	}
+	ids := func(day uint64) []int64 { return queueIDs(ditherCandidates(lane(), day)) }
+
+	first := ids(20000)
+	assert.Equal(t, first, ids(20000), "the same day gives the same order")
+	changed, topRanks := 0, 0
+	for day := uint64(20000); day < 20030; day++ {
+		today := ids(day)
+		if !slices.Equal(today, ids(day+1)) {
+			changed++
+		}
+		assert.ElementsMatch(t, ids(day), queueIDs(lane()), "dithering only reorders")
+		if today[0] <= 4 {
+			topRanks++
 		}
 	}
-	closeMatches, rest := queueLane(lane(), 0)
-	assert.Equal(t, []int64{1, 2, 3}, queueIDs(closeMatches))
-	assert.Equal(t, []int64{4}, queueIDs(rest))
+	assert.Equal(t, 30, changed, "each day orders the lane differently")
+	assert.GreaterOrEqual(t, topRanks, 27, "the first place nearly always goes to a top-four match")
 
-	closeMatches, _ = queueLane(lane(), 1)
-	assert.Equal(t, []int64{2, 3, 1}, queueIDs(closeMatches))
-	closeMatches, _ = queueLane(lane(), 3)
-	assert.Equal(t, []int64{1, 2, 3}, queueIDs(closeMatches), "the order comes round again")
-
-	closeMatches, rest = queueLane(nil, 5)
-	assert.Empty(t, closeMatches)
-	assert.Empty(t, rest)
+	single := []*candidate{queueEntry(1, 1, "A", "")}
+	assert.Equal(t, single, ditherCandidates(single, 1))
 }
