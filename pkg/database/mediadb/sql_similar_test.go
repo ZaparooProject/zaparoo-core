@@ -91,7 +91,7 @@ func TestSimilarityReads(t *testing.T) {
 
 	found, err := lib.db.FindTitlesSharingTags(ctx, []database.WeightedTag{
 		{TagDBID: genreID, Weight: 1}, {TagDBID: marioID, Weight: 3},
-	}, []int64{lib.titles["Mario One"]}, 10)
+	}, []int64{lib.titles["Mario One"]}, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, found, 3)
 	assert.Equal(t, lib.titles["Mario Two"], found[0].TitleDBID, "sharing both tags outranks sharing one")
@@ -99,17 +99,60 @@ func TestSimilarityReads(t *testing.T) {
 	assert.InDelta(t, 1.0, found[1].Score, 1e-9)
 	assert.Less(t, found[1].TitleDBID, found[2].TitleDBID, "ties are broken by title row")
 
-	limited, err := lib.db.FindTitlesSharingTags(ctx, []database.WeightedTag{{TagDBID: genreID, Weight: 1}}, nil, 2)
+	limited, err := lib.db.FindTitlesSharingTags(ctx,
+		[]database.WeightedTag{{TagDBID: genreID, Weight: 1}}, nil, nil, 2)
 	require.NoError(t, err)
 	assert.Len(t, limited, 2)
 
-	empty, err := lib.db.FindTitlesSharingTags(ctx, nil, nil, 10)
+	empty, err := lib.db.FindTitlesSharingTags(ctx, nil, nil, nil, 10)
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 
 	estimate, err := lib.db.MediaTitleCountEstimate(ctx)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, estimate, int64(5))
+}
+
+// A lookup limited to some systems is filtered before its limit, so titles on
+// other systems that score higher cannot crowd out the allowed ones.
+func TestFindTitlesSharingTags_SystemsBeforeLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lib := newVersionTestLibrary(t, "Mario One", "Mario Two", "Mario Three")
+	mario := franchiseTag(tags.TagSearchFranchiseMario)
+	platformer := genreTag(tags.TagGameGenreActionPlatformer)
+	lib.scrape(t, "Mario One", titleTagsWrite(platformer, mario))
+	lib.scrape(t, "Mario Two", titleTagsWrite(platformer, mario))
+	lib.scrape(t, "Mario Three", titleTagsWrite(mario))
+	conn := lib.db.sql.Load()
+	_, err := conn.ExecContext(ctx, `INSERT INTO Systems (SystemID, Name) VALUES ('NES', 'NES')`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE MediaTitles SET SystemDBID = (SELECT DBID FROM Systems
+		WHERE SystemID = 'NES') WHERE DBID IN (?, ?)`, lib.titles["Mario One"], lib.titles["Mario Two"])
+	require.NoError(t, err)
+
+	facets, err := lib.db.GetTitleFacetTags(ctx, []int64{lib.titles["Mario One"]},
+		[]string{string(tags.TagTypeGenre), string(tags.TagTypeSearch)})
+	require.NoError(t, err)
+	genre := string(tags.TagGameGenreActionPlatformer)
+	weighted := []database.WeightedTag{
+		{TagDBID: facetTagID(t, facets, string(tags.TagTypeGenre), genre), Weight: 1},
+		{TagDBID: facetTagID(t, facets, string(tags.TagTypeSearch), string(tags.TagSearchFranchiseMario)), Weight: 1},
+	}
+
+	unlimited, err := lib.db.FindTitlesSharingTags(ctx, weighted, nil, nil, 1)
+	require.NoError(t, err)
+	require.Len(t, unlimited, 1)
+	assert.NotEqual(t, lib.titles["Mario Three"], unlimited[0].TitleDBID, "the NES titles score higher")
+
+	arcade, err := lib.db.FindTitlesSharingTags(ctx, weighted, nil, []string{systemdefs.SystemArcade}, 1)
+	require.NoError(t, err)
+	require.Len(t, arcade, 1)
+	assert.Equal(t, lib.titles["Mario Three"], arcade[0].TitleDBID)
+
+	none, err := lib.db.FindTitlesSharingTags(ctx, weighted, nil, []string{}, 10)
+	require.NoError(t, err)
+	assert.Empty(t, none, "an empty system list allows nothing")
 }
 
 // TestFindTitlesSharingTags_Plan pins the read to the tag index: without it
@@ -136,6 +179,30 @@ func TestFindTitlesSharingTags_Plan(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Contains(t, plan.String(), "mediatitletags_tag_idx")
 	assert.NotContains(t, plan.String(), "SCAN p")
+
+	// Limited to some systems, each posting's title is a primary-key probe,
+	// never a walk of MediaTitles.
+	rows, err = lib.db.sql.Load().QueryContext(ctx, `EXPLAIN QUERY PLAN
+		WITH tok(TagDBID, W) AS (VALUES (?,?),(?,?))
+		SELECT p.MediaTitleDBID, SUM(tok.W) AS S
+		FROM tok CROSS JOIN MediaTitleTags p ON p.TagDBID = tok.TagDBID
+		CROSS JOIN MediaTitles t ON t.DBID = p.MediaTitleDBID
+		WHERE 1 AND p.MediaTitleDBID NOT IN (?)
+		AND t.SystemDBID IN (SELECT DBID FROM Systems WHERE SystemID IN (?))
+		GROUP BY p.MediaTitleDBID ORDER BY S DESC, p.MediaTitleDBID ASC LIMIT ?`, 1, 1.0, 2, 1.0, 9, "NES", 10)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	plan.Reset()
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		plan.WriteString(detail + "\n")
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, plan.String(), "mediatitletags_tag_idx")
+	assert.NotContains(t, plan.String(), "SCAN p")
+	assert.Contains(t, plan.String(), "SEARCH t USING INTEGER PRIMARY KEY")
 }
 
 func TestGetUserTagMedia(t *testing.T) {

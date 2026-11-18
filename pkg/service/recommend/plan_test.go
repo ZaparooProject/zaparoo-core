@@ -331,6 +331,59 @@ func TestBuildPlan_SeedsAreNotPlayLaterItems(t *testing.T) {
 	assert.NotContains(t, all, int64(21))
 }
 
+// A play later mark on another system's copy of a seed does not list the
+// seed's game, and a game marked on two systems is listed once.
+func TestBuildPlan_PlayLaterPortsAreOneGame(t *testing.T) {
+	t.Parallel()
+	lib := seriesLibrary()
+	lib.port(1, 7)
+	lib.port(61, 62)
+	lib.flag(1, tags.TagUserFavorite)
+	lib.flag(7, tags.TagUserPlayLater)
+	lib.flag(61, tags.TagUserPlayLater)
+	lib.flag(62, tags.TagUserPlayLater)
+
+	plan := planFor(t, lib, "", Options{})
+	i := slices.IndexFunc(plan.Sections, func(s PlanSection) bool { return s.Kind == SectionPlayLater })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []PlanItem{{TitleDBID: 61}}, plan.Sections[i].Items)
+	assert.NotContains(t, planTitles(plan), int64(7), "the seed's port is the seed")
+}
+
+// A dislike on any port of a game keeps every port of it out, whichever of
+// them the plan meets first.
+func TestBuildPlan_DislikedPortNeverAppears(t *testing.T) {
+	t.Parallel()
+	for _, disliked := range []int64{2, 8} {
+		lib := seriesLibrary()
+		lib.port(2, 8)
+		lib.flag(1, tags.TagUserFavorite)
+		lib.flag(disliked, tags.TagUserDisliked)
+
+		all := planTitles(planFor(t, lib, "", Options{MaxResults: 30}))
+		require.NotEmpty(t, all)
+		assert.NotContains(t, all, int64(2), "disliked %d", disliked)
+		assert.NotContains(t, all, int64(8), "disliked %d", disliked)
+	}
+}
+
+// A game played at length is not suggested again for being marked to play
+// later.
+func TestBuildPlan_PlayedPlayLaterIsNotListed(t *testing.T) {
+	t.Parallel()
+	lib := seriesLibrary()
+	lib.play("", 91, hours(1), planNow.Add(-time.Hour))
+	lib.flag(91, tags.TagUserPlayLater)
+	lib.play("", 92, 5*60, planNow.Add(-time.Hour))
+	lib.flag(92, tags.TagUserPlayLater)
+	lib.flag(93, tags.TagUserPlayLater)
+
+	plan := planFor(t, lib, "", Options{})
+	require.Equal(t, []string{SectionPlayLater}, sectionKinds(plan))
+	assert.Equal(t, []PlanItem{{TitleDBID: 92}, {TitleDBID: 93}}, plan.Sections[0].Items,
+		"a game only tried briefly stays listed")
+}
+
 func TestBuildPlan_TinyLibrary(t *testing.T) {
 	t.Parallel()
 	lib := newFakeLibrary()

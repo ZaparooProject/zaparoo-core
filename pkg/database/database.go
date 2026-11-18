@@ -1934,9 +1934,10 @@ type MediaDBI interface {
 	// no further than limit.
 	CountTitlesByTag(ctx context.Context, tagDBIDs []int64, limit int) (map[int64]int, error)
 	// FindTitlesSharingTags returns the titles carrying any of the given
-	// tags, best summed weight first, leaving out the excluded titles.
+	// tags, best summed weight first, leaving out the excluded titles. A
+	// non-nil systemIDs keeps only titles on those systems.
 	FindTitlesSharingTags(
-		ctx context.Context, tags []WeightedTag, excludeTitleDBIDs []int64, limit int,
+		ctx context.Context, tags []WeightedTag, excludeTitleDBIDs []int64, systemIDs []string, limit int,
 	) ([]TagSharingTitle, error)
 	// GetUserTagMedia returns every user tag on a present media row.
 	GetUserTagMedia(ctx context.Context) ([]UserTagMedia, error)

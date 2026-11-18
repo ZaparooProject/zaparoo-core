@@ -2937,12 +2937,12 @@ func (m *MockMediaDBI) CountTitlesByTag(ctx context.Context, tagDBIDs []int64, l
 }
 
 func (m *MockMediaDBI) FindTitlesSharingTags(
-	ctx context.Context, tags []database.WeightedTag, excludeTitleDBIDs []int64, limit int,
+	ctx context.Context, tags []database.WeightedTag, excludeTitleDBIDs []int64, systemIDs []string, limit int,
 ) ([]database.TagSharingTitle, error) {
 	if !m.hasExpectedCall("FindTitlesSharingTags") {
 		return nil, nil
 	}
-	args := m.Called(ctx, tags, excludeTitleDBIDs, limit)
+	args := m.Called(ctx, tags, excludeTitleDBIDs, systemIDs, limit)
 	candidates, ok := args.Get(0).([]database.TagSharingTitle)
 	if !ok && args.Get(0) != nil {
 		return nil, fmt.Errorf("mock FindTitlesSharingTags returned %T, want []database.TagSharingTitle", args.Get(0))

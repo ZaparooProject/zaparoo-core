@@ -127,38 +127,55 @@ func (db *MediaDB) CountTitlesByTag(ctx context.Context, tagDBIDs []int64, limit
 
 // FindTitlesSharingTags returns the titles carrying any of the given tags,
 // ordered by the summed weight of the tags they share. The caller bounds the
-// work by which tags it passes: the read costs their posting lists.
+// work by which tags it passes: the read costs their posting lists. A non-nil
+// systemIDs keeps only titles on those systems, before the limit, so a
+// narrowed lookup is not starved by titles on other systems.
 func (db *MediaDB) FindTitlesSharingTags(
-	ctx context.Context, weighted []database.WeightedTag, excludeTitleDBIDs []int64, limit int,
+	ctx context.Context, weighted []database.WeightedTag, excludeTitleDBIDs []int64,
+	systemIDs []string, limit int,
 ) ([]database.TagSharingTitle, error) {
 	conn := db.sql.Load()
 	if conn == nil {
 		return nil, ErrNullSQL
 	}
-	if len(weighted) == 0 || limit <= 0 {
+	if len(weighted) == 0 || limit <= 0 || (systemIDs != nil && len(systemIDs) == 0) {
 		return nil, nil
 	}
-	if 2*len(weighted)+len(excludeTitleDBIDs)+1 > sqliteMaxParams {
-		return nil, fmt.Errorf("too many tags and exclusions for one query: %d and %d",
-			len(weighted), len(excludeTitleDBIDs))
+	params := 2*len(weighted) + len(excludeTitleDBIDs) + len(systemIDs) + 1
+	if params > sqliteMaxParams {
+		return nil, fmt.Errorf("too many tags, exclusions and systems for one query: %d, %d and %d",
+			len(weighted), len(excludeTitleDBIDs), len(systemIDs))
 	}
-	args := make([]any, 0, 2*len(weighted)+len(excludeTitleDBIDs)+1)
+	args := make([]any, 0, params)
 	for i := range weighted {
 		args = append(args, weighted[i].TagDBID, weighted[i].Weight)
 	}
 	var query strings.Builder
 	// CROSS JOIN pins the order to start from the handful of tags, so each
 	// one is a range of the tag index and no title is visited that shares
-	// none of them.
+	// none of them. A system filter then probes each posting's title by its
+	// primary key.
 	query.WriteString(`WITH tok(TagDBID, W) AS (VALUES `)
 	query.WriteString(prepareVariadic("(?,?)", ",", len(weighted)))
 	query.WriteString(`) SELECT p.MediaTitleDBID, SUM(tok.W) AS S
 		FROM tok CROSS JOIN MediaTitleTags p ON p.TagDBID = tok.TagDBID`)
+	if systemIDs != nil {
+		query.WriteString(` CROSS JOIN MediaTitles t ON t.DBID = p.MediaTitleDBID`)
+	}
+	query.WriteString(` WHERE 1`)
 	if len(excludeTitleDBIDs) > 0 {
-		query.WriteString(` WHERE p.MediaTitleDBID NOT IN (`)
+		query.WriteString(` AND p.MediaTitleDBID NOT IN (`)
 		query.WriteString(prepareVariadic("?", ",", len(excludeTitleDBIDs)))
 		query.WriteString(`)`)
 		args = append(args, int64Args(excludeTitleDBIDs)...)
+	}
+	if systemIDs != nil {
+		query.WriteString(` AND t.SystemDBID IN (SELECT DBID FROM Systems WHERE SystemID IN (`)
+		query.WriteString(prepareVariadic("?", ",", len(systemIDs)))
+		query.WriteString(`))`)
+		for _, id := range systemIDs {
+			args = append(args, id)
+		}
 	}
 	query.WriteString(` GROUP BY p.MediaTitleDBID ORDER BY S DESC, p.MediaTitleDBID ASC LIMIT ?`)
 	args = append(args, limit)

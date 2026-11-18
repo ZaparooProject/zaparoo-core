@@ -355,7 +355,14 @@ func HandleMediaRecommended(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 	now := recommendClock.Now()
-	plan, cached := recommendedPlans.Get(&key, now)
+	// An index rewrites title rows before its generation moves on, so a plan
+	// cached before it could name the wrong games until it finishes.
+	indexing := statusInstance.isRunning()
+	var plan *recommend.Plan
+	cached := false
+	if !indexing {
+		plan, cached = recommendedPlans.Get(&key, now)
+	}
 	if !cached {
 		plan, err = recommend.BuildPlan(env.Context, &recommend.Deps{
 			MediaDB:      env.Database.MediaDB,
@@ -366,7 +373,7 @@ func HandleMediaRecommended(env requests.RequestEnv) (any, error) {
 			return nil, fmt.Errorf("error building recommendations: %w", err)
 		}
 		// A plan built mid-index describes a library that is still filling.
-		if !statusInstance.isRunning() {
+		if !indexing && !statusInstance.isRunning() {
 			recommendedPlans.Put(&key, plan, now)
 		}
 	}

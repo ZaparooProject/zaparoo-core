@@ -83,10 +83,10 @@ func expectSimilarReads(mediaDB *helpers.MockMediaDBI, candidates ...int64) {
 	for _, id := range candidates {
 		found = append(found, database.TagSharingTitle{TitleDBID: id, Score: 1})
 	}
-	mediaDB.On("FindTitlesSharingTags", mock.Anything, mock.Anything, []int64{1}, mock.Anything).
+	mediaDB.On("FindTitlesSharingTags", mock.Anything, mock.Anything, []int64{1}, mock.Anything, mock.Anything).
 		Return(found, nil)
 	// A read that leaves nothing out is of a whole series.
-	mediaDB.On("FindTitlesSharingTags", mock.Anything, mock.Anything, []int64(nil), mock.Anything).
+	mediaDB.On("FindTitlesSharingTags", mock.Anything, mock.Anything, []int64(nil), mock.Anything, mock.Anything).
 		Return([]database.TagSharingTitle{{TitleDBID: 1, Score: 1}, {TitleDBID: 2, Score: 1}}, nil)
 }
 
@@ -137,7 +137,8 @@ func TestHandleMediaSimilar_NothingKnown(t *testing.T) {
 	require.True(t, ok)
 	assert.NotNil(t, response.Results)
 	assert.Empty(t, response.Results, "unscraped media has nothing to be compared by")
-	mediaDB.AssertNotCalled(t, "FindTitlesSharingTags", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mediaDB.AssertNotCalled(t, "FindTitlesSharingTags", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything)
 }
 
 func TestHandleMediaSimilar_RejectsBadRequests(t *testing.T) {
@@ -300,6 +301,29 @@ func TestHandleMediaRecommended_PlanIsReusedUntilSomethingChanges(t *testing.T) 
 	built := fixture.plansBuilt()
 	fixture.call(t, nil)
 	assert.Equal(t, built+1, fixture.plansBuilt(), "a new day weighs play afresh")
+}
+
+// A running index rewrites title rows before its generation moves on, so a
+// plan cached before it is not served until the index finishes.
+//
+//nolint:paralleltest // swaps the package's recommendation clock, plan cache and indexing status
+func TestHandleMediaRecommended_IndexingBypassesCachedPlan(t *testing.T) {
+	fixture := newRecommendedFixture(t)
+	fixture.mediaDB.On("MediaPreferencesRevision", mock.Anything).Return("1", nil)
+	t.Cleanup(statusInstance.clear)
+
+	fixture.call(t, nil)
+	require.Equal(t, 1, fixture.plansBuilt())
+
+	statusInstance.setRunning(true)
+	fixture.call(t, nil)
+	assert.Equal(t, 2, fixture.plansBuilt(), "the cached plan is not read mid-index")
+	fixture.call(t, nil)
+	assert.Equal(t, 3, fixture.plansBuilt(), "a plan built mid-index is not cached")
+
+	statusInstance.setRunning(false)
+	fixture.call(t, nil)
+	assert.Equal(t, 3, fixture.plansBuilt(), "the plan cached before the index is used again after it")
 }
 
 //nolint:paralleltest // swaps the package's recommendation clock and plan cache

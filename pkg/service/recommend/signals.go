@@ -76,7 +76,8 @@ type MediaStore interface {
 	GetTitleFacetTags(ctx context.Context, titleDBIDs []int64, tagTypes []string) ([]database.TitleFacetTag, error)
 	CountTitlesByTag(ctx context.Context, tagDBIDs []int64, limit int) (map[int64]int, error)
 	FindTitlesSharingTags(
-		ctx context.Context, weighted []database.WeightedTag, excludeTitleDBIDs []int64, limit int,
+		ctx context.Context, weighted []database.WeightedTag, excludeTitleDBIDs []int64,
+		systemIDs []string, limit int,
 	) ([]database.TagSharingTitle, error)
 	GetUserTagMedia(ctx context.Context) ([]database.UserTagMedia, error)
 	MediaTitleCountEstimate(ctx context.Context) (int64, error)

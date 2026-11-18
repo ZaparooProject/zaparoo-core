@@ -144,6 +144,15 @@ type chosenSeed struct {
 	affinity float64
 }
 
+// gameState is the profile's interest in one game, gathered from every
+// version group the game spans.
+type gameState struct {
+	// playLater are the signals marked to play later, by title row.
+	playLater []*GameSignal
+	playSecs  int64
+	disliked  bool
+}
+
 // candidate is a game being weighed for the plan.
 type candidate struct {
 	profile *titleProfile
@@ -196,9 +205,13 @@ type planBuilder struct {
 	seriesTitles []int64
 	profiles     map[int64]*titleProfile
 	groups       map[int64]int64
-	// ports maps a title slug to the game that first claimed it, so the
-	// same game on another system counts as that game.
-	ports     map[string]int64
+	// ports maps a title slug to the game that claimed it, so the same game
+	// on another system counts as that game. Seeds claim first, then titles
+	// by row, so a game's identity never depends on the order it is met in.
+	ports map[string]int64
+	// games is what the signals say about each game, across its versions
+	// and its ports.
+	games     map[int64]*gameState
 	seriesTag string
 	seeds     []chosenSeed
 	disliked  []*seed
@@ -334,8 +347,8 @@ func (b *planBuilder) gatherCandidates(ctx context.Context) error {
 		all = append(all, ids...)
 	}
 	if tagDBID, ok := b.seriesTagDBID(); ok {
-		rows, err := b.deps.MediaDB.FindTitlesSharingTags(
-			ctx, []database.WeightedTag{{TagDBID: tagDBID, Weight: 1}}, nil, seriesCandidates)
+		rows, err := b.deps.MediaDB.FindTitlesSharingTags(ctx,
+			[]database.WeightedTag{{TagDBID: tagDBID, Weight: 1}}, nil, systemList(b.opts.Systems), seriesCandidates)
 		if err != nil {
 			return fmt.Errorf("find series titles: %w", err)
 		}
@@ -344,8 +357,10 @@ func (b *planBuilder) gatherCandidates(ctx context.Context) error {
 		}
 		all = append(all, b.seriesTitles...)
 	}
+	// A game marked, disliked or played is read too, so its ports on other
+	// systems are known to be the same game.
 	for _, game := range b.signals.ByGroup {
-		if game.PlayLater {
+		if game.PlayLater || game.Disliked || game.PlaySecs > 0 {
 			all = append(all, game.TitleDBID)
 		}
 	}
@@ -357,22 +372,15 @@ func (b *planBuilder) gatherCandidates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	// A seed claims its slug first, so its ports are the seed and not picks.
-	for i := range b.seeds {
-		if slug := b.seeds[i].seed.profile.slug; slug != "" {
-			if _, claimed := b.ports[slug]; !claimed {
-				b.ports[slug] = b.seeds[i].game.Group
-			}
-		}
-	}
+	b.claimPorts(all)
+	b.gatherGames()
 
 	hatedGroups := make(map[int64]struct{})
 	for i, hated := range b.disliked {
 		for _, id := range hatedFound[i] {
 			if profile, ok := b.profiles[id]; ok {
 				if _, alike := hated.score(profile); alike {
-					hatedGroups[versionGroupOf(b.groups, id)] = struct{}{}
+					hatedGroups[b.gameOf(id)] = struct{}{}
 				}
 			}
 		}
@@ -413,11 +421,11 @@ func (b *planBuilder) gatherCandidates(ctx context.Context) error {
 		for _, score := range scores[:min(len(scores), topSeedContributions)] {
 			entry.total += score
 		}
-		if game, played := b.signals.ByGroup[group]; played {
-			if game.PlaySecs > 0 {
+		if game, known := b.games[group]; known {
+			if game.playSecs > 0 {
 				entry.total *= brieflyPlayedFactor
 			}
-			if game.PlayLater {
+			if len(game.playLater) > 0 {
 				entry.total += playLaterBoost
 			}
 		}
@@ -444,7 +452,8 @@ func (b *planBuilder) findLike(ctx context.Context, from *seed, limit int) ([]in
 	if err != nil {
 		return nil, err
 	}
-	rows, err := b.deps.MediaDB.FindTitlesSharingTags(ctx, from.candidateTags(seedPostings), exclude, limit)
+	rows, err := b.deps.MediaDB.FindTitlesSharingTags(
+		ctx, from.candidateTags(seedPostings), exclude, systemList(b.opts.Systems), limit)
 	if err != nil {
 		return nil, fmt.Errorf("find titles like seed: %w", err)
 	}
@@ -463,19 +472,58 @@ func (b *planBuilder) allowedSystem(systemID string) bool {
 	return ok
 }
 
+// claimPorts settles which game holds each slug: a seed's own first, so its
+// ports are the seed and not picks, then the lowest title row's.
+func (b *planBuilder) claimPorts(titleDBIDs []int64) {
+	for i := range b.seeds {
+		if slug := b.seeds[i].seed.profile.slug; slug != "" {
+			if _, claimed := b.ports[slug]; !claimed {
+				b.ports[slug] = b.seeds[i].game.Group
+			}
+		}
+	}
+	for _, id := range titleDBIDs {
+		profile, ok := b.profiles[id]
+		if !ok || profile.slug == "" {
+			continue
+		}
+		if _, claimed := b.ports[profile.slug]; !claimed {
+			b.ports[profile.slug] = versionGroupOf(b.groups, id)
+		}
+	}
+}
+
+// gatherGames rolls the signals up per game, so a dislike, a play-later mark
+// or play time on one port counts for every port of the game.
+func (b *planBuilder) gatherGames() {
+	b.games = make(map[int64]*gameState, len(b.signals.ByGroup))
+	for _, signal := range b.signals.ByGroup {
+		id := b.gameOf(signal.TitleDBID)
+		game, held := b.games[id]
+		if !held {
+			game = &gameState{}
+			b.games[id] = game
+		}
+		game.playSecs += signal.PlaySecs
+		game.disliked = game.disliked || signal.Disliked
+		if signal.PlayLater {
+			game.playLater = append(game.playLater, signal)
+		}
+	}
+	for _, game := range b.games {
+		slices.SortFunc(game.playLater, func(a, b *GameSignal) int { return cmp.Compare(a.TitleDBID, b.TitleDBID) })
+	}
+}
+
 // gameOf returns the game a title belongs to: its version group, or the game
-// already holding its slug when the library has it on more than one system.
+// holding its slug when the library has it on more than one system.
 func (b *planBuilder) gameOf(titleDBID int64) int64 {
-	group := versionGroupOf(b.groups, titleDBID)
-	profile, ok := b.profiles[titleDBID]
-	if !ok || profile.slug == "" {
-		return group
+	if profile, ok := b.profiles[titleDBID]; ok && profile.slug != "" {
+		if owner, claimed := b.ports[profile.slug]; claimed {
+			return owner
+		}
 	}
-	if owner, claimed := b.ports[profile.slug]; claimed {
-		return owner
-	}
-	b.ports[profile.slug] = group
-	return group
+	return versionGroupOf(b.groups, titleDBID)
 }
 
 // suggestable reports whether a game may be recommended: not one the plan is
@@ -484,11 +532,11 @@ func (b *planBuilder) suggestable(group int64) bool {
 	if b.isSeed(group) {
 		return false
 	}
-	game, known := b.signals.ByGroup[group]
+	game, known := b.games[group]
 	if !known {
 		return true
 	}
-	return !game.Disliked && game.PlaySecs < playedExcludeSecs
+	return !game.disliked && game.playSecs < playedExcludeSecs
 }
 
 // isSeed reports whether the plan is built from the game.
@@ -627,14 +675,24 @@ func (b *planBuilder) playLaterSection(used map[int64]struct{}, limit int) PlanS
 		total   float64
 	}
 	var list []marked
-	for group, game := range b.signals.ByGroup {
-		if !game.PlayLater || game.Disliked {
+	for group, state := range b.games {
+		// A game played at length is not suggested, marked or not.
+		if len(state.playLater) == 0 || state.disliked || state.playSecs >= playedExcludeSecs {
 			continue
 		}
 		if _, done := used[group]; done {
 			continue
 		}
-		if profile, ok := b.profiles[game.TitleDBID]; ok && !b.allowedSystem(profile.systemID) {
+		// The game is listed once, as the first marked version the request
+		// may show.
+		var game *GameSignal
+		for _, signal := range state.playLater {
+			if profile, ok := b.profiles[signal.TitleDBID]; !ok || b.allowedSystem(profile.systemID) {
+				game = signal
+				break
+			}
+		}
+		if game == nil {
 			continue
 		}
 		entry := marked{game: game}

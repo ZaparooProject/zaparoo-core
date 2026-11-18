@@ -159,11 +159,14 @@ func (l *fakeLibrary) CountTitlesByTag(_ context.Context, tagDBIDs []int64, limi
 }
 
 func (l *fakeLibrary) FindTitlesSharingTags(
-	_ context.Context, weighted []database.WeightedTag, exclude []int64, limit int,
+	_ context.Context, weighted []database.WeightedTag, exclude []int64, systemIDs []string, limit int,
 ) ([]database.TagSharingTitle, error) {
 	var found []database.TagSharingTitle
 	for _, id := range l.order {
 		if slices.Contains(exclude, id) {
+			continue
+		}
+		if systemIDs != nil && !slices.Contains(systemIDs, l.titles[id].system) {
 			continue
 		}
 		score := 0.0

@@ -107,6 +107,26 @@ func TestSimilar_SystemsFilter(t *testing.T) {
 	assert.Equal(t, []int64{7, 8, 9, 10}, pickIDs(picks))
 }
 
+// More titles on other systems than the candidate read returns must not
+// crowd out a match on an allowed system.
+func TestSimilar_SystemsFilterBeforeCandidateLimit(t *testing.T) {
+	t.Parallel()
+	lib := newFakeLibrary()
+	lib.add(1, "NES", tagPlatformer, tagMario, tagNintendo)
+	for id := int64(2); id <= similarCandidates+50; id++ {
+		lib.add(id, "NES", tagPlatformer, tagMario, tagNintendo)
+	}
+	lib.add(1000, "SNES", tagMario)
+	// Untagged titles keep the shared tags rare enough to match on.
+	for id := int64(2000); id < 4000; id++ {
+		lib.add(id, "NES")
+	}
+	picks, err := Similar(context.Background(), lib, 1,
+		SimilarOptions{Limit: 10, Systems: map[string]struct{}{"SNES": {}}})
+	require.NoError(t, err)
+	assert.Equal(t, []int64{1000}, pickIDs(picks))
+}
+
 func TestSimilar_NothingToCompare(t *testing.T) {
 	t.Parallel()
 	lib := seriesLibrary()
@@ -123,9 +143,9 @@ func TestSimilar_NothingToCompare(t *testing.T) {
 func TestSimilar_UbiquitousTagFindsNothing(t *testing.T) {
 	t.Parallel()
 	lib := newFakeLibrary()
-	// Every title is a platformer: the genre says nothing here. Two share a
-	// developer.
-	for id := int64(1); id <= 120; id++ {
+	// Every title is a platformer, past the fixed cutoff: the genre says
+	// nothing here. Two share a developer.
+	for id := int64(1); id <= minUbiquitousTitles+100; id++ {
 		titleTags := []string{tagPlatformer}
 		if id <= 2 {
 			titleTags = append(titleTags, tagNintendo)

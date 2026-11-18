@@ -172,7 +172,7 @@ func BenchmarkFindTitlesSharingTags(b *testing.B) {
 		weighted := []database.WeightedTag{{TagDBID: similarBenchSeriesBase + 1, Weight: 3}}
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := mediaDB.FindTitlesSharingTags(ctx, weighted, nil, 150); err != nil {
+			if _, err := mediaDB.FindTitlesSharingTags(ctx, weighted, nil, nil, 150); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -187,7 +187,7 @@ func BenchmarkFindTitlesSharingTags(b *testing.B) {
 		}
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := mediaDB.FindTitlesSharingTags(ctx, weighted, []int64{1}, 150); err != nil {
+			if _, err := mediaDB.FindTitlesSharingTags(ctx, weighted, []int64{1}, nil, 150); err != nil {
 				b.Fatal(err)
 			}
 		}

@@ -284,6 +284,20 @@ type SimilarOptions struct {
 	Limit   int
 }
 
+// systemList returns the systems a lookup is limited to, sorted so the query
+// text is stable. Nil allows every system; an empty set allows none.
+func systemList(systems map[string]struct{}) []string {
+	if systems == nil {
+		return nil
+	}
+	list := make([]string, 0, len(systems))
+	for id := range systems {
+		list = append(list, id)
+	}
+	slices.Sort(list)
+	return list
+}
+
 // Similar returns the titles most like the given one, best first. A title is
 // never like another version of itself or the same game on another system,
 // and each game is picked once however many versions and ports of it the
@@ -308,7 +322,7 @@ func Similar(
 		return nil, err
 	}
 	found, err := mediaDB.FindTitlesSharingTags(
-		ctx, prepared.candidateTags(similarPostings), exclude, similarCandidates)
+		ctx, prepared.candidateTags(similarPostings), exclude, systemList(opts.Systems), similarCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("find similar titles: %w", err)
 	}
