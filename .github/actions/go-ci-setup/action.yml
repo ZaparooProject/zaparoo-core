@@ -73,25 +73,31 @@ runs:
     # the job still linking when the timeout killed it. This cache is keyed by
     # commit and restored by prefix, so a run starts from the nearest previous
     # build rather than from nothing.
+    #
+    # Go's cache does not see C and C++ files that a package pulls in by
+    # #include from another directory, which is how the vendored audio
+    # libraries under pkg/**/third_party are built. A restored cache would
+    # keep linking objects compiled from the old sources, so the key and every
+    # restore key carry a hash of those sources and a change starts cold.
     - name: Cache Go build cache (Windows)
       if: inputs.os == 'windows' && inputs.save-build-cache == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: D:\go-cache
-        key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        key: ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
-          ${{ runner.os }}-gobuild-
+          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-
 
     - name: Restore Go build cache (Windows)
       if: inputs.os == 'windows' && inputs.save-build-cache != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: D:\go-cache
-        key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        key: ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
-          ${{ runner.os }}-gobuild-
+          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-
 
     - name: Download Go modules
       shell: bash
