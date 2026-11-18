@@ -62,6 +62,14 @@ const (
 	maxDescriptionLength = 4000
 )
 
+var (
+	// errLowSpace stops artwork downloads that would eat into the reserve.
+	errLowSpace = errors.New("image folder is low on space")
+	// errBadAsset is artwork the server can never supply as named, which a
+	// later run would not fetch either.
+	errBadAsset = errors.New("unusable artwork")
+)
+
 // freeSpaceFloor is the free space an image download must leave on the image
 // folder's filesystem. A variable so tests can lower it.
 var freeSpaceFloor = uint64(config.MinFreeDiskBytes)
@@ -148,6 +156,10 @@ type run struct {
 	// lowSpace stops artwork downloads for the rest of the run once the
 	// image folder's filesystem is short of space. Text metadata still lands.
 	lowSpace bool
+	// artworkPending is set when an image this system needed could not be
+	// stored but may be on a later run, so the system is not fingerprinted
+	// as done.
+	artworkPending bool
 }
 
 type stats struct {
@@ -255,6 +267,10 @@ func (r *run) scrapeSystem(
 	if err != nil {
 		return stats{}, fmt.Errorf("load media: %w", err)
 	}
+	r.artworkPending = false
+	// leftAlone is set when an ordinary run passes over rows it scraped
+	// before, which a change on the server has then not reached.
+	leftAlone := false
 	result := stats{}
 	if len(media) > 0 {
 		system, sysErr := r.db.FindSystemBySystemID(systemID)
@@ -265,6 +281,7 @@ func (r *run) scrapeSystem(
 		if doneErr != nil {
 			return stats{}, doneErr
 		}
+		leftAlone = !r.opts.Force && !r.opts.FillMissing && len(done) > 0
 		slices.SortFunc(media, func(a, b database.MediaWithFullPath) int { return strings.Compare(a.Path, b.Path) })
 		result, err = r.apply(ctx, newIndex(roms), media, done, func(processed, matched, total, skipped int) {
 			select {
@@ -279,10 +296,15 @@ func (r *run) scrapeSystem(
 			return result, err
 		}
 	}
-	if rememberErr := scraper.RememberSystem(
-		ctx, r.db, ScraperID, systemID, fingerprintVersion, state,
-	); rememberErr != nil {
-		log.Debug().Err(rememberErr).Msg("romm: system fingerprint not stored")
+	// The state is recorded only when every row has seen it, so a later
+	// fill-missing run still looks at rows this run left alone, and at
+	// artwork that may download next time.
+	if !leftAlone && !r.artworkPending {
+		if rememberErr := scraper.RememberSystem(
+			ctx, r.db, ScraperID, systemID, fingerprintVersion, state,
+		); rememberErr != nil {
+			log.Debug().Err(rememberErr).Msg("romm: system fingerprint not stored")
+		}
 	}
 	return result, nil
 }
@@ -553,6 +575,9 @@ func (r *run) artwork(ctx context.Context, rom *romm.Rom) []database.MediaProper
 		}
 		rel, err := r.image(ctx, rom.ID, image.name, image.asset)
 		if err != nil {
+			if !errors.Is(err, errBadAsset) && !errors.Is(err, romm.ErrNotFound) {
+				r.artworkPending = true
+			}
 			log.Debug().Err(err).Int("rom", rom.ID).Str("image", image.name).Msg("romm: artwork not stored")
 			continue
 		}
@@ -577,19 +602,14 @@ func (r *run) image(ctx context.Context, romID int, name, asset string) (string,
 		}
 	}
 	if r.lowSpace {
-		return "", errors.New("image folder is low on space")
+		return "", errLowSpace
 	}
-	if r.freeSpace != nil {
-		if free, err := r.freeSpace(r.root); err == nil && free < freeSpaceFloor {
-			r.lowSpace = true
-			log.Warn().Str("dir", r.root).Uint64("freeMB", free/(1024*1024)).
-				Msg("romm: not enough free space for artwork, downloads stopped")
-			return "", errors.New("image folder is low on space")
-		}
+	if !r.hasSpaceFor(0) {
+		return "", errLowSpace
 	}
 	assetURL, ok := r.client.AssetURL(asset)
 	if !ok {
-		return "", fmt.Errorf("unusable asset path %q", asset)
+		return "", fmt.Errorf("%w: unusable asset path %q", errBadAsset, asset)
 	}
 	data, err := r.client.Fetch(ctx, assetURL, imageMaxBytes)
 	if err != nil {
@@ -597,7 +617,12 @@ func (r *run) image(ctx context.Context, romID int, name, asset string) (string,
 	}
 	ext, ok := imageTypes[http.DetectContentType(data)]
 	if !ok {
-		return "", fmt.Errorf("%s is not a supported image", asset)
+		return "", fmt.Errorf("%w: %s is not a supported image", errBadAsset, asset)
+	}
+	// The image is written beside any copy it replaces, so the reserve must
+	// survive the whole new file.
+	if !r.hasSpaceFor(uint64(len(data))) {
+		return "", errLowSpace
 	}
 	if err := writeFile(r.fs, filepath.Join(dir, name+ext), data); err != nil {
 		return "", err
@@ -612,6 +637,22 @@ func (r *run) image(ctx context.Context, romID int, name, asset string) (string,
 		}
 	}
 	return relDir + "/" + name + ext, nil
+}
+
+// hasSpaceFor reports whether the image folder can take size more bytes and
+// still keep freeSpaceFloor free. Once it cannot, downloads stop for the run.
+func (r *run) hasSpaceFor(size uint64) bool {
+	if r.freeSpace == nil {
+		return true
+	}
+	free, err := r.freeSpace(r.root)
+	if err != nil || free >= freeSpaceFloor && free-freeSpaceFloor >= size {
+		return true
+	}
+	r.lowSpace = true
+	log.Warn().Str("dir", r.root).Uint64("freeMB", free/(1024*1024)).
+		Msg("romm: not enough free space for artwork, downloads stopped")
+	return false
 }
 
 // writeFile replaces path atomically, so an interrupted run never leaves a

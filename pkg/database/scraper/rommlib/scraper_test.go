@@ -58,6 +58,7 @@ type server struct {
 	roms        []romm.Rom
 	assetCalls  atomic.Int32
 	unavailable atomic.Bool
+	failAssets  atomic.Bool
 }
 
 func newServer(t *testing.T, roms ...romm.Rom) *server {
@@ -85,6 +86,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, page)
 	case strings.HasPrefix(p, "/assets/"):
 		s.assetCalls.Add(1)
+		if s.failAssets.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
 		body, ok := s.assets[p]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -266,8 +271,9 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 	}, nil).Once()
 	h.db.On("GetScrapedMediaIDs", mock.Anything, ScraperID, int64(7)).
 		Return(map[int64]struct{}{106: {}}, nil).Once()
-	h.db.On("SetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES, mock.Anything).
-		Return(nil).Once()
+	// The run leaves row 106 alone, so the system's state is not recorded.
+	h.db.On("SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
 
 	updates := h.scrape(t, scraper.ScrapeOptions{})
 	final := updates[len(updates)-1]
@@ -310,6 +316,7 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 	assert.Empty(t, other.TitleTags)
 	assert.Empty(t, other.MediaProps)
 	h.db.AssertExpectations(t)
+	h.db.AssertNotCalled(t, "SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestScrapeReusesStoredArtwork(t *testing.T) {
@@ -394,6 +401,64 @@ func TestScrapeFillMissingSkipsUnchangedSystem(t *testing.T) {
 	assert.Zero(t, updates[len(updates)-1].Processed)
 	require.Len(t, *h.writes, 1, "the unchanged system is not loaded again")
 	h.db.AssertExpectations(t)
+}
+
+// Artwork that failed to download keeps the system open, so the next
+// fill-missing run fetches it once the server answers again.
+func TestScrapeRetriesFailedArtwork(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, richRom())
+	cover := "/assets/romm/resources/roms/1/cover/big.png"
+	h.srv.failAssets.Store(true)
+	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
+		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
+	h.db.On("GetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES).Return("", nil)
+	h.db.On("SetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES, mock.Anything).
+		Return(nil).Once()
+
+	h.scrape(t, scraper.ScrapeOptions{FillMissing: true})
+	require.Len(t, *h.writes, 1)
+	assert.Empty(t, (*h.writes)[0].Write.MediaProps)
+	h.db.AssertNotCalled(t, "SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	h.srv.failAssets.Store(false)
+	h.srv.assets[cover] = pngBytes
+	h.scrape(t, scraper.ScrapeOptions{FillMissing: true})
+	require.Len(t, *h.writes, 2)
+	assert.NotEmpty(t, propText((*h.writes)[1].Write.MediaProps, tags.TagPropertyImageBoxart))
+	h.db.AssertExpectations(t)
+}
+
+// A missing or unusable image cannot download later, so it does not keep the
+// system open.
+func TestScrapeFingerprintsPastMissingArtwork(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, richRom())
+	delete(h.srv.assets, "/assets/romm/resources/roms/1/cover/big.png")
+	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
+		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
+	h.db.On("GetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES).Return("", nil)
+	h.db.On("SetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES, mock.Anything).
+		Return(nil).Once()
+
+	h.scrape(t, scraper.ScrapeOptions{FillMissing: true})
+	h.db.AssertExpectations(t)
+}
+
+// An image is refused when writing it would eat into the free-space reserve,
+// even if the folder starts above it.
+func TestScrapeKeepsReserveForImageSize(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, richRom())
+	h.free = freeSpaceFloor + uint64(len(pngBytes)) - 1
+	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
+		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
+	h.db.On("GetScrapedMediaIDs", mock.Anything, ScraperID, int64(7)).Return(map[int64]struct{}{}, nil)
+
+	h.scrape(t, scraper.ScrapeOptions{})
+	require.Len(t, *h.writes, 1)
+	assert.Empty(t, propText((*h.writes)[0].Write.MediaProps, tags.TagPropertyImageBoxart))
+	assert.Equal(t, int32(1), h.srv.assetCalls.Load(), "downloads stop once the reserve is reached")
 }
 
 func TestScrapeFillMissingResumesRun(t *testing.T) {

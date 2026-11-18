@@ -22,6 +22,8 @@ package romm
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -115,6 +117,63 @@ func TestFetchStaysOnServer(t *testing.T) {
 	require.Error(t, err)
 	_, err = c.Fetch(context.Background(), f.URL+"/assets/romm/resources/missing.png", 10)
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// A redirect is followed only while it stays on the configured server.
+func TestFetchRefusesRedirectOffServer(t *testing.T) {
+	t.Parallel()
+
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("elsewhere"))
+	}))
+	t.Cleanup(other.Close)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/assets/romm/resources/off.png":
+			http.Redirect(w, r, other.URL+"/x.png", http.StatusFound)
+		case "/assets/romm/resources/on.png":
+			http.Redirect(w, r, "/assets/romm/resources/real.png", http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("png"))
+		}
+	}))
+	t.Cleanup(server.Close)
+	c, err := NewClient(server.URL)
+	require.NoError(t, err)
+
+	data, err := c.Fetch(context.Background(), server.URL+"/assets/romm/resources/on.png", 10)
+	require.NoError(t, err)
+	assert.Equal(t, "png", string(data))
+
+	_, err = c.Fetch(context.Background(), server.URL+"/assets/romm/resources/off.png", 10)
+	require.ErrorContains(t, err, "redirected off the server")
+}
+
+func TestCheckRedirect(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewClient("http://romm.local:8080/base")
+	require.NoError(t, err)
+	for target, ok := range map[string]bool{
+		"http://romm.local:8080/base/api/roms": true,
+		"https://romm.local/base/api/roms":     true,
+		"http://romm.local:8080/other":         false,
+		"http://evil.example:8080/base/api":    false,
+		"http://sub.romm.local:8080/base/api":  false,
+	} {
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+		require.NoError(t, reqErr)
+		assert.Equal(t, ok, c.checkRedirect(req, nil) == nil, target)
+	}
+
+	secure, err := NewClient("https://romm.local")
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://romm.local/api/roms", http.NoBody)
+	require.NoError(t, err)
+	require.Error(t, secure.checkRedirect(req, nil), "https never drops to http")
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "https://romm.local/api/roms", http.NoBody)
+	require.NoError(t, err)
+	require.Error(t, secure.checkRedirect(req, make([]*http.Request, maxRedirects)))
 }
 
 func TestClientSendsStoredToken(t *testing.T) {

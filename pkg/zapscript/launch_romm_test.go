@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -105,4 +107,91 @@ func TestLaunchClosureRomMUnconfigured(t *testing.T) {
 	launch := getLaunchClosure(pl, &env, false)
 	require.Error(t, launch(launchTarget{path: romm.RomPath(5, "Super Game")}))
 	pl.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// rommSNESServer serves ROM 5, a one-file SNES game.
+func rommSNESServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/roms/5":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(romm.Rom{
+				ID: 5, PlatformSlug: "snes", Name: "Super Game",
+				FSName: "Super Game (USA).sfc", FSSizeBytes: 4,
+				Files: []romm.RomFile{{FileName: "Super Game (USA).sfc", FileSizeBytes: 4}},
+			})
+		case "/api/roms/5/content/Super Game (USA).sfc":
+			_, _ = w.Write([]byte("rom!"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// rommSNESPlatform has two SNES launchers and expects the game to launch with
+// the one named want.
+func rommSNESPlatform(t *testing.T, cfg *config.Instance, want string) *mocks.MockPlatform {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "SNES"), 0o750))
+	launchers := []platforms.Launcher{
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}, Extensions: []string{".sfc"}},
+		{ID: "SNESAlt", SystemID: "SNES", Folders: []string{"SNES"}, Extensions: []string{".sfc"}},
+	}
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("RootDirs", cfg).Return([]string{root}).Maybe()
+	pl.On("Launchers", cfg).Return(launchers)
+	pl.On("LaunchMedia", cfg, filepath.Join(root, "SNES", "Super Game (USA).sfc"),
+		mock.MatchedBy(func(l *platforms.Launcher) bool { return l != nil && l.ID == want }),
+		mock.Anything, mock.Anything).Return(nil).Once()
+	return pl
+}
+
+// Naming the RomM placeholder launcher still leaves the installed game to its
+// system's default launcher.
+func TestLaunchClosureRomMExplicitPlaceholderUsesSystemDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherServerURL(romm.LauncherID, rommSNESServer(t).URL)
+	cfg.SetSystemDefaults([]config.SystemsDefault{{System: "SNES", Launcher: "SNESAlt"}})
+	pl := rommSNESPlatform(t, cfg, "SNESAlt")
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{
+			string(zapscript.KeyLauncher): romm.LauncherID,
+		})},
+	}
+	require.NoError(t, getLaunchClosure(pl, &env, true)(launchTarget{path: romm.RomPath(5, "Super Game")}))
+	pl.AssertExpectations(t)
+}
+
+// A launcher override set on the RomM row applies to the game it installs,
+// which has no indexed row of its own yet.
+func TestLaunchClosureRomMKeepsRowLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetLauncherServerURL(romm.LauncherID, rommSNESServer(t).URL)
+	pl := rommSNESPlatform(t, cfg, "SNESAlt")
+
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("FindSystemBySystemID", "SNES").Return(database.System{}, sql.ErrNoRows).Maybe()
+	mediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(42)).
+		Return([]database.MediaProperty{{TypeTag: launcherOverridePropertyTypeTag(), Text: "SNESAlt"}}, nil).Once()
+
+	env := platforms.CmdEnv{
+		Cfg:      cfg,
+		Cmd:      zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		Database: &database.Database{MediaDB: mediaDB},
+	}
+	target := launchTarget{path: romm.RomPath(5, "Super Game"), systemID: "SNES", mediaID: 42}
+	require.NoError(t, getLaunchClosure(pl, &env, false)(target))
+	mediaDB.AssertExpectations(t)
+	pl.AssertExpectations(t)
 }

@@ -411,12 +411,16 @@ func TestInstallRemoteMediaRefusesWhenDiskTooSmall(t *testing.T) {
 func TestSafeArchiveEntryName(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"Game.cue", "Disc 1/Track 01.bin", "folder/"} {
+	for _, name := range []string{
+		"Game.cue", "Disc 1/Track 01.bin", "folder/", "Console.bin", "COM10.bin", "LPT.txt", "nul-track.bin",
+	} {
 		assert.True(t, safeArchiveEntryName(name), name)
 	}
 	for _, name := range []string{
 		"", "/", "/etc/passwd", "../x", "a/../../x", "a/./b", "a//b", `a\b`, "C:x",
 		"a:stream", "x\x00y", "x\ny", ".", "..",
+		// Windows device names, refused on every OS.
+		"NUL", "con.cue", "Disc 1/aux.bin", "com1", "LPT9.txt", "prn .bin", "nul.tar.gz", "COM\u00b9", "CONOUT$",
 	} {
 		assert.False(t, safeArchiveEntryName(name), "%q", name)
 	}

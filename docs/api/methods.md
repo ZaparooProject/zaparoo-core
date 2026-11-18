@@ -3691,7 +3691,7 @@ An object (optional):
 
 | Key      | Type   | Required | Description                                                                                          |
 | :------- | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
-| url      | string | No       | Auth server base URL. Defaults to the configured online base URL, which is the official Zaparoo API unless changed. HTTP is allowed only for loopback, private, or link-local development endpoints. Required for `romm`, where it is the RomM server URL. |
+| url      | string | No       | Auth server base URL. Defaults to the configured online base URL, which is the official Zaparoo API unless changed. For `zaparoo`, HTTP is allowed only for loopback, private, or link-local development endpoints. Required for `romm`, where it is the RomM server URL and may use HTTP or HTTPS; an address without a scheme is taken as HTTP. |
 | provider | string | No       | `zaparoo` (default) to link a Zaparoo Online account, or `romm` to link a RomM server.                 |
 
 #### Result

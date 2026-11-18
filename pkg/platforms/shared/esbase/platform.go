@@ -879,6 +879,11 @@ func (p *Platform) esAPILaunch(_ *config.Instance, path string, _ *platforms.Lau
 		ctx = p.launcherManager.GetContext()
 	}
 	p.awaitESGame(ctx, esPath)
+	// A stop while waiting for ES to list the game cancels the launch; a
+	// lookup or reload failure still launches.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("stopped before launch: %w", err)
+	}
 	if err := p.api().Launch(esPath); err != nil {
 		return nil, fmt.Errorf("failed to launch via API: %w", err)
 	}

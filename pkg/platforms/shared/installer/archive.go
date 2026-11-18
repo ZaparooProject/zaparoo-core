@@ -71,11 +71,34 @@ func safeArchiveEntryName(name string) bool {
 		return false
 	}
 	for _, seg := range strings.Split(name, "/") {
-		if seg == "" || seg == "." || seg == ".." {
+		if seg == "" || seg == "." || seg == ".." || isWindowsDeviceName(seg) {
 			return false
 		}
 	}
 	return true
+}
+
+// isWindowsDeviceName reports whether a path segment names a DOS device on
+// Windows, such as NUL or com1.txt. Such a segment is refused on every OS so
+// an archive installs the same way everywhere.
+func isWindowsDeviceName(seg string) bool {
+	// Windows ignores an extension and trailing dots and spaces here.
+	if i := strings.IndexByte(seg, '.'); i >= 0 {
+		seg = seg[:i]
+	}
+	seg = strings.ToUpper(strings.TrimRight(seg, " "))
+	switch seg {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	if len(seg) < 4 || (seg[:3] != "COM" && seg[:3] != "LPT") {
+		return false
+	}
+	switch seg[3:] {
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u00b9", "\u00b2", "\u00b3":
+		return true
+	}
+	return false
 }
 
 type ctxReader struct {
@@ -122,7 +145,11 @@ func extractZip(ctx context.Context, zipPath, dest string, budget int64) error {
 		if !safeArchiveEntryName(f.Name) {
 			return fmt.Errorf("%w: %q", ErrUnsafeArchive, f.Name)
 		}
-		target := filepath.Join(dest, filepath.FromSlash(strings.TrimSuffix(f.Name, "/")))
+		rel := filepath.FromSlash(strings.TrimSuffix(f.Name, "/"))
+		if !filepath.IsLocal(rel) {
+			return fmt.Errorf("%w: %q", ErrUnsafeArchive, f.Name)
+		}
+		target := filepath.Join(dest, rel)
 		if !isWithinDir(dest, target) {
 			return fmt.Errorf("%w: %q", ErrUnsafeArchive, f.Name)
 		}

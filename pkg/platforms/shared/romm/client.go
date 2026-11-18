@@ -55,6 +55,12 @@ const (
 	maxListBody = 32 << 20
 	// maxDetailBody caps a single ROM response.
 	maxDetailBody = 4 << 20
+	// requestTimeout bounds one request from dialing to the end of its body,
+	// so a server that stalls mid-response cannot hold indexing or scraping.
+	// It allows a full list page over a slow link.
+	requestTimeout = 5 * time.Minute
+	// maxRedirects is how many redirects one request follows.
+	maxRedirects = 10
 	// assetPrefix is where RomM serves the cover and screenshot paths its API
 	// returns without one.
 	assetPrefix = "/assets/romm/resources/"
@@ -140,7 +146,32 @@ func NewClient(serverURL string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid romm server url: %w", err)
 	}
-	return &Client{base: base, http: &http.Client{Transport: useragent.Transport(transport())}}, nil
+	c := &Client{base: base}
+	c.http = &http.Client{
+		Transport:     useragent.Transport(transport()),
+		Timeout:       requestTimeout,
+		CheckRedirect: c.checkRedirect,
+	}
+	return c, nil
+}
+
+// checkRedirect keeps requests on the configured server. A redirect may move
+// an http server to https on the same host, but never to another host, out of
+// the server's path, or from https down to http.
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if c.owns(req.URL.String()) {
+		return nil
+	}
+	upgraded := strings.EqualFold(c.base.Scheme, "http") && strings.EqualFold(req.URL.Scheme, "https") &&
+		strings.EqualFold(req.URL.Hostname(), c.base.Hostname()) &&
+		strings.HasPrefix(req.URL.Path, c.base.Path+"/")
+	if upgraded {
+		return nil
+	}
+	return fmt.Errorf("romm server redirected off the server to %s", req.URL.Redacted())
 }
 
 // ClientFromConfig returns a client for the configured server, or

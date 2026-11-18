@@ -651,6 +651,23 @@ func TestESAPILaunch_ReloadTimesOutThenLaunches(t *testing.T) {
 	assert.Equal(t, []string{game}, api.launched)
 }
 
+// A stop while the launch waits for ES to list the game cancels the launch.
+func TestESAPILaunch_StoppedWhileAwaitingReload(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true}
+	p, game := esReloadPlatform(t, api)
+	p.clock = clockwork.NewFakeClock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.launcherManager = cancelledLaunches{ctx: ctx}
+
+	_, err := p.esAPILaunch(nil, game, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, api.reloads)
+	assert.Empty(t, api.launched, "a stopped launch must not start the game")
+}
+
 // An ES that cannot answer whether it lists a game launches as before.
 func TestESAPILaunch_LookupErrorLaunchesWithoutReload(t *testing.T) {
 	t.Parallel()
