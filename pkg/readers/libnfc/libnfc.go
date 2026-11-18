@@ -19,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/clausecker/nfc/v2"
@@ -751,6 +752,11 @@ func detectSerialReaders(connected []string) string {
 
 		// ignore if different resolved device and reader connected
 		if realPath != "" && strings.HasSuffix(realPath, ":"+device) {
+			continue
+		}
+
+		// a port another program has open is not ours to reconfigure
+		if len(serialport.PortsInUse([]string{device})) > 0 {
 			continue
 		}
 

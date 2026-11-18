@@ -448,6 +448,9 @@ func (r *Reader) Detect(connected []string) string {
 
 	log.Trace().Int("port_count", len(ports)).Msg("tty2oled: checking serial ports")
 
+	failed := exhaustedProbes()
+	candidates := make([]string, 0, len(ports))
+
 	for _, name := range ports {
 		device := "tty2oled:" + name
 
@@ -477,17 +480,113 @@ func (r *Reader) Detect(connected []string) string {
 		if portInUse {
 			continue
 		}
+		if failed[name] {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
 
+	// Ports another program has open are left alone, and the rest get their
+	// settings put back once the handshake shows they are not a tty2oled.
+	guard := guardProbes(candidates)
+	found := ""
+	for _, name := range candidates {
+		if guard.Busy(name) {
+			continue
+		}
 		// try to detect tty2oled device by attempting handshake
 		log.Trace().Str("port", name).Msg("tty2oled: attempting detection")
 		if r.detectDevice(name) {
-			log.Trace().Str("device", device).Msg("tty2oled: device detected successfully")
-			return device
+			log.Trace().Str("port", name).Msg("tty2oled: device detected successfully")
+			clearFailedProbe(name)
+			found = name
+			break
 		}
 		log.Trace().Str("port", name).Msg("tty2oled: detection failed for port")
+		recordFailedProbe(name)
 	}
+	if found == "" {
+		guard.Release()
+		return ""
+	}
+	guard.Release(found)
+	return "tty2oled:" + found
+}
 
-	return ""
+// maxProbeAttempts is how many handshakes a port may leave unanswered before
+// detection stops trying it. More than one, because a display that is still
+// starting up when it is plugged in misses the first.
+const maxProbeAttempts = 3
+
+// failedProbe counts unanswered handshakes on a port, with the identity of
+// its device file so that a replug at the same path starts again.
+type failedProbe struct {
+	nodeID   string
+	attempts int
+}
+
+// Package-level because auto-detection does not keep one Reader between
+// ticks. probeNodeID and guardProbes are indirected for tests.
+var (
+	failedProbesMu syncutil.Mutex
+	failedProbes   = make(map[string]failedProbe)
+	probeNodeID    = serialport.NodeID
+	guardProbes    = serialport.GuardProbes
+)
+
+// probeStatPath is the file whose identity tracks the device at path. A
+// usbserial port has no device file of its own, so its usbfs node stands in.
+func probeStatPath(path string) string {
+	if usbserial.IsPath(path) {
+		return usbserial.DeviceNode(path)
+	}
+	return path
+}
+
+// exhaustedProbes drops entries whose device file changed or went away and
+// returns the ports that have used up their attempts.
+func exhaustedProbes() map[string]bool {
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	exhausted := make(map[string]bool, len(failedProbes))
+	for path, entry := range failedProbes {
+		nodeID, err := probeNodeID(probeStatPath(path))
+		if err != nil || nodeID != entry.nodeID {
+			delete(failedProbes, path)
+			continue
+		}
+		if entry.attempts >= maxProbeAttempts {
+			exhausted[path] = true
+		}
+	}
+	return exhausted
+}
+
+func recordFailedProbe(path string) {
+	nodeID, err := probeNodeID(probeStatPath(path))
+	if err != nil {
+		return
+	}
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	entry := failedProbes[path]
+	if entry.nodeID != nodeID {
+		entry = failedProbe{nodeID: nodeID}
+	}
+	entry.attempts++
+	failedProbes[path] = entry
+	if entry.attempts == maxProbeAttempts {
+		log.Debug().Str("port", path).Msg("tty2oled: no answer from port, leaving it out of detection until replugged")
+	}
+}
+
+func clearFailedProbe(path string) {
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	delete(failedProbes, path)
 }
 
 func (r *Reader) Path() string {
