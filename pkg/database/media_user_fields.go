@@ -238,7 +238,15 @@ func ApplyMediaUserField(
 	if err != nil {
 		return MediaUserFieldsSync{}, fmt.Errorf("failed to read the title's media user fields: %w", err)
 	}
-	result, err := fieldsDB.SyncMediaUserFields(ctx, foldMediaUserFields(row.Title.DBID, rows, files, db.UserImages))
+	// A row matched by slug can belong to a file indexed under another title.
+	// Resolve ownership the way a reconcile does, so both fold the same rows.
+	byTitle, err := groupMediaUserFieldsByTitle(ctx, db.MediaDB, rows)
+	if err != nil {
+		return MediaUserFieldsSync{}, err
+	}
+	result, err := fieldsDB.SyncMediaUserFields(
+		ctx, foldMediaUserFields(row.Title.DBID, byTitle[row.Title.DBID], files, db.UserImages),
+	)
 	if err != nil {
 		return MediaUserFieldsSync{}, fmt.Errorf("failed to write media user fields: %w", err)
 	}
@@ -335,22 +343,30 @@ func reconcileMediaUserFields(ctx context.Context, db *Database) (changed int, e
 	}
 	sort.Slice(titleIDs, func(i, j int) bool { return titleIDs[i] < titleIDs[j] })
 
+	// One title that fails does not hold back the titles after it.
+	var errs []error
 	for _, titleDBID := range titleIDs {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			errs = append(errs, fmt.Errorf("re-applying media user fields stopped: %w", ctxErr))
+			break
+		}
 		files, listErr := fieldsDB.ListMediaByTitle(ctx, titleDBID)
 		if listErr != nil {
-			return changed, fmt.Errorf("failed to list the files of title %d: %w", titleDBID, listErr)
+			errs = append(errs, fmt.Errorf("failed to list the files of title %d: %w", titleDBID, listErr))
+			continue
 		}
 		result, syncErr := fieldsDB.SyncMediaUserFields(
 			ctx, foldMediaUserFields(titleDBID, byTitle[titleDBID], files, db.UserImages),
 		)
 		if syncErr != nil {
-			return changed, fmt.Errorf("failed to write the user fields of title %d: %w", titleDBID, syncErr)
+			errs = append(errs, fmt.Errorf("failed to write the user fields of title %d: %w", titleDBID, syncErr))
+			continue
 		}
 		if result.Changed {
 			changed++
 		}
 	}
-	return changed, nil
+	return changed, errors.Join(errs...)
 }
 
 // groupMediaUserFieldsByTitle resolves each row to the title it belongs to,

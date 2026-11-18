@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,21 +148,33 @@ func TestHandleMediaMetaUpdate_RejectsInvalidFields(t *testing.T) {
 	t.Parallel()
 	e := newUserFieldsTestEnv(t)
 
+	tooManyGenres, err := json.Marshal(slices.Repeat([]string{"action"}, mediaUserTagsMaxValues+1))
+	require.NoError(t, err)
+	longDescription := strings.Repeat("a", mediaUserDescriptionMaxLength+1)
 	for name, patch := range map[string]string{
-		"empty name":           `{"name": "   "}`,
-		"control character":    `{"name": "a\u0007b"}`,
-		"name not a string":    `{"name": 5}`,
-		"unknown genre":        `{"tags": {"genre": ["not-a-real-genre"]}}`,
-		"two years":            `{"tags": {"year": ["1990", "1991"]}}`,
-		"uneditable tag type":  `{"tags": {"region": ["us"]}}`,
-		"unknown image kind":   `{"images": {"poster": null}}`,
-		"relative image path":  `{"images": {"boxart": {"kind": "file", "path": "cover.png"}}}`,
-		"upload without an id": `{"images": {"boxart": {"kind": "upload"}}}`,
-		"unknown field":        `{"rating": "5"}`,
-		"unknown image source": `{"images": {"boxart": {"kind": "url", "path": "/x"}}}`,
+		"name too long":                 fmt.Sprintf(`{"name": %q}`, strings.Repeat("a", mediaUserNameMaxLength+1)),
+		"description not a string":      `{"description": 5}`,
+		"description too long":          fmt.Sprintf(`{"description": %q}`, longDescription),
+		"description control character": `{"description": "a\u0007b"}`,
+		"tags not an object":            `{"tags": ["genre"]}`,
+		"tag values not a list":         `{"tags": {"genre": "action"}}`,
+		"too many tag values":           `{"tags": {"genre": ` + string(tooManyGenres) + `}}`,
+		"images not an object":          `{"images": "boxart"}`,
+		"image not a source":            `{"images": {"boxart": "cover.png"}}`,
+		"empty name":                    `{"name": "   "}`,
+		"control character":             `{"name": "a\u0007b"}`,
+		"name not a string":             `{"name": 5}`,
+		"unknown genre":                 `{"tags": {"genre": ["not-a-real-genre"]}}`,
+		"two years":                     `{"tags": {"year": ["1990", "1991"]}}`,
+		"uneditable tag type":           `{"tags": {"region": ["us"]}}`,
+		"unknown image kind":            `{"images": {"poster": null}}`,
+		"relative image path":           `{"images": {"boxart": {"kind": "file", "path": "cover.png"}}}`,
+		"upload without an id":          `{"images": {"boxart": {"kind": "upload"}}}`,
+		"unknown field":                 `{"rating": "5"}`,
+		"unknown image source":          `{"images": {"boxart": {"kind": "url", "path": "/x"}}}`,
 	} {
-		err := e.updateErr(t, patch)
-		assert.Truef(t, isClientErr(err), "%s: want a client error, got %v", name, err)
+		updateErr := e.updateErr(t, patch)
+		assert.Truef(t, isClientErr(updateErr), "%s: want a client error, got %v", name, updateErr)
 	}
 	fields, err := e.env.Database.UserDB.ListMediaUserFields()
 	require.NoError(t, err)
@@ -277,32 +291,49 @@ func TestHandleMediaMetaUpdate_ImageFromUpload(t *testing.T) {
 	require.ErrorIs(t, err, uploads.ErrNotFound)
 	entries, err := os.ReadDir(UserImagesDir(e.env.Platform))
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, filepath.Base(stored), entries[0].Name())
+	var files []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			files = append(files, entry.Name())
+		}
+	}
+	assert.Equal(t, []string{filepath.Base(stored)}, files)
+	staged, err := os.ReadDir(filepath.Join(UserImagesDir(e.env.Platform), uploadStagingDirName))
+	require.NoError(t, err)
+	assert.Empty(t, staged)
 }
 
 func TestHandleUploads_RejectsWhatIsNotAnImage(t *testing.T) {
 	t.Parallel()
-	e := newUserFieldsTestEnv(t)
-	data := []byte("plain text pretending to be a cover")
-	sum := sha256.Sum256(data)
+	cases := map[string][]byte{
+		"plain text": []byte("plain text pretending to be a cover"),
+		// Starts like a PNG, so a type sniff alone accepts it.
+		"png signature only": append([]byte("\x89PNG\r\n\x1a\n"), []byte("not the rest of a png")...),
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newUserFieldsTestEnv(t)
+			sum := sha256.Sum256(data)
 
-	result, err := HandleUploadsBegin(withParams(&e.env, fmt.Sprintf(
-		`{"purpose":"media-image","size":%d,"sha256":%q}`, len(data), hex.EncodeToString(sum[:]),
-	)))
-	require.NoError(t, err)
-	begun, ok := result.(models.UploadResponse)
-	require.True(t, ok)
-	params, err := json.Marshal(map[string]any{
-		"uploadId": begun.UploadID, "offset": 0, "data": base64.StdEncoding.EncodeToString(data),
-	})
-	require.NoError(t, err)
-	_, err = HandleUploadsChunk(withParams(&e.env, string(params)))
-	require.NoError(t, err)
+			result, err := HandleUploadsBegin(withParams(&e.env, fmt.Sprintf(
+				`{"purpose":"media-image","size":%d,"sha256":%q}`, len(data), hex.EncodeToString(sum[:]),
+			)))
+			require.NoError(t, err)
+			begun, ok := result.(models.UploadResponse)
+			require.True(t, ok)
+			params, err := json.Marshal(map[string]any{
+				"uploadId": begun.UploadID, "offset": 0, "data": base64.StdEncoding.EncodeToString(data),
+			})
+			require.NoError(t, err)
+			_, err = HandleUploadsChunk(withParams(&e.env, string(params)))
+			require.NoError(t, err)
 
-	_, err = HandleUploadsFinish(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)))
-	require.Error(t, err)
-	assert.True(t, isClientErr(err))
+			_, err = HandleUploadsFinish(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)))
+			require.Error(t, err)
+			assert.True(t, isClientErr(err))
+		})
+	}
 }
 
 func TestHandleUploads_RequireAPairedOrLocalClient(t *testing.T) {
@@ -325,6 +356,75 @@ func TestHandleUploads_UnknownPurposeAndOversize(t *testing.T) {
 	_, err = HandleUploadsBegin(withParams(&e.env,
 		fmt.Sprintf(`{"purpose":"media-image","size":%d,"sha256":%q}`, 11<<20, hash)))
 	require.ErrorIs(t, err, uploads.ErrTooLarge)
+}
+
+// A chunk is refused before it reaches the session when it is larger than a
+// chunk can be or is not base64.
+func TestHandleUploads_ChunkValidation(t *testing.T) {
+	t.Parallel()
+	e := newUserFieldsTestEnv(t)
+	data := []byte("0123456789")
+	sum := sha256.Sum256(data)
+	result, err := HandleUploadsBegin(withParams(&e.env, fmt.Sprintf(
+		`{"purpose":"media-image","size":%d,"sha256":%q}`, len(data), hex.EncodeToString(sum[:]),
+	)))
+	require.NoError(t, err)
+	begun, ok := result.(models.UploadResponse)
+	require.True(t, ok)
+	chunk := func(data string) error {
+		params, marshalErr := json.Marshal(map[string]any{"uploadId": begun.UploadID, "offset": 0, "data": data})
+		require.NoError(t, marshalErr)
+		_, chunkErr := HandleUploadsChunk(withParams(&e.env, string(params)))
+		return chunkErr
+	}
+
+	require.ErrorIs(t, chunk(base64.StdEncoding.EncodeToString(make([]byte, uploads.ChunkBytes+3))),
+		uploads.ErrChunkTooLarge)
+	err = chunk("not base64!")
+	require.Error(t, err)
+	assert.True(t, isClientErr(err))
+	_, err = HandleUploadsChunk(withParams(&e.env, `{"uploadId":"`+begun.UploadID+`"}`))
+	require.Error(t, err, "a chunk needs an offset and data")
+	assert.True(t, isClientErr(err))
+
+	status, err := HandleUploadsStatus(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)))
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), status.(models.UploadResponse).Received, "a refused chunk writes nothing")
+}
+
+func TestHandleUploads_CancelDiscardsTheUpload(t *testing.T) {
+	t.Parallel()
+	e := newUserFieldsTestEnv(t)
+	hash := hex.EncodeToString(make([]byte, 32))
+	result, err := HandleUploadsBegin(withParams(&e.env, `{"purpose":"media-image","size":10,"sha256":"`+hash+`"}`))
+	require.NoError(t, err)
+	begun, ok := result.(models.UploadResponse)
+	require.True(t, ok)
+	idParams := fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)
+
+	_, err = HandleUploadsCancel(withParams(&e.env, idParams))
+	require.NoError(t, err)
+	_, err = HandleUploadsStatus(withParams(&e.env, idParams))
+	require.ErrorIs(t, err, uploads.ErrNotFound)
+	_, err = HandleUploadsCancel(withParams(&e.env, idParams))
+	require.ErrorIs(t, err, uploads.ErrNotFound)
+	_, err = HandleUploadsCancel(withParams(&e.env, `{}`))
+	require.Error(t, err)
+	assert.True(t, isClientErr(err))
+}
+
+func TestHandleUploads_UnavailableWithoutAPlatform(t *testing.T) {
+	t.Parallel()
+	e := newUserFieldsTestEnv(t)
+	e.env.Platform = nil
+
+	_, err := HandleUploadsCancel(withParams(&e.env, `{"uploadId":"x"}`))
+	require.Error(t, err)
+	assert.True(t, isClientErr(err))
+	_, err = HandleUploadsStatus(withParams(&e.env, `{"uploadId":"x"}`))
+	require.Error(t, err)
+	_, err = HandleUploadsChunk(withParams(&e.env, `{"uploadId":"x","offset":0,"data":"eA=="}`))
+	require.Error(t, err)
 }
 
 // A reset leaves the field empty; the scrapers that fill missing fields are
@@ -396,4 +496,80 @@ func TestHandleMediaMetaUpdate_ResetScrapesTheFileAgain(t *testing.T) {
 		require.FailNowf(t, "a scraper that cannot fill missing fields ran", "%+v", extra)
 	default:
 	}
+
+	// A reset stays written when a later edit in the same request fails, so
+	// the file is still scraped again.
+	e.update(t, 0, `{"description": "mine"}`)
+	missing := filepath.Join(t.TempDir(), "missing.png")
+	err := e.updateErr(t, fmt.Sprintf(
+		`{"description": null, "images": {"boxart": {"kind": "file", "path": %q}}}`, missing,
+	))
+	assert.True(t, isClientErr(err))
+	opts = receiveScrapeOptions(t, gotOptions)
+	assert.Equal(t, ids[0], opts.Scope.MediaID)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+}
+
+// failingFieldsUserDB fails to record user fields while fail is set.
+type failingFieldsUserDB struct {
+	database.UserDBI
+	fail bool
+}
+
+func (f *failingFieldsUserDB) SetMediaUserField(field *database.MediaUserField, titlePaths []string) error {
+	if f.fail {
+		return errors.New("disk full")
+	}
+	if err := f.UserDBI.SetMediaUserField(field, titlePaths); err != nil {
+		return fmt.Errorf("set media user field: %w", err)
+	}
+	return nil
+}
+
+// An upload whose write fails stays available, so the client can retry it.
+func TestHandleMediaMetaUpdate_UploadSurvivesAFailedWrite(t *testing.T) {
+	t.Parallel()
+	e := newUserFieldsTestEnv(t)
+	userDB := &failingFieldsUserDB{UserDBI: e.env.Database.UserDB, fail: true}
+	e.env.Database.UserDB = userDB
+	data := testPNG(t, 32)
+	uploadID := e.uploadImage(t, data, 1024)
+	patch := fmt.Sprintf(`{"images": {"boxart": {"kind": "upload", "uploadId": %q}}}`, uploadID)
+
+	writeErr := e.updateErr(t, patch)
+	assert.False(t, isClientErr(writeErr), "a failed write is the device's fault: %v", writeErr)
+	_, err := HandleUploadsStatus(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, uploadID)))
+	require.NoError(t, err, "the upload must outlive the failed write")
+
+	userDB.fail = false
+	media := e.update(t, 0, patch)
+	stored := media.Properties[tags.PropertyTypeTag(tags.TagPropertyImageBoxart)].Text
+	got, err := os.ReadFile(stored) //nolint:gosec // a path under the test's own temp dir
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
+}
+
+// Pruning the images folder leaves an upload that is still waiting to be
+// used, however long ago its last chunk arrived.
+func TestHandleMediaMetaUpdate_PruneLeavesStagedUploads(t *testing.T) {
+	t.Parallel()
+	e := newUserFieldsTestEnv(t)
+	data := testPNG(t, 32)
+	uploadID := e.uploadImage(t, data, 1024)
+	old := time.Now().Add(-time.Hour)
+	err := filepath.WalkDir(UserImagesDir(e.env.Platform), func(path string, _ os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return os.Chtimes(path, old, old) //nolint:gosec // the test's own temp dir
+	})
+	require.NoError(t, err)
+
+	pruneMediaUserImages(&e.env)
+
+	media := e.update(t, 0, fmt.Sprintf(`{"images": {"boxart": {"kind": "upload", "uploadId": %q}}}`, uploadID))
+	stored := media.Properties[tags.PropertyTypeTag(tags.TagPropertyImageBoxart)].Text
+	got, err := os.ReadFile(stored) //nolint:gosec // a path under the test's own temp dir
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
 }

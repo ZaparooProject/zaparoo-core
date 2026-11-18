@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/base64"
 	"fmt"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -31,6 +32,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/uploads"
 	"github.com/spf13/afero"
 )
+
+// uploadStagingDirName is the folder in the user images folder that holds
+// uploads still being received.
+const uploadStagingDirName = "uploads"
 
 // uploadManagers holds the upload sessions of each data directory. A Core
 // process has one; tests have one per platform they build.
@@ -50,9 +55,11 @@ func uploadManager(env *requests.RequestEnv) *uploads.Manager {
 	}
 	manager := uploads.NewManager(afero.NewOsFs())
 	manager.Register(uploads.Purpose{
-		Name:       UploadPurposeMediaImage,
-		MaxBytes:   imagefiles.MaxBytes,
-		StagingDir: dir,
+		Name:     UploadPurposeMediaImage,
+		MaxBytes: imagefiles.MaxBytes,
+		// A folder of its own: pruning the images folder must not remove a
+		// staged upload.
+		StagingDir: filepath.Join(dir, uploadStagingDirName),
 		Validate:   validateUploadedImage,
 	})
 	uploadManagers[dir] = manager
@@ -65,7 +72,7 @@ func validateUploadedImage(fs afero.Fs, path string) error {
 	if err != nil {
 		return fmt.Errorf("read uploaded image: %w", err)
 	}
-	if _, err := imagefiles.ContentType(data); err != nil {
+	if err := checkMediaUserImage(data); err != nil {
 		return fmt.Errorf("uploaded image: %w", err)
 	}
 	return nil

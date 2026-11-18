@@ -24,6 +24,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,11 +44,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/uploads"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -263,55 +270,99 @@ func isJSONNull(raw json.RawMessage) bool {
 }
 
 // storeMediaUserImage reads the image an edit names, stores it in the user
-// images folder and returns the file name UserDB keeps.
-func storeMediaUserImage(env *requests.RequestEnv, input *models.MediaImageInput) (string, error) {
+// images folder and hands the file name UserDB keeps to commit. An upload is
+// consumed only once commit succeeds, so a failed write can be retried with
+// the same upload.
+func storeMediaUserImage(
+	env *requests.RequestEnv, input *models.MediaImageInput, commit func(name string) error,
+) error {
 	store, err := userImages(env)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if input.Kind == models.MediaImageKindUpload {
-		var name string
+		var commitErr error
 		takeErr := uploadManager(env).Take(input.UploadID, env.ClientID, UploadPurposeMediaImage,
 			func(path string) error {
 				data, readErr := readMediaBinaryFile(afero.NewOsFs(), path, imagefiles.MaxBytes)
 				if readErr != nil {
 					return fmt.Errorf("read uploaded image: %w", readErr)
 				}
-				name, readErr = store.Save(mediaUserImagePrefix, data)
-				if readErr != nil {
-					return fmt.Errorf("store uploaded image: %w", readErr)
+				name, saveErr := store.Save(mediaUserImagePrefix, data)
+				if saveErr != nil {
+					return fmt.Errorf("store uploaded image: %w", saveErr)
 				}
-				return nil
+				commitErr = commit(name)
+				return commitErr
 			})
-		if takeErr != nil {
-			return "", uploadClientError(takeErr)
+		switch {
+		case commitErr != nil:
+			return commitErr
+		case takeErr != nil:
+			return uploadClientError(takeErr)
 		}
-		return name, nil
+		return nil
 	}
 
 	// A file image reads any image on the Core host.
 	if !isLocalOrAdmin(env) {
-		return "", models.ClientErrf("%w", ErrForbidden)
+		return models.ClientErrf("%w", ErrForbidden)
 	}
 	info, err := os.Stat(input.Path)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", models.ClientErrf("image file not found: %s", input.Path)
+		return models.ClientErrf("image file not found: %s", input.Path)
 	}
 	if info.Size() > imagefiles.MaxBytes {
-		return "", models.ClientErr(imagefiles.ErrTooLarge)
+		return models.ClientErr(imagefiles.ErrTooLarge)
 	}
 	data, err := readMediaBinaryFile(afero.NewOsFs(), input.Path, imagefiles.MaxBytes)
 	if err != nil {
-		return "", models.ClientErrf("image file cannot be read: %w", err)
+		return models.ClientErrf("image file cannot be read: %w", err)
+	}
+	if err = checkMediaUserImage(data); err != nil {
+		return models.ClientErr(err)
 	}
 	name, err := store.Save(mediaUserImagePrefix, data)
 	if err != nil {
 		if errors.Is(err, imagefiles.ErrNotImage) || errors.Is(err, imagefiles.ErrTooLarge) {
-			return "", models.ClientErr(err)
+			return models.ClientErr(err)
 		}
-		return "", fmt.Errorf("failed to store image: %w", err)
+		return fmt.Errorf("failed to store image: %w", err)
 	}
-	return name, nil
+	return commit(name)
+}
+
+// checkMediaUserImage accepts data that is a supported image whose header
+// decodes, not only bytes that start like one.
+func checkMediaUserImage(data []byte) error {
+	contentType, err := imagefiles.ContentType(data)
+	if err != nil {
+		return fmt.Errorf("check image type: %w", err)
+	}
+	decodeConfig := map[string]func(io.Reader) (image.Config, error){
+		"image/jpeg": jpeg.DecodeConfig,
+		"image/png":  png.DecodeConfig,
+		"image/gif":  gif.DecodeConfig,
+		"image/webp": webp.DecodeConfig,
+	}[contentType]
+	if decodeConfig == nil {
+		return imagefiles.ErrNotImage
+	}
+	if _, err := decodeConfig(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
+	}
+	return nil
+}
+
+// mediaUserImagesMu serializes storing user images, writing the rows that
+// name them and pruning the folder, so a prune never removes a file another
+// edit is about to name. Every transport's requests share it.
+var mediaUserImagesMu syncutil.Mutex
+
+type mediaFieldChanges struct {
+	tags    bool
+	images  bool
+	cleared bool
 }
 
 // applyMediaFieldEdits writes each edit to UserDB and the media database,
@@ -320,42 +371,61 @@ func applyMediaFieldEdits(env *requests.RequestEnv, row *database.MediaFullRow, 
 	if len(edits) == 0 {
 		return nil
 	}
-	db := env.Database
-
-	var tagsChanged, imagesChanged, cleared bool
-	for i := range edits {
-		edit := &edits[i]
-		value := edit.value
-		if edit.image != nil {
-			name, err := storeMediaUserImage(env, edit.image)
-			if err != nil {
-				return err
-			}
-			value = &name
-		}
-		result, err := database.ApplyMediaUserField(env.Context, db, row, edit.field, value)
-		if err != nil {
-			return mediaWriteClientError(
-				fmt.Errorf("failed to apply media %s: %w", edit.field, err), database.MediaWriteOperationNone,
-			)
-		}
-		tagsChanged = tagsChanged || result.TagsChanged
-		imagesChanged = imagesChanged || result.ImagesChanged
-		cleared = cleared || len(result.ClearedMediaDBIDs) > 0
+	changes, err := writeMediaFieldEdits(env, row, edits)
+	// Edits written before a failed one stay written, so the caches and the
+	// refill follow them either way.
+	if changes.tags {
+		refreshScrapedTags(env.Context, env.Database.MediaDB)
 	}
-
-	if tagsChanged {
-		refreshScrapedTags(env.Context, db.MediaDB)
-	}
-	if imagesChanged {
+	if changes.images {
 		mediaImageNoImages.clear()
-		invalidateChangedScrapeThumbnails(db.MediaDB)
-		pruneMediaUserImages(env)
+		invalidateChangedScrapeThumbnails(env.Database.MediaDB)
 	}
-	if cleared {
+	if changes.cleared {
 		refillMediaAfterReset(env, row)
 	}
-	return nil
+	return err
+}
+
+// writeMediaFieldEdits stores each edit's image and writes the edits in order,
+// stopping at the first that fails, and reports what the written ones changed.
+func writeMediaFieldEdits(
+	env *requests.RequestEnv, row *database.MediaFullRow, edits []mediaFieldEdit,
+) (changes mediaFieldChanges, err error) {
+	mediaUserImagesMu.Lock()
+	defer mediaUserImagesMu.Unlock()
+	defer func() {
+		if changes.images {
+			pruneMediaUserImages(env)
+		}
+	}()
+
+	apply := func(field string, value *string) error {
+		result, applyErr := database.ApplyMediaUserField(env.Context, env.Database, row, field, value)
+		if applyErr != nil {
+			return mediaWriteClientError(
+				fmt.Errorf("failed to apply media %s: %w", field, applyErr), database.MediaWriteOperationNone,
+			)
+		}
+		changes.tags = changes.tags || result.TagsChanged
+		changes.images = changes.images || result.ImagesChanged
+		changes.cleared = changes.cleared || len(result.ClearedMediaDBIDs) > 0
+		return nil
+	}
+	for i := range edits {
+		edit := &edits[i]
+		if edit.image == nil {
+			err = apply(edit.field, edit.value)
+		} else {
+			err = storeMediaUserImage(env, edit.image, func(name string) error {
+				return apply(edit.field, &name)
+			})
+		}
+		if err != nil {
+			return changes, err
+		}
+	}
+	return changes, nil
 }
 
 // pruneMediaUserImages removes stored user images no game uses any more.

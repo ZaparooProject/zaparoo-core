@@ -518,9 +518,12 @@ func (db *MediaDB) ListMediaUserFieldTitles(ctx context.Context) ([]int64, error
 	}
 	typeTag := tags.PropertyTypeTag(tags.TagPropertyUserFields)
 	markerTag, err := resolvePropertyTypeTag(ctx, sqlDB, typeTag)
-	if err != nil {
+	if errors.Is(err, errPropertyTypeTagNotFound) {
 		// A database that never held a user field has no marker tag either.
-		return nil, nil //nolint:nilerr // an unseeded marker tag means no markers
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve the user-fields marker tag: %w", err)
 	}
 	rows, err := sqlDB.QueryContext(ctx, `
 		SELECT MediaTitleDBID FROM MediaTitleProperties WHERE TypeTagDBID = ?

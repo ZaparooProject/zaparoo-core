@@ -244,6 +244,62 @@ func TestRegisterRemovesLeftoverStagingFiles(t *testing.T) {
 	assert.Equal(t, []string{"img-0011.png"}, stagedFiles(t, fs, dir), "only staging files are removed")
 }
 
+func TestUploadCancelDiscardsTheStagedFile(t *testing.T) {
+	t.Parallel()
+	m, fs, dir := newTestManager(t, 1<<20)
+	data := []byte("0123456789")
+	info, err := m.Begin(testPurpose, "client", int64(len(data)), sumHex(data))
+	require.NoError(t, err)
+	_, err = m.Chunk(info.ID, "client", 0, data[:4])
+	require.NoError(t, err)
+
+	require.ErrorIs(t, m.Cancel(info.ID, "someone else"), ErrNotFound)
+	assert.Len(t, stagedFiles(t, fs, dir), 1, "another client cannot cancel the upload")
+	require.NoError(t, m.Cancel(info.ID, "client"))
+	assert.Empty(t, stagedFiles(t, fs, dir))
+	_, err = m.Status(info.ID, "client")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestUploadFinishedTakesNoMoreChunks(t *testing.T) {
+	t.Parallel()
+	m, _, _ := newTestManager(t, 1<<20)
+	data := []byte("0123456789")
+	info, err := m.Begin(testPurpose, "client", int64(len(data)), sumHex(data))
+	require.NoError(t, err)
+	_, err = m.Chunk(info.ID, "client", 0, data)
+	require.NoError(t, err)
+	_, err = m.Finish(info.ID, "client")
+	require.NoError(t, err)
+
+	again, err := m.Finish(info.ID, "client")
+	require.NoError(t, err, "finishing twice reports the finished upload")
+	assert.True(t, again.Finished)
+	_, err = m.Chunk(info.ID, "client", int64(len(data)), data[:1])
+	require.ErrorIs(t, err, ErrFinished)
+	_, err = m.Finish("unknown", "client")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// Purposes may share a staging folder, and registering one must not delete
+// an upload another purpose has in progress there.
+func TestRegisterKeepsLiveUploads(t *testing.T) {
+	t.Parallel()
+	m, fs, dir := newTestManager(t, 1<<20)
+	data := []byte("0123456789")
+	_, err := m.Begin(testPurpose, "client", int64(len(data)), sumHex(data))
+	require.NoError(t, err)
+
+	m.Register(Purpose{Name: "other", MaxBytes: 10, StagingDir: dir})
+
+	assert.Len(t, stagedFiles(t, fs, dir), 1)
+	purpose, ok := m.Purpose("other")
+	require.True(t, ok)
+	assert.Equal(t, int64(10), purpose.MaxBytes)
+	_, ok = m.Purpose("missing")
+	assert.False(t, ok)
+}
+
 // FuzzChunk feeds a session chunks of any size at any offset. Whatever
 // arrives, the session never holds more than its declared size, and what it
 // holds is exactly the accepted chunks in order.

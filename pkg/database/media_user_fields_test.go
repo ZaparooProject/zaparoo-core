@@ -22,9 +22,12 @@ package database_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
@@ -314,4 +317,79 @@ func TestReapplyMediaUserFieldsWithoutImageStoreLeavesImagesAlone(t *testing.T) 
 	path, present := f.mediaProperty(t, "Alpha.nes", tags.TagPropertyImageBoxart)
 	assert.True(t, present)
 	assert.Equal(t, "/data/media/images-user/cover.png", path)
+}
+
+// A row found by its old slug whose file is now indexed under another title
+// belongs to that title, on a live edit as on a reconcile.
+func TestApplyMediaUserFieldLeavesRowsOfAnotherTitlesFile(t *testing.T) {
+	f := newReconcileFixture(t, "Alpha (USA).nes", "Beta.nes")
+	alpha := f.row(t, "Alpha (USA).nes")
+	require.NoError(t, f.db.UserDB.SetMediaUserField(&database.MediaUserField{
+		SystemID: alpha.System.SystemID, Path: nesPath("Beta.nes"),
+		Field: database.MediaUserFieldDescription, Value: "Beta's own description", Slug: alpha.Title.Slug,
+	}, nil))
+
+	f.apply(t, "Alpha (USA).nes", database.MediaUserFieldName, ptr("Renamed Alpha"))
+
+	_, held := f.titleProperty(t, "Alpha (USA).nes", tags.TagPropertyDescription)
+	assert.False(t, held, "Beta's row must not reach Alpha's title")
+	changed, err := database.ReapplyMediaUserFields(context.Background(), f.db)
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed, "only Beta's title was out of line")
+	text, _ := f.titleProperty(t, "Beta.nes", tags.TagPropertyDescription)
+	assert.Equal(t, "Beta's own description", text)
+}
+
+// failingTitleMediaDB fails to list the files of one title.
+type failingTitleMediaDB struct {
+	*mediadb.MediaDB
+	titleDBID int64
+}
+
+func (f failingTitleMediaDB) ListMediaByTitle(ctx context.Context, titleDBID int64) ([]database.Media, error) {
+	if titleDBID == f.titleDBID {
+		return nil, errors.New("listing failed")
+	}
+	media, err := f.MediaDB.ListMediaByTitle(ctx, titleDBID)
+	if err != nil {
+		return nil, fmt.Errorf("list media by title: %w", err)
+	}
+	return media, nil
+}
+
+func TestReapplyMediaUserFieldsContinuesPastATitleThatFails(t *testing.T) {
+	ctx := context.Background()
+	f := newReconcileFixture(t, "Alpha (USA).nes", "Beta.nes")
+	alpha, beta := f.row(t, "Alpha (USA).nes"), f.row(t, "Beta.nes")
+	for _, row := range []*database.MediaFullRow{alpha, beta} {
+		require.NoError(t, f.db.UserDB.SetMediaUserField(&database.MediaUserField{
+			SystemID: row.System.SystemID, Path: row.Path,
+			Field: database.MediaUserFieldDescription, Value: "edited " + row.Title.Name, Slug: row.Title.Slug,
+		}, nil))
+	}
+	realDB, ok := f.db.MediaDB.(*mediadb.MediaDB)
+	require.True(t, ok)
+	// Titles are re-applied in ID order, so fail the first.
+	f.db.MediaDB = failingTitleMediaDB{MediaDB: realDB, titleDBID: min(alpha.Title.DBID, beta.Title.DBID)}
+
+	changed, err := database.ReapplyMediaUserFields(ctx, f.db)
+	require.Error(t, err)
+	assert.Equal(t, 1, changed)
+	later := alpha
+	if beta.Title.DBID > alpha.Title.DBID {
+		later = beta
+	}
+	f.db.MediaDB = realDB
+	text, _ := f.titleProperty(t, filepath.Base(later.Path), tags.TagPropertyDescription)
+	assert.Equal(t, "edited "+later.Title.Name, text)
+}
+
+// Stored text that does not decode is treated as holding nothing, never as an
+// error that would stop a reconcile.
+func TestMediaUserFieldsDecodeMalformedText(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "[]", database.EncodeMediaUserTags(nil))
+	assert.Nil(t, database.DecodeMediaUserTags("not json"))
+	assert.Equal(t, database.MediaUserFieldsMarker{}, database.DecodeMediaUserFieldsMarker("not json"))
+	assert.Equal(t, database.MediaUserFieldsMarker{}, database.DecodeMediaUserFieldsMarker(""))
 }
