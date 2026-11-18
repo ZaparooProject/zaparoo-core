@@ -226,8 +226,13 @@ func executeTokenZapScript(
 		}
 		cmd := cmds[i]
 
+		// A locked kiosk defers too. Whether a launch is allowed is only
+		// known once its target is resolved, and the before_media_start hook
+		// and the stop of whatever is playing must not happen for a launch
+		// the lock then refuses.
 		deferLaunch := (suppressTapRelaunch(svc, &originToken, inHookContext) ||
-			originToken.LaunchGuardGeneration != 0) && zapscript.HasResolvedLaunchTarget(cmd.Name)
+			originToken.LaunchGuardGeneration != 0 || svc.State.Kiosk().Locked()) &&
+			zapscript.HasResolvedLaunchTarget(cmd.Name)
 		beforeMediaStart := func() error {
 			beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
 			if !shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
@@ -430,6 +435,14 @@ func executeTokenZapScript(
 				RecordMediaStop:    svc.State.RecordMediaStop,
 				StopSeq:            svc.State.UserStopSeq,
 				SkipMediaLaunch:    skipLaunch,
+				AdmitLaunch: func(target platforms.ResolvedLaunch, final bool) error {
+					return admitKioskLaunch(runCtx, svc, target, final)
+				},
+				AdmitMediaInstall: func() error {
+					return admitKioskMediaInstall(svc, &token)
+				},
+				SystemPermitted:    kioskSystemPermitted(svc),
+				GuardPermits:       svc.State.Kiosk().CommandPermitted,
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
@@ -1419,6 +1432,7 @@ func handleQueuedToken(
 	}
 
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
+	guardScannedToken(svc, &t, hasMapping)
 	scriptText := t.Text
 	if hasMapping {
 		// The token's own text was bounded above, but the override that

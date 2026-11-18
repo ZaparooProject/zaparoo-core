@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -857,6 +858,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("RunBackgroundOptimizationWithLease",
 				mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
+			mockMediaDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
 
 			// Mock total media count
@@ -978,6 +980,31 @@ func TestHandleScrapers(t *testing.T) {
 			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
 		})
 	}
+}
+
+func TestHandleScrapers_ReportsSkipImagesSupport(t *testing.T) {
+	t.Parallel()
+
+	mixed := emptyPlatformScraper("mixed", "Mixed")
+	mixed.SupportsSkipImages = true
+	env := makeScrapeEnvWithPlatform(t, map[string]platforms.Scraper{
+		"mixed":    mixed,
+		"art-only": emptyPlatformScraper("art-only", "Art only"),
+	})
+
+	result, err := HandleScrapers(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.ScrapersResponse)
+	require.True(t, ok)
+	supported := make(map[string]bool, len(resp.Scrapers))
+	for _, s := range resp.Scrapers {
+		supported[s.ID] = s.SupportsSkipImages
+	}
+	assert.Equal(t, map[string]bool{"mixed": true, "art-only": false}, supported)
+
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"supportsSkipImages":false`, "the field is always present")
 }
 
 func TestHandleScrapers_IDAndNameMatch(t *testing.T) {

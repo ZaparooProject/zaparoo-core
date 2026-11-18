@@ -425,3 +425,86 @@ func TestRBFCache_LoadFromDisk_PopulatesMaps(t *testing.T) {
 		})
 	}
 }
+
+// rootListCountingFs counts how many times a directory is opened for listing.
+type rootListCountingFs struct {
+	afero.Fs
+	opens map[string]int
+}
+
+func (c *rootListCountingFs) Open(name string) (afero.File, error) {
+	c.opens[filepath.Clean(name)]++
+	//nolint:wrapcheck // test wrapper passes the error through unchanged
+	return c.Fs.Open(name)
+}
+
+func writeCoreTree(t *testing.T, root string) {
+	t.Helper()
+	for _, dir := range []string{
+		"_Console", "_Arcade", "Light Gun", filepath.Join("_RA_Cores", "Cores"), "games",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0o750))
+	}
+	for _, file := range []string{
+		"menu.rbf", "notes.txt",
+		filepath.Join("_Console", "SNES_20240101.rbf"), filepath.Join("_Console", "readme.md"),
+		filepath.Join("_Arcade", "game.mra"), filepath.Join("Light Gun", "Gun.rbf"),
+		filepath.Join("_RA_Cores", "Cores", "N64.rbf"), filepath.Join("games", "ignored.rbf"),
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, file), []byte("x"), 0o600))
+	}
+}
+
+// The combined snapshot has to agree with the three it replaces at load.
+func TestSnapshotRBFState_MatchesSeparateSnapshots(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "sd")
+	writeCoreTree(t, root)
+	fs := afero.NewOsFs()
+
+	state, err := snapshotRBFStateWithFS(fs, root)
+	require.NoError(t, err)
+
+	manifest, err := snapshotRBFManifestWithFS(fs, root)
+	require.NoError(t, err)
+	mtimes, err := snapshotDirMtimesWithFS(fs, root)
+	require.NoError(t, err)
+	rootRBFs, err := snapshotRootRBFsWithFS(fs, root)
+	require.NoError(t, err)
+
+	assert.Equal(t, manifest, state.manifest)
+	assert.Equal(t, mtimes, state.dirMtimes)
+	assert.Equal(t, rootRBFs, state.rootRBFs)
+	assert.Contains(t, state.manifest, filepath.Join("_RA_Cores", "Cores", "N64.rbf"))
+	assert.NotContains(t, state.manifest, filepath.Join("games", "ignored.rbf"))
+}
+
+// Loading the persisted cache lists each directory once and leaves the state
+// the later cheap checks need, so the next Refresh does not rescan.
+func TestRBFCache_LoadFromDisk_ListsEachDirectoryOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	root := filepath.Join(dir, "sd")
+	writeCoreTree(t, root)
+	manifest, err := snapshotRBFManifestWithFS(afero.NewOsFs(), root)
+	require.NoError(t, err)
+	path := filepath.Join(dir, RBFCacheFileName)
+	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), manifest))
+
+	counting := &rootListCountingFs{Fs: afero.NewOsFs(), opens: map[string]int{}}
+	cache := &RBFCache{sdRoot: root}
+	cache.SetFilesystem(counting)
+	cache.SetPersistPath(path)
+	cache.Refresh()
+
+	require.False(t, cache.NeedsRescan())
+	assert.Equal(t, 1, counting.opens[root], "SD root listings during load")
+	assert.Equal(t, 1, counting.opens[filepath.Join(root, "_Arcade")], "_Arcade listings during load")
+
+	cache.mu.RLock()
+	gotMtimes, gotRootRBFs := cache.lastDirMtimes, cache.lastRootRBFs
+	cache.mu.RUnlock()
+	assert.Len(t, gotMtimes, 5)
+	assert.Equal(t, []string{"menu.rbf"}, gotRootRBFs)
+	assert.True(t, dirMtimesMatchWithFS(afero.NewOsFs(), root, gotMtimes))
+}

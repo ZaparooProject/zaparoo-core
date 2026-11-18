@@ -86,7 +86,7 @@ func (s *scrapingStatus) persistStart(db database.MediaDBI, operation *database.
 	if err := db.SetScrapingOperation(*operation); err != nil {
 		return fmt.Errorf("persist scrape job: %w", err)
 	}
-	s.force = operation.Force
+	s.force, s.skipImages = operation.Force, operation.SkipImages
 	if err := db.SetScrapingStatus(mediadb.IndexingStatusRunning); err != nil {
 		return fmt.Errorf("failed to persist scraping status: %w", err)
 	}
@@ -158,7 +158,7 @@ func (s *scrapingStatus) advance(
 	next := database.ScrapingOperation{
 		Version: 1, Status: mediadb.IndexingStatusPending,
 		ScraperID: job.ScraperID, Systems: job.Systems, Force: job.Force,
-		FillMissing: job.FillMissing, RunID: job.RunID, Pending: current.Pending[1:],
+		FillMissing: job.FillMissing, SkipImages: job.SkipImages, RunID: job.RunID, Pending: current.Pending[1:],
 		// Without this a queued single-file request is promoted to a
 		// whole-system scrape when its turn comes.
 		Scope: job.Scope,
@@ -169,7 +169,7 @@ func (s *scrapingStatus) advance(
 	if err := db.SetScrapingOperation(next); err != nil {
 		return database.ScrapingOperation{}, fmt.Errorf("persist next scrape job: %w", err)
 	}
-	s.scraperID, s.force = next.ScraperID, next.Force
+	s.scraperID, s.force, s.skipImages = next.ScraperID, next.Force, next.SkipImages
 	s.countCache = scrapedCountCache{}
 	return next, nil
 }
@@ -193,15 +193,19 @@ func startQueuedScraper(
 	if operation.FillMissing && (operation.Force || !s.SupportsFillMissing) {
 		return fail(fmt.Errorf("scraper %q cannot apply requested fill-missing policy", operation.ScraperID))
 	}
+	if operation.SkipImages && !s.SupportsSkipImages {
+		return fail(fmt.Errorf("scraper %q does not support skipImages", operation.ScraperID))
+	}
 	publishScrapingStatus(env.State.Notifications, &models.ScrapingStatusResponse{
-		ScraperID: operation.ScraperID, Force: operation.Force, Scraping: true, State: scrapeStateRunning,
+		ScraperID: operation.ScraperID, Force: operation.Force, SkipImages: operation.SkipImages,
+		Scraping: true, State: scrapeStateRunning,
 		Paused:             env.ScrapePauser != nil && env.ScrapePauser.IsPaused(),
 		Throttled:          env.ScrapePauser != nil && env.ScrapePauser.IsThrottled(),
 		CurrentStepDisplay: ptrIfNotEmpty(preparingMediaScrapeDisplay),
 	})
 	opts := scraper.ScrapeOptions{
-		Systems: operation.Systems, RunID: operation.RunID, Force: operation.Force,
-		FillMissing: operation.FillMissing, Pauser: env.ScrapePauser,
+		Scope: operation.Scope, Systems: operation.Systems, RunID: operation.RunID, Force: operation.Force,
+		FillMissing: operation.FillMissing, SkipImages: operation.SkipImages, Pauser: env.ScrapePauser,
 	}
 	if err := s.Scrape(ctx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
 		return fail(err)

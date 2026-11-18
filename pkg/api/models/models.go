@@ -121,6 +121,9 @@ const (
 	MethodMediaGenerateResume         = "media.generate.resume"
 	MethodMediaIndex                  = "media.index" // DEPRECATED
 	MethodMediaSearch                 = "media.search"
+	MethodMediaVersions               = "media.versions"
+	MethodMediaSimilar                = "media.similar"
+	MethodMediaRecommended            = "media.recommended"
 	MethodMediaTags                   = "media.tags"
 	MethodMediaTagsUpdate             = "media.tags.update"
 	MethodMediaMetaUpdate             = "media.meta.update"
@@ -132,6 +135,7 @@ const (
 	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
+	MethodMediaArtworkRandom          = "media.artwork.random"
 	MethodMediaAsset                  = "media.asset"
 	MethodScrapers                    = "scrapers"
 	MethodMediaScrape                 = "media.scrape"

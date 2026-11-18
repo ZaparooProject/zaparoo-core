@@ -82,6 +82,14 @@ Index-triggered jobs only fill missing metadata. A property is missing when no r
 
 These checks and inserts share the existing single/batch scrape transaction. A batch is written with multi-row statements under either policy: a fill-missing batch reads which rows already hold a value for each exclusive tag type once, inserts tag links with `INSERT OR IGNORE` and properties with `ON CONFLICT DO NOTHING`, and stores what the one-target-at-a-time policy stores for the same targets in the same order (the first target to offer a shared title's field wins it). Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
 
+### Metadata-Only Runs
+
+`media.scrape` accepts `skipImages` for scrapers that set `SupportsSkipImages`: `gamelist.xml`, `mister-docs`, PinUP Popper and Playnite. Scrapers that only supply art, or only metadata, reject it, and `scrapers` reports the flag per scraper as `supportsSkipImages`. The flag is stored with the operation and its queued jobs, so a resumed or queued run keeps it.
+
+Art means `property:image-*`, `property:video` and `property:manual`. A metadata-only run builds none of them, so it does not stat art files, and the write path drops any that reach it (`ScrapeWrite.SkipImages`). Tags, descriptions and other metadata properties are written under the usual force or fill-missing policy, and art already stored is never touched: `mister-docs` skips its force cleanup of stale image and manual properties.
+
+A metadata-only write leaves out the scraper sentinel, and the run does not store an unchanged-system fingerprint. A later run without `skipImages`, manual or index-triggered, therefore still reaches those rows and adds their art. Those rows do not count towards `totalScraped`. Without a sentinel, a resumed metadata-only run without `force` writes the rows it already reached again. A forced run skips them through its run marker, except a `mister-docs` run over whole systems, which marks rows only on scoped runs.
+
 ### Unchanged Systems
 
 A fill-missing run reconsiders a system only when something it depends on moved. Every scraper that runs after an index (`mister-docs`, `mister-arcade`, `gamedatabase`, PinUP Popper and the Android apps scraper) stores a fingerprint per system in `DBConfig` (`ScrapeFingerprint:<scraper>:<system>`) when they complete it, on any run over whole systems. It joins the state of the scraper's source with the system's library revision.
@@ -439,7 +447,7 @@ JSON-RPC methods:
 
 | Method | Purpose |
 |---|---|
-| `scrapers` | Lists registered scrapers with ID, name, and supported systems |
+| `scrapers` | Lists registered scrapers with ID, name, supported systems, and whether they accept `skipImages` |
 | `media.scrape` | Starts a scraper run as a background operation |
 | `media.scrape.status` | Returns latest in-memory scraper status plus current DB scraped count |
 | `media.scrape.cancel` | Cancels the active scraper run |
@@ -454,7 +462,8 @@ JSON-RPC methods:
 {
   "scraperId": "gamelist.xml",
   "systems": ["snes", "nes"],
-  "force": false
+  "force": false,
+  "skipImages": false
 }
 ```
 
@@ -487,7 +496,7 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 }
 ```
 
-`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count. Existing flat fields stay for compatibility; new UIs should use `currentSystem` for current-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run system-step progress.
+`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count, so records written by a metadata-only run are not counted. Status and notifications carry `skipImages: true` while such a run is active. Existing flat fields stay for compatibility; new UIs should use `currentSystem` for current-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run system-step progress.
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 

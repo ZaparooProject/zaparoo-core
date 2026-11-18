@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1784,9 +1785,9 @@ func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
 
 // TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles is the regression
 // test for a failing pipeline (non-SkipFilesystemScan) scanner clobbering the
-// collected file list. The filesystem files must still be staged, and because
-// the scan is incomplete the previously indexed row absent from this run must
-// keep its missing state instead of being flagged.
+// collected file list. The filesystem files must still be staged. Media the
+// failed scanner reported on an earlier run keeps its state, while a file the
+// walk no longer finds is flagged missing (#1815).
 func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
 	for _, scanFailure := range []error{
@@ -1811,15 +1812,21 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 				Folders:    []string{customDir},
 				Extensions: []string{".iso", ".bin"},
 			}
-			// Pipeline scanner that fails outright (e.g. corrupt gamelist.xml).
+			// Scanner that adds one entry of its own, then fails outright on
+			// the second run (e.g. corrupt gamelist.xml).
+			addedPath := filepath.Join(customDir, "scanner-only.iso")
+			var failing atomic.Bool
 			failingLauncher := platforms.Launcher{
 				ID:                 "failing-enricher",
 				SystemID:           systemdefs.SystemPS2,
 				SkipFilesystemScan: errors.Is(scanFailure, platforms.ErrScannerUnavailable),
 				Scanner: func(_ context.Context, _ *config.Instance, _ string,
-					_ []platforms.ScanResult,
+					results []platforms.ScanResult,
 				) ([]platforms.ScanResult, error) {
-					return nil, scanFailure
+					if failing.Load() {
+						return nil, scanFailure
+					}
+					return append(results, platforms.ScanResult{Path: addedPath}), nil
 				},
 			}
 
@@ -1847,14 +1854,15 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 				testLauncherCacheMutex.Unlock()
 			}()
 
-			// Plant a previously indexed row that this run won't collect. With the
-			// scan incomplete it must keep IsMissing=0.
+			// Plant a walked row that the next run won't collect. Only the
+			// scanner failed, so the walk's absence still flags it missing.
 			plantedPath := filepath.Join(customDir, "planted.iso")
 			require.NoError(t, os.WriteFile(plantedPath, []byte("test"), 0o600))
 			systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
 			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 			require.NoError(t, err)
 			require.NoError(t, os.Remove(plantedPath))
+			failing.Store(true)
 
 			filesIndexed, err := NewNamesIndex(
 				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
@@ -1869,11 +1877,13 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 			for _, entry := range mediaEntries {
 				byBase[filepath.Base(entry.Path)] = entry
 			}
-			require.Len(t, byBase, 3)
+			require.Len(t, byBase, 4)
 			assert.False(t, byBase["game1.iso"].IsMissing)
 			assert.False(t, byBase["game2.bin"].IsMissing)
-			assert.False(t, byBase["planted.iso"].IsMissing,
-				"an incomplete scan must not flag absent media as missing")
+			assert.False(t, byBase["scanner-only.iso"].IsMissing,
+				"media the failed scanner reported must keep its state")
+			assert.True(t, byBase["planted.iso"].IsMissing,
+				"a failed scanner must not stop the walk flagging a deleted file")
 			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
 				assert.Contains(t, output.String(), "optional installation unavailable")
 				assert.NotContains(t, output.String(), `"level":"error"`)
@@ -1888,7 +1898,8 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 // with no system of its own whose source is closed for this run, such as a
 // frontend that is not running. It is asked once per system, so the absence
 // must not be logged as an error each time, and the media it indexed earlier
-// must keep its state.
+// must keep its state. A file the walk no longer finds is still flagged
+// missing, since only the frontend failed (#1815).
 func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
 	for _, scanFailure := range []error{
@@ -1920,6 +1931,18 @@ func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
 				},
 			}
 
+			romDir := t.TempDir()
+			keptPath := filepath.Join(romDir, "kept.iso")
+			deletedPath := filepath.Join(romDir, "deleted.iso")
+			require.NoError(t, os.WriteFile(keptPath, []byte("test"), 0o600))
+			require.NoError(t, os.WriteFile(deletedPath, []byte("test"), 0o600))
+			folderLauncher := platforms.Launcher{
+				ID:         "folder-ps2",
+				SystemID:   systemdefs.SystemPS2,
+				Folders:    []string{romDir},
+				Extensions: []string{".iso"},
+			}
+
 			fsHelper := testhelpers.NewMemoryFS()
 			cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
 			require.NoError(t, err)
@@ -1929,7 +1952,7 @@ func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
 			platform.On("Settings").Return(platforms.Settings{})
 			platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
 			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
-				[]platforms.Launcher{anyLauncher})
+				[]platforms.Launcher{anyLauncher, folderLauncher})
 
 			db, cleanup := testhelpers.NewTestDatabase(t)
 			defer cleanup()
@@ -1949,18 +1972,26 @@ func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
 				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
 			)
 			require.NoError(t, err)
-			require.Equal(t, 1, filesIndexed)
+			require.Equal(t, 3, filesIndexed)
 
 			available = false
+			require.NoError(t, os.Remove(deletedPath))
 			output.Reset()
 			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 			require.NoError(t, err)
 
 			mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
 			require.NoError(t, err)
-			require.Len(t, mediaEntries, 1)
-			assert.False(t, mediaEntries[0].IsMissing,
+			byBase := make(map[string]database.MediaWithFullPath)
+			for _, entry := range mediaEntries {
+				byBase[filepath.Base(entry.Path)] = entry
+			}
+			require.Len(t, byBase, 3)
+			assert.False(t, byBase["Frontend%20Game"].IsMissing,
 				"media from a source that is closed for this run must not be flagged missing")
+			assert.False(t, byBase["kept.iso"].IsMissing)
+			assert.True(t, byBase["deleted.iso"].IsMissing,
+				"a closed frontend must not stop the walk flagging a deleted file")
 			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
 				assert.Contains(t, output.String(), "optional installation unavailable")
 				assert.NotContains(t, output.String(), `"level":"error"`)

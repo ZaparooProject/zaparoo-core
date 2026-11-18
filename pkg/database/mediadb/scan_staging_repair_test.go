@@ -75,7 +75,7 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil)
+	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, scanFlagMissingBatchSize+1, affected)
 
@@ -175,12 +175,24 @@ func TestClearScanStage_RecreatesMissingScratchTables(t *testing.T) {
 
 	require.NoError(t, mediaDB.ClearScanStage())
 
+	// The scratch tables live in the scanner's scratch database, which only a
+	// connection that has it attached can see. Beginning a transaction would
+	// attach it too, but also repairs the tables itself, so the check goes
+	// through a connection that only attaches.
+	inspect, err := mediaDB.sql.Load().Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inspect.Close() })
+	require.NoError(t, attachScanScratch(ctx, inspect, mediaDB.scanScratchPath()))
 	for _, table := range []string{"ScanStage", "ScanStageTags", "ScanStageProperties", "ScanTouchedTitles"} {
 		var name string
-		err = mediaDB.sql.Load().QueryRowContext(ctx,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
+		err = inspect.QueryRowContext(ctx,
+			"SELECT name FROM scan.sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
 		require.NoError(t, err)
 		require.Equal(t, table, name)
+		var inMain int
+		require.NoError(t, inspect.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM main.sqlite_master WHERE name = ?", table).Scan(&inMain))
+		require.Zero(t, inMain, "%s must not shadow the scratch table", table)
 	}
 	for _, index := range []string{
 		"scanstage_slug_idx",
@@ -188,8 +200,8 @@ func TestClearScanStage_RecreatesMissingScratchTables(t *testing.T) {
 		"scanstageproperties_property_idx",
 	} {
 		var name string
-		err = mediaDB.sql.Load().QueryRowContext(ctx,
-			"SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&name)
+		err = inspect.QueryRowContext(ctx,
+			"SELECT name FROM scan.sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&name)
 		require.NoError(t, err)
 		require.Equal(t, index, name)
 	}

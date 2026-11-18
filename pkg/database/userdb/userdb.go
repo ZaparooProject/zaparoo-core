@@ -49,6 +49,8 @@ var ErrNullSQL = errors.New("UserDB is not connected")
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 	"&_cache_size=-512&_mmap_size=0&_txlock=immediate"
 
+const sqliteUserDriver = "sqlite3"
+
 const (
 	// connDrainTimeout bounds the wait for in-flight queries before an
 	// operation that replaces the database files gives up.
@@ -65,9 +67,10 @@ type UserDB struct {
 	ctx context.Context
 	// fs overrides the filesystem used to recover an interrupted restore; nil
 	// uses the OS filesystem. Set only by tests to inject failures.
-	fs     afero.Fs
-	sql    database.Conn
-	dbPath string
+	fs       afero.Fs
+	sql      database.Conn
+	dbPath   string
+	mappings enabledMappingsCache
 	// drainTimeout overrides how long closeAndDrain waits; zero uses
 	// connDrainTimeout. Set only by tests to avoid multi-second waits.
 	drainTimeout time.Duration
@@ -127,7 +130,7 @@ func (db *UserDB) Open() error {
 
 func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 	log.Debug().Msg("opening user database connection")
-	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
+	sqlInstance, err := sql.Open(sqliteDriverName(), dbPath+sqliteConnParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user database: %w", err)
 	}
@@ -176,6 +179,7 @@ func (db *UserDB) Truncate() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
+	defer db.mappings.invalidate()
 	return sqlTruncate(db.ctx, db.sql.Load())
 }
 
@@ -217,6 +221,7 @@ func (db *UserDB) Close() error {
 	if db.sql.Load() == nil {
 		return nil
 	}
+	logSQLTraceSummary()
 	err := db.sql.Load().Close()
 	if err != nil {
 		return fmt.Errorf("failed to close database: %w", err)

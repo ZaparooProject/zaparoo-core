@@ -90,6 +90,10 @@ tasks:
     vars:
       BENCH_PKGS: '{{default "" .BENCH_PKGS}}'
       EXTRA_TEST_PKGS: '{{default "" .EXTRA_TEST_PKGS}}'
+      # Same C flags as the service build (LINUX_CFLAGS in zigcc.yml). Without
+      # them Zig compiles SQLite unoptimized and UBSan-instrumented, so the
+      # numbers do not describe the shipped binary.
+      BENCH_CFLAGS: '{{default "-Os -fstack-protector-strong -fno-omit-frame-pointer" .BENCH_CFLAGS}}'
     cmds:
       - task: :zigcc:setup
       - task: :docker:run
@@ -107,7 +111,7 @@ tasks:
             -e GOOS=linux
             -e GOARCH=arm
             -e GO111MODULE=on
-            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
+            -e CGO_CFLAGS="{{.BENCH_CFLAGS}} -I/opt/libnfc/arm-linux-gnueabihf/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
           EXEC: >-
             bash -c 'set -e && mkdir -p _build/bench_arm &&
@@ -119,28 +123,22 @@ tasks:
             name=$(basename $pkg) &&
             echo "Building $pkg -> ${name}.test" &&
             go test -c
-            -tags "netgo,osusergo,sqlite_omit_load_extension,nopkgconfig"
+            -tags "netgo,osusergo,sqlite_omit_load_extension,validator_novalidatefn,expr_static_methods,nopkgconfig"
             -ldflags "-linkmode external -s -w"
             -o "_build/bench_arm/${name}.test" "$pkg"
             ; done &&
             echo "Done: $(ls _build/bench_arm/*.test | wc -l) binaries"'
 
   bench-run:
-    desc: Run benchmark binaries on MiSTer and save baseline
+    # The run is detached on the device and uses the SD card for TMPDIR; see
+    # scripts/mister/bench-run.sh. MediaDB and the media scanner run only the
+    # benchmarks listed in scripts/mister/bench-patterns.txt: their full sets
+    # take more than ten hours on the card. BENCH_PATTERNS=/dev/null runs all.
+    desc: Run benchmark binaries on MiSTer (BENCH_OUT=testdata/benchmarks/baseline-mister.txt replaces the baseline)
     vars:
-      BENCH_COUNT: '{{default "3" .BENCH_COUNT}}'
-      BENCH_TIMEOUT: '{{default "60m" .BENCH_TIMEOUT}}'
-      SSH_OPTS: -o ServerAliveInterval=30 -o ServerAliveCountMax=120
+      BENCH_OUT: '{{default "/tmp/zaparoo-bench-mister.txt" .BENCH_OUT}}'
     cmds:
-      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "mkdir -p /media/fat/zaparoo-bench"
-      - scp _build/bench_arm/*.test root@${MISTER_IP}:/media/fat/zaparoo-bench/
-      - |
-        (for bin in _build/bench_arm/*.test; do
-          name=$(basename $bin)
-          echo "Running $name..." >&2
-          ssh {{.SSH_OPTS}} root@${MISTER_IP} "/media/fat/zaparoo-bench/$name -test.run='^\$' -test.bench=. -test.benchmem -test.count={{.BENCH_COUNT}} -test.timeout={{.BENCH_TIMEOUT}}"
-        done) | grep -E "^(Benchmark.* ns/op|goos:|goarch:|pkg:|cpu:)" | tee testdata/benchmarks/baseline-mister.txt
-      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "rm -rf /media/fat/zaparoo-bench"
+      - scripts/mister/bench-run.sh "${MISTER_IP}" "{{.BENCH_OUT}}"
 
   bench:
     desc: Build and run benchmarks on MiSTer

@@ -123,6 +123,7 @@ func Classify(err error) (category, message string) {
 		return models.ErrorCategoryInvalidScript, "ZapScript is invalid"
 	case errors.Is(err, zapscript.ErrCommandBlocked),
 		errors.Is(err, zapscript.ErrCommandNotPermitted),
+		errors.Is(err, zapscript.ErrLaunchNotAdmitted),
 		errors.Is(err, zapscript.ErrExecuteNotAllowed),
 		errors.Is(err, zapscript.ErrHTTPNotAllowed),
 		errors.Is(err, zapscript.ErrRemoteSource),

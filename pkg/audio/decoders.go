@@ -58,7 +58,7 @@ var SupportedExtensions = []string{
 
 // PlaylistExtensions lists the playlist files kept with audio. They are not
 // decoded: launching one plays its entries as a playlist.
-var PlaylistExtensions = []string{".pls", ".m3u"}
+var PlaylistExtensions = []string{".pls", ".m3u", ".m3u8"}
 
 // radioProbeTimeout bounds finding out what a stream URL serves.
 const radioProbeTimeout = 10 * time.Second

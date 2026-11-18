@@ -27,9 +27,9 @@ var knownMethods = func() map[string]struct{} {
 	methods := strings.Fields(`
 launch run confirm ui ui.respond ui.shown run.script stop tokens media
 media.generate media.generate.cancel media.generate.resume media.index
-media.search media.tags media.tags.update media.meta.update media.active
+media.search media.versions media.similar media.recommended media.tags media.tags.update media.meta.update media.active
 media.history media.history.latest media.history.top media.lookup media.lookup.candidates
-media.meta media.image media.asset
+media.meta media.image media.asset media.artwork.random
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
 media.browse media.browse.index media.control media.active.update media.clean.orphans
 media.active.image playlists.update
@@ -40,6 +40,8 @@ settings.backup.remote.list settings.backup.remote.restore
 settings.playtime.limits settings.playtime.limits.update playtime playtime.extend
 clients clients.current clients.delete clients.pair.start clients.pair.cancel
 profiles profiles.new profiles.update profiles.delete profiles.active profiles.switch profiles.verify
+profiles.content profiles.content.update
+kiosk kiosk.enable kiosk.disable kiosk.unlock kiosk.lock kiosk.update kiosk.allow
 decks decks.get decks.new decks.update decks.delete decks.open decks.image
 systems launchers launchers.refresh tokens.history mappings mappings.new mappings.delete
 mappings.update mappings.reload readers readers.write readers.write.cancel version health

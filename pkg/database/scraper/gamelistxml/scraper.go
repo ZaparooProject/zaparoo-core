@@ -102,6 +102,9 @@ type GamelistXMLScraper struct {
 	gamelistDirs       []string
 	maxGamelistBytes   int64
 	matchArcadeSets    bool
+	// skipArt leaves images, videos and manuals out of MapToDB, sparing
+	// the file lookups a metadata-only run has no use for.
+	skipArt bool
 }
 
 // maxGamelistFileBytes is the size limit for one gamelist.xml on this
@@ -275,6 +278,7 @@ func NewPlatformScraper(options ...Option) platforms.Scraper {
 		ID:                 "gamelist.xml",
 		Name:               "ES gamelist.xml",
 		SupportedSystemIDs: []string{},
+		SupportsSkipImages: true,
 		Scrape: func(
 			ctx context.Context,
 			cfg *config.Instance,
@@ -297,6 +301,7 @@ func NewPlatformScraper(options ...Option) platforms.Scraper {
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				maxGamelistBytes:   maxGamelistBytesForPlatform(pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
+				skipArt:            opts.SkipImages,
 			}
 			for _, option := range options {
 				option(s)
@@ -1163,16 +1168,27 @@ outer:
 }
 
 const (
-	scrapeProgressInterval  = 250 * time.Millisecond
-	companionWriteBatchSize = 10
+	scrapeProgressInterval = 250 * time.Millisecond
+	// companionWriteBatchSize is how many matched files one write transaction
+	// carries. Ten spent most of a scrape in commits: forcing two systems
+	// (15,363 matches) on the MiSTer test device took 547 s and wrote 700 MB,
+	// against 224 s and 259 MB here. The writer is held for about half a
+	// second per batch, as it is by the other scrapers.
+	companionWriteBatchSize = scraper.WriteBatchSize
 )
 
 func shouldUseRunMarker(opts scraper.ScrapeOptions) bool {
 	return opts.Force && opts.RunID != ""
 }
 
-func appendRunMarker(scraperID string, opts scraper.ScrapeOptions, write *database.ScrapeWrite) {
-	if !shouldUseRunMarker(opts) || write == nil {
+// applyRunOptions carries the run's per-write policy onto write: the run
+// marker for a forced run, and the metadata-only flag.
+func applyRunOptions(scraperID string, opts scraper.ScrapeOptions, write *database.ScrapeWrite) {
+	if write == nil {
+		return
+	}
+	write.SkipImages = opts.SkipImages
+	if !shouldUseRunMarker(opts) {
 		return
 	}
 	write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
@@ -1504,7 +1520,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				TitleTags:  mapped.TitleTags,
 				TitleProps: mapped.TitleProps,
 			}
-			appendRunMarker(id, opts, write)
+			applyRunOptions(id, opts, write)
 			writeTarget := database.ScrapeWriteTarget{
 				MediaDBID:      record.MatchedMediaDBID,
 				MediaTitleDBID: record.MatchedTitleDBID,
@@ -1710,6 +1726,14 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	} else if game.ScreenScraperID != 0 {
 		titleProps = append(titleProps,
 			textProp(propType+":"+string(tags.TagPropertyXMLGameID), strconv.Itoa(game.ScreenScraperID)))
+	}
+
+	if g.skipArt {
+		return scraper.MapResult{
+			MediaTags:  mediaTags,
+			TitleTags:  titleTags,
+			TitleProps: titleProps,
+		}
 	}
 
 	// For each image property: use the XML path when present, otherwise scan
@@ -2943,7 +2967,7 @@ func (g *GamelistXMLScraper) writeCompanionEntries(
 			if matched.MediaLevelWriteSafe {
 				write.MediaTags = g.companionChildTags(c)
 			}
-			appendRunMarker("gamelist.xml", opts, write)
+			applyRunOptions("gamelist.xml", opts, write)
 			titlePayloadKey := companionTitlePayloadKey(write)
 			if existingKey, ok := titlePayloadByTitleDBID[media.MediaTitleDBID]; !ok {
 				titlePayloadByTitleDBID[media.MediaTitleDBID] = titlePayloadKey

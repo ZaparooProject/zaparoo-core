@@ -194,7 +194,7 @@ func TestBuildSettingsMainMenu_LeftRightSwitchColumns_Integration(t *testing.T) 
 	require.True(t, runner.WaitForText("Debug and system options", uiSettleTimeout))
 	runner.SimulateArrowLeft()
 	require.True(t, runner.WaitForText("Reader connections and scanning", uiSettleTimeout))
-	for range 6 {
+	for range 7 {
 		runner.SimulateArrowDown()
 	}
 	require.True(t, runner.WaitForText("Zaparoo Online account and cloud features", uiSettleTimeout))

@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,13 +122,48 @@ func sqlErrorIsMissingScanStage(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table: Scan")
 }
 
+// scanScratchSchema is the name the scanner's scratch database is attached
+// under on the writer connection.
+const scanScratchSchema = "scan"
+
+// scanStagingTables are the scanner's scratch tables, children first.
+var scanStagingTables = []string{
+	"ScanStageLinks", "ScanStageSources", "ScanStageProducers", "ScanStageProperties", "ScanStageTags",
+	"ScanStage", "ScanTouchedTitles",
+}
+
+// scanScratchQueryable marks a connection that has the scratch database
+// attached, so the staging tables belong there rather than in the main file.
+//
+// Staged rows are rebuilt for every system and thrown away after its
+// reconcile. Kept in the main database they went through its WAL and a
+// checkpoint like real data: an unchanged 252,000-file rescan on the MiSTer
+// test device wrote 3.6 GB, spent 37% of its time in commits, and left the
+// 356 MB database at 448 MB with a quarter of its pages free. The scratch
+// database has no WAL and is deleted at every start.
+type scanScratchQueryable struct {
+	sqlQueryable
+}
+
 // sqlEnsureScanStagingTables recreates scanner scratch tables when a copied or
 // partially migrated media.db has the scan-staging migration marked applied but
 // the tables are absent. They hold no durable user data, so creating missing
 // tables is safer than failing an otherwise recoverable index resume.
 func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS ScanStage (
+	// Table and index names take the schema prefix; the table an index is on
+	// is always resolved inside that same schema.
+	schema := ""
+	statements := make([]string, 0, len(scanStagingTables)+12)
+	if _, scratch := db.(scanScratchQueryable); scratch {
+		schema = scanScratchSchema + "."
+		// A table of the same name in the main database would be found first
+		// by every unqualified reference, and the scan would write there.
+		for _, table := range scanStagingTables {
+			statements = append(statements, "DROP TABLE IF EXISTS main."+table)
+		}
+	}
+	statements = append(statements, []string{
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStage (
 			Path          TEXT PRIMARY KEY,
 			ParentDir     TEXT NOT NULL,
 			Slug          TEXT NOT NULL,
@@ -137,24 +173,24 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SlugWordCount INTEGER NOT NULL,
 			SecondarySlug TEXT
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstage_slug_idx ON ScanStage(Slug)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageTags (
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstage_slug_idx ON ScanStage(Slug)`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageTags (
 			Path    TEXT NOT NULL,
 			TagType TEXT NOT NULL,
 			Tag     TEXT NOT NULL,
 			PRIMARY KEY (Path, TagType, Tag)
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstagetags_type_tag_path_idx ON ScanStageTags(TagType, Tag, Path)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageProperties (
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstagetags_type_tag_path_idx ON ScanStageTags(TagType, Tag, Path)`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageProperties (
 			Path         TEXT NOT NULL,
 			PropertyType TEXT NOT NULL,
 			Property     TEXT NOT NULL,
 			Text         TEXT NOT NULL,
 			PRIMARY KEY (Path, PropertyType, Property)
 		) WITHOUT ROWID`,
-		`CREATE INDEX IF NOT EXISTS scanstageproperties_property_idx
+		`CREATE INDEX IF NOT EXISTS ` + schema + `scanstageproperties_property_idx
 			ON ScanStageProperties(PropertyType, Property, Text)`,
-		`CREATE TABLE IF NOT EXISTS ScanStageSources (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageSources (
 			Path       TEXT PRIMARY KEY,
 			SourcePath TEXT NOT NULL,
 			SourceKey  TEXT NOT NULL,
@@ -162,14 +198,19 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory')),
 			SourceGroup TEXT NOT NULL DEFAULT ''
 		) WITHOUT ROWID`,
-		`CREATE TABLE IF NOT EXISTS ScanStageLinks (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageLinks (
 			Path       TEXT PRIMARY KEY,
 			TargetPath TEXT NOT NULL
 		) WITHOUT ROWID`,
-		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanStageProducers (
+			Path      TEXT NOT NULL,
+			ScannerID TEXT NOT NULL,
+			PRIMARY KEY (Path, ScannerID)
+		) WITHOUT ROWID`,
+		`CREATE TABLE IF NOT EXISTS ` + schema + `ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
 		) WITHOUT ROWID`,
-	}
+	}...)
 	for _, stmt := range statements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("failed to ensure scan staging schema: %w", err)
@@ -181,10 +222,7 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 // sqlClearScanStage empties all scanner staging tables. Called before staging a
 // system (clearing any rows a crashed run left behind) and after its reconcile.
 func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
-	for _, table := range []string{
-		"ScanStageLinks", "ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage",
-		"ScanTouchedTitles",
-	} {
+	for _, table := range scanStagingTables {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			if sqlErrorIsMissingScanStage(err) {
@@ -266,18 +304,73 @@ type chunkedStepTiming struct {
 	pacing time.Duration
 }
 
+// scanProducerJudgeable returns a condition on the Media alias m, and its
+// args, that holds when the row's absence from this scan can be trusted: no
+// producer it was last reported by failed. A row with no recorded producers
+// was indexed before producers were tracked, so nothing says which source it
+// came from; it is only judged when no producer failed at all. With no failed
+// producers the condition is empty and the caller's statement is unchanged.
+func scanProducerJudgeable(failed []string) (cond string, args []any) {
+	if len(failed) == 0 {
+		return "", nil
+	}
+	holders, args := scanProducerIDArgs(failed)
+	return `
+		AND EXISTS (SELECT 1 FROM MediaProducers p WHERE p.MediaDBID = m.DBID)
+		AND NOT EXISTS (
+			SELECT 1 FROM MediaProducers p
+			JOIN MediaScanners sc ON sc.DBID = p.ScannerDBID
+			WHERE p.MediaDBID = m.DBID AND sc.ScannerID IN (` + holders + `)
+		)`, args
+}
+
+// scanProducerKeepFailed returns a condition on the MediaProducers alias p,
+// and its args, that spares the links of failed producers when a staged
+// path's producer set is replaced. A failed producer did not report anything
+// this scan, so its absence from a path's staged producers says nothing about
+// whether it still reports that path.
+func scanProducerKeepFailed(failed []string) (cond string, args []any) {
+	if len(failed) == 0 {
+		return "", nil
+	}
+	holders, args := scanProducerIDArgs(failed)
+	return `
+				  AND p.ScannerDBID NOT IN (
+					SELECT DBID FROM MediaScanners WHERE ScannerID IN (` + holders + `)
+				  )`, args
+}
+
+// scanProducerIDArgs deduplicates producer IDs into bind args and their
+// placeholder list.
+func scanProducerIDArgs(ids []string) (holders string, args []any) {
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	args = make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return prepareVariadic("?", ",", len(ids)), args
+}
+
 func sqlFlagMissingMedia(
 	ctx context.Context,
 	db sqlQueryable,
 	clock clockwork.Clock,
 	systemID string,
 	systemDBID int64,
+	failedProducers []string,
 	yield func() error,
 ) (int64, chunkedStepTiming, error) {
 	const step = "flag missing media"
 	totalStart := clock.Now()
 	totalAffected := int64(0)
 	var timing chunkedStepTiming
+	judgeable, judgeableArgs := scanProducerJudgeable(failedProducers)
+	args := make([]any, 0, len(judgeableArgs)+2)
+	args = append(args, systemDBID)
+	args = append(args, judgeableArgs...)
+	args = append(args, scanFlagMissingBatchSize)
 	for {
 		if err := ctx.Err(); err != nil {
 			return totalAffected, timing, fmt.Errorf("scan reconcile cancelled before %s: %w", step, err)
@@ -288,11 +381,11 @@ func sqlFlagMissingMedia(
 				SELECT m.DBID
 				FROM Media m
 				WHERE m.SystemDBID = ? AND m.IsMissing = 0
-				  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)
+				  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)`+judgeable+`
 				LIMIT ?
 			)
 			UPDATE Media SET IsMissing = 1
-			WHERE DBID IN (SELECT DBID FROM missing)`, systemDBID, scanFlagMissingBatchSize)
+			WHERE DBID IN (SELECT DBID FROM missing)`, args...)
 		chunkElapsed := clock.Since(chunkStart)
 		if err != nil {
 			log.Warn().
@@ -521,7 +614,10 @@ func sqlResolveScanSystem(ctx context.Context, db sqlQueryable, systemID string)
 //
 // With opts.IncompleteScan, step 3 skips the missing flags (and step 2 skips
 // the newly-missing capture): the staged set is known to be a subset of the
-// library, so absence from it is not evidence a file is gone.
+// library, so absence from it is not evidence a file is gone. With
+// opts.FailedProducers, the same steps skip only the rows a failed producer
+// reported (see scanProducerJudgeable); step 3 then records the producers of
+// every staged row for the next scan to judge by.
 func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequence
 	ctx context.Context, db sqlQueryable, clock clockwork.Clock, systemID string, opts database.ScanReconcileOpts,
 ) (database.ScanReconcileStats, error) {
@@ -576,11 +672,19 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 				Msg("scan reconcile step timings")
 		}
 	}()
-	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
+	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).
+		Strs("failedProducers", opts.FailedProducers).Msg("scan reconcile started")
+	judgeable, judgeableArgs := scanProducerJudgeable(opts.FailedProducers)
 
+	// libraryRows counts rows written outside the scratch tables. The
+	// "capture" steps only note which titles to revisit.
+	var libraryRows int64
 	execStep := func(step, query string, args ...any) (int64, error) {
 		stepStart := clock.Now()
 		affected, execErr := scanReconcileExec(ctx, db, clock, systemID, step, query, args...)
+		if !strings.HasPrefix(step, "capture") {
+			libraryRows += affected
+		}
 		recordStep(step, clock.Since(stepStart))
 		if execErr != nil || opts.Yield == nil {
 			return affected, execErr
@@ -752,8 +856,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
 			SELECT m.MediaTitleDBID FROM Media m
 			WHERE m.SystemDBID = ? AND m.IsMissing = 0
-			  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)`,
-			args: []any{systemDBID},
+			  AND NOT EXISTS (SELECT 1 FROM ScanStage s WHERE s.Path = m.Path)` + judgeable,
+			args: append([]any{systemDBID}, judgeableArgs...),
 		})
 	}
 	for _, capture := range preUpsertCaptures {
@@ -794,6 +898,10 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		   OR MediaSources.SourceGroup IS NOT excluded.SourceGroup`, systemDBID); err != nil {
 		return stats, err
 	}
+	// Judged against the producers recorded before this scan, which is why
+	// this runs before "replace media producers": a row a failed producer
+	// reported keeps its provenance even when another source staged it
+	// without one.
 	if !opts.IncompleteScan {
 		if _, err = execStep("delete stale media sources", `
 			DELETE FROM MediaSources
@@ -802,8 +910,8 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 				WHERE m.SystemDBID = ?
 				  AND NOT EXISTS (
 					SELECT 1 FROM ScanStageSources ss WHERE ss.Path = m.Path
-				  )
-			)`, systemDBID); err != nil {
+				  )`+judgeable+`
+			)`, append([]any{systemDBID}, judgeableArgs...)...); err != nil {
 			return stats, err
 		}
 	}
@@ -836,12 +944,53 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		flagMissingStart := clock.Now()
 		var flagMissingTiming chunkedStepTiming
 		stats.MediaMissing, flagMissingTiming, err = sqlFlagMissingMedia(
-			ctx, db, clock, systemID, systemDBID, opts.Yield,
+			ctx, db, clock, systemID, systemDBID, opts.FailedProducers, opts.Yield,
 		)
 		recordChunkedStep("flag missing media", clock.Since(flagMissingStart), flagMissingTiming)
 		if err != nil {
 			return stats, err
 		}
+	}
+
+	// Record which sources reported each staged row, replacing what an
+	// earlier scan recorded for it. Rows absent from this scan keep their
+	// producers, so a later scan can still tell which source to wait for.
+	if _, err = execStep("insert media scanners", `
+		INSERT OR IGNORE INTO MediaScanners (ScannerID)
+		SELECT DISTINCT ScannerID FROM ScanStageProducers`); err != nil {
+		return stats, err
+	}
+	// A fresh system owns no Media rows from before this reconcile, so none
+	// has recorded producers to replace. An incomplete scan stages only part
+	// of what its sources report, so it adds producers but removes none.
+	// Both producer statements CROSS JOIN to pin the stage as the outer loop;
+	// left to the planner they walk every Media row of the system, which costs
+	// the whole system per rescan.
+	if !opts.IncompleteScan && !freshSystem {
+		keepFailed, keepFailedArgs := scanProducerKeepFailed(opts.FailedProducers)
+		if _, err = execStep("delete stale media producers", `
+			DELETE FROM MediaProducers
+			WHERE (MediaDBID, ScannerDBID) IN (
+				SELECT p.MediaDBID, p.ScannerDBID
+				FROM ScanStage s
+				CROSS JOIN Media m ON m.SystemDBID = ? AND m.Path = s.Path
+				CROSS JOIN MediaProducers p ON p.MediaDBID = m.DBID
+				WHERE NOT EXISTS (
+					SELECT 1 FROM ScanStageProducers sp
+					JOIN MediaScanners sc ON sc.ScannerID = sp.ScannerID
+					WHERE sp.Path = s.Path AND sc.DBID = p.ScannerDBID
+				)`+keepFailed+`
+			)`, append([]any{systemDBID}, keepFailedArgs...)...); err != nil {
+			return stats, err
+		}
+	}
+	if _, err = execStep("insert media producers", `
+		INSERT OR IGNORE INTO MediaProducers (MediaDBID, ScannerDBID)
+		SELECT m.DBID, sc.DBID
+		FROM ScanStageProducers sp
+		CROSS JOIN Media m ON m.SystemDBID = ? AND m.Path = sp.Path
+		CROSS JOIN MediaScanners sc ON sc.ScannerID = sp.ScannerID`, systemDBID); err != nil {
+		return stats, err
 	}
 
 	// Create Tags rows for staged values of the types that are not closed
@@ -1130,6 +1279,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	recordStep("clear scan stage", clock.Since(clearStart))
 	if clearErr != nil {
 		return stats, clearErr
+	}
+	// The chunked steps report through their own counters, and a system
+	// with links always runs the link sync, which this does not measure.
+	stats.LibraryRowsChanged = libraryRows + stats.MediaUpserted + stats.MediaMissing + stats.TouchedTitles
+	if hasLinks || freshSystem {
+		stats.LibraryRowsChanged++
 	}
 	return stats, nil
 }

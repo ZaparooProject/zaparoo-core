@@ -25,7 +25,6 @@ import (
 	"errors"
 	"os"
 	"testing"
-	"time"
 
 	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
@@ -330,8 +329,8 @@ func TestClose_ClearsFailedProbe(t *testing.T) {
 	// Pre-populate failed probes for two paths
 	probeStateMu.Lock()
 	failedProbePaths = map[string]failedProbeEntry{
-		"/dev/ttyUSB0": {deviceModTime: time.Now()},
-		"/dev/ttyUSB1": {deviceModTime: time.Now()},
+		"/dev/ttyUSB0": {nodeID: "node"},
+		"/dev/ttyUSB1": {nodeID: "node"},
 	}
 	probeStateMu.Unlock()
 
@@ -368,7 +367,7 @@ func TestClose_SessionError(t *testing.T) {
 		probeStateMu.Unlock()
 	}()
 	failedProbePaths = map[string]failedProbeEntry{
-		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+		"/dev/ttyUSB0": {nodeID: "node"},
 	}
 	probeStateMu.Unlock()
 
@@ -409,7 +408,7 @@ func TestClose_DeviceError(t *testing.T) {
 		probeStateMu.Unlock()
 	}()
 	failedProbePaths = map[string]failedProbeEntry{
-		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+		"/dev/ttyUSB0": {nodeID: "node"},
 	}
 	probeStateMu.Unlock()
 
@@ -454,50 +453,52 @@ func TestRefreshFailedProbes(t *testing.T) {
 		probeStateMu.Lock()
 		defer probeStateMu.Unlock()
 		failedProbePaths = map[string]failedProbeEntry{
-			"/dev/nonexistent_device_xyz": {deviceModTime: time.Now()},
+			"/dev/nonexistent_device_xyz": {nodeID: "node"},
 		}
 		refreshFailedProbes()
 		assert.Empty(t, failedProbePaths, "entry should be removed when device file is gone")
 	})
 
 	t.Run("device unchanged", func(t *testing.T) {
-		// Create a temp file to simulate a device file
-		tmpFile, err := os.CreateTemp("", "pn532test")
-		require.NoError(t, err)
-		defer func() { _ = os.Remove(tmpFile.Name()) }()
-		_ = tmpFile.Close()
-
-		info, err := os.Stat(tmpFile.Name())
-		require.NoError(t, err)
+		stubProbeNodeID(t, map[string]string{"/dev/ttyUSB0": "node-a"})
 
 		probeStateMu.Lock()
 		defer probeStateMu.Unlock()
 		failedProbePaths = map[string]failedProbeEntry{
-			tmpFile.Name(): {deviceModTime: info.ModTime()},
+			"/dev/ttyUSB0": {nodeID: "node-a"},
 		}
 		refreshFailedProbes()
-		assert.Contains(t, failedProbePaths, tmpFile.Name(),
-			"entry should persist when ModTime unchanged")
+		assert.Contains(t, failedProbePaths, "/dev/ttyUSB0",
+			"entry should persist while the device file is the same one")
 	})
 
 	t.Run("device changed", func(t *testing.T) {
-		// Create a temp file and record a stale ModTime
-		tmpFile, err := os.CreateTemp("", "pn532test")
-		require.NoError(t, err)
-		defer func() { _ = os.Remove(tmpFile.Name()) }()
-		_ = tmpFile.Close()
-
-		staleTime := time.Now().Add(-time.Hour)
+		stubProbeNodeID(t, map[string]string{"/dev/ttyUSB0": "node-b"})
 
 		probeStateMu.Lock()
 		defer probeStateMu.Unlock()
 		failedProbePaths = map[string]failedProbeEntry{
-			tmpFile.Name(): {deviceModTime: staleTime},
+			"/dev/ttyUSB0": {nodeID: "node-a"},
 		}
 		refreshFailedProbes()
 		assert.Empty(t, failedProbePaths,
-			"entry should be removed when ModTime differs (device was swapped)")
+			"entry should be removed when the device file was recreated (device was swapped)")
 	})
+}
+
+// stubProbeNodeID replaces the device file identity lookup with a fixed
+// table; a path missing from it reads as a device that is gone.
+func stubProbeNodeID(t *testing.T, ids map[string]string) {
+	t.Helper()
+	orig := probeNodeID
+	t.Cleanup(func() { probeNodeID = orig })
+	probeNodeID = func(path string) (string, error) {
+		id, ok := ids[path]
+		if !ok {
+			return "", os.ErrNotExist
+		}
+		return id, nil
+	}
 }
 
 // TestClearFailedProbe verifies that ClearFailedProbe removes only the
@@ -514,8 +515,8 @@ func TestClearFailedProbe(t *testing.T) {
 
 	probeStateMu.Lock()
 	failedProbePaths = map[string]failedProbeEntry{
-		"/dev/ttyUSB0": {deviceModTime: time.Now()},
-		"/dev/ttyUSB1": {deviceModTime: time.Now()},
+		"/dev/ttyUSB0": {nodeID: "node"},
+		"/dev/ttyUSB1": {nodeID: "node"},
 	}
 	probeStateMu.Unlock()
 

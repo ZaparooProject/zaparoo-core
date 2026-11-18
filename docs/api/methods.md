@@ -732,7 +732,7 @@ An object:
 | sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, `filename-desc` or `added-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. `added-desc` orders by when each game got a flag; see [Sorting by date added](#sorting-by-date-added). Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | groupBy    | string   | No       | `title` returns one result per title and system instead of one per media file. See [Grouped search](#grouped-search). Only `name-asc` and `name-desc` sorts apply. Cannot be combined with `titleId`. |
-| titleId    | number   | No       | List the versions of one title: its media matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. |
+| titleId    | number   | No       | List the versions of one title's game: the title's media and the media of every title [linked](#versions-and-links) to it, matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. To list versions of a specific media item, with the reason each belongs, use [media.versions](#mediaversions). |
 
 #### Sorting by date added
 
@@ -742,9 +742,11 @@ An object:
 
 With `groupBy: "title"`, each result stands for one title on one system. Regional releases, revisions and copies in other folders are one title. The same name on two systems gives two results. `maxResults`, `hasNextPage` and cursors count titles rather than files.
 
-A title's media that launch through one container (a `.cue` and its `.bin` tracks, or a folder of discs) count as one version, the file the container launches.
+A title's media that launch through one container (a `.cue` and its `.bin` tracks, or a folder of discs) count as one version, the file the container launches. A symlink alias of a file, such as an Arcade Organizer entry, is the same version as the file it points at.
 
-Each result carries the fields of the version Core prefers for the title, chosen the same way a title launch chooses: main releases before variants, then your preferred regions and languages, then the launcher's file type order. Its `zapScript` launches that version. `versionCount` is the number of versions matching the search's tags, `pathPrefix` and visibility, across the whole search rather than the page. A search with the result's `titleId` lists the same versions.
+Each result carries the fields of the version Core prefers for the title, chosen the same way a title launch chooses: main releases before variants, then your preferred regions and languages, then the launcher's file type order. Its `zapScript` launches that version. `versionCount` is the number of versions of the title's game matching the search's tags, `pathPrefix` and visibility, across the whole search rather than the page. A search with the result's `titleId` lists the same versions.
+
+Titles Core knows to be the same game under different names (see [Versions and links](#versions-and-links)) stay separate results, each under its own name. Each counts the versions of all of them in its `versionCount`.
 
 #### Result
 
@@ -759,8 +761,8 @@ Each result carries the fields of the version Core prefers for the title, chosen
 | Key       | Type                     | Required | Description                                                                                                 |
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
 | mediaId   | number                   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests.                |
-| titleId   | number                   | No       | Opaque title ID for a `titleId` search listing this title's versions. Changes when media is re-indexed. |
-| versionCount | number                | No       | Grouped searches only. Number of versions of this title that match the search. |
+| titleId   | number                   | No       | Opaque title ID for a `titleId` search listing the versions of this title's game. Changes when media is re-indexed. |
+| versionCount | number                | No       | Grouped searches only. Number of versions of this title's game that match the search, including versions under [linked](#versions-and-links) titles. |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
@@ -918,6 +920,411 @@ Available categories remain dynamic: derive them from `categories` on systems re
 }
 ```
 
+### media.versions
+
+**Access:** All clients.
+
+List the other versions of a media item's game on the same system: regional releases, revisions, translations, hacks, bootlegs and releases under another name. The media item asked about is included, marked `current`, so the result is the whole list a version picker shows.
+
+#### Versions and links
+
+Two things make media versions of one game:
+
+- **A shared title.** Core gives files whose names differ only in bracketed details, such as `Game (USA)` and `Game (Europe) (Rev 1)`, one title. This covers most regional and revision sets on every system.
+- **A link.** Some versions share no name: ASO and Alpha Mission, Contra and Probotector. Core links their titles when a source says they are the same game. The sources are identities Core already holds for a file or gets from a scraper:
+
+| Source            | What ties the titles together                                                                 |
+| :---------------- | :-------------------------------------------------------------------------------------------- |
+| `mame-set`        | An arcade romset and the parent set it is a clone of.                                          |
+| `gamedatabase-id` | The game ID GameDataBase gives every release of one game.                                      |
+| `alt-folder`      | The folder a platform files a game's alternates in, such as MiSTer's `_alternatives/_<Game>/`. |
+
+Links never cross systems. They are worked out at the end of a media index and of a scraper run, so a link appears once the source behind it has been scraped. More sources may be added; treat an unknown source as a link like any other.
+
+Media that launch through one container count as one version, and a symlink alias is the same version as its target, as in a [grouped search](#grouped-search).
+
+#### Parameters
+
+An object naming one media item, by `mediaId` or by `system` and `path`:
+
+| Key           | Type    | Required | Description                                                                                          |
+| :------------ | :------ | :------- | :--------------------------------------------------------------------------------------------------- |
+| mediaId       | number  | No\*     | Media database row ID, as returned by `media.search` and `media.browse`.                             |
+| system        | string  | No\*     | System ID of the media. Required with `path` when `mediaId` is not given.                            |
+| path          | string  | No\*     | Indexed path of the media. Required with `system` when `mediaId` is not given.                       |
+| maxResults    | number  | No       | Max number of versions to return. Default and maximum is 100.                                        |
+| cursor        | string  | No       | Cursor for pagination. Omit for the first page, use `nextCursor` from the previous response after.   |
+| includeHidden | boolean | No       | Include hidden versions. Defaults to `false`.                                                        |
+
+\* Give either `mediaId`, or both `system` and `path`.
+
+#### Result
+
+| Key        | Type                             | Required | Description                                                                                       |
+| :--------- | :------------------------------- | :------- | :------------------------------------------------------------------------------------------------ |
+| versions   | Version[]                        | Yes      | The versions on this page. Versions sharing the requested media's title come first, led by the one a title launch would pick, then versions under linked titles ordered by name. |
+| total      | number                           | Yes      | Number of versions across every page. Equal to the `versionCount` `media.browse` reports for the media. |
+| pagination | [Pagination](#pagination-object) | No       | Pagination information. Omitted when there are no versions to return.                             |
+
+##### Version object
+
+Every field of a [Media object](#media-object), and:
+
+| Key     | Type     | Required | Description                                                                                                   |
+| :------ | :------- | :------- | :------------------------------------------------------------------------------------------------------------ |
+| reason  | string   | Yes      | `title` when the version shares the requested media's title, `link` when it is filed under a linked title.     |
+| sources | string[] | No       | For a `link`: the sources that tie the version's title to the game, from the table above.                      |
+| current | boolean  | No       | `true` on the media the request asked about. When that media is a symlink alias, its target is marked instead. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "method": "media.versions",
+  "params": {
+    "mediaId": 456
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "versions": [
+      {
+        "reason": "title",
+        "current": true,
+        "mediaId": 456,
+        "titleId": 120,
+        "name": "Contra",
+        "path": "/media/fat/games/NES/Contra (USA).nes",
+        "relativePath": "NES/Contra (USA).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Contra (region:us)",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "us", "type": "region" }],
+        "disambiguatingTags": [{ "tag": "us", "type": "region" }]
+      },
+      {
+        "reason": "link",
+        "sources": ["gamedatabase-id"],
+        "mediaId": 457,
+        "titleId": 121,
+        "name": "Probotector",
+        "path": "/media/fat/games/NES/Probotector (Europe).nes",
+        "relativePath": "NES/Probotector (Europe).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Probotector",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "eu", "type": "region" }]
+      }
+    ],
+    "total": 2,
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    }
+  }
+}
+```
+
+### media.similar
+
+**Access:** All clients.
+
+List media like one media item, from anywhere in the library. Core compares what its scrapers recorded about each title: the series it belongs to, its genres, who developed and published it, how many play it and when it was released. A series counts for most, then genre, then the rest. A tag that most of the library carries counts for little, so a library of platformers is not told that every platformer is alike.
+
+Each result is a different game. Other versions of the requested media are never returned (use [media.versions](#mediaversions) for those), and neither is the same game on another system. A game with several versions, or held on several systems, appears once. Hidden media is left out.
+
+Media no scraper has matched has nothing to be compared by. The result is then an empty list, as it is when nothing in the library is like the media. Core does not fall back to comparing names.
+
+Everything is worked out on the device from its own index. Nothing is sent anywhere.
+
+#### Parameters
+
+An object naming one media item, by `mediaId` or by `system` and `path`:
+
+| Key         | Type     | Required | Description                                                                                  |
+| :---------- | :------- | :------- | :------------------------------------------------------------------------------------------- |
+| mediaId     | number   | No\*     | Media database row ID, as returned by `media.search` and `media.browse`.                     |
+| system      | string   | No\*     | System ID of the media. Required with `path` when `mediaId` is not given.                    |
+| path        | string   | No\*     | Indexed path of the media. Required with `system` when `mediaId` is not given.               |
+| systems     | string[] | No       | Only return media on these systems. Defaults to every system.                                |
+| fuzzySystem | boolean  | No       | Match `systems` loosely, as in [media.search](#mediasearch). Defaults to `false`.            |
+| maxResults  | number   | No       | Max number of results to return. Default is 20, maximum is 50.                               |
+
+\* Give either `mediaId`, or both `system` and `path`.
+
+#### Result
+
+| Key     | Type              | Required | Description                               |
+| :------ | :---------------- | :------- | :---------------------------------------- |
+| results | SuggestedMedia[]  | Yes      | The media most like the request, best first. |
+
+##### SuggestedMedia object
+
+Every field of a [Media object](#media-object), for the version of the game a title launch would pick, and:
+
+| Key     | Type      | Required | Description                                                                                  |
+| :------ | :-------- | :------- | :------------------------------------------------------------------------------------------- |
+| reasons | Reason[]  | Yes      | Up to three things the media shares with the media it was suggested for, strongest first.     |
+| signal  | string    | No       | In a `queue` section from [media.recommended](#mediarecommended): why the item is there. `played`, `favorite`, `liked` or `deck` for the interest shown in `seed`, or `playLater` for media marked to play later. |
+| seed    | [Media](#media-object) | No | In a `queue` section: the media the item is most like. Left out for `playLater` items, and when the seed is hidden or not allowed for the client. |
+
+##### Reason object
+
+| Key  | Type                 | Required | Description                                                                                         |
+| :--- | :------------------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| code | string               | Yes      | What is shared, from the table below. More codes may be added; show an unknown code generically.     |
+| tags | [TagInfo](#taginfo-object)[] | No       | The shared values.                                                                                   |
+
+| Code          | Shared                                                                                   |
+| :------------ | :--------------------------------------------------------------------------------------- |
+| `series`      | The series or franchise.                                                                 |
+| `genre`       | A genre, or a genre family such as `action` when the two have different genres within it. |
+| `perspective` | The camera perspective.                                                                  |
+| `art`         | The art style.                                                                           |
+| `based`       | What the game is based on, such as a film.                                               |
+| `developer`   | The developer.                                                                           |
+| `publisher`   | The publisher.                                                                           |
+| `players`     | The player count.                                                                        |
+| `year`        | The release year.                                                                        |
+| `decade`      | The release decade. The tag is the decade's first year, such as `1990`.                  |
+
+Reasons are codes and tags, not sentences, so a client words them in its own language.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "method": "media.similar",
+  "params": {
+    "mediaId": 456,
+    "maxResults": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "results": [
+      {
+        "reasons": [
+          { "code": "series", "tags": [{ "tag": "franchise:contra", "type": "search" }] },
+          { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+        ],
+        "mediaId": 512,
+        "titleId": 140,
+        "name": "Super C",
+        "path": "/media/fat/games/NES/Super C (USA).nes",
+        "relativePath": "NES/Super C (USA).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Super C",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "us", "type": "region" }]
+      },
+      {
+        "reasons": [
+          { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+        ],
+        "mediaId": 9031,
+        "titleId": 2210,
+        "name": "Gunstar Heroes",
+        "path": "/media/fat/games/Genesis/Gunstar Heroes (USA).md",
+        "relativePath": "Genesis/Gunstar Heroes (USA).md",
+        "hasCover": true,
+        "zapScript": "@Genesis/Gunstar Heroes",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "Genesis",
+          "name": "Sega Genesis"
+        },
+        "tags": [{ "tag": "us", "type": "region" }]
+      }
+    ]
+  }
+}
+```
+
+### media.recommended
+
+**Access:** All clients.
+
+List media the active profile may want to play next, in sections that each say why. Core works it out on the device from what the profile has shown interest in:
+
+- **Play.** Games the profile played, weighed by how long and how recently. A session shorter than a minute does not count. With a profile active only its own play counts; with none active, only play made with none active.
+- **Favorites and likes.** These never fade.
+- **Decks made on this device.** A light sign of interest. Decks fetched from a link or saved from another account do not count.
+
+Those games are the seeds. Recommendations are the media most like them, found the way [media.similar](#mediasimilar) finds it, and are games the profile has not played for long. Disliked and hidden media is never recommended and never a seed, and media like a disliked game ranks lower. A game appears once across all sections, as the version a title launch would pick, and the same game on another system counts as that game.
+
+With nothing to go on, `sections` is empty. Core does not fill it with popular or random media, so a client can hide the row until there is something real to show. Media no scraper has matched cannot be recommended for what it is like, because nothing is known about it.
+
+There is no profile parameter: the method always answers for the active profile.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                        |
+| :---------- | :------- | :------- | :--------------------------------------------------------------------------------- |
+| systems     | string[] | No       | Only recommend media on these systems. Defaults to every system.                   |
+| fuzzySystem | boolean  | No       | Match `systems` loosely, as in [media.search](#mediasearch). Defaults to `false`.  |
+| maxResults  | number   | No       | Max number of items in one section. Default is 12, maximum is 30.                  |
+| maxSections | number   | No       | Max number of sections. Default is 6, maximum is 12. Ignored for the `queue` layout. |
+| layout      | string   | No       | `sections` (default) or `queue`. A `queue` returns one `queue` section: a single ranked list for "play next", up to `maxResults` items. |
+
+#### Result
+
+| Key      | Type      | Required | Description                                                |
+| :------- | :-------- | :------- | :--------------------------------------------------------- |
+| sections | Section[] | Yes      | The recommendations, most relevant section first. May be empty. |
+
+##### Section object
+
+| Key    | Type                                           | Required | Description                                                                                          |
+| :----- | :--------------------------------------------- | :------- | :--------------------------------------------------------------------------------------------------- |
+| kind   | string                                         | Yes      | What the section is built around, from the table below. More kinds may be added; skip an unknown one. |
+| seed   | [Media](#media-object)                         | No       | For a `seed` section: the media the items are like.                                                   |
+| signal | string                                         | No       | For a `seed` section: the interest shown in the seed. `played`, `favorite`, `liked` or `deck`.         |
+| tag    | [TagInfo](#taginfo-object)                             | No       | For a `series` section: the series.                                                                   |
+| items  | [SuggestedMedia](#suggestedmedia-object)[]     | Yes      | The recommended media, best first.                                                                    |
+
+| Kind        | Section                                                                                                    |
+| :---------- | :--------------------------------------------------------------------------------------------------------- |
+| `seed`      | Media like one game the profile showed interest in. Each item's `reasons` say what it shares with `seed`.   |
+| `playLater` | Media marked to play later, the ones most like the seeds first. An item's `reasons` may be empty.           |
+| `series`    | More of the series the seeds lean on most.                                                                  |
+| `queue`     | With `layout: "queue"`: one list for "play next". The seeds take turns, a stronger seed more often, each adding its next match, and every fourth place goes to media marked to play later. Each seed's matches are lightly reshuffled once a day (UTC): the best stay near the front, the rest trade places, so the list changes from day to day even when nothing else does. Within a day it is stable. Each item's `signal` and `seed` say why it is there. |
+
+The section for the strongest seed comes first, then `playLater`, then `series`, then the other seeds. A section with too little to show is left out. The `queue` layout returns at most one section, the same series and system caps apply, and a game appears once.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.recommended",
+  "params": {
+    "maxResults": 1,
+    "maxSections": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "sections": [
+      {
+        "kind": "seed",
+        "signal": "played",
+        "seed": {
+          "mediaId": 456,
+          "titleId": 120,
+          "name": "Contra",
+          "path": "/media/fat/games/NES/Contra (USA).nes",
+          "relativePath": "NES/Contra (USA).nes",
+          "hasCover": true,
+          "zapScript": "@NES/Contra",
+          "system": {
+            "category": "Console",
+            "categories": ["Console"],
+            "id": "NES",
+            "name": "Nintendo Entertainment System"
+          },
+          "tags": [{ "tag": "us", "type": "region" }]
+        },
+        "items": [
+          {
+            "reasons": [
+              { "code": "series", "tags": [{ "tag": "franchise:contra", "type": "search" }] },
+              { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+            ],
+            "mediaId": 512,
+            "titleId": 140,
+            "name": "Super C",
+            "path": "/media/fat/games/NES/Super C (USA).nes",
+            "relativePath": "NES/Super C (USA).nes",
+            "hasCover": true,
+            "zapScript": "@NES/Super C",
+            "system": {
+              "category": "Console",
+              "categories": ["Console"],
+              "id": "NES",
+              "name": "Nintendo Entertainment System"
+            },
+            "tags": [{ "tag": "us", "type": "region" }]
+          }
+        ]
+      },
+      {
+        "kind": "playLater",
+        "items": [
+          {
+            "reasons": [],
+            "mediaId": 7120,
+            "titleId": 1803,
+            "name": "Chrono Trigger",
+            "path": "/media/fat/games/SNES/Chrono Trigger (USA).sfc",
+            "relativePath": "SNES/Chrono Trigger (USA).sfc",
+            "hasCover": true,
+            "zapScript": "@SNES/Chrono Trigger",
+            "system": {
+              "category": "Console",
+              "categories": ["Console"],
+              "id": "SNES",
+              "name": "Super Nintendo Entertainment System"
+            },
+            "tags": [{ "tag": "us", "type": "region" }, { "tag": "playlater", "type": "user" }]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ### media.browse
 
 **Access:** All clients.
@@ -995,6 +1402,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries, and on `directory` and `root` entries that belong to exactly one system, where it names the folder itself (`SNES/USA`, or `SNES` for the system's launcher folder) and can be sent back as `path`. Omitted for unmatched absolute paths, virtual URIs, and folders shared by several systems. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Same object shape as `tags`. Omitted when there is nothing to disambiguate. |
+| versionCount | number   | No       | On `media` entries: how many versions of the entry's game the library holds, the entry included, counted as [media.versions](#mediaversions) lists them and respecting `includeHidden`. A client can offer a versions action when it is greater than 1. Omitted for directories, for a system not indexed or scraped since Core gained version counts (the next index or scrape of the system adds it), and when Core could not work it out in time. |
 | multiDisc    | boolean  | No       | `true` on a `directory` entry that stands for several disc images of one game. Its launch fields point at the disc last played from it, or the first disc; browse its `path` to list the others. Omitted otherwise. |
 | hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 | coverColor   | string   | No       | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Present on `media` entries and logical single-game container `directory` entries once Core has built a thumbnail for the media through `media.image` with a `maxSize`. Omitted on a container `directory` entry that has folder artwork of its own, because the colour describes the launch target's cover. |
@@ -1478,6 +1886,7 @@ An omitted or `null` value parameters key is also valid and will index every sys
 - When `systems` is provided with specific system IDs, only those systems will be reindexed
 - The server will validate all provided system IDs and return an error if any are invalid
 - If all systems are specified (equivalent to no restriction), a full database rebuild will be performed for optimal performance
+- A full index of a media database created with an older storage page size replaces the database first, as `rebuild` does. This happens once per database; scraped metadata is re-scraped and favourites and launcher overrides are preserved
 - Selective indexing cannot be performed while database optimization is running
 - A request refused because indexing, scraping, optimization, maintenance or recovery is already running returns an error whose `data.category` is `busy`. See [media database busy errors](#media-database-busy-errors).
 - Resume functionality will validate that the system configuration hasn't changed between indexing sessions
@@ -2648,6 +3057,94 @@ When a resized thumbnail is built for a request whose image type preference list
 }
 ```
 
+### media.artwork.random
+
+**Access:** Localhost or any authenticated client.
+
+Return random indexed media that have artwork of the requested types, for slideshows and screensavers. Nothing is launched, fetched, or recorded in history, and no image data is returned: request each image with [`media.image`](#mediaimage).
+
+Every eligible row is equally likely. A row is eligible when it matches the filters, is not missing, and has at least one requested image type on its media row or its title. Indexed artwork counts as available; Core does not check that the file still exists, so `media.image` can still fail for an item. Hidden media and media in hidden folders are left out unless `includeHidden` is set or a `tags` filter requires a `user` tag, the same rule as `media.search`. Profiles do not limit systems here; to show only some systems or categories, pass them in `systems`.
+
+#### Parameters
+
+An object:
+
+| Key           | Type     | Required | Description |
+| :------------ | :------- | :------- | :---------- |
+| imageTypes    | string[] | Yes      | One to 12 image types. An item qualifies when it has any of them. Uses the [`media.image`](#mediaimage) values; any other value is rejected. |
+| limit         | number   | No       | Maximum number of items to return, 1 to 50. Default is 10. |
+| excludeIds    | number[] | No       | Up to 500 `mediaId` values to leave out, such as items already shown. |
+| systems       | string[] | No       | Case-sensitive list of system IDs to sample from. A missing key or empty list samples all systems. |
+| fuzzySystem   | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array. |
+| tags          | string[] | No       | Tag filters with the same syntax and limits as [`media.search`](#mediasearch). |
+| pathPrefix    | string   | No       | Recursively restrict items beneath a filesystem directory or virtual route, as in [`media.search`](#mediasearch). |
+| includeHidden | boolean  | No       | Include hidden media and media in hidden folders. Defaults to `false`. |
+
+Unknown keys are rejected.
+
+#### Result
+
+| Key   | Type                                                    | Required | Description |
+| :---- | :------------------------------------------------------ | :------- | :---------- |
+| items | [MediaArtworkRandomItem](#media-artwork-random-item-object)[] | Yes | Random items in random order. Fewer than `limit` items, or an empty list, when not enough media qualify. |
+
+##### Media artwork random item object
+
+| Key        | Type                       | Required | Description |
+| :--------- | :------------------------- | :------- | :---------- |
+| mediaId    | number                     | Yes      | Opaque media database row ID. Valid only until the next index or database rebuild finishes. |
+| system     | [System](#system-object)   | Yes      | System the media belongs to. |
+| name       | string                     | Yes      | Display name of the media. |
+| path       | string                     | Yes      | Indexed path of the media. With `system.id`, identifies the media across index runs and rebuilds. |
+| imageTypes | string[]                   | Yes      | The requested image types this item has, in request order. |
+
+To fetch an image, send `media.image` either `mediaId` alone or `system` and `path` together, never all three: all three name a directory entry. Use `system` and `path` for anything kept across an index run.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3f1c2a40-5b1e-4c7d-9a2e-0b6d1e2f3a4b",
+  "method": "media.artwork.random",
+  "params": {
+    "imageTypes": ["screenshot", "boxart"],
+    "systems": ["SNES", "Genesis"],
+    "limit": 2,
+    "excludeIds": [42]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3f1c2a40-5b1e-4c7d-9a2e-0b6d1e2f3a4b",
+  "result": {
+    "items": [
+      {
+        "mediaId": 1187,
+        "system": { "id": "Genesis", "name": "Genesis", "category": "Console" },
+        "name": "Sonic the Hedgehog",
+        "path": "/roms/Genesis/Sonic the Hedgehog (USA, Europe).md",
+        "imageTypes": ["screenshot", "boxart"]
+      },
+      {
+        "mediaId": 305,
+        "system": { "id": "SNES", "name": "SNES", "category": "Console" },
+        "name": "Super Metroid",
+        "path": "/roms/SNES/Super Metroid (USA).sfc",
+        "imageTypes": ["boxart"]
+      }
+    ]
+  }
+}
+```
+
 ### scrapers
 
 **Access:** All clients.
@@ -2671,6 +3168,7 @@ None.
 | id               | string   | Yes      | Stable scraper ID used by `media.scrape`.                                |
 | name             | string   | Yes      | Human-readable scraper name.                                             |
 | supportedSystems | string[] | Yes      | Supported system IDs. Empty means the scraper can run against all systems. |
+| supportsSkipImages | boolean | Yes    | Whether `media.scrape` accepts `skipImages` for this scraper. |
 
 #### Example
 
@@ -2695,17 +3193,20 @@ None.
       {
         "id": "gamelist.xml",
         "name": "ES gamelist.xml",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": true
       },
       {
         "id": "media-folder",
         "name": "ES media folders",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": false
       },
       {
         "id": "mister-docs",
         "name": "MiSTer docs databases",
-        "supportedSystems": []
+        "supportedSystems": [],
+        "supportsSkipImages": true
       }
     ]
   }
@@ -2732,6 +3233,7 @@ An object:
 | systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. Cannot be combined with `scope`. |
 | scope     | object   | No       | Select one indexed media item or one directory subtree; see below. |
 | force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag, within the selected scope. Default is false. |
+| skipImages | boolean | No       | Import metadata (tags, descriptions) without images, videos or manuals. Art already stored is kept, and records are not marked scraped, so a later run without `skipImages` still adds their art. Only for scrapers whose `supportsSkipImages` is true; other scrapers reject it. Default is false. |
 
 #### Scope
 
@@ -2818,6 +3320,7 @@ None.
 | skipped   | integer | Yes      | Number of records skipped.                                 |
 | totalScraped | integer | Yes  | Number of media records already marked scraped.             |
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
+| skipImages | boolean | No      | True while the active run imports metadata without art.    |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
 | paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
 | state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |
@@ -5075,6 +5578,233 @@ Exactly one of `profileId` or `switchId` is required.
 | hasPin    | boolean | Yes      | Whether the profile has a PIN set.       |
 
 Verification failure (wrong PIN, unknown profile or switch ID, rate limited) returns an error, using the same errors as `profiles.switch`.
+
+## Kiosk
+
+Kiosk mode locks a device so that the person at its controls, a card, or a client on the network cannot change it or launch what its owner has not allowed. Core holds the lock and enforces it on every route; clients show it.
+
+The lock has three states: `off`, `locked`, and `unlocked` (a temporary unlock that ends on its own). A device that restarts while locked or temporarily unlocked comes back locked.
+
+While the state is `locked`:
+
+- Every caller except a client paired as admin is held to a fixed list of methods: reading state, browsing, starting and stopping media, switching between non-admin profiles, [`kiosk`](#kiosk-1), [`kiosk.unlock`](#kioskunlock) and [`kiosk.lock`](#kiosklock). This includes localhost and API keys. Any other method returns `the device is locked`. [`clients.current`](#clientscurrent) reports such a caller with `access` `member` and no capabilities.
+- ZapScript from a card, from the run endpoints, from a remote operation, or from a [`run`](#run) by anyone but a paired admin may only use launch, stop, playlist, delay, echo and control commands, plus `profile` and `playtime.extend` when the settings allow them. This is checked as each command runs, so it also stops a script that was already running when the device locked. A script a stored mapping substitutes for a card runs as written.
+- Every launch is checked against the active profile's content rule, whatever started it. See [`profiles.content`](#profilescontent).
+- A card cannot download media.
+- The active profile cannot be changed to an admin profile or to the shared profile.
+- Browse, search, system listings, versions, similar media, recommendations and random artwork returned to a capped caller leave out hidden media and systems the active profile's rule closes.
+
+For as long as kiosk mode is on, `locked` or `unlocked`, remote clients must be paired: Core behaves as if `service.encryption` were enabled, without changing the stored setting. Unpaired connections are closed when kiosk mode is turned on.
+
+A static API key is an admin credential set in the device's own configuration, and is not affected by that rule on the HTTP endpoints: a remote caller with a valid key is still admitted to HTTP POST and SSE. It is capped like any other caller while the state is `locked`, and has admin rights again during a temporary unlock. The WebSocket endpoint does not accept an API key in place of pairing while kiosk mode is on.
+
+### kiosk
+
+**Access:** Localhost or any authenticated client.
+
+Return the lock's state, settings and seal status.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key         | Type   | Required | Description                                                                 |
+| :---------- | :----- | :------- | :--------------------------------------------------------------------------- |
+| state       | string | Yes      | `off`, `locked` or `unlocked`.                                              |
+| settings    | object | No       | [Kiosk settings](#kiosk-settings). Present whenever kiosk mode is on.       |
+| unlockUntil | string | No       | RFC 3339 time a temporary unlock ends. Present only when `state` is `unlocked`. |
+| seal        | object | Yes      | [Seal status](#seal-status).                                                |
+
+##### Kiosk settings
+
+| Key                | Type    | Description                                                                                 |
+| :----------------- | :------ | :------------------------------------------------------------------------------------------- |
+| preset             | string  | `family` or `public`: the preset the settings started from.                                 |
+| deviceUnlock       | boolean | An admin profile's PIN entered on the device unlocks it. Off, only a paired admin client can. |
+| defaultContentMode | string  | Content mode of a profile with none of its own: `all` or `allowed`.                         |
+| profileSwitching   | boolean | The active profile can be changed between non-admin profiles while locked.                  |
+| extensionCard      | boolean | The playtime extension card keeps working while locked.                                     |
+| downloads          | string  | Which media downloads a card may ask for while locked. Only `none` is defined.              |
+| idleReset          | boolean | Stop the running media after `idleTimeout` without input.                                   |
+| idleTimeout        | number  | Seconds without input before idle reset stops the media. At least 30.                       |
+| unlockDuration     | number  | Seconds a temporary unlock lasts. 30 to 3600.                                               |
+
+The `family` preset sets `deviceUnlock`, `profileSwitching` and `extensionCard` on, `idleReset` off and `defaultContentMode` to `allowed`. The `public` preset sets those three off, `idleReset` on and `defaultContentMode` to `all`.
+
+##### Seal status
+
+| Key      | Type     | Description                                                                 |
+| :------- | :------- | :--------------------------------------------------------------------------- |
+| sealed   | boolean  | `true` when nothing outside Zaparoo can be reached from the device's own controls. Always `false` while kiosk mode is off. |
+| unsealed | string[] | Why the device is not sealed. Empty when it is.                             |
+
+Values of `unsealed`:
+
+| Value          | Meaning                                                                          |
+| :------------- | :------------------------------------------------------------------------------- |
+| `hostMenus`    | The host's own interface (a frontend's menus, a desktop, an overlay) is not locked. |
+| `mainLock`     | The MiSTer Main binary running now cannot lock its menu.                        |
+| `mainControls` | MiSTer Main locks its menu but still answers controls that leave the running core. |
+| `frontend`     | The Zaparoo frontend on this device does not yet hide what a locked device should not offer. |
+| `idleReset`    | Idle reset is on but this device cannot tell when it is being used.             |
+
+Clients should show unknown values as given.
+
+#### Example
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5d-4c6f-8b0a-3f2d1c4b5a69",
+  "result": {
+    "state": "locked",
+    "settings": {
+      "preset": "family",
+      "deviceUnlock": true,
+      "defaultContentMode": "allowed",
+      "profileSwitching": true,
+      "extensionCard": true,
+      "downloads": "none",
+      "idleReset": false,
+      "idleTimeout": 600,
+      "unlockDuration": 300
+    },
+    "seal": {
+      "sealed": false,
+      "unsealed": ["hostMenus"]
+    }
+  }
+}
+```
+
+### kiosk.enable
+
+**Access:** Localhost or admin.
+
+Turn kiosk mode on, locked, from a preset. Returns the same result as [`kiosk`](#kiosk-1).
+
+Refused when no admin profile exists, and when `deviceUnlock` is off and no client is paired as admin, since nothing could then unlock the device. Refused with `a profile is limited to allowed content but nothing is allowed` when the shared profile or a non-admin profile would be able to launch nothing; send `confirmEmpty` to lock anyway.
+
+#### Parameters
+
+| Key          | Type    | Required | Description                                                          |
+| :----------- | :------ | :------- | :-------------------------------------------------------------------- |
+| preset       | string  | Yes      | `family` or `public`.                                                |
+| settings     | object  | No       | Any [kiosk settings](#kiosk-settings) that should differ from the preset. `preset` itself cannot be set here. |
+| confirmEmpty | boolean | No       | Accept a lock under which some profile can launch nothing.           |
+
+### kiosk.update
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Change the settings of an enabled lock. Returns the same result as [`kiosk`](#kiosk-1).
+
+#### Parameters
+
+| Key      | Type   | Required | Description                                             |
+| :------- | :----- | :------- | :------------------------------------------------------- |
+| settings | object | Yes      | The [kiosk settings](#kiosk-settings) to change. Others are left as they are. |
+
+### kiosk.disable
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Turn kiosk mode off. Returns the same result as [`kiosk`](#kiosk-1).
+
+### kiosk.unlock
+
+**Access:** Paired admin; or localhost with an admin profile's PIN or the recovery token.
+
+Lift the lock for a while. It locks again when the time is up, on [`kiosk.lock`](#kiosklock), and on restart. Returns the same result as [`kiosk`](#kiosk-1).
+
+A client paired as admin sends no credential. A caller on the device sends an admin profile and its PIN, which is accepted only when `deviceUnlock` is on. A PIN is never accepted from a remote client. Wrong PINs share the per-profile rate limiter with [`profiles.switch`](#profilesswitch), and failed attempts persist across restarts.
+
+The recovery token is for a forgotten PIN. Core writes it to `kiosk-recovery-token` in its data directory at every start, readable only by the user Core runs as. `-profile-reset-pin` uses it automatically.
+
+#### Parameters
+
+| Key           | Type   | Required | Description                                                      |
+| :------------ | :----- | :------- | :---------------------------------------------------------------- |
+| profileId     | string | No       | Admin profile to unlock as. Requires `pin`.                      |
+| pin           | string | No       | That profile's PIN.                                              |
+| recoveryToken | string | No       | The device's recovery token, in place of a profile and PIN.      |
+| duration      | number | No       | Seconds to unlock for, 30 to 3600. Defaults to `unlockDuration`. |
+
+### kiosk.lock
+
+**Access:** Localhost or any authenticated client.
+
+End a temporary unlock early. Returns the same result as [`kiosk`](#kiosk-1).
+
+### kiosk.allow
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Approve the next launch of one media path that the content rule would refuse. The device stays locked. The approval covers that path only and expires unused after five minutes. It is typically sent in answer to a [`kiosk.launch.refused`](./notifications.md#kiosklaunchrefused) notification.
+
+#### Parameters
+
+| Key      | Type   | Required | Description                     |
+| :------- | :----- | :------- | :------------------------------ |
+| systemId | string | Yes      | System of the media to approve. |
+| path     | string | Yes      | Path of the media to approve.   |
+
+#### Result
+
+Returns `null` on success.
+
+### profiles.content
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Return what a profile may launch while the device is locked. Content rules are stored whether or not kiosk mode is on, and are enforced only while it is locked.
+
+A rule has a mode and a list of entries. Under mode `all` everything launches except what a `deny` entry or the hidden flag excludes. Under mode `allowed` only what an `allow` entry matches launches. A `deny` entry always wins. Anything that cannot be matched is refused under `allowed`, including media the index has no data for during a reindex.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                      |
+| :-------- | :----- | :------- | :------------------------------------------------ |
+| profileId | string | No       | Profile to read. Omitted or empty is the shared profile. |
+
+#### Result
+
+| Key           | Type     | Required | Description                                                        |
+| :------------ | :------- | :------- | :------------------------------------------------------------------ |
+| profileId     | string   | Yes      | The profile, empty for the shared profile.                         |
+| mode          | string   | Yes      | The profile's own mode, `all` or `allowed`, or empty when it has none. |
+| effectiveMode | string   | Yes      | The mode that applies: `mode`, or the lock's `defaultContentMode`. |
+| entries       | object[] | Yes      | [Content rule entries](#content-rule-entry).                       |
+
+##### Content rule entry
+
+| Key      | Type   | Required | Description                                                  |
+| :------- | :----- | :------- | :------------------------------------------------------------ |
+| effect   | string | Yes      | `allow` or `deny`.                                           |
+| kind     | string | Yes      | `system`, `deck`, `media` or `tags`.                         |
+| systemId | string | No       | System ID. Required for `system` and `media`.                |
+| path     | string | No       | Media path. Required for `media`.                            |
+| value    | string | No       | Deck ID for `deck`; comma-separated tag filters for `tags`, written as for a `tags` argument (`rating:adult`, `-unfinished:demo`). |
+
+A `tags` entry matches only media the index holds tags for.
+
+### profiles.content.update
+
+**Access:** Paired admin, or localhost or admin while not locked.
+
+Replace a profile's whole content rule. Returns the same result as [`profiles.content`](#profilescontent).
+
+#### Parameters
+
+| Key       | Type     | Required | Description                                                       |
+| :-------- | :------- | :------- | :----------------------------------------------------------------- |
+| profileId | string   | No       | Profile to change. Omitted or empty is the shared profile.        |
+| mode      | string   | No       | `all` or `allowed`. Omitted or empty leaves the profile on the lock's default mode. |
+| entries   | object[] | No       | [Content rule entries](#content-rule-entry). Replaces every existing entry. |
 
 ## Mappings
 

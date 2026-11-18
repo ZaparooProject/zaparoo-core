@@ -163,14 +163,17 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		return false
 	}
 
-	beforeManifest, beforeErr := c.snapshotRBFManifest()
+	// One pass gives the manifest to check the stored cache against and the
+	// directory state the later cheap checks compare with. Building the maps
+	// reads nothing from disk, so there is nothing to bracket with a second
+	// listing here, unlike the scan in scanLocked.
+	state, stateErr := snapshotRBFStateWithFS(c.filesystem(), c.root())
 	c.BuildFromRBFs(stored.Files)
-	afterManifest, afterErr := c.snapshotRBFManifest()
-	c.lastDirMtimes, _ = c.snapshotDirMtimes()
-	c.lastRootRBFs, _ = c.snapshotRootRBFs()
-	manifestStable := beforeErr == nil && afterErr == nil &&
-		rbfManifestsMatch(beforeManifest, afterManifest)
-	if manifestStable && rbfManifestsMatch(stored.Manifest, beforeManifest) {
+	if stateErr == nil {
+		c.lastDirMtimes = state.dirMtimes
+		c.lastRootRBFs = state.rootRBFs
+	}
+	if stateErr == nil && rbfManifestsMatch(stored.Manifest, state.manifest) {
 		log.Info().
 			Int("rbf_files", len(stored.Files)).
 			Int("systems_mapped", len(c.bySystemID)).
@@ -181,11 +184,9 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		event := log.Info().
 			Str("path", c.persistPath).
 			Int("cached_rbf_files", len(stored.Manifest)).
-			Int("current_rbf_files", len(afterManifest))
-		if beforeErr != nil {
-			event = event.Err(beforeErr)
-		} else if afterErr != nil {
-			event = event.Err(afterErr)
+			Int("current_rbf_files", len(state.manifest))
+		if stateErr != nil {
+			event = event.Err(stateErr)
 		}
 		event.Msg("RBF cache loaded but manifest check failed or drifted; rescan needed")
 		c.needsRescan = true

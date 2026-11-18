@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	iofs "io/fs"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/spf13/afero"
@@ -62,6 +64,70 @@ func ListingState(fs afero.Fs, dir string) string {
 		}
 	}
 	return fmt.Sprintf("entries=%d names=%x", entries, names)
+}
+
+// TreeListingState describes a directory tree by how many entries it holds
+// at any depth and a digest of their paths below dir, from one listing per
+// directory. Like ListingState it moves whenever an entry is added, removed,
+// renamed or moved, and reads no file.
+//
+// ok is false for a tree that reaches a directory through a symlink. A file
+// lookup follows the link, but the walk here does not, so what is behind it
+// could change without the description moving.
+func TreeListingState(fs afero.Fs, dir string) (state string, ok bool) {
+	var entries, names uint64
+	pending := []string{""}
+	for len(pending) > 0 {
+		relative := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		listing, err := readTreeDir(fs, filepath.Join(dir, relative))
+		if err != nil {
+			return "unreadable", true
+		}
+		for _, entry := range listing {
+			child := filepath.Join(relative, entry.Name())
+			entries++
+			// Summed, so the digest does not depend on listing order.
+			names += NameDigest(child)
+			if entry.IsDir() {
+				pending = append(pending, child)
+				continue
+			}
+			if entry.Type()&iofs.ModeSymlink == 0 {
+				continue
+			}
+			if target, statErr := fs.Stat(filepath.Join(dir, child)); statErr == nil && target.IsDir() {
+				return "", false
+			}
+		}
+	}
+	return fmt.Sprintf("entries=%d names=%x", entries, names), true
+}
+
+// readTreeDir lists dir with each entry's type. Where the filesystem reports
+// the type in the directory itself nothing is stat'ed.
+func readTreeDir(fs afero.Fs, dir string) ([]iofs.DirEntry, error) {
+	directory, err := fs.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", dir, err)
+	}
+	defer func() { _ = directory.Close() }()
+	if typed, ok := directory.(iofs.ReadDirFile); ok {
+		listing, readErr := typed.ReadDir(-1)
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", dir, readErr)
+		}
+		return listing, nil
+	}
+	infos, err := directory.Readdir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	listing := make([]iofs.DirEntry, 0, len(infos))
+	for _, info := range infos {
+		listing = append(listing, iofs.FileInfoToDirEntry(info))
+	}
+	return listing, nil
 }
 
 // NameDigest hashes one entry name for an order-independent listing digest.

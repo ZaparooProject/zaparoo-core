@@ -118,7 +118,13 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	_, kioskCapped := kioskScope(&env)
+	env.ExcludeHidden = kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden)
 
 	// media.browse.index never takes a cursor: every call is a fresh request,
 	// so a preferences change mid-call always gets one rerun inside Core

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,18 +78,18 @@ func snapshotRBFManifestAt(root string) ([]string, error) {
 }
 
 func snapshotRBFManifestWithFS(fs afero.Fs, root string) ([]string, error) {
-	rootFiles, err := afero.ReadDir(fs, root)
+	rootFiles, err := readDirEntries(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root for RBF manifest: %w", err)
 	}
 
 	manifest := make([]string, 0)
-	addRBF := func(dir, relativeDir string, entry os.FileInfo) error {
+	addRBF := func(dir, relativeDir string, entry iofs.DirEntry) error {
 		if entry.IsDir() || filepath.Ext(strings.ToLower(entry.Name())) != ".rbf" {
 			return nil
 		}
 		relativePath := filepath.Join(relativeDir, entry.Name())
-		if entry.Mode()&os.ModeSymlink != 0 {
+		if entry.Type()&os.ModeSymlink != 0 {
 			target, linkErr := readlinkIfPossible(fs, filepath.Join(dir, entry.Name()))
 			if linkErr != nil {
 				return fmt.Errorf("read RBF symlink %s: %w", relativePath, linkErr)
@@ -99,7 +100,7 @@ func snapshotRBFManifestWithFS(fs afero.Fs, root string) ([]string, error) {
 		return nil
 	}
 	addRBFs := func(dir, relativeDir string) error {
-		entries, readErr := afero.ReadDir(fs, dir)
+		entries, readErr := readDirEntries(fs, dir)
 		if readErr != nil {
 			return fmt.Errorf("readdir %s: %w", dir, readErr)
 		}
@@ -136,6 +137,121 @@ func snapshotRBFManifestWithFS(fs afero.Fs, root string) ([]string, error) {
 	return manifest, nil
 }
 
+// readDirEntries lists dir sorted by name. Where the filesystem reports an
+// entry's type in the directory itself, nothing is stat'ed: afero.ReadDir
+// lstats every entry, and on exFAT each lstat searches the directory again,
+// so listing a folder of a few thousand files cost seconds on a cold start
+// to learn nothing but which names end in .rbf.
+func readDirEntries(fs afero.Fs, dir string) ([]iofs.DirEntry, error) {
+	f, err := fs.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open directory %s: %w", dir, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var entries []iofs.DirEntry
+	if typed, ok := f.(iofs.ReadDirFile); ok {
+		entries, err = typed.ReadDir(-1)
+		if err != nil {
+			return nil, fmt.Errorf("read directory %s: %w", dir, err)
+		}
+	} else {
+		infos, readErr := f.Readdir(-1)
+		if readErr != nil {
+			return nil, fmt.Errorf("read directory %s: %w", dir, readErr)
+		}
+		entries = make([]iofs.DirEntry, 0, len(infos))
+		for _, info := range infos {
+			entries = append(entries, iofs.FileInfoToDirEntry(info))
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, nil
+}
+
+func isRBFCoreDir(entry iofs.DirEntry) bool {
+	return entry.IsDir() && (strings.HasPrefix(entry.Name(), "_") || strings.EqualFold(entry.Name(), "Light Gun"))
+}
+
+// rbfState is everything a persisted cache is checked against, and what the
+// later cheap checks compare with.
+type rbfState struct {
+	dirMtimes map[string]int64
+	manifest  []string
+	rootRBFs  []string
+}
+
+// snapshotRBFStateWithFS reads the manifest, the core directory mtimes and
+// the root RBF names in one pass over the SD root. Each directory's mtime is
+// taken before its contents are listed, so a core added while this runs
+// leaves an mtime that no longer matches rather than one that hides it.
+func snapshotRBFStateWithFS(fs afero.Fs, root string) (rbfState, error) {
+	state := rbfState{dirMtimes: make(map[string]int64), manifest: []string{}, rootRBFs: []string{}}
+	rootEntries, err := readDirEntries(fs, root)
+	if err != nil {
+		return state, fmt.Errorf("readdir SD root for RBF state: %w", err)
+	}
+
+	addRBF := func(dir, relativeDir string, entry iofs.DirEntry) error {
+		if entry.IsDir() || filepath.Ext(strings.ToLower(entry.Name())) != ".rbf" {
+			return nil
+		}
+		relativePath := filepath.Join(relativeDir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, linkErr := readlinkIfPossible(fs, filepath.Join(dir, entry.Name()))
+			if linkErr != nil {
+				return fmt.Errorf("read RBF symlink %s: %w", relativePath, linkErr)
+			}
+			relativePath += " -> " + target
+		}
+		state.manifest = append(state.manifest, relativePath)
+		return nil
+	}
+	addDir := func(dir, relativeDir string) error {
+		entries, readErr := readDirEntries(fs, dir)
+		if readErr != nil {
+			return readErr
+		}
+		for _, entry := range entries {
+			if addErr := addRBF(dir, relativeDir, entry); addErr != nil {
+				return addErr
+			}
+		}
+		return nil
+	}
+
+	for _, entry := range rootEntries {
+		if !isRBFCoreDir(entry) {
+			if !entry.IsDir() && filepath.Ext(strings.ToLower(entry.Name())) == ".rbf" {
+				state.rootRBFs = append(state.rootRBFs, entry.Name())
+			}
+			if addErr := addRBF(root, "", entry); addErr != nil {
+				return state, addErr
+			}
+			continue
+		}
+		dir := filepath.Join(root, entry.Name())
+		if info, statErr := fs.Stat(dir); statErr == nil {
+			state.dirMtimes[dir] = info.ModTime().UnixNano()
+		}
+		if addErr := addDir(dir, entry.Name()); addErr != nil {
+			return state, fmt.Errorf("readdir RBF directory %s: %w", dir, addErr)
+		}
+	}
+	for _, relativeDir := range nestedRBFDirectories {
+		dir := filepath.Join(root, relativeDir)
+		if info, statErr := fs.Stat(dir); statErr == nil && info.IsDir() {
+			state.dirMtimes[dir] = info.ModTime().UnixNano()
+		}
+		if addErr := addDir(dir, relativeDir); addErr != nil && !errors.Is(addErr, os.ErrNotExist) {
+			return state, fmt.Errorf("readdir RBF directory %s: %w", dir, addErr)
+		}
+	}
+	sort.Strings(state.manifest)
+	sort.Strings(state.rootRBFs)
+	return state, nil
+}
+
 func rbfManifestsMatch(stored, current []string) bool {
 	if len(stored) != len(current) {
 		return false
@@ -151,7 +267,7 @@ func rbfManifestsMatch(stored, current []string) bool {
 func snapshotDirMtimesWithFS(fs afero.Fs, root string) (map[string]int64, error) {
 	snapshot := make(map[string]int64)
 
-	files, err := afero.ReadDir(fs, root)
+	files, err := readDirEntries(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
@@ -185,7 +301,7 @@ func snapshotDirMtimesWithFS(fs afero.Fs, root string) (map[string]int64, error)
 // MiSTer's convention that cores live at SD root, under top-level `_*`
 // folders, or in Light Gun. Other top-level directories are not scanned.
 func snapshotRootRBFsWithFS(fs afero.Fs, root string) ([]string, error) {
-	files, err := afero.ReadDir(fs, root)
+	files, err := readDirEntries(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
@@ -310,7 +426,7 @@ func dirMtimesMatchWithFS(fs afero.Fs, root string, snapshot map[string]int64) b
 			return false
 		}
 	}
-	files, err := afero.ReadDir(fs, root)
+	files, err := readDirEntries(fs, root)
 	if err != nil {
 		return false
 	}

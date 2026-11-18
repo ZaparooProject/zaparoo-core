@@ -21,6 +21,8 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -175,9 +177,14 @@ func BenchmarkScanToLaunch_DirectPath(b *testing.B) {
 	env := setupPipelineBench(b, 1_000)
 	defer env.cleanup()
 
-	// Direct file path — no title resolution, just mapping check + parse + launch
+	// Direct file path — no title resolution, just mapping check + parse + launch.
+	// The launch command checks the file exists, so it has to be a real one.
+	romPath := filepath.Join(b.TempDir(), "Super Mario Bros 1.nes")
+	if err := os.WriteFile(romPath, []byte("rom"), 0o600); err != nil {
+		b.Fatal(err)
+	}
 	token := tokens.Token{
-		Text:   "/roms/system/Super Mario Bros 1.nes",
+		Text:   romPath,
 		UID:    "04:AA:BB:CC:DD:EE:FF",
 		Source: "bench",
 	}

@@ -131,10 +131,10 @@ func TestMediaOperationGuardDuplicateStartIsBusy(t *testing.T) {
 	requireBusyError(t, err, "indexing already in progress")
 	ClearIndexingStatus()
 
-	first, err := startScraping(mockDB, "test-scraper", false)
+	first, err := startScraping(mockDB, "test-scraper", false, false)
 	require.NoError(t, err)
 	defer first.Release()
-	second, err := startScraping(mockDB, "test-scraper", false)
+	second, err := startScraping(mockDB, "test-scraper", false, false)
 	assert.Nil(t, second)
 	requireBusyError(t, err, "scraping already in progress")
 	require.ErrorIs(t, err, database.ErrMediaWriteConflict)
@@ -151,7 +151,7 @@ func TestMediaOperationGuardRequiresWriteCoordinator(t *testing.T) {
 	assert.Nil(t, lease)
 	require.ErrorIs(t, err, database.ErrMediaWriteCoordinatorUnavailable)
 
-	lease, err = startScraping(db, "test-scraper", false)
+	lease, err = startScraping(db, "test-scraper", false, false)
 	assert.Nil(t, lease)
 	require.ErrorIs(t, err, database.ErrMediaWriteCoordinatorUnavailable)
 }
@@ -177,7 +177,7 @@ func TestMediaOperationGuardOptimizationConflictsAreClientErrors(t *testing.T) {
 			name:        "scraping",
 			expectedMsg: "database optimization in progress",
 			start: func(db database.MediaDBI) (*database.MediaWriteLease, error) {
-				return startScraping(db, "test-scraper", false)
+				return startScraping(db, "test-scraper", false, false)
 			},
 		},
 	}
@@ -251,6 +251,7 @@ func TestPostIndexOptimizationHandoffBlocksScraping(t *testing.T) {
 	unblockOptimization := make(chan struct{})
 	optimizationDone := make(chan struct{})
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, indexLease).
 		Run(func(mock.Arguments) { <-unblockOptimization }).Return(nil).Once()
 	mockDB.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(optimizationDone) }).Return().Once()
@@ -279,6 +280,7 @@ func TestPostIndexOptimizationFailedStartReleasesLease(t *testing.T) {
 
 	optimizationDone := make(chan struct{})
 	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
 	mockDB.On("RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, indexLease).
 		Return(errors.New("injected optimization startup failure")).Once()
 	mockDB.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(optimizationDone) }).Return().Once()
@@ -307,8 +309,8 @@ func TestMediaOperationGuardReleasesLeaseWhenStatusClaimFails(t *testing.T) {
 	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
 
 	statusInstance.clear()
-	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
-	lease, err = startScraping(mockDB, "test-scraper", false)
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false, false)
+	lease, err = startScraping(mockDB, "test-scraper", false, false)
 	assert.Nil(t, lease)
 	require.Error(t, err)
 	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())

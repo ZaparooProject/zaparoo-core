@@ -80,6 +80,11 @@ type ScrapeOptions struct {
 	// FillMissing revisits records but never replaces existing metadata.
 	// It is mutually exclusive with Force and requires scraper support.
 	FillMissing bool
+
+	// SkipImages imports metadata only, leaving out images, videos and
+	// manuals. Records are not marked done, so a later run can add the art.
+	// It requires scraper support.
+	SkipImages bool
 }
 
 // ScrapeUpdate is one progress event emitted on the channel returned by Scrape.

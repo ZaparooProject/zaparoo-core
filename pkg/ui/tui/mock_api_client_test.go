@@ -420,6 +420,62 @@ func (m *MockSettingsService) VerifyProfileManagement(ctx context.Context, profi
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+func kioskResult(args mock.Arguments) (*models.KioskResponse, error) {
+	state, ok := args.Get(0).(*models.KioskResponse)
+	if !ok {
+		state = nil
+	}
+	return state, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetKiosk mocks fetching the kiosk lock state.
+func (m *MockSettingsService) GetKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// EnableKiosk mocks turning kiosk mode on.
+func (m *MockSettingsService) EnableKiosk(
+	ctx context.Context, preset string, confirmEmpty bool,
+) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx, preset, confirmEmpty))
+}
+
+// DisableKiosk mocks turning kiosk mode off.
+func (m *MockSettingsService) DisableKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// UnlockKiosk mocks a PIN unlock.
+func (m *MockSettingsService) UnlockKiosk(
+	ctx context.Context, profileID, pin string,
+) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx, profileID, pin))
+}
+
+// LockKiosk mocks ending a temporary unlock.
+func (m *MockSettingsService) LockKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// GetProfileContent mocks fetching a profile's content rule.
+func (m *MockSettingsService) GetProfileContent(
+	ctx context.Context, profileID string,
+) (*models.ProfilesContentResponse, error) {
+	args := m.Called(ctx, profileID)
+	content, ok := args.Get(0).(*models.ProfilesContentResponse)
+	if !ok {
+		content = nil
+	}
+	return content, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// UpdateProfileContent mocks replacing a profile's content rule.
+func (m *MockSettingsService) UpdateProfileContent(
+	ctx context.Context, params *models.ProfilesContentUpdateParams,
+) error {
+	return m.Called(ctx, params).Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
 // GetProfiles mocks fetching profiles.
 func (m *MockSettingsService) GetProfiles(ctx context.Context) (*models.ProfilesResponse, error) {
 	args := m.Called(ctx)

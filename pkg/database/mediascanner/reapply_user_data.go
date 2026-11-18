@@ -50,16 +50,26 @@ import (
 func reapplyMediaUserData(
 	ctx context.Context, db database.MediaDBI, userDB database.UserDBI,
 ) (int, error) {
+	applied, _, err := reapplyMediaUserDataCountingWrites(ctx, db, userDB)
+	return applied, err
+}
+
+// reapplyMediaUserDataCountingWrites is reapplyMediaUserData that also says
+// how many files needed a tag written. Zero means every flag was already in
+// place, so nothing built from the library's tags went stale.
+func reapplyMediaUserDataCountingWrites(
+	ctx context.Context, db database.MediaDBI, userDB database.UserDBI,
+) (applied, tagWrites int, err error) {
 	rows, err := userDB.ListMediaUserData()
 	if err != nil {
-		return 0, fmt.Errorf("failed to list media user data: %w", err)
+		return 0, 0, fmt.Errorf("failed to list media user data: %w", err)
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	if err := ensureLauncherOverrideTag(db); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	overrideTypeTag := tags.PropertyTypeTag(tags.TagPropertyLauncherOverride)
 
@@ -68,7 +78,7 @@ func reapplyMediaUserData(
 		bySystem[rows[i].SystemID] = append(bySystem[rows[i].SystemID], rows[i])
 	}
 
-	applied := 0
+	applied = 0
 	var tagUpdates []database.MediaTagUpdate
 	for systemID, items := range bySystem {
 		system, sysErr := db.FindSystemBySystemID(systemID)
@@ -76,7 +86,7 @@ func reapplyMediaUserData(
 			continue // system not indexed; harmless orphans
 		}
 		if sysErr != nil {
-			return applied, fmt.Errorf("failed to resolve system %q: %w", systemID, sysErr)
+			return applied, 0, fmt.Errorf("failed to resolve system %q: %w", systemID, sysErr)
 		}
 
 		paths := make([]string, 0, len(items))
@@ -85,7 +95,7 @@ func reapplyMediaUserData(
 		}
 		mediaByPath, mErr := db.FindMediaBySystemAndPaths(ctx, system.DBID, paths)
 		if mErr != nil {
-			return applied, fmt.Errorf("failed to look up media for system %q: %w", systemID, mErr)
+			return applied, 0, fmt.Errorf("failed to look up media for system %q: %w", systemID, mErr)
 		}
 		mediaIDs := make([]int64, 0, len(mediaByPath))
 		for i := range items {
@@ -95,7 +105,7 @@ func reapplyMediaUserData(
 		}
 		existing, tErr := db.GetMediaTagsByMediaDBIDs(ctx, mediaIDs)
 		if tErr != nil {
-			return applied, fmt.Errorf("failed to read user tags for system %q: %w", systemID, tErr)
+			return applied, 0, fmt.Errorf("failed to read user tags for system %q: %w", systemID, tErr)
 		}
 
 		for i := range items {
@@ -116,19 +126,19 @@ func reapplyMediaUserData(
 					TypeTag: overrideTypeTag,
 					Text:    item.LauncherOverride,
 				}}); pErr != nil {
-					return applied, fmt.Errorf("failed to re-apply launcher override for %q: %w", item.Path, pErr)
+					return applied, 0, fmt.Errorf("failed to re-apply launcher override for %q: %w", item.Path, pErr)
 				}
 			}
 		}
 	}
 
 	if err := writeMediaTagUpdates(ctx, db, tagUpdates); err != nil {
-		return applied, err
+		return applied, 0, err
 	}
 
 	log.Debug().Int("rows", len(rows)).Int("applied", applied).Int("tagWrites", len(tagUpdates)).
 		Msg("re-applied media user data")
-	return applied, nil
+	return applied, len(tagUpdates), nil
 }
 
 // writeMediaTagUpdates writes the edits in one transaction when the database

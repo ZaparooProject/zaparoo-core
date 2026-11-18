@@ -125,6 +125,22 @@ func TestScraperTagHelpers(t *testing.T) {
 	assert.Equal(t, "scraper-run.gamelist.xml:run-123", ScraperRunTypeTag("gamelist.xml", "run-123"))
 }
 
+func TestIsArtPropertyTypeTag(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []TagValue{
+		TagPropertyImageImage, TagPropertyImageBoxart, TagPropertyImageMap, TagPropertyVideo, TagPropertyManual,
+	} {
+		assert.True(t, IsArtPropertyTypeTag(PropertyTypeTag(value)), value)
+	}
+	for _, value := range []TagValue{
+		TagPropertyDescription, TagPropertyXMLGameID, TagPropertyGameDatabaseID, TagPropertyMAMESetName,
+	} {
+		assert.False(t, IsArtPropertyTypeTag(PropertyTypeTag(value)), value)
+	}
+	assert.False(t, IsArtPropertyTypeTag("image-boxart"), "a bare value is not a property type tag")
+}
+
 func TestIsUserOwnedType(t *testing.T) {
 	t.Parallel()
 

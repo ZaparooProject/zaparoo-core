@@ -248,11 +248,15 @@ func TestStartupServer_ShutdownReleasesThePortBeforeItReturns(t *testing.T) {
 		cancel()
 		require.NoError(t, err)
 
-		again, err := (&net.ListenConfig{}).Listen(
-			context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", srv.Port()),
-		)
-		require.NoErrorf(t, err, "port still held after shutdown returned, on pass %d", i)
-		require.NoError(t, again.Close())
+		// The server's own socket is checked rather than binding the port
+		// number again: other tests bind free ports in parallel and can be
+		// handed this one the moment it is released. A listener that is
+		// still open times out here instead of reporting itself closed.
+		listener, ok := srv.Listener().(*net.TCPListener)
+		require.True(t, ok)
+		_ = listener.SetDeadline(time.Now().Add(-time.Second))
+		_, err = listener.Accept()
+		require.ErrorIsf(t, err, net.ErrClosed, "port still held after shutdown returned, on pass %d", i)
 	}
 }
 

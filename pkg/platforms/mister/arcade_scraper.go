@@ -87,23 +87,46 @@ func arcadeCatalogEntries(rows []arcadedb.ArcadeDbEntry) []misterarcade.Entry {
 	return entries
 }
 
+// arcadeClassCacheReader reads the classification cache granular arcade
+// indexing already wrote, once, on first use.
+type arcadeClassCacheReader struct {
+	entries map[string]arcadeClassCacheEntry
+	path    string
+	once    sync.Once
+}
+
+func newArcadeClassCacheReader(pl platforms.Platform) *arcadeClassCacheReader {
+	return &arcadeClassCacheReader{
+		path: filepath.Join(helpers.DataDir(pl), config.CacheDir, arcadeClassCacheFileName),
+	}
+}
+
+func (r *arcadeClassCacheReader) load() map[string]arcadeClassCacheEntry {
+	r.once.Do(func() { r.entries = loadArcadeClassCache(r.path) })
+	return r.entries
+}
+
 // NewArcadeSetNameCache answers set-name lookups from the classification cache
 // granular arcade indexing already wrote, so a scrape costs a map lookup per
 // descriptor instead of re-reading thousands of them from SD storage. An entry
 // only answers while the file still matches the size and mtime it was parsed
 // at, and a cached empty set name is a real answer: that descriptor had none.
 func NewArcadeSetNameCache(pl platforms.Platform) misterarcade.SetNameCache {
-	path := filepath.Join(helpers.DataDir(pl), config.CacheDir, arcadeClassCacheFileName)
-	var once sync.Once
-	var entries map[string]arcadeClassCacheEntry
+	reader := newArcadeClassCacheReader(pl)
 	return func(mraPath string) (string, bool) {
-		once.Do(func() { entries = loadArcadeClassCache(path) })
-		return cachedSetName(entries, mraPath)
+		return cachedSetName(reader.load(), mraPath)
 	}
 }
 
 // NewArcadeScraper builds the arcade catalog scraper for a MiSTer platform.
 // systems states which arcade systems that platform indexes.
 func NewArcadeScraper(pl platforms.Platform, systems []string) platforms.Scraper {
-	return misterarcade.NewPlatformScraper(systems, ArcadeCatalog, NewArcadeSetNameCache(pl))
+	reader := newArcadeClassCacheReader(pl)
+	setNames := func(mraPath string) (string, bool) {
+		return cachedSetName(reader.load(), mraPath)
+	}
+	identities := func(mraPath string) (setName, parent string, ok bool) {
+		return cachedIdentity(reader.load(), mraPath)
+	}
+	return misterarcade.NewPlatformScraper(systems, ArcadeCatalog, setNames, identities)
 }

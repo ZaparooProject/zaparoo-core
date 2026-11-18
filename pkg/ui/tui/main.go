@@ -600,6 +600,7 @@ func BuildMainPage(
 					models.NotificationTokensRemoved,
 					models.NotificationReadersConnected,
 					models.NotificationReadersDisconnected,
+					models.NotificationKioskState,
 				)
 				switch {
 				case errors.Is(err, client.ErrRequestTimeout):
@@ -660,6 +661,17 @@ func BuildMainPage(
 					}
 					app.QueueUpdateDraw(func() {
 						scanningArea.SetReaderInfo(len(readers.Readers), driver)
+					})
+
+				case models.NotificationKioskState:
+					// The lock changed under this screen: a temporary unlock
+					// ran out, or an app locked or unlocked the device. The
+					// main page is rebuilt so its buttons match. Any other
+					// page is left alone and rebuilds this one on return.
+					app.QueueUpdateDraw(func() {
+						if name, _ := pages.GetFrontPage(); name == PageMain {
+							BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName, session)
+						}
 					})
 				}
 			}
@@ -725,7 +737,36 @@ func BuildMainPage(
 		app.Stop()
 	})
 
-	disableRow1 := !svcRunning
+	// A locked device offers nothing here that changes it: Core would
+	// refuse each of these anyway, so they are shown as unavailable and the
+	// Settings slot becomes the way to unlock.
+	var kioskState *models.KioskResponse
+	if svcRunning {
+		kioskCtx, kioskCancel := tuiContext()
+		state, kioskErr := svc.GetKiosk(kioskCtx)
+		kioskCancel()
+		if kioskErr != nil {
+			log.Debug().Err(kioskErr).Msg("TUI: could not read kiosk state")
+		} else {
+			kioskState = state
+		}
+	}
+	locked := kioskLocked(kioskState)
+	if locked {
+		canUnlock := kioskState.Settings != nil && kioskState.Settings.DeviceUnlock
+		settingsButton = tview.NewButton("Unlock").SetSelectedFunc(func() {
+			saveFocus()
+			promptKioskUnlock(svc, pages, app, rebuildMainPage, rebuildMainPage)
+		})
+		settingsHelp = "This device is locked. Enter an administrator PIN to unlock it"
+		if !canUnlock {
+			settingsButton = tview.NewButton("Locked")
+			settingsButton.SetDisabled(true)
+			settingsHelp = "This device is locked. Unlock it from an app paired as administrator"
+		}
+	}
+
+	disableRow1 := !svcRunning || locked
 	if disableRow1 {
 		searchButton.SetDisabled(true)
 		writeButton.SetDisabled(true)

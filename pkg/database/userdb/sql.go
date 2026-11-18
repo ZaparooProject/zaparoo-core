@@ -335,14 +335,14 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 		where
 			DBID = ?;
 	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare update mapping statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return fmt.Errorf("failed to prepare update mapping statement: %w", err)
-	}
 	_, err = stmt.ExecContext(ctx,
 		m.Added,
 		m.Label,

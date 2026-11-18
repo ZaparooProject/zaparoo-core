@@ -591,5 +591,6 @@ func (m *manager) requestEnv(ctx context.Context, role permissions.Role, params 
 		PlaybackManager: m.deps.PlaybackManager, UI: m.deps.UI, TokenQueue: nil,
 		ConfirmQueue: m.deps.ConfirmQueue, IndexPauser: m.deps.IndexPauser, ScrapePauser: m.deps.ScrapePauser,
 		BackupPauser: m.deps.BackupPauser, Params: params, ClientRole: string(role), IsLocal: false,
+		Kiosk: m.deps.State.Kiosk(),
 	}
 }

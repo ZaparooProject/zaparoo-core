@@ -291,3 +291,46 @@ func TestGrant_RoleRemoteNeverGainsCapabilities(t *testing.T) {
 	// did, locality still wins — remote dispatch must never set IsLocal.
 	assert.Equal(t, RoleAdmin, Grant{Role: RoleRemote, IsLocal: true}.EffectiveRole())
 }
+
+func TestGrant_KioskCapReachesEveryIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		grant Grant
+	}{
+		{name: "localhost", grant: Grant{IsLocal: true}},
+		{name: "API key", grant: Grant{APIKeyAuthenticated: true}},
+		{name: "paired admin", grant: Grant{Role: RoleAdmin}},
+		{name: "paired member", grant: Grant{Role: RoleMember}},
+		{name: "online remote", grant: Grant{Role: RoleRemote}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.False(t, tt.grant.Capped(), "no cap without a session role")
+
+			capped := tt.grant
+			capped.SessionRole = RoleKiosk
+			assert.True(t, capped.Capped())
+			assert.Equal(t, RoleKiosk, capped.EffectiveRole())
+			assert.Empty(t, capped.Capabilities(), "the kiosk role holds no capability")
+			// A value every released client already understands.
+			assert.Equal(t, AccessMember, capped.Access())
+			assert.True(t, capped.Authenticated(), "a capped caller is still a known caller")
+		})
+	}
+}
+
+func TestGrant_KioskCapLeavesLegacyToTheLegacyGate(t *testing.T) {
+	t.Parallel()
+	grant := Grant{PlatformID: platformids.Mister, SessionRole: RoleKiosk}
+	assert.False(t, grant.Capped())
+	assert.Equal(t, RoleLegacy, grant.EffectiveRole())
+	assert.Equal(t, AccessLegacy, grant.Access())
+}
+
+func TestRoleKioskCannotBeChosenAtPairing(t *testing.T) {
+	t.Parallel()
+	assert.False(t, ValidRole(string(RoleKiosk)))
+}

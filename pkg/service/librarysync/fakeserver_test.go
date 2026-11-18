@@ -60,6 +60,8 @@ type fakeOnline struct {
 	rejectState  string
 	resolved     [][]database.MediaIdentity
 	deckPushHook func(*fakeOnline)
+	// resolveHook runs as each resolve request arrives.
+	resolveHook func()
 	// imageUploads maps a staged upload to its deck and bytes.
 	imageUploads map[string]fakeImageUpload
 	// stageCode and stageStatus make staging fail; expireUploads makes the
@@ -358,6 +360,9 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeOnline) handleResolve(w http.ResponseWriter, r *http.Request) {
+	if f.resolveHook != nil {
+		f.resolveHook()
+	}
 	if f.resolveStatus != 0 {
 		writeFakeError(w, f.resolveStatus, f.resolveCode)
 		return

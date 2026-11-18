@@ -74,7 +74,9 @@ type UIStateResponse struct {
 type SearchResultMedia struct {
 	RelPath *string `json:"relativePath,omitempty"`
 	// VersionCount is set by a search grouped by title: how many versions of
-	// the title matched, across the whole search rather than this page.
+	// the game matched, across the whole search rather than this page. It
+	// counts the versions filed under other titles too, such as a regional
+	// release with its own name.
 	VersionCount *int   `json:"versionCount,omitempty"`
 	System       System `json:"system"`
 	Name         string `json:"name"`
@@ -90,6 +92,79 @@ type SearchResultMedia struct {
 	// its versions. Valid until the next media index.
 	TitleID  int64 `json:"titleId,omitempty"`
 	HasCover bool  `json:"hasCover"`
+}
+
+// Version link reasons: why a media.versions row is a version of the game
+// asked about.
+const (
+	// VersionReasonTitle marks a row that shares the game's title.
+	VersionReasonTitle = "title"
+	// VersionReasonLink marks a row filed under another title that a source
+	// declared to be the same game.
+	VersionReasonLink = "link"
+)
+
+// MediaVersion is one version of a game: a search result with the reason it
+// belongs to the game.
+type MediaVersion struct {
+	Reason string `json:"reason"`
+	// Sources names the kinds of identity that tie the row's title to the
+	// game, such as "mame-set". Set only when Reason is "link".
+	Sources []string `json:"sources,omitempty"`
+	SearchResultMedia
+	// Current marks the media the request asked about.
+	Current bool `json:"current,omitempty"`
+}
+
+type MediaVersionsResponse struct {
+	Pagination *PaginationInfo `json:"pagination,omitempty"`
+	Versions   []MediaVersion  `json:"versions"`
+	// Total is the number of versions across every page, the same number
+	// versionCount reports for the game.
+	Total int `json:"total"`
+}
+
+// MediaReason is one thing a suggested item shares with the media it was
+// suggested for. Code names the kind of thing, such as "series" or "genre",
+// and Tags are the shared values.
+type MediaReason struct {
+	Code string             `json:"code"`
+	Tags []database.TagInfo `json:"tags,omitempty"`
+}
+
+// SuggestedMedia is a search result with the reasons it was suggested. Seed
+// and Signal are set on queue items only: the media the item is most like and
+// the interest shown in it, or Signal "playLater" for media the profile
+// marked to play.
+type SuggestedMedia struct {
+	Seed    *SearchResultMedia `json:"seed,omitempty"`
+	Signal  string             `json:"signal,omitempty"`
+	Reasons []MediaReason      `json:"reasons"`
+	SearchResultMedia
+}
+
+type MediaSimilarResponse struct {
+	Results []SuggestedMedia `json:"results"`
+}
+
+// RecommendedSection is one group of recommendations. Kind is "seed" for
+// media like one the profile showed interest in, "playLater" for media it
+// marked to play, "series" for more of a series it plays, and "queue" for
+// the single ranked list of the queue layout.
+type RecommendedSection struct {
+	// Seed is the media a seed section is built around.
+	Seed *SearchResultMedia `json:"seed,omitempty"`
+	// Tag is the series a series section is about.
+	Tag  *database.TagInfo `json:"tag,omitempty"`
+	Kind string            `json:"kind"`
+	// Signal is the interest shown in a seed section's seed: "played",
+	// "favorite", "liked" or "deck".
+	Signal string           `json:"signal,omitempty"`
+	Items  []SuggestedMedia `json:"items"`
+}
+
+type MediaRecommendedResponse struct {
+	Sections []RecommendedSection `json:"sections"`
 }
 
 type PaginationInfo struct {
@@ -118,9 +193,12 @@ type BrowseEntry struct {
 	ZapScript *string `json:"zapScript,omitempty"`
 	FileCount *int    `json:"fileCount,omitempty"`
 	Group     *string `json:"group,omitempty"`
-	Path      string  `json:"path"`
-	Type      string  `json:"type"`
-	Name      string  `json:"name"`
+	// VersionCount is how many versions of a media entry's game the library
+	// holds, the entry included. Omitted for directories and when unknown.
+	VersionCount *int   `json:"versionCount,omitempty"`
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	Name         string `json:"name"`
 	// CoverColor is the cover thumbnail's average colour as "#rrggbb".
 	// Omitted until a thumbnail was built.
 	CoverColor         string             `json:"coverColor,omitempty"`
@@ -481,6 +559,21 @@ type MediaHistoryTopResponse struct {
 	Entries []MediaHistoryTopEntry `json:"entries"`
 }
 
+// MediaArtworkRandomItem is one media entry with indexed artwork. MediaID is
+// valid until the next media index or rebuild; System.ID and Path survive both.
+type MediaArtworkRandomItem struct {
+	System System `json:"system"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	// ImageTypes are the requested image types this entry has, in request order.
+	ImageTypes []string `json:"imageTypes"`
+	MediaID    int64    `json:"mediaId"`
+}
+
+type MediaArtworkRandomResponse struct {
+	Items []MediaArtworkRandomItem `json:"items"`
+}
+
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
 // Binary payloads are intentionally not included; use media.image to fetch image bytes.
 type MediaMetaPropertyItem struct {
@@ -601,6 +694,8 @@ type ScrapingStatusResponse struct {
 	// media plays.
 	Throttled bool `json:"throttled,omitempty"`
 	Force     bool `json:"force"`
+	// SkipImages reports a run importing metadata without art.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 type MediaLookupMatch struct {
@@ -632,6 +727,9 @@ type ScraperInfo struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
 	SupportedSystems []string `json:"supportedSystems"`
+	// SupportsSkipImages reports that media.scrape accepts skipImages for
+	// this scraper.
+	SupportsSkipImages bool `json:"supportsSkipImages"`
 }
 
 // ScrapersResponse is the result returned by the "scrapers" RPC method.

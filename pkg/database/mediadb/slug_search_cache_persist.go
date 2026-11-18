@@ -20,6 +20,7 @@
 package mediadb
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 
@@ -129,24 +130,7 @@ func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
 	if source != db.sql.Load() || db.recreating.Load() {
 		return false, nil
 	}
-	cache := &SlugSearchCache{
-		source:          source,
-		systemDBIDToID:  stored.SystemDBIDToID,
-		systemIDToDBID:  stored.SystemIDToDBID,
-		systemRanges:    stored.SystemRanges,
-		coveredSystems:  stored.CoveredSystems,
-		secSlugOffsets:  stored.SecSlugOffsets,
-		slugOffsets:     stored.SlugOffsets,
-		secSlugData:     stored.SecSlugData,
-		slugData:        stored.SlugData,
-		titleDBIDs:      stored.TitleDBIDs,
-		systemDBIDs:     stored.SystemDBIDs,
-		trigramOffsets:  stored.TrigramOffsets,
-		trigramPostings: stored.TrigramPostings,
-		trigramCapped:   stored.TrigramCapped,
-		entryCount:      stored.EntryCount,
-		complete:        stored.Complete,
-	}
+	cache := stored.toCache(source)
 	cache.buildCandidateBlocks()
 	if source != db.sql.Load() || db.recreating.Load() {
 		return false, nil
@@ -190,10 +174,24 @@ func (db *MediaDB) PersistSlugSearchCache() error {
 		return fmt.Errorf("failed to read index generation: %w", err)
 	}
 
-	stored := persistedSlugSearchCache{
+	stored := newPersistedSlugSearchCache(cache, gen)
+	if err := writePersistedCacheFile(path, stored); err != nil {
+		return err
+	}
+	log.Info().
+		Int("entries", cache.entryCount).
+		Int("systems", len(cache.systemRanges)).
+		Int64("generation", gen).
+		Str("path", path).
+		Msg("slug search cache persisted")
+	return nil
+}
+
+func newPersistedSlugSearchCache(cache *SlugSearchCache, generation int64) *persistedSlugSearchCache {
+	return &persistedSlugSearchCache{
 		Magic:           slugSearchCacheFileMagic,
 		Version:         slugSearchCacheFileVersion,
-		IndexGeneration: gen,
+		IndexGeneration: generation,
 		SystemDBIDToID:  cache.systemDBIDToID,
 		SystemIDToDBID:  cache.systemIDToDBID,
 		SystemRanges:    cache.systemRanges,
@@ -210,14 +208,25 @@ func (db *MediaDB) PersistSlugSearchCache() error {
 		EntryCount:      cache.entryCount,
 		Complete:        cache.complete,
 	}
-	if err := writePersistedCacheFile(path, &stored); err != nil {
-		return err
+}
+
+func (p *persistedSlugSearchCache) toCache(source *sql.DB) *SlugSearchCache {
+	return &SlugSearchCache{
+		source:          source,
+		systemDBIDToID:  p.SystemDBIDToID,
+		systemIDToDBID:  p.SystemIDToDBID,
+		systemRanges:    p.SystemRanges,
+		coveredSystems:  p.CoveredSystems,
+		secSlugOffsets:  p.SecSlugOffsets,
+		slugOffsets:     p.SlugOffsets,
+		secSlugData:     p.SecSlugData,
+		slugData:        p.SlugData,
+		titleDBIDs:      p.TitleDBIDs,
+		systemDBIDs:     p.SystemDBIDs,
+		trigramOffsets:  p.TrigramOffsets,
+		trigramPostings: p.TrigramPostings,
+		trigramCapped:   p.TrigramCapped,
+		entryCount:      p.EntryCount,
+		complete:        p.Complete,
 	}
-	log.Info().
-		Int("entries", cache.entryCount).
-		Int("systems", len(cache.systemRanges)).
-		Int64("generation", gen).
-		Str("path", path).
-		Msg("slug search cache persisted")
-	return nil
 }

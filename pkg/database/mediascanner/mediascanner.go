@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -191,6 +192,50 @@ func configureIndexingPragmas(db indexingPragmaDB) func() {
 // reconcile-volume commits. Production now commits at every system boundary;
 // only the file-limit path can still commit mid-system.
 var maxReconcileRowsPerTransaction int64 = 50000
+
+// Producer IDs for the sources that are not launcher scanners. Launcher
+// scanners use their launcher ID. The prefix keeps them apart from any
+// launcher ID.
+const (
+	scanProducerFilesystem  = "core:filesystem"
+	scanProducerLaunchables = "core:launchables"
+)
+
+// scanProducers tracks which sources reported each scan result of one
+// system, keyed by scanResultIdentity so coalesced duplicates share one set.
+type scanProducers map[string][]string
+
+func (p scanProducers) add(files []platforms.ScanResult, producer string) {
+	for i := range files {
+		key := scanResultIdentity(files[i].Path)
+		if !slices.Contains(p[key], producer) {
+			p[key] = append(p[key], producer)
+		}
+	}
+}
+
+// piped returns the producers after a pipeline scanner replaced the result
+// list with out. A result that was already in the list keeps the sources that
+// reported it; a result the scanner added is attributed to the scanner.
+func (p scanProducers) piped(out []platforms.ScanResult, producer string) scanProducers {
+	next := make(scanProducers, len(out))
+	for i := range out {
+		key := scanResultIdentity(out[i].Path)
+		if _, done := next[key]; done {
+			continue
+		}
+		if existing, ok := p[key]; ok {
+			next[key] = existing
+		} else {
+			next[key] = []string{producer}
+		}
+	}
+	return next
+}
+
+func (p scanProducers) of(path string) []string {
+	return p[scanResultIdentity(path)]
+}
 
 func scanResultIdentity(path string) string {
 	if schemeEnd := strings.Index(path, "://"); schemeEnd > 0 {
@@ -1768,6 +1813,12 @@ func NewNamesIndexWithSources(
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
 	// are called for every system, fixing the stale-state gaps that existed in
 	// the previous loop 2 and loop 3.
+	// Set once any system's reconcile writes a library row. A run that never
+	// does leaves the library exactly as the caches were built from it.
+	runChanged := false
+	// batchChanged is the same question for the systems waiting on the next
+	// commit: a batch that changed nothing leaves nothing to refresh.
+	batchChanged := false
 	for _, sys := range sortedSystems {
 		// Starts the iteration, not the collect phase: the pauser wait, status
 		// update, slug cache drop and scan-stage clear below all cost real time
@@ -1861,12 +1912,14 @@ func NewNamesIndexWithSources(
 		// Per-system setup: the pauser wait, status update, slug cache drop and
 		// scan-stage clear that ran before collection could start.
 		systemSetupDur := collectStart.Sub(systemSetupStart)
-		// Set when any file source for this system errors. The staged set is
-		// then a subset of the library, so the reconcile must not treat
-		// absence from it as evidence media is missing. Starts true when a
+		// Sources that failed for this system. The staged set then lacks what
+		// they would have reported, so the reconcile must not treat absence of
+		// their media as evidence it is gone. Media from sources that
+		// succeeded is still judged. The filesystem starts failed when a
 		// source root this system could use failed to read above.
-		scanIncomplete := sourceScanIncomplete[systemID]
-		filesystemIncomplete := scanIncomplete
+		var failedProducers []string
+		producers := make(scanProducers)
+		filesystemIncomplete := sourceScanIncomplete[systemID]
 		var successfulSources map[string]bool
 		if sourceCollector != nil {
 			successfulSources = make(map[string]bool)
@@ -1903,11 +1956,14 @@ func NewNamesIndexWithSources(
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
-				scanIncomplete = true
 				filesystemIncomplete = true
 				continue
 			}
 			files = append(files, pathFiles...)
+		}
+		producers.add(files, scanProducerFilesystem)
+		if filesystemIncomplete {
+			failedProducers = append(failedProducers, scanProducerFilesystem)
 		}
 		if status.WalkEntries > 0 {
 			status.WalkEntries = 0
@@ -1945,6 +2001,7 @@ func NewNamesIndexWithSources(
 				if scanErr == nil {
 					produced = len(independent)
 					files = append(files, independent...)
+					producers.add(independent, l.ID)
 				}
 			} else {
 				// Pipeline: scanner filters/enriches existing files. Replace the
@@ -1955,10 +2012,11 @@ func NewNamesIndexWithSources(
 				if scanErr == nil {
 					produced = len(piped)
 					files = piped
+					producers = producers.piped(piped, l.ID)
 				}
 			}
 			if scanErr != nil {
-				scanIncomplete = true
+				failedProducers = append(failedProducers, l.ID)
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 				}
@@ -1970,7 +2028,7 @@ func NewNamesIndexWithSources(
 					continue
 				}
 				// Only the platform's exact unavailable result is expected. A joined
-				// failure must remain reportable; keep scanIncomplete set above.
+				// failure must remain reportable; the producer is already failed.
 				if scanErr == platforms.ErrScannerUnavailable { //nolint:errorlint // Do not hide joined I/O failures.
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: optional installation unavailable", l.ID)
 					continue
@@ -1994,7 +2052,7 @@ func NewNamesIndexWithSources(
 			before := len(files)
 			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, slices.Clip(files))
 			if scanErr != nil {
-				scanIncomplete = true
+				failedProducers = append(failedProducers, anyScanners[i].ID)
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
 				}
@@ -2015,6 +2073,7 @@ func NewNamesIndexWithSources(
 				continue
 			}
 			files = results
+			producers = producers.piped(results, anyScanners[i].ID)
 			if sourceCollector != nil && len(results) > before {
 				successfulSources[anyScanners[i].ID] = true
 			}
@@ -2023,6 +2082,7 @@ func NewNamesIndexWithSources(
 		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
 		// rows with zaparoo:// paths, so search, browse, paging, and missing-state
 		// handling stay in one place.
+		launchableStart := len(files)
 		for _, item := range launchables.MediaForSystem(cfg, platform, systemID) {
 			files = append(files, platforms.ScanResult{
 				Path:  item.ZapScript(),
@@ -2030,6 +2090,7 @@ func NewNamesIndexWithSources(
 				NoExt: true,
 			})
 		}
+		producers.add(files[launchableStart:], scanProducerLaunchables)
 
 		files = coalesceScanResults(systemID, files)
 		if sourceCollector != nil {
@@ -2047,6 +2108,43 @@ func NewNamesIndexWithSources(
 			status.Files += len(files)
 			log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
 		}
+
+		// A system whose walk matches the record its last reconcile stored
+		// is left as it is: staging and reconciling it would write nothing.
+		// An incomplete walk proves nothing either way, so it never matches
+		// and is never recorded.
+		walkMarker, markerUsable := "", false
+		storedMarker := ""
+		if len(failedProducers) == 0 {
+			walkMarker, markerUsable = scanWalkMarker(cfg, files)
+		}
+		if stored, markerErr := db.ScanMarker(ctx, systemID); markerErr != nil {
+			log.Debug().Err(markerErr).Str("system", systemID).Msg("scan marker unreadable, reconciling system")
+			markerUsable = false
+		} else {
+			storedMarker = stored
+		}
+		// Disc images that were read and carry no game ID are part of what
+		// the stored marker stands for, so they are loaded before deciding.
+		var discMisses *gameIDMisses
+		if _, hasGameIDs := gameid.ConsoleForSystem(systemID); hasGameIDs {
+			listing := ""
+			if markerUsable {
+				listing = walkMarker
+			}
+			discMisses = loadGameIDMisses(ctx, db, systemID, listing)
+		}
+		if markerUsable && storedMarker != "" && storedMarker == walkMarker+discMisses.currentMarkerSuffix() {
+			collectDur += time.Since(collectStart)
+			completedSystems[systemID] = true
+			log.Info().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Dur("elapsed", time.Since(systemSetupStart)).
+				Msg("system unchanged since its last index, skipped")
+			continue
+		}
+		gameIDUnresolved := 0
 
 		// Group files by directory and determine stripping policy per directory
 		filesByDir := make(map[string][]platforms.ScanResult)
@@ -2121,6 +2219,10 @@ func NewNamesIndexWithSources(
 				Source:       file.Source,
 				LinkTarget:   file.LinkTarget,
 				NoExt:        file.NoExt,
+				Producers:    producers.of(file.Path),
+
+				GameIDUnresolved: &gameIDUnresolved,
+				GameIDMisses:     discMisses,
 			})
 			insertDur += time.Since(insertStart)
 			if addErr != nil {
@@ -2210,10 +2312,11 @@ func NewNamesIndexWithSources(
 			}
 			batchStarted = true
 		}
-		if scanIncomplete {
+		if len(failedProducers) > 0 {
 			log.Warn().
 				Str("system", systemID).
-				Msg("file collection hit errors; keeping existing missing-media state for this system")
+				Strs("failedSources", failedProducers).
+				Msg("file collection hit errors; keeping missing-media state for media those sources reported")
 		}
 		// WaitForPacing, not Wait: reconcile holds the open write transaction
 		// (see ReconcileStagedSystem), so honoring a full pause here would
@@ -2222,8 +2325,8 @@ func NewNamesIndexWithSources(
 		// statements.
 		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
 			ctx, systemID, database.ScanReconcileOpts{
-				Yield:          func() error { return pauser.WaitForPacing(ctx) },
-				IncompleteScan: scanIncomplete,
+				Yield:           func() error { return pauser.WaitForPacing(ctx) },
+				FailedProducers: failedProducers,
 			},
 		)
 		if reconcileErr != nil {
@@ -2249,6 +2352,25 @@ func NewNamesIndexWithSources(
 				Int64("mediaLinksDeleted", reconcileStats.MediaLinksDeleted).
 				Int64("touchedTitles", reconcileStats.TouchedTitles).
 				Msg("reconciled staged system")
+			if reconcileStats.LibraryRowsChanged > 0 {
+				runChanged = true
+				batchChanged = true
+			}
+			// Record what this reconcile was derived from, in the same
+			// transaction as its rows. A system that still has files to
+			// identify keeps none, so the next index reads them again.
+			if missErr := discMisses.save(ctx, db, systemID); missErr != nil {
+				return 0, missErr
+			}
+			nextMarker := ""
+			if markerUsable && gameIDUnresolved == 0 {
+				nextMarker = walkMarker + discMisses.nextMarkerSuffix()
+			}
+			if nextMarker != storedMarker {
+				if markerErr := db.SetScanMarker(ctx, systemID, nextMarker); markerErr != nil {
+					return 0, fmt.Errorf("failed to record scan marker for %s: %w", systemID, markerErr)
+				}
+			}
 			pendingSystems = append(pendingSystems, systemID)
 			// Track reconcile write volume so a run of low-file/high-reconcile
 			// systems still commits regularly, bounding WAL growth.
@@ -2256,7 +2378,18 @@ func NewNamesIndexWithSources(
 				reconcileStats.TitlesInserted + reconcileStats.TouchedTitles
 		} else {
 			// System has no DB row and produced no files — nothing to commit.
+			// Its empty walk is recorded all the same, so the next index
+			// leaves it alone instead of opening a transaction to find that
+			// out again.
 			completedSystems[systemID] = true
+			if missErr := discMisses.save(ctx, db, systemID); missErr != nil {
+				return 0, missErr
+			}
+			if markerUsable && walkMarker != storedMarker {
+				if markerErr := db.SetScanMarker(ctx, systemID, walkMarker); markerErr != nil {
+					return 0, fmt.Errorf("failed to record scan marker for %s: %w", systemID, markerErr)
+				}
+			}
 		}
 		reconcileDur += time.Since(reconcileStart)
 
@@ -2349,7 +2482,11 @@ func NewNamesIndexWithSources(
 					return 0, analyzeErr
 				}
 				cacheRefreshStart := time.Now()
-				cacheErr := refreshMidScanCaches(ctx, db, justCommitted, midScanTagsCache)
+				var cacheErr error
+				if batchChanged {
+					cacheErr = refreshMidScanCaches(ctx, db, justCommitted, midScanTagsCache)
+				}
+				batchChanged = false
 				cacheRefreshDur += time.Since(cacheRefreshStart)
 				if cacheErr != nil {
 					return 0, cacheErr
@@ -2442,7 +2579,24 @@ func NewNamesIndexWithSources(
 	// Mark database as complete and ready for use. UpdateLastGenerated clears
 	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
 	// population must happen after this call.
-	updateErr := db.UpdateLastGenerated()
+	//
+	// A run that changed no library row, on a database whose caches are all
+	// present and current, only moves the timestamp: rebuilding them cost
+	// about four minutes of an unchanged rescan on the MiSTer test device.
+	unchangedRun := false
+	if !runChanged {
+		missing := db.IndexCachesMissing(ctx)
+		unchangedRun = missing == ""
+		if !unchangedRun {
+			log.Info().Str("missing", missing).Msg("media index unchanged, but caches need rebuilding")
+		}
+	}
+	var updateErr error
+	if unchangedRun {
+		updateErr = db.TouchLastGenerated()
+	} else {
+		updateErr = db.UpdateLastGenerated()
+	}
 	if updateErr != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", updateErr)
 	}
@@ -2453,7 +2607,7 @@ func NewNamesIndexWithSources(
 	// they reflect it. Best-effort: a failure here only means the projection is
 	// stale until the next reindex; the truth in UserDB is unaffected.
 	t0 = time.Now()
-	if applied, reapplyErr := reapplyMediaUserData(ctx, db, fdb.UserDB); reapplyErr != nil {
+	if applied, tagWrites, reapplyErr := reapplyMediaUserDataCountingWrites(ctx, db, fdb.UserDB); reapplyErr != nil {
 		if maintenanceErr := bestEffortMaintenanceError(
 			reapplyErr, "failed to re-apply media user data",
 		); maintenanceErr != nil {
@@ -2461,6 +2615,15 @@ func NewNamesIndexWithSources(
 		}
 	} else {
 		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
+		if unchangedRun && tagWrites > 0 {
+			// A user flag had to be written onto the library after all, so
+			// the caches that show it have to be rebuilt in the usual way.
+			log.Info().Int("tagWrites", tagWrites).Msg("media index unchanged, but user flags were re-applied")
+			unchangedRun = false
+			if lateErr := db.UpdateLastGenerated(); lateErr != nil {
+				return 0, fmt.Errorf("failed to update last generated timestamp: %w", lateErr)
+			}
+		}
 	}
 	// Hidden folders are projected whole, so one already in line writes nothing.
 	if syncErr := database.SyncHiddenDirectories(ctx, fdb.UserDB, db); syncErr != nil {
@@ -2471,6 +2634,28 @@ func NewNamesIndexWithSources(
 		}
 	}
 	logPhaseMetrics("reapply_media_user_data")
+
+	// Files that came or went change which titles are versions of one game.
+	// Best-effort: a stale group only affects version lists until the next run.
+	groupSystems := make([]string, 0, len(completedSystems))
+	for systemID, completed := range completedSystems {
+		if completed {
+			groupSystems = append(groupSystems, systemID)
+		}
+	}
+	if len(groupSystems) > 0 {
+		t0 = time.Now()
+		if groupErr := db.RecomputeVersionGroups(ctx, groupSystems); groupErr != nil {
+			if maintenanceErr := bestEffortMaintenanceError(
+				groupErr, "failed to regroup versions",
+			); maintenanceErr != nil {
+				return 0, maintenanceErr
+			}
+		} else {
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("version regroup complete")
+		}
+	}
+	logPhaseMetrics("version_groups")
 
 	status.Phase = PhaseBuildingCaches
 	update(status)
@@ -2519,99 +2704,103 @@ func NewNamesIndexWithSources(
 	// persisted per-system SQL cache for the indexed systems, refresh in-memory slug
 	// coverage for them, and rebuild the in-memory tag cache from the SystemTagsCache
 	// table so first-entry requests for those systems stay warm too.
-	t0 = time.Now()
-	if selectiveRun {
-		if cacheErr := bestEffortMaintenanceError(
-			db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs),
-			"failed to populate system tags cache for indexed systems",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().
-			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(indexedSystemDefs)).
-			Msg("PopulateSystemTagsCacheForSystems complete")
-		logPhaseMetrics("populate_system_tags_cache")
-
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildTagCache(), "failed to rebuild tag cache after selective indexing",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
-		logPhaseMetrics("rebuild_tag_cache")
-
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems),
-			"failed to refresh slug search cache for indexed systems",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().
-			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(indexedSystems)).
-			Msg("RefreshSlugSearchCacheForSystems complete")
-		logPhaseMetrics("refresh_slug_search_cache")
+	if unchangedRun {
+		log.Info().Msg("media index unchanged, caches kept as they are")
 	} else {
-		if cacheErr := bestEffortMaintenanceError(
-			db.PopulateSystemTagsCache(ctx), "failed to populate system tags cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
-		logPhaseMetrics("populate_system_tags_cache")
-
 		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildSlugSearchCache(), "failed to rebuild slug search cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
-		logPhaseMetrics("rebuild_slug_search_cache")
+		if selectiveRun {
+			if cacheErr := bestEffortMaintenanceError(
+				db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs),
+				"failed to populate system tags cache for indexed systems",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().
+				Dur("elapsed", time.Since(t0)).
+				Int("systems", len(indexedSystemDefs)).
+				Msg("PopulateSystemTagsCacheForSystems complete")
+			logPhaseMetrics("populate_system_tags_cache")
 
-		t0 = time.Now()
-		if cacheErr := bestEffortMaintenanceError(
-			db.RebuildTagCache(), "failed to rebuild tag cache",
-		); cacheErr != nil {
-			return 0, cacheErr
-		}
-		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
-		logPhaseMetrics("rebuild_tag_cache")
-	}
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildTagCache(), "failed to rebuild tag cache after selective indexing",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+			logPhaseMetrics("rebuild_tag_cache")
 
-	// Bump the index generation counter so persisted cache files written
-	// below carry the new value. Boot-time loads compare this against the
-	// DB to detect stale cache files from a previous run.
-	_, bumpErr := db.BumpIndexGeneration()
-	if maintenanceErr := bestEffortMaintenanceError(
-		bumpErr, "failed to bump index generation",
-	); maintenanceErr != nil {
-		return 0, maintenanceErr
-	}
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems),
+				"failed to refresh slug search cache for indexed systems",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().
+				Dur("elapsed", time.Since(t0)).
+				Int("systems", len(indexedSystems)).
+				Msg("RefreshSlugSearchCacheForSystems complete")
+			logPhaseMetrics("refresh_slug_search_cache")
+		} else {
+			if cacheErr := bestEffortMaintenanceError(
+				db.PopulateSystemTagsCache(ctx), "failed to populate system tags cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+			logPhaseMetrics("populate_system_tags_cache")
 
-	// Persist the rebuilt in-memory caches to disk so a subsequent cold
-	// boot can skip the SQL rebuild path. Best-effort: a write failure
-	// just means next boot pays the rebuild cost, no correctness impact.
-	// Skip if the bump failed: the persisted file would embed a generation
-	// the DB doesn't agree with, and the next boot would load it as fresh.
-	if bumpErr != nil {
-		log.Warn().Msg("skipping cache persist because index generation bump failed")
-	} else {
-		if persistErr := bestEffortMaintenanceError(
-			db.PersistTagCache(), "failed to persist tag cache to disk",
-		); persistErr != nil {
-			return 0, persistErr
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildSlugSearchCache(), "failed to rebuild slug search cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+			logPhaseMetrics("rebuild_slug_search_cache")
+
+			t0 = time.Now()
+			if cacheErr := bestEffortMaintenanceError(
+				db.RebuildTagCache(), "failed to rebuild tag cache",
+			); cacheErr != nil {
+				return 0, cacheErr
+			}
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+			logPhaseMetrics("rebuild_tag_cache")
 		}
-		if persistErr := bestEffortMaintenanceError(
-			db.PersistSlugSearchCache(), "failed to persist slug search cache to disk",
-		); persistErr != nil {
-			return 0, persistErr
+
+		// Bump the index generation counter so persisted cache files written
+		// below carry the new value. Boot-time loads compare this against the
+		// DB to detect stale cache files from a previous run.
+		_, bumpErr := db.BumpIndexGeneration()
+		if maintenanceErr := bestEffortMaintenanceError(
+			bumpErr, "failed to bump index generation",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
 		}
+
+		// Persist the rebuilt in-memory caches to disk so a subsequent cold
+		// boot can skip the SQL rebuild path. Best-effort: a write failure
+		// just means next boot pays the rebuild cost, no correctness impact.
+		// Skip if the bump failed: the persisted file would embed a generation
+		// the DB doesn't agree with, and the next boot would load it as fresh.
+		if bumpErr != nil {
+			log.Warn().Msg("skipping cache persist because index generation bump failed")
+		} else {
+			if persistErr := bestEffortMaintenanceError(
+				db.PersistTagCache(), "failed to persist tag cache to disk",
+			); persistErr != nil {
+				return 0, persistErr
+			}
+			if persistErr := bestEffortMaintenanceError(
+				db.PersistSlugSearchCache(), "failed to persist slug search cache to disk",
+			); persistErr != nil {
+				return 0, persistErr
+			}
+		}
+		logPhaseMetrics("persist_caches")
 	}
-	logPhaseMetrics("persist_caches")
 
 	// Clear resume metadata and prepare background optimization before publishing
 	// Completed. Completed is the final database write, so no later maintenance
@@ -2644,13 +2833,17 @@ func NewNamesIndexWithSources(
 		return 0, setErr
 	}
 	if cacheErr := bestEffortMaintenanceError(
-		db.InvalidateCountCache(), "failed to invalidate media count cache after indexing",
+		invalidateCountCacheUnlessUnchanged(db, unchangedRun), "failed to invalidate media count cache after indexing",
 	); cacheErr != nil {
 		return 0, cacheErr
 	}
 
 	// Background optimization handles cache population and WAL housekeeping.
-	if optimizationErr := db.SetOptimizationStatus(mediadb.IndexingStatusPending); optimizationErr != nil {
+	// Background optimization rebuilds what a change to the library made
+	// stale, so an unchanged run leaves its status where it was.
+	if unchangedRun {
+		log.Debug().Msg("media index unchanged, background optimization not scheduled")
+	} else if optimizationErr := db.SetOptimizationStatus(mediadb.IndexingStatusPending); optimizationErr != nil {
 		return 0, fmt.Errorf("failed to set optimization status to pending: %w", optimizationErr)
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -2685,4 +2878,14 @@ func NewNamesIndexWithSources(
 // unreachable, which is the user's setup rather than a Core fault.
 func scannerSourceUnavailable(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, platforms.ErrScannerSourceUnreachable)
+}
+
+// invalidateCountCacheUnlessUnchanged drops the cached media counts after an
+// index, except when the index changed nothing they count.
+func invalidateCountCacheUnlessUnchanged(db database.MediaDBI, unchanged bool) error {
+	if unchanged {
+		return nil
+	}
+	//nolint:wrapcheck // the caller adds the context
+	return db.InvalidateCountCache()
 }

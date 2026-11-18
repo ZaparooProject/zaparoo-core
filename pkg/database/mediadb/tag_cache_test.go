@@ -198,3 +198,49 @@ func TestBuildTagCache_ScanError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to scan tag cache row")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestTagCache_TagsForSystems_MergedResultIsReusedAndIsolated(t *testing.T) {
+	t.Parallel()
+	cache := &tagCache{
+		bySystem: map[string][]database.TagInfo{
+			"nes":  {{Type: "genre", Tag: "action", Count: 2}, {Type: "region", Tag: "us", Count: 1}},
+			"snes": {{Type: "genre", Tag: "action", Count: 3}, {Type: "genre", Tag: "rpg", Count: 4}},
+			"gb":   {{Type: "genre", Tag: "puzzle", Count: 5}},
+		},
+	}
+	both := []systemdefs.System{{ID: "nes"}, {ID: "snes"}}
+	want := []database.TagInfo{
+		{Type: "genre", Tag: "action", Count: 5},
+		{Type: "region", Tag: "us", Count: 1},
+		{Type: "genre", Tag: "rpg", Count: 4},
+	}
+
+	var memo mergedSystemTagsMemo
+	first := memo.tagsForSystems(cache, both)
+	assert.Equal(t, want, first)
+	require.NotNil(t, memo.last.Load())
+
+	// A caller may sort or trim what it was given.
+	first[0].Count = 999
+	assert.Equal(t, want, memo.tagsForSystems(cache, both))
+
+	// A different set, or the same set in another order, is merged afresh.
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "action", Count: 5},
+		{Type: "genre", Tag: "rpg", Count: 4},
+		{Type: "region", Tag: "us", Count: 1},
+	}, memo.tagsForSystems(cache, []systemdefs.System{{ID: "snes"}, {ID: "nes"}}))
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "action", Count: 2},
+		{Type: "region", Tag: "us", Count: 1},
+		{Type: "genre", Tag: "puzzle", Count: 5},
+	}, memo.tagsForSystems(cache, []systemdefs.System{{ID: "nes"}, {ID: "gb"}}))
+	assert.Equal(t, want, memo.tagsForSystems(cache, both))
+
+	// A rebuilt cache never answers from the entry of the one it replaced.
+	rebuilt := &tagCache{bySystem: map[string][]database.TagInfo{
+		"nes":  {{Type: "genre", Tag: "action", Count: 1}},
+		"snes": {{Type: "genre", Tag: "action", Count: 1}},
+	}}
+	assert.Equal(t, []database.TagInfo{{Type: "genre", Tag: "action", Count: 2}}, memo.tagsForSystems(rebuilt, both))
+}

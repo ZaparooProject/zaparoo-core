@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -899,4 +900,33 @@ func TestBatchInserter_BufferResetOnDependencyFlushFailure(t *testing.T) {
 	require.NoError(t, childBI.Add(int64(99), int64(10)))
 	require.Equal(t, 1, childBI.currentCount,
 		"child buffer must contain only the new row, not the previously-failed one")
+}
+
+// A wide table at the default batch size used to exceed SQLite's variable
+// limit on every full flush and fall back to chunked statements.
+func TestBatchInserter_WideTableFlushesWithinVariableLimit(t *testing.T) {
+	t.Parallel()
+	sqlDB, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "wide.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	_, err = sqlDB.ExecContext(context.Background(), "CREATE TABLE Wide (a, b, c, d, e, f, g, h)")
+	require.NoError(t, err)
+	tx, err := sqlDB.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	inserter, err := NewBatchInserter(context.Background(), tx, "Wide",
+		[]string{"a", "b", "c", "d", "e", "f", "g", "h"}, 5000)
+	require.NoError(t, err)
+	assert.Equal(t, 4000, inserter.batchSize)
+
+	const rows = 9000
+	for i := range rows {
+		require.NoError(t, inserter.Add(i, i, i, i, i, i, i, i))
+	}
+	require.NoError(t, inserter.Close())
+	require.NoError(t, tx.Commit())
+
+	var count int
+	require.NoError(t, sqlDB.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM Wide").Scan(&count))
+	assert.Equal(t, rows, count)
 }

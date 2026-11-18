@@ -80,7 +80,7 @@ func startIndexing(mediaDB database.MediaDBI) (*database.MediaWriteLease, error)
 }
 
 func startScraping(
-	mediaDB database.MediaDBI, scraperID string, force bool,
+	mediaDB database.MediaDBI, scraperID string, force, skipImages bool,
 ) (*database.MediaWriteLease, error) {
 	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
 	if err != nil {
@@ -90,7 +90,7 @@ func startScraping(
 	if err != nil {
 		return nil, mediaWriteClientError(err, database.MediaWriteOperationScraping)
 	}
-	if !scrapingStatusInstance.startIfNotRunning(scraperID, force) {
+	if !scrapingStatusInstance.startIfNotRunning(scraperID, force, skipImages) {
 		lease.Release()
 		return nil, mediaBusyError("scraping already in progress", nil)
 	}

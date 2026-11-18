@@ -39,8 +39,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 type reloadAPICaller func(
@@ -380,6 +382,14 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	case isFlagPassed("profile-reset-pin"):
 		if *f.ProfileResetPIN == "" {
 			_, _ = fmt.Fprint(os.Stderr, "Error: profile-reset-pin requires a profile ID\n")
+			os.Exit(1)
+		}
+		if err := unlockKioskForRecovery(
+			context.Background(), cfg, afero.NewOsFs(),
+			kiosk.RecoveryTokenPath(helpers.DataDir(pl)), client.LocalClient,
+		); err != nil {
+			logClientCommandError(err, "error unlocking device for PIN reset")
+			_, _ = fmt.Fprintf(os.Stderr, "Error resetting profile PIN: %v\n", err)
 			os.Exit(1)
 		}
 		pin, err := resetProfilePIN(
