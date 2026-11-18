@@ -164,6 +164,13 @@ func MayHaveContainerTarget(mediaPath string) bool {
 	return isM3UCompanionExt(ext) || isDiscSetExt(ext)
 }
 
+// ContainerTargetExts returns every extension MayHaveContainerTarget accepts,
+// for a caller that has to test paths where a Go call cannot run, such as in
+// SQL.
+func ContainerTargetExts() []string {
+	return []string{".bin", ".wav", ".mp3", ".ogg", ".flac", ".ape", ".cue", ".chd", ".iso", ".img", ".pbp"}
+}
+
 func isDiscSetExt(ext string) bool {
 	switch ext {
 	case ".cue", ".chd", ".iso", ".bin", ".img", ".pbp":

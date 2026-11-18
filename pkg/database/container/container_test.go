@@ -379,3 +379,22 @@ func TestMayHaveContainerTarget(t *testing.T) {
 		assert.False(t, container.MayHaveContainerTarget(path), path)
 	}
 }
+
+func TestContainerTargetExtsMatchesMayHaveContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	listed := make(map[string]struct{})
+	for _, ext := range container.ContainerTargetExts() {
+		listed[ext] = struct{}{}
+		assert.True(t, container.MayHaveContainerTarget("/roms/PSX/Game/Game"+ext), ext)
+	}
+	// Every extension the rules accept must be listed, or a count that tests
+	// paths in SQL would miss a file a container can stand in for.
+	for _, ext := range []string{
+		".bin", ".wav", ".mp3", ".ogg", ".flac", ".ape", ".cue", ".chd", ".iso", ".img", ".pbp",
+		".m3u", ".nes", ".zip", ".mra", ".txt", ".7z", ".gdi", ".cdi", ".ccd", ".sub",
+	} {
+		_, ok := listed[ext]
+		assert.Equal(t, container.MayHaveContainerTarget("/roms/PSX/Game/Game"+ext), ok, ext)
+	}
+}

@@ -170,11 +170,12 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 		} else {
 			parsed++
 			var parseOK bool
-			setName, parseOK = c.parseSetName(files[i].Path)
+			var parent string
+			setName, parent, parseOK = c.parseSetName(files[i].Path)
 			if !parseOK {
 				parseFailures++
 			}
-			if entry, statOK := statCacheEntry(files[i].Path, setName); statOK {
+			if entry, statOK := statCacheEntry(files[i].Path, setName, parent); statOK {
 				fresh[files[i].Path] = entry
 			}
 		}
@@ -223,29 +224,49 @@ func cachedSetName(
 	return entry.SetName, true
 }
 
+// cachedIdentity returns the set name and parent recorded for path, under the
+// same freshness rule as cachedSetName. ok is false for an entry that never
+// recorded a parent, so the caller neither reads one nor mistakes the gap for
+// "this set has no parent".
+func cachedIdentity(
+	cached map[string]arcadeClassCacheEntry, path string,
+) (setName, parent string, ok bool) {
+	entry, found := cached[path]
+	if !found || !entry.ParentRead {
+		return "", "", false
+	}
+	setName, ok = cachedSetName(cached, path)
+	if !ok {
+		return "", "", false
+	}
+	return setName, entry.Parent, true
+}
+
 // parseSetName reads and parses one MRA file. A failed read or parse returns
 // ok=false with an empty setname — the file is unclassifiable, which is also
 // worth caching so it isn't re-read every classification.
-func (c *arcadeSystemCache) parseSetName(path string) (setName string, ok bool) {
+func (c *arcadeSystemCache) parseSetName(path string) (setName, parent string, ok bool) {
 	mra, err := c.readMRA(path)
 	if err != nil {
 		log.Debug().Err(err).Str("path", path).Msg("unable to classify arcade MRA")
-		return "", false
+		return "", "", false
 	}
-	return mra.SetName, true
+	return mra.SetName, mra.Parent, true
 }
 
-// statCacheEntry builds a cache entry pinning setName to the file's current
-// size and mtime.
-func statCacheEntry(path, setName string) (arcadeClassCacheEntry, bool) {
+// statCacheEntry builds a cache entry pinning setName and parent to the file's
+// current size and mtime.
+func statCacheEntry(path, setName, parent string) (arcadeClassCacheEntry, bool) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return arcadeClassCacheEntry{}, false
 	}
 	return arcadeClassCacheEntry{
-		SetName: setName,
-		Size:    info.Size(),
-		MtimeNs: info.ModTime().UnixNano(),
+		SetName:    setName,
+		Parent:     parent,
+		ParentRead: true,
+		Size:       info.Size(),
+		MtimeNs:    info.ModTime().UnixNano(),
 	}, true
 }
 

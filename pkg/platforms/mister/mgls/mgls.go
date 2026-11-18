@@ -88,6 +88,7 @@ func LoadsSent() uint64 {
 type MRA struct {
 	XMLName xml.Name `xml:"misterromdescription"`
 	SetName string   `xml:"setname"`
+	Parent  string   `xml:"parent"`
 	Name    string   `xml:"name"`
 	Rbf     string   `xml:"rbf"`
 	Roms    []MRARom `xml:"rom"`

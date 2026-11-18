@@ -115,6 +115,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from MediaTitleTags;
 	delete from MediaTags;
 	delete from MediaLinks;
+	delete from MediaVersionKeys;
 	delete from MediaSources;
 	delete from MediaCoverThumbs;
 	delete from Media;
@@ -276,6 +277,11 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 			" OR TargetMediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))",
 		dbidPlaceholders), append(append([]any{}, systemDBIDs...), systemDBIDs...)...); err != nil {
 		return fmt.Errorf("failed to delete MediaLinks: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM MediaVersionKeys WHERE SystemDBID IN (%s)", dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete MediaVersionKeys: %w", err)
 	}
 	for _, table := range []string{"MediaSources", "MediaCoverThumbs"} {
 		//nolint:gosec // Safe: table is a fixed name and prepareVariadic only generates placeholders
@@ -459,7 +465,7 @@ func sqlCleanMediaOrphans(ctx context.Context, db *sql.DB) (int64, error) {
 	); err != nil {
 		return 0, fmt.Errorf("failed to delete MediaLinks for missing media: %w", err)
 	}
-	for _, table := range []string{"MediaSources", "MediaCoverThumbs", "SlugResolutionCache"} {
+	for _, table := range []string{"MediaVersionKeys", "MediaSources", "MediaCoverThumbs", "SlugResolutionCache"} {
 		//nolint:gosec // Safe: table is a fixed name
 		if _, err = conn.ExecContext(ctx,
 			"DELETE FROM "+table+" WHERE MediaDBID IN (SELECT DBID FROM Media WHERE IsMissing = 1)",

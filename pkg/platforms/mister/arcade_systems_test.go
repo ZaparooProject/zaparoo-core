@@ -795,3 +795,55 @@ func TestArcadeSystemCacheScanFilesIncludesOrganizerWhenScanDuplicatesEnabled(t 
 	assert.NotContains(t, results, platforms.ScanResult{Path: brokenAlias},
 		"a dangling alias must not reach classification")
 }
+
+// Classification records each descriptor's parent set as it reads it, and
+// leaves an entry written before parents were kept exactly as it was: the
+// file is unchanged, so it is not read again just to learn its parent.
+func TestArcadeSystemCacheRecordsParentWithoutRereading(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	clonePath := filepath.Join(dir, "Alpha Mission.mra")
+	require.NoError(t, os.WriteFile(clonePath, []byte(
+		"<misterromdescription><setname>alphamis</setname><parent>aso</parent></misterromdescription>",
+	), 0o600))
+	olderPath := filepath.Join(dir, "Older.mra")
+	require.NoError(t, os.WriteFile(olderPath, []byte(
+		"<misterromdescription><setname>older</setname><parent>aso</parent></misterromdescription>",
+	), 0o600))
+	olderInfo, err := os.Stat(olderPath)
+	require.NoError(t, err)
+
+	cache := newTestArcadeSystemCache(t)
+	older := arcadeClassCacheEntry{
+		SetName: "older", Size: olderInfo.Size(), MtimeNs: olderInfo.ModTime().UnixNano(),
+	}
+	require.NoError(t, saveArcadeClassCache(cache.persistPath, map[string]arcadeClassCacheEntry{olderPath: older}))
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return []arcadedb.ArcadeDbEntry{{Setname: "alphamis", Platform: "Capcom CPS-1"}}, nil
+	}
+	var read []string
+	baseReadMRA := cache.readMRA
+	cache.readMRA = func(path string) (mgls.MRA, error) {
+		read = append(read, path)
+		return baseReadMRA(path)
+	}
+
+	_, err = cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade,
+		[]platforms.ScanResult{{Path: clonePath}, {Path: olderPath}})
+	require.NoError(t, err)
+	_, err = cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{clonePath}, read, "the unchanged descriptor is not read again")
+
+	persisted := loadArcadeClassCache(cache.persistPath)
+	setName, parent, ok := cachedIdentity(persisted, clonePath)
+	require.True(t, ok)
+	assert.Equal(t, "alphamis", setName)
+	assert.Equal(t, "aso", parent)
+	assert.Equal(t, older, persisted[olderPath])
+	_, _, ok = cachedIdentity(persisted, olderPath)
+	assert.False(t, ok, "an entry from before parents were kept has no parent answer")
+}

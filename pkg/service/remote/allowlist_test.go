@@ -244,6 +244,127 @@ func TestTranslateBrowseParams_ProducesMethodParams(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTranslateSimilarParams_ProducesMethodParams(t *testing.T) {
+	t.Parallel()
+
+	translated, err := translateSimilarParams(json.RawMessage(
+		`{"media_id": 42, "systems": ["NES"], "fuzzy_system": true, "max_results": 8}`))
+	require.NoError(t, err)
+	var params models.MediaSimilarParams
+	require.NoError(t, json.Unmarshal(translated, &params))
+	require.NotNil(t, params.MediaID)
+	assert.Equal(t, int64(42), *params.MediaID)
+	require.NotNil(t, params.Systems)
+	assert.Equal(t, []string{"NES"}, *params.Systems)
+	require.NotNil(t, params.FuzzySystem)
+	assert.True(t, *params.FuzzySystem)
+	require.NotNil(t, params.MaxResults)
+	assert.Equal(t, 8, *params.MaxResults)
+
+	translated, err = translateSimilarParams(json.RawMessage(`{"system": "NES", "path": "/roms/NES/Contra.nes"}`))
+	require.NoError(t, err)
+	params = models.MediaSimilarParams{}
+	require.NoError(t, json.Unmarshal(translated, &params))
+	assert.Equal(t, "NES", params.System)
+	assert.Equal(t, "/roms/NES/Contra.nes", params.Path)
+	require.NotNil(t, params.MaxResults, "a size is always sent, so an oversized result has one to halve")
+	assert.Equal(t, remoteSimilarMaxResults, *params.MaxResults)
+
+	shrunk, ok := shrinkPage(translated)
+	require.True(t, ok)
+	params = models.MediaSimilarParams{}
+	require.NoError(t, json.Unmarshal(shrunk, &params))
+	assert.Equal(t, remoteSimilarMaxResults/2, *params.MaxResults)
+
+	for _, raw := range []string{
+		`{"mediaId": 42}`,
+		`{"media_id": 0}`,
+		`{"media_id": 42, "max_results": 51}`,
+		`{"media_id": 42, "systems": [""]}`,
+	} {
+		_, err := translateSimilarParams(json.RawMessage(raw))
+		require.Error(t, err, raw)
+	}
+}
+
+func TestTranslateRecommendedParams_ProducesMethodParams(t *testing.T) {
+	t.Parallel()
+
+	translated, err := translateRecommendedParams(json.RawMessage(
+		`{"systems": ["SNES"], "max_results": 6, "max_sections": 3}`))
+	require.NoError(t, err)
+	var params models.MediaRecommendedParams
+	require.NoError(t, json.Unmarshal(translated, &params))
+	require.NotNil(t, params.Systems)
+	assert.Equal(t, []string{"SNES"}, *params.Systems)
+	require.NotNil(t, params.MaxResults)
+	assert.Equal(t, 6, *params.MaxResults)
+	require.NotNil(t, params.MaxSections)
+	assert.Equal(t, 3, *params.MaxSections)
+
+	translated, err = translateRecommendedParams(nil)
+	require.NoError(t, err)
+	params = models.MediaRecommendedParams{}
+	require.NoError(t, json.Unmarshal(translated, &params))
+	require.NotNil(t, params.MaxResults)
+	assert.Equal(t, remoteRecommendedMaxResults, *params.MaxResults)
+	assert.Nil(t, params.MaxSections)
+
+	// Halving the default stays inside what the method accepts.
+	shrunk, ok := shrinkPage(translated)
+	require.True(t, ok)
+	params = models.MediaRecommendedParams{}
+	require.NoError(t, json.Unmarshal(shrunk, &params))
+	assert.Equal(t, remoteRecommendedMaxResults/2, *params.MaxResults)
+
+	for _, raw := range []string{
+		`{"maxResults": 5}`,
+		`{"max_results": 31}`,
+		`{"max_sections": 13}`,
+		`{"profile_id": "kid"}`,
+	} {
+		_, err := translateRecommendedParams(json.RawMessage(raw))
+		require.Error(t, err, raw)
+	}
+}
+
+func TestTranslateVersionsParams_ProducesMethodParams(t *testing.T) {
+	t.Parallel()
+
+	translated, err := translateVersionsParams(json.RawMessage(`{"media_id": 42, "max_results": 20, "cursor": "c3"}`))
+	require.NoError(t, err)
+	var params models.MediaVersionsParams
+	require.NoError(t, json.Unmarshal(translated, &params))
+	require.NotNil(t, params.MediaID)
+	assert.Equal(t, int64(42), *params.MediaID)
+	require.NotNil(t, params.MaxResults)
+	assert.Equal(t, 20, *params.MaxResults)
+	require.NotNil(t, params.Cursor)
+	assert.Equal(t, "c3", *params.Cursor)
+	assert.Empty(t, params.System)
+	assert.Nil(t, params.IncludeHidden, "hidden media is not part of the remote surface")
+	assert.Contains(t, string(translated), "maxResults", "shrinking a page rewrites the method's own field")
+
+	translated, err = translateVersionsParams(json.RawMessage(`{"system": "NES", "path": "/roms/NES/Contra.nes"}`))
+	require.NoError(t, err)
+	params = models.MediaVersionsParams{}
+	require.NoError(t, json.Unmarshal(translated, &params))
+	assert.Nil(t, params.MediaID)
+	assert.Equal(t, "NES", params.System)
+	assert.Equal(t, "/roms/NES/Contra.nes", params.Path)
+
+	for _, raw := range []string{
+		`{"mediaId": 42}`,
+		`{"media_id": 0}`,
+		`{"media_id": 42, "max_results": 101}`,
+		`{"media_id": 42, "include_hidden": true}`,
+		`{"media_id": 42, "unknown": 1}`,
+	} {
+		_, err = translateVersionsParams(json.RawMessage(raw))
+		require.Error(t, err, raw)
+	}
+}
+
 func TestTranslateSystemsParams(t *testing.T) {
 	t.Parallel()
 

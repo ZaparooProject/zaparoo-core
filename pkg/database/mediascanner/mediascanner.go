@@ -2568,6 +2568,28 @@ func NewNamesIndexWithSources(
 	}
 	logPhaseMetrics("reapply_media_user_data")
 
+	// Files that came or went change which titles are versions of one game.
+	// Best-effort: a stale group only affects version lists until the next run.
+	groupSystems := make([]string, 0, len(completedSystems))
+	for systemID, completed := range completedSystems {
+		if completed {
+			groupSystems = append(groupSystems, systemID)
+		}
+	}
+	if len(groupSystems) > 0 {
+		t0 = time.Now()
+		if groupErr := db.RecomputeVersionGroups(ctx, groupSystems); groupErr != nil {
+			if maintenanceErr := bestEffortMaintenanceError(
+				groupErr, "failed to regroup versions",
+			); maintenanceErr != nil {
+				return 0, maintenanceErr
+			}
+		} else {
+			log.Info().Dur("elapsed", time.Since(t0)).Msg("version regroup complete")
+		}
+	}
+	logPhaseMetrics("version_groups")
+
 	status.Phase = PhaseBuildingCaches
 	update(status)
 

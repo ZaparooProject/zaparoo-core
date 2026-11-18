@@ -598,6 +598,43 @@ func (m *MockUserDBI) GetMediaHistoryTop(
 	return entries, nil
 }
 
+func (m *MockUserDBI) hasExpectedCall(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MockUserDBI) GetMediaPlayTotals(
+	ctx context.Context, profileID string, since time.Time, minSessionSecs, limit int,
+) ([]database.MediaPlayTotal, error) {
+	if !m.hasExpectedCall("GetMediaPlayTotals") {
+		return nil, nil
+	}
+	args := m.Called(ctx, profileID, since, minSessionSecs, limit)
+	totals, ok := args.Get(0).([]database.MediaPlayTotal)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetMediaPlayTotals returned %T, want []database.MediaPlayTotal", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get media play totals failed: %w", err)
+	}
+	return totals, nil
+}
+
+func (m *MockUserDBI) MediaHistoryVersion(ctx context.Context) (string, error) {
+	if !m.hasExpectedCall("MediaHistoryVersion") {
+		return "", nil
+	}
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return "", fmt.Errorf("mock UserDBI media history version failed: %w", err)
+	}
+	return args.String(0), nil
+}
+
 func (m *MockUserDBI) CloseHangingMediaHistory() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
@@ -2838,6 +2875,222 @@ func (m *MockMediaDBI) GetMediaLinkTarget(
 		return 0, false, fmt.Errorf("mock GetMediaLinkTarget failed: %w", err)
 	}
 	return targetDBID, args.Bool(1), nil
+}
+
+func (m *MockMediaDBI) GetMediaLinkTargets(ctx context.Context, mediaDBIDs []int64) (map[int64]int64, error) {
+	if !m.hasExpectedCall("GetMediaLinkTargets") {
+		return map[int64]int64{}, nil
+	}
+	args := m.Called(ctx, mediaDBIDs)
+	targets, ok := args.Get(0).(map[int64]int64)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetMediaLinkTargets returned %T, want map[int64]int64", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMediaLinkTargets failed: %w", err)
+	}
+	return targets, nil
+}
+
+func (m *MockMediaDBI) RecomputeVersionGroups(ctx context.Context, systemIDs []string) error {
+	if !m.hasExpectedCall("RecomputeVersionGroups") {
+		return nil
+	}
+	if err := m.Called(ctx, systemIDs).Error(0); err != nil {
+		return fmt.Errorf("mock RecomputeVersionGroups failed: %w", err)
+	}
+	return nil
+}
+
+// GetTitleVersionGroups answers every title as its own group when unstubbed,
+// which is what a library with no linked titles returns.
+func (m *MockMediaDBI) GetTitleFacetTags(
+	ctx context.Context, titleDBIDs []int64, tagTypes []string,
+) ([]database.TitleFacetTag, error) {
+	if !m.hasExpectedCall("GetTitleFacetTags") {
+		return nil, nil
+	}
+	args := m.Called(ctx, titleDBIDs, tagTypes)
+	facets, ok := args.Get(0).([]database.TitleFacetTag)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetTitleFacetTags returned %T, want []database.TitleFacetTag", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetTitleFacetTags failed: %w", err)
+	}
+	return facets, nil
+}
+
+func (m *MockMediaDBI) CountTitlesByTag(ctx context.Context, tagDBIDs []int64, limit int) (map[int64]int, error) {
+	if !m.hasExpectedCall("CountTitlesByTag") {
+		return map[int64]int{}, nil
+	}
+	args := m.Called(ctx, tagDBIDs, limit)
+	counts, ok := args.Get(0).(map[int64]int)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock CountTitlesByTag returned %T, want map[int64]int", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock CountTitlesByTag failed: %w", err)
+	}
+	return counts, nil
+}
+
+func (m *MockMediaDBI) FindTitlesSharingTags(
+	ctx context.Context, tags []database.WeightedTag, excludeTitleDBIDs []int64, limit int,
+) ([]database.TagSharingTitle, error) {
+	if !m.hasExpectedCall("FindTitlesSharingTags") {
+		return nil, nil
+	}
+	args := m.Called(ctx, tags, excludeTitleDBIDs, limit)
+	candidates, ok := args.Get(0).([]database.TagSharingTitle)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock FindTitlesSharingTags returned %T, want []database.TagSharingTitle", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock FindTitlesSharingTags failed: %w", err)
+	}
+	return candidates, nil
+}
+
+func (m *MockMediaDBI) GetUserTagMedia(ctx context.Context) ([]database.UserTagMedia, error) {
+	if !m.hasExpectedCall("GetUserTagMedia") {
+		return nil, nil
+	}
+	args := m.Called(ctx)
+	tagged, ok := args.Get(0).([]database.UserTagMedia)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetUserTagMedia returned %T, want []database.UserTagMedia", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetUserTagMedia failed: %w", err)
+	}
+	return tagged, nil
+}
+
+func (m *MockMediaDBI) MediaTitleCountEstimate(ctx context.Context) (int64, error) {
+	if !m.hasExpectedCall("MediaTitleCountEstimate") {
+		return 0, nil
+	}
+	args := m.Called(ctx)
+	count, ok := args.Get(0).(int64)
+	if !ok {
+		return 0, fmt.Errorf("mock MediaTitleCountEstimate returned %T, want int64", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock MediaTitleCountEstimate failed: %w", err)
+	}
+	return count, nil
+}
+
+func (m *MockMediaDBI) GetTitleVersionGroups(ctx context.Context, titleDBIDs []int64) (map[int64]int64, error) {
+	if !m.hasExpectedCall("GetTitleVersionGroups") {
+		groups := make(map[int64]int64, len(titleDBIDs))
+		for _, id := range titleDBIDs {
+			groups[id] = id
+		}
+		return groups, nil
+	}
+	args := m.Called(ctx, titleDBIDs)
+	groups, ok := args.Get(0).(map[int64]int64)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetTitleVersionGroups returned %T, want map[int64]int64", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetTitleVersionGroups failed: %w", err)
+	}
+	return groups, nil
+}
+
+func (m *MockMediaDBI) GetVersionGroupMembers(ctx context.Context, titleDBIDs []int64) (map[int64][]int64, error) {
+	if !m.hasExpectedCall("GetVersionGroupMembers") {
+		return map[int64][]int64{}, nil
+	}
+	args := m.Called(ctx, titleDBIDs)
+	members, ok := args.Get(0).(map[int64][]int64)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetVersionGroupMembers returned %T, want map[int64][]int64", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetVersionGroupMembers failed: %w", err)
+	}
+	return members, nil
+}
+
+func (m *MockMediaDBI) GetStoredVersionCounts(
+	ctx context.Context, titleDBIDs []int64, excludeHidden bool,
+) (database.StoredVersionCounts, error) {
+	if !m.hasExpectedCall("GetStoredVersionCounts") {
+		return database.StoredVersionCounts{Counts: map[int64]int{}}, nil
+	}
+	args := m.Called(ctx, titleDBIDs, excludeHidden)
+	counts, ok := args.Get(0).(database.StoredVersionCounts)
+	if !ok && args.Get(0) != nil {
+		return database.StoredVersionCounts{}, fmt.Errorf(
+			"mock GetStoredVersionCounts returned %T, want StoredVersionCounts", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return database.StoredVersionCounts{}, fmt.Errorf("mock GetStoredVersionCounts failed: %w", err)
+	}
+	return counts, nil
+}
+
+func (m *MockMediaDBI) GetVersionKeysByTitleDBIDs(
+	ctx context.Context, titleDBIDs []int64,
+) (map[int64][]database.VersionKey, error) {
+	if !m.hasExpectedCall("GetVersionKeysByTitleDBIDs") {
+		return map[int64][]database.VersionKey{}, nil
+	}
+	args := m.Called(ctx, titleDBIDs)
+	keys, ok := args.Get(0).(map[int64][]database.VersionKey)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetVersionKeysByTitleDBIDs returned %T, want version key map", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetVersionKeysByTitleDBIDs failed: %w", err)
+	}
+	return keys, nil
+}
+
+// CountTitleVersionRows answers two foldable rows for every title when
+// unstubbed, so a test that stubs only the version rows still has them read
+// and counted.
+func (m *MockMediaDBI) CountTitleVersionRows(
+	ctx context.Context, titleDBIDs []int64, filters *database.SearchFilters,
+) (map[int64]database.TitleVersionRowCount, error) {
+	if !m.hasExpectedCall("CountTitleVersionRows") {
+		counts := make(map[int64]database.TitleVersionRowCount, len(titleDBIDs))
+		for _, id := range titleDBIDs {
+			counts[id] = database.TitleVersionRowCount{Rows: 2, Foldable: 2}
+		}
+		return counts, nil
+	}
+	args := m.Called(ctx, titleDBIDs, filters)
+	counts, ok := args.Get(0).(map[int64]database.TitleVersionRowCount)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock CountTitleVersionRows returned %T, want title row count map", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock CountTitleVersionRows failed: %w", err)
+	}
+	return counts, nil
+}
+
+func (m *MockMediaDBI) GetTitleVersionRows(
+	ctx context.Context, titleDBIDs []int64, filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	if !m.hasExpectedCall("GetTitleVersionRows") {
+		return nil, nil
+	}
+	args := m.Called(ctx, titleDBIDs, filters)
+	rows, ok := args.Get(0).([]database.SearchResultWithCursor)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetTitleVersionRows returned %T, want search results", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetTitleVersionRows failed: %w", err)
+	}
+	return rows, nil
 }
 
 func (m *MockMediaDBI) GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error) {

@@ -142,14 +142,24 @@ func systemLaunchers(env *requests.RequestEnv, systemID string) []platforms.Laun
 }
 
 // defaultTitleVersions folds each group's versions and picks the one a title
-// launch would prefer. counts[i] is the number of versions behind results[i].
+// launch would prefer. counts[i] is the number of versions behind results[i]:
+// the title's own, and those of every title it shares a version group with
+// that pass the search's visibility, tag and path filters.
 func defaultTitleVersions(
-	env *requests.RequestEnv, groups []database.SearchTitleGroup,
+	env *requests.RequestEnv, groups []database.SearchTitleGroup, filters *database.SearchFilters,
 ) (results []database.SearchResultWithCursor, counts []int, err error) {
 	results = make([]database.SearchResultWithCursor, 0, len(groups))
 	counts = make([]int, 0, len(groups))
+	titleIDs := make([]int64, len(groups))
 	for i := range groups {
-		versions, foldErr := foldContainerVersions(env.Context, env.Database.MediaDB, groups[i].Rows)
+		titleIDs[i] = groups[i].TitleDBID
+	}
+	linked, err := titleVersionCounts(env.Context, env.Database.MediaDB, titleIDs, filters, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range groups {
+		versions, foldErr := foldVersions(env.Context, env.Database.MediaDB, groups[i].Rows)
 		if foldErr != nil {
 			return nil, nil, foldErr
 		}
@@ -164,7 +174,13 @@ func defaultTitleVersions(
 			}
 		}
 		results = append(results, chosen)
-		counts = append(counts, len(versions))
+		count := len(versions)
+		if groupCount, ok := linked[groups[i].TitleDBID]; ok {
+			// The group read applies the same filters, but not the search's
+			// words, so the title's own rows can only match or exceed it.
+			count = max(count, groupCount)
+		}
+		counts = append(counts, count)
 	}
 	return results, counts, nil
 }

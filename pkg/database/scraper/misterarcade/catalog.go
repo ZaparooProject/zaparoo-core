@@ -71,6 +71,13 @@ type Catalog func(platforms.Platform) ([]Entry, error)
 // is valid and means every row is read.
 type SetNameCache func(path string) (setName string, ok bool)
 
+// IdentityCache is the same fast path for a descriptor's set name together
+// with the set it is a clone of. ok=false means the platform holds no parent
+// answer for that descriptor; the scraper then leaves the parent unknown
+// rather than read the file, since the point of the cache is not to. A nil
+// cache is valid.
+type IdentityCache func(path string) (setName, parent string, ok bool)
+
 // index maps a lower-cased set name to its catalog row. Later duplicates lose:
 // the catalog is a single upstream file, so a repeated set name is a defect in
 // it rather than an ambiguity Core can resolve. The repeats sit in blocks

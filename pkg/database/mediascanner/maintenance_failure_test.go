@@ -49,14 +49,16 @@ const (
 	failPersistTagCache        = "persist_tag_cache"
 	failPersistSlugCache       = "persist_slug_cache"
 	failCountCache             = "count_cache"
+	failVersionGroups          = "version_groups"
 )
 
 type maintenanceFailureMediaDB struct {
 	database.MediaDBI
-	failure  error
-	failAt   string
-	statuses []string
-	marked   []string
+	failure   error
+	failAt    string
+	statuses  []string
+	marked    []string
+	regrouped [][]string
 }
 
 func (db *maintenanceFailureMediaDB) injected(name string) error {
@@ -148,6 +150,15 @@ func (db *maintenanceFailureMediaDB) InvalidateCountCache() error {
 		return err
 	}
 	return db.MediaDBI.InvalidateCountCache()
+}
+
+//nolint:wrapcheck // Test decorator deliberately forwards underlying behavior.
+func (db *maintenanceFailureMediaDB) RecomputeVersionGroups(ctx context.Context, systemIDs []string) error {
+	db.regrouped = append(db.regrouped, systemIDs)
+	if err := db.injected(failVersionGroups); err != nil {
+		return err
+	}
+	return db.MediaDBI.RecomputeVersionGroups(ctx, systemIDs)
 }
 
 //nolint:wrapcheck // Test decorator deliberately forwards underlying behavior.
@@ -259,6 +270,67 @@ func TestNewNamesIndex_EarlyAnalyzeCorruptionAbortsRun(t *testing.T) {
 	assert.NotEmpty(t, wrapped.marked)
 	assert.NotContains(t, wrapped.statuses, mediadb.IndexingStatusCompleted)
 	platform.AssertExpectations(t)
+}
+
+// runVersionGroupIndex indexes one NES file, so the run has a system whose
+// versions it must regroup.
+func runVersionGroupIndex(t *testing.T, failure error) (*maintenanceFailureMediaDB, error) {
+	t.Helper()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	wrapped := &maintenanceFailureMediaDB{MediaDBI: db.MediaDB, failure: failure}
+	if failure != nil {
+		wrapped.failAt = failVersionGroups
+	}
+	db.MediaDB = wrapped
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{{
+		ID:                 "nes-test",
+		SystemID:           "NES",
+		SkipFilesystemScan: true,
+		Scanner: func(
+			context.Context, *config.Instance, string, []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return []platforms.ScanResult{{Path: "game.nes"}}, nil
+		},
+	}})
+	platform.On("RootDirs", mock.Anything).Return([]string{})
+
+	_, err := NewNamesIndex(
+		context.Background(), platform, &config.Instance{}, []systemdefs.System{{ID: "NES"}},
+		db, func(IndexStatus) {}, nil,
+	)
+	return wrapped, err
+}
+
+// An index run regroups the versions of the systems it indexed, once, after
+// their files are in place.
+func TestNewNamesIndex_RegroupsVersionsOfIndexedSystems(t *testing.T) {
+	wrapped, err := runVersionGroupIndex(t, nil)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"NES"}}, wrapped.regrouped)
+	assert.Contains(t, wrapped.statuses, mediadb.IndexingStatusCompleted)
+}
+
+// A stale group only affects version lists, so a failed regroup must not cost
+// the user their index; a corrupt database still stops the run.
+func TestNewNamesIndex_VersionRegroupFailure(t *testing.T) {
+	t.Run("ordinary failure is best-effort", func(t *testing.T) {
+		wrapped, err := runVersionGroupIndex(t, errors.New("regroup unavailable"))
+		require.NoError(t, err)
+		assert.Empty(t, wrapped.marked)
+		assert.Contains(t, wrapped.statuses, mediadb.IndexingStatusCompleted)
+	})
+
+	t.Run("corruption aborts the run", func(t *testing.T) {
+		corruptErr := fmt.Errorf("regroup: %w", sqlite3.Error{Code: sqlite3.ErrCorrupt})
+		wrapped, err := runVersionGroupIndex(t, corruptErr)
+		require.ErrorIs(t, err, corruptErr)
+		assert.NotEmpty(t, wrapped.marked)
+		assert.NotContains(t, wrapped.statuses, mediadb.IndexingStatusCompleted)
+	})
 }
 
 func TestNewNamesIndex_OrdinaryCacheFailureRemainsBestEffort(t *testing.T) {

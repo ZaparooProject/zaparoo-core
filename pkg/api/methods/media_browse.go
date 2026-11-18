@@ -1763,6 +1763,7 @@ func buildBrowseResponse(
 		entries = append(entries, entry)
 	}
 	attachBrowseCoverColors(env, entries)
+	attachBrowseVersionCounts(env, entries, files)
 	for _, i := range folderArtEntries {
 		entries[i].CoverColor = ""
 	}

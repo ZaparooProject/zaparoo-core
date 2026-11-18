@@ -88,6 +88,16 @@ The resolution cache (`SlugResolutionCache`) only stores the `mediaDBID` and str
 
 Optimization opportunity: cache the full result object to make cache hits a pure memory lookup (~66x ratio instead of ~120x).
 
+## Similar and Recommended Media
+
+Target at 129k titles: < 250ms for `media.similar` index work on one title; < 2s to build a `media.recommended` plan from ten seeds, uncached.
+
+`media.similar` answers a request from a details screen, where a short wait after the screen opens is acceptable but the list should arrive while the user is still looking at it. `media.recommended` fills a home row; its plan is cached per profile, so the uncached cost is paid once per change to play history, flags or the index.
+
+x86 baseline at 129k titles (`BenchmarkSimilar`, `BenchmarkRecommendPlan` in `pkg/database/mediadb`): 1.4-3.4ms per similar lookup, 5.6ms per plan. Both are dominated by DB reads. MiSTer baseline: not measured yet.
+
+The work is bounded by design, not by library size: a tag carried by more than 2% of titles (minimum 50) finds no candidates, and the tags that do are capped by a postings budget (6,000 index entries for `media.similar`, 3,000 per seed for a plan). Raising either bound trades latency for reach.
+
 ## x86-to-MiSTer Multiplier Bands
 
 Derived from the 212 benchmarks present in both baselines (`testdata/benchmarks/baseline.txt` and `baseline-mister.txt`, both regenerated November 2026 from the same commit, the MiSTer run on the SD card). These enable CI prediction of MiSTer performance from x86 benchmark runs.

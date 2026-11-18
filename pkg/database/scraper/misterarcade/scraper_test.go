@@ -120,7 +120,7 @@ func arcadeSystem() database.System {
 func TestScraperIsBoundToItsArcadeLaunchers(t *testing.T) {
 	t.Parallel()
 	systems := []string{systemdefs.SystemArcade, systemdefs.SystemCPS1}
-	s := NewPlatformScraper(systems, fixtureCatalog(), nil)
+	s := NewPlatformScraper(systems, fixtureCatalog(), nil, nil)
 
 	assert.Equal(t, "mister-arcade", s.ID)
 	assert.Equal(t, systems, s.SupportedSystemIDs)
@@ -152,7 +152,7 @@ func TestScrapeWritesCatalogMetadataToMatchedDescriptors(t *testing.T) {
 	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
 	last := final[len(final)-1]
@@ -160,10 +160,21 @@ func TestScrapeWritesCatalogMetadataToMatchedDescriptors(t *testing.T) {
 	assert.Equal(t, 1, last.Matched)
 	assert.Equal(t, 2, last.Skipped, "an uncatalogued set and an unreadable descriptor")
 
-	require.Len(t, *writes, 1)
-	assert.Equal(t, int64(100), (*writes)[0].MediaDBID)
-	assert.Equal(t, int64(1), (*writes)[0].MediaTitleDBID)
-	title := (*writes)[0].Write.TitleTags
+	// The uncatalogued set has no metadata, but it still says which set it
+	// is, so it is written with nothing but that.
+	require.Len(t, *writes, 2)
+	keysOnly := (*writes)[0]
+	assert.Equal(t, int64(101), keysOnly.MediaDBID)
+	assert.Empty(t, keysOnly.Write.Sentinel.Type, "a row with no metadata is not marked scraped")
+	assert.Empty(t, keysOnly.Write.TitleTags)
+	assert.Equal(t, scraperID, keysOnly.Write.VersionKeySource)
+	assert.Contains(t, keysOnly.Write.VersionKeys,
+		database.VersionKey{Type: database.VersionKeyMAMESet, Key: "notinthecatalog"})
+
+	matchedWrite := (*writes)[1]
+	assert.Equal(t, int64(100), matchedWrite.MediaDBID)
+	assert.Equal(t, int64(1), matchedWrite.MediaTitleDBID)
+	title := matchedWrite.Write.TitleTags
 	assert.Equal(t, []string{"1990"}, tagValues(title, tags.TagTypeYear))
 	assert.Equal(t, []string{"shmup:v", "shmup"}, tagValues(title, tags.TagTypeGenre))
 	assert.Equal(t, []string{"capcom:cps"}, tagValues(title, tags.TagTypeArcadeBoard))
@@ -196,7 +207,7 @@ func TestScrapePrefersThePlatformSetNameCache(t *testing.T) {
 	s := NewPlatformScraper(
 		[]string{systemdefs.SystemArcade},
 		fixtureCatalog(Entry{SetName: "cached", Year: "1984"}),
-		cache,
+		cache, nil,
 	)
 	run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
@@ -222,7 +233,7 @@ func TestScrapeReadsTheDescriptorWhenTheCacheMisses(t *testing.T) {
 	s := NewPlatformScraper(
 		[]string{systemdefs.SystemArcade},
 		fixtureCatalog(Entry{SetName: "ondisk", Year: "1987"}),
-		func(string) (string, bool) { return "", false },
+		func(string) (string, bool) { return "", false }, nil,
 	)
 	run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
@@ -247,7 +258,7 @@ func TestScrapeSkipsRowsItHasAlreadyWritten(t *testing.T) {
 	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	updates := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
 	assert.Equal(t, 1, updates[len(updates)-1].Processed, "a sentinel row is not a candidate")
@@ -272,7 +283,7 @@ func TestFillMissingRevisitsSentinelRowsAndMarksTheWrite(t *testing.T) {
 	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	run(t, &s, fs, mediaDB, scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"})
 
 	require.Len(t, *writes, 1)
@@ -307,7 +318,7 @@ func TestFillMissingSkipsASystemWhoseCatalogAndLibraryAreUnchanged(t *testing.T)
 	first.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
 		Run(func(args mock.Arguments) { remembered = args.String(3) }).Return(nil)
 	writes := captureWrites(t, first)
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	run(t, &s, fs, first, fill)
 	require.Len(t, *writes, 1)
 	require.NotEmpty(t, remembered)
@@ -327,7 +338,7 @@ func TestFillMissingSkipsASystemWhoseCatalogAndLibraryAreUnchanged(t *testing.T)
 	changed.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
 		Return(nil)
 	rewritten := captureWrites(t, changed)
-	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(refreshed), nil)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(refreshed), nil, nil)
 	run(t, &s, fs, changed, fill)
 	assert.Len(t, *rewritten, 1)
 
@@ -337,14 +348,14 @@ func TestFillMissingSkipsASystemWhoseCatalogAndLibraryAreUnchanged(t *testing.T)
 	manual.On("SetScrapeFingerprint", mock.Anything, scraperID, systemdefs.SystemArcade, mock.Anything).
 		Return(nil)
 	manualWrites := captureWrites(t, manual)
-	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s = NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	run(t, &s, fs, manual, scraper.ScrapeOptions{})
 	assert.Len(t, *manualWrites, 1)
 }
 
 func TestScrapeRejectsFillMissingWithForce(t *testing.T) {
 	t.Parallel()
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(), nil, nil)
 	err := s.Scrape(
 		context.Background(), nil, nil, afero.NewMemMapFs(),
 		&database.Database{MediaDB: testhelpers.NewMockMediaDBI()},
@@ -359,7 +370,7 @@ func TestScrapeFailsWhenTheCatalogCannotBeRead(t *testing.T) {
 	// request rather than write an empty result over real metadata.
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, func(platforms.Platform) ([]Entry, error) {
 		return nil, errors.New("no catalog available")
-	}, nil)
+	}, nil, nil)
 	err := s.Scrape(
 		context.Background(), nil, nil, afero.NewMemMapFs(),
 		&database.Database{MediaDB: testhelpers.NewMockMediaDBI()},
@@ -386,7 +397,7 @@ func TestScrapeStopsOnAWriteFailure(t *testing.T) {
 		Return(errors.New("disk full"))
 
 	entry := cps1Entry()
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil, nil)
 	updates := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
 	last := updates[len(updates)-1]
@@ -436,7 +447,7 @@ func TestSharedTitleWritesAreOrderedByPath(t *testing.T) {
 	japan1941 := cps1Entry()
 	japan1941.SetName = "1941j"
 	japan1941.Year = "1991"
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(world1941, japan1941), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(world1941, japan1941), nil, nil)
 	run(t, &s, fs, mediaDB, scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"})
 
 	require.Len(t, *writes, 2)
@@ -487,7 +498,7 @@ func TestScrapeSkipsASystemWithNoDescriptors(t *testing.T) {
 		{DBID: 101, MediaTitleDBID: 2, Path: filepath.Join(arcadeRoot, "Gone.mra"), IsMissing: true},
 	}, nil)
 
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil, nil)
 	final := run(t, &s, afero.NewMemMapFs(), mediaDB, scraper.ScrapeOptions{})
 
 	last := final[len(final)-1]
@@ -541,7 +552,7 @@ func TestScrapeDoesNotLoadTitles(t *testing.T) {
 		Return(map[int64]struct{}{}, nil).Once()
 	writes := captureWrites(t, mediaDB)
 
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil, nil)
 	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
 
 	assert.Equal(t, 1, final[len(final)-1].Matched)
@@ -568,7 +579,7 @@ func TestScopedScrapeWritesOnlyTheSelectedRow(t *testing.T) {
 	}}, nil).Once()
 	writes := captureWrites(t, mediaDB)
 
-	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil, nil)
 	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{Scope: scope, Force: true})
 
 	last := final[len(final)-1]
@@ -586,6 +597,7 @@ func TestBuildTargetsWaitsWhilePaused(t *testing.T) {
 	t.Parallel()
 	var reads atomic.Int32
 	impl := &scraperImpl{
+		db: testhelpers.NewMockMediaDBI(),
 		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
 		cache: func(string) (string, bool) {
 			reads.Add(1)
@@ -603,10 +615,10 @@ func TestBuildTargetsWaitsWhilePaused(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		targets, _, err := impl.buildTargets(ctx, []descriptorRow{
+		built, err := impl.buildTargets(ctx, []descriptorRow{
 			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
-		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
-		done <- result{targets: targets, err: err}
+		}, mainIndex{}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		done <- result{targets: built.matched, err: err}
 	}()
 
 	assert.Never(t, func() bool { return reads.Load() > 0 }, 50*time.Millisecond, 5*time.Millisecond,
@@ -623,6 +635,7 @@ func TestBuildTargetsCancelledWhilePaused(t *testing.T) {
 	t.Parallel()
 	var reads atomic.Int32
 	impl := &scraperImpl{
+		db: testhelpers.NewMockMediaDBI(),
 		fs: afero.NewMemMapFs(), entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
 		cache: func(string) (string, bool) {
 			reads.Add(1)
@@ -634,9 +647,9 @@ func TestBuildTargetsCancelledWhilePaused(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := impl.buildTargets(ctx, []descriptorRow{
+		_, err := impl.buildTargets(ctx, []descriptorRow{
 			{path: filepath.Join(arcadeRoot, "1941.mra"), dbid: 100, titleDBID: 1},
-		}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
+		}, mainIndex{}, map[int64]struct{}{}, scraper.ScrapeOptions{Pauser: pauser})
 		done <- err
 	}()
 	cancel()

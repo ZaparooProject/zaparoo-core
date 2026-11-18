@@ -331,6 +331,9 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.generate.cancel           | Cancel active media database indexing.                                                | All clients |
 | media.generate.resume           | Resume paused media database indexing.                                                | All clients |
 | media.search                    | Search indexed media.                                                                 | All clients |
+| media.versions                  | List the other versions of a media item's game.                                       | All clients |
+| media.similar                   | List media like a media item.                                                         | All clients |
+| media.recommended               | List media the active profile may want to play next.                                  | All clients |
 | media.browse                    | Browse indexed media in a directory hierarchy.                                        | All clients |
 | media.browse.index              | Return jump-to-letter buckets and seek cursors for browsing.                          | All clients |
 | media.tags                      | Query tags available for media filtering.                                             | All clients |
