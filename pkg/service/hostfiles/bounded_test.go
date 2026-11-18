@@ -21,6 +21,8 @@ package hostfiles
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -75,4 +77,76 @@ func TestBoundedReportsCancellation(t *testing.T) {
 		return 0, nil
 	})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// swappedTree is a root with games/covers/a.png and, outside it,
+// private/a.png. Its browser swaps covers for a link to private after the
+// path is checked and before it is opened.
+func swappedTree(t *testing.T, link func(base string) string) (b *Browser, rootPath string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	rootPath = filepath.Join(base, "games")
+	covers := filepath.Join(rootPath, "covers")
+	private := filepath.Join(base, "private")
+	for _, dir := range []string{covers, private} {
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.png"), []byte(filepath.Base(dir)), 0o600))
+	}
+	if err = os.Symlink(link(base), filepath.Join(rootPath, "probe")); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	b = NewBrowser([]string{rootPath}, "")
+	b.afterCheck = func() {
+		require.NoError(t, os.Rename(covers, filepath.Join(rootPath, "covers.old")))
+		require.NoError(t, os.Symlink(link(base), covers))
+		leaked, readErr := os.ReadFile(filepath.Join(covers, "a.png")) //nolint:gosec // test temp folder
+		require.NoError(t, readErr)
+		require.Equal(t, "private", string(leaked), "the swapped folder leads outside the root")
+	}
+	return b, rootPath
+}
+
+func TestFolderSwappedAfterTheCheckCannotLeadOutOfTheRoot(t *testing.T) {
+	t.Parallel()
+	links := map[string]func(base string) string{
+		"absolute": func(base string) string { return filepath.Join(base, "private") },
+		"relative": func(string) string { return filepath.Join("..", "private") },
+	}
+	for name, link := range links {
+		t.Run(name+" image", func(t *testing.T) {
+			t.Parallel()
+			b, rootPath := swappedTree(t, link)
+			image, err := b.OpenImage(context.Background(), rootID(rootPath), "covers/a.png")
+			if image != nil {
+				_ = image.File.Close()
+			}
+			require.ErrorIs(t, err, ErrNotFound, "the swapped folder is not followed out of the root")
+		})
+		t.Run(name+" listing", func(t *testing.T) {
+			t.Parallel()
+			b, rootPath := swappedTree(t, link)
+			listing, err := b.ListImages(context.Background(), rootID(rootPath), "covers")
+			require.ErrorIs(t, err, ErrNotFound, "listing %v", listing.Entries)
+		})
+	}
+}
+
+func TestBoundedClosesWhatALateReadOpened(t *testing.T) {
+	t.Parallel()
+	b := &Browser{timeout: 50 * time.Millisecond}
+	release := make(chan struct{})
+	discarded := make(chan int, 1)
+	_, err := boundedDiscard(context.Background(), b, "/test-discard-"+t.Name(), func() (int, error) {
+		<-release
+		return 3, nil
+	}, func(v int) { discarded <- v })
+	require.ErrorIs(t, err, ErrTimeout)
+	close(release)
+	select {
+	case v := <-discarded:
+		assert.Equal(t, 3, v)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the late value was not discarded")
+	}
 }

@@ -306,36 +306,62 @@ func prepareMediaImageEdits(env *requests.RequestEnv, edits []mediaFieldEdit) er
 // readMediaImageSource reads and checks the image a file or browse edit
 // names.
 func readMediaImageSource(env *requests.RequestEnv, input *models.MediaImageInput) ([]byte, error) {
-	sourcePath := input.Path
-	if input.Kind == models.MediaImageKindBrowse {
-		// A browse image is one files.browse listed: inside a browse root.
-		browser, err := hostBrowser(env)
-		if err != nil {
-			return nil, err
-		}
-		sourcePath, err = browser.ResolveImage(env.Context, input.Root, input.Path)
-		if err != nil {
-			return nil, hostFilesClientError(err)
-		}
-	} else if !isLocalOrAdmin(env) {
+	var data []byte
+	var err error
+	switch {
+	case input.Kind == models.MediaImageKindBrowse:
+		data, err = readBrowsedMediaImage(env, input)
+	case !isLocalOrAdmin(env):
 		// A file image reads any image on the Core host.
 		return nil, models.ClientErrf("%w", ErrForbidden)
+	default:
+		data, err = readHostMediaImage(input.Path)
 	}
-	info, err := os.Stat(sourcePath)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, models.ClientErrf("image file not found: %s", input.Path)
-	}
-	if info.Size() > imagefiles.MaxBytes {
-		return nil, models.ClientErr(imagefiles.ErrTooLarge)
-	}
-	data, err := readMediaBinaryFile(afero.NewOsFs(), sourcePath, imagefiles.MaxBytes)
 	if err != nil {
-		return nil, models.ClientErrf("image file cannot be read: %w", err)
+		return nil, err
 	}
 	if err = checkMediaUserImage(data); err != nil {
 		return nil, models.ClientErr(err)
 	}
 	return data, nil
+}
+
+// readBrowsedMediaImage reads a browse image: one files.browse listed, inside
+// a browse root, read through the file the root opened.
+func readBrowsedMediaImage(env *requests.RequestEnv, input *models.MediaImageInput) ([]byte, error) {
+	browser, err := hostBrowser(env)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := browser.OpenImage(env.Context, input.Root, input.Path)
+	if err != nil {
+		return nil, hostFilesClientError(err)
+	}
+	defer func() { _ = opened.File.Close() }()
+	data, err := readOpenedMediaFile(opened.File, opened.Info, imagefiles.MaxBytes)
+	return data, mediaImageSourceReadError(err)
+}
+
+// readHostMediaImage reads a file image, named by its path on the Core host.
+func readHostMediaImage(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, models.ClientErrf("image file not found: %s", path)
+	}
+	data, err := readMediaBinaryFile(afero.NewOsFs(), path, imagefiles.MaxBytes)
+	return data, mediaImageSourceReadError(err)
+}
+
+// mediaImageSourceReadError is the client error for a failed image read.
+func mediaImageSourceReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var tooLarge *mediaBinaryTooLargeError
+	if errors.As(err, &tooLarge) {
+		return models.ClientErr(imagefiles.ErrTooLarge)
+	}
+	return models.ClientErrf("image file cannot be read: %w", err)
 }
 
 // storeMediaUserImage stores the image an edit names in the user images

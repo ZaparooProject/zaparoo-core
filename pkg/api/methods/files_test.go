@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/hostfiles"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -167,4 +168,46 @@ func TestHandleMediaMetaUpdate_ImageFromBrowse(t *testing.T) {
 	require.ErrorIs(t, err, ErrForbidden)
 	err = e.updateErr(t, `{"images": {"boxart": {"kind": "browse", "root": "x"}}}`)
 	assert.True(t, isClientErr(err), "a browse image needs a path")
+}
+
+func TestHostImagesOverTheLimitAreRefused(t *testing.T) {
+	t.Parallel()
+	e, rootID, _ := newFilesTestEnv(t)
+	roots, err := hostBrowser(&e.env)
+	require.NoError(t, err)
+	opened, err := roots.OpenImage(e.env.Context, rootID, "covers/zelda.png")
+	require.NoError(t, err)
+	huge := filepath.Join(filepath.Dir(opened.Path), "huge.png")
+	require.NoError(t, opened.File.Close())
+	require.NoError(t, os.WriteFile(huge, nil, 0o600))
+	require.NoError(t, os.Truncate(huge, imagefiles.MaxBytes+1))
+
+	_, err = HandleFilesImage(withParams(&e.env, fmt.Sprintf(`{"root":%q,"path":"covers/huge.png"}`, rootID)))
+	require.Error(t, err)
+	assert.True(t, isClientErr(err), "want a client error, got %v", err)
+	err = e.updateErr(t, fmt.Sprintf(
+		`{"images": {"boxart": {"kind": "browse", "root": %q, "path": "covers/huge.png"}}}`, rootID))
+	require.ErrorIs(t, err, imagefiles.ErrTooLarge)
+}
+
+func TestReadOpenedMediaFileRefusesAFileThatGrew(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "grows.png")
+	require.NoError(t, os.WriteFile(path, []byte("abc"), 0o600))
+	file, err := os.Open(path) //nolint:gosec // a path under the test's own temp dir
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = file.Close() })
+	info, err := file.Stat()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("abcdefg"), 0o600))
+
+	_, err = readOpenedMediaFile(file, info, 4)
+	var tooLarge *mediaBinaryTooLargeError
+	require.ErrorAs(t, err, &tooLarge, "a file that grew past the limit after its check is refused")
+
+	_, err = file.Seek(0, 0)
+	require.NoError(t, err)
+	data, err := readOpenedMediaFile(file, info, 16)
+	require.NoError(t, err)
+	assert.Equal(t, "abcdefg", string(data), "within the limit, the whole file is read")
 }

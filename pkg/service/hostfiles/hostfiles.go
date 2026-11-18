@@ -103,8 +103,11 @@ type Listing struct {
 // Browser resolves and lists paths under a set of roots. Every method that
 // touches the filesystem runs it under ReadTimeout and a read slot.
 type Browser struct {
-	roots   []Root
-	timeout time.Duration
+	// afterCheck, when set by a test, runs between a path's check and its
+	// open.
+	afterCheck func()
+	roots      []Root
+	timeout    time.Duration
 }
 
 // readSlots counts the filesystem reads in flight, across browsers, in all
@@ -156,6 +159,14 @@ func (r *readSlots) release(root string) {
 // timeout. A call that times out returns, but fn keeps its slot until the
 // filesystem answers it.
 func bounded[T any](ctx context.Context, b *Browser, root string, fn func() (T, error)) (T, error) {
+	return boundedDiscard(ctx, b, root, fn, nil)
+}
+
+// boundedDiscard is bounded for a value that holds a resource: when the call
+// has already returned, a value fn produces later is handed to discard.
+func boundedDiscard[T any](
+	ctx context.Context, b *Browser, root string, fn func() (T, error), discard func(T),
+) (T, error) {
 	var zero T
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
@@ -169,11 +180,19 @@ func bounded[T any](ctx context.Context, b *Browser, root string, fn func() (T, 
 		err   error
 		value T
 	}
-	done := make(chan result, 1)
+	// Unbuffered: either the caller takes the result or, once it has
+	// returned, ctx is done and the result is discarded.
+	done := make(chan result)
 	go func() {
 		defer reads.release(root)
 		value, err := fn()
-		done <- result{value: value, err: err}
+		select {
+		case done <- result{value: value, err: err}:
+		case <-ctx.Done():
+			if err == nil && discard != nil {
+				discard(value)
+			}
+		}
 	}()
 	select {
 	case r := <-done:
@@ -258,26 +277,10 @@ func (b *Browser) root(id string) (Root, error) {
 	return b.roots[index], nil
 }
 
-// Resolve returns the real path of rel under the root with the given ID. rel
-// uses forward slashes; empty is the root itself. A path that leaves its
-// root, by ".." or through a symlink, is refused.
-func (b *Browser) Resolve(ctx context.Context, id, rel string) (string, error) {
-	root, err := b.root(id)
-	if err != nil {
-		return "", err
-	}
-	clean, err := cleanRel(rel)
-	if err != nil {
-		return "", err
-	}
-	return bounded(ctx, b, root.Path, func() (string, error) {
-		_, resolved, resolveErr := resolveUnder(root.Path, clean)
-		return resolved, resolveErr
-	})
-}
-
-// resolveUnder returns the real paths of root and of clean under it. It
-// touches the filesystem, so it runs inside bounded.
+// resolveUnder returns the real paths of root and of clean under it, and
+// refuses a path that leaves the root, by ".." or through a symlink. It
+// touches the filesystem, so it runs inside bounded. The result is only a
+// check: open it through an os.Root at rootReal.
 func resolveUnder(rootPath, clean string) (rootReal, resolved string, err error) {
 	rootReal, err = filepath.EvalSymlinks(rootPath)
 	if err != nil {
@@ -323,35 +326,68 @@ func within(root, path string) bool {
 		!filepath.IsAbs(rel)
 }
 
-// ResolveImage is Resolve for a regular file with an image extension.
-func (b *Browser) ResolveImage(ctx context.Context, id, rel string) (string, error) {
+// Image is an image file opened under a browse root. The caller closes File.
+type Image struct {
+	Info os.FileInfo
+	File *os.File
+	// Path is the file's real path when it was opened, for naming it. Read
+	// the file through File: Path is not checked again.
+	Path string
+}
+
+// OpenImage opens a regular file with an image extension under the root with
+// the given ID. rel uses forward slashes. A path that leaves its root, by
+// ".." or through a symlink, is refused, and the file is opened through the
+// root, so a folder swapped for a link after the check cannot lead outside.
+func (b *Browser) OpenImage(ctx context.Context, id, rel string) (*Image, error) {
 	root, err := b.root(id)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	clean, err := cleanRel(rel)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return bounded(ctx, b, root.Path, func() (string, error) {
-		_, path, resolveErr := resolveUnder(root.Path, clean)
+	return boundedDiscard(ctx, b, root.Path, func() (*Image, error) {
+		rootReal, path, resolveErr := resolveUnder(root.Path, clean)
 		if resolveErr != nil {
-			return "", resolveErr
+			return nil, resolveErr
 		}
-		info, statErr := os.Stat(path)
+		b.checked()
+		dirRoot, openErr := os.OpenRoot(rootReal)
+		if openErr != nil {
+			return nil, ErrNotFound
+		}
+		defer func() { _ = dirRoot.Close() }()
+		relPath, relErr := filepath.Rel(rootReal, path)
+		if relErr != nil {
+			return nil, ErrInvalidPath
+		}
+		// Checked before the open, which would wait on a named pipe.
+		info, statErr := dirRoot.Stat(relPath)
 		if statErr != nil {
-			return "", ErrNotFound
+			return nil, ErrNotFound
 		}
 		if !info.Mode().IsRegular() || !IsImageName(path) {
-			return "", ErrNotFile
+			return nil, ErrNotFile
 		}
-		return path, nil
-	})
+		file, openErr := dirRoot.Open(relPath)
+		if openErr != nil {
+			return nil, ErrNotFound
+		}
+		info, statErr = file.Stat()
+		if statErr != nil || !info.Mode().IsRegular() {
+			_ = file.Close()
+			return nil, ErrNotFile
+		}
+		return &Image{File: file, Info: info, Path: path}, nil
+	}, func(image *Image) { _ = image.File.Close() })
 }
 
 // ListImages lists the folders and image files of one folder under a root,
 // folders first, each group by name. Hidden entries and anything a symlink
-// leads out of the root are left out.
+// leads out of the root are left out. The folder is read through the root,
+// so a folder swapped for a link after the check cannot lead outside.
 func (b *Browser) ListImages(ctx context.Context, id, rel string) (Listing, error) {
 	root, err := b.root(id)
 	if err != nil {
@@ -366,21 +402,45 @@ func (b *Browser) ListImages(ctx context.Context, id, rel string) (Listing, erro
 		if resolveErr != nil {
 			return Listing{}, resolveErr
 		}
-		info, statErr := os.Stat(dir)
+		b.checked()
+		top, openErr := os.OpenRoot(rootReal)
+		if openErr != nil {
+			return Listing{}, ErrNotFound
+		}
+		defer func() { _ = top.Close() }()
+		relDir, relErr := filepath.Rel(rootReal, dir)
+		if relErr != nil {
+			return Listing{}, ErrInvalidPath
+		}
+		info, statErr := top.Stat(relDir)
 		if statErr != nil {
 			return Listing{}, ErrNotFound
 		}
 		if !info.IsDir() {
 			return Listing{}, ErrNotDir
 		}
-		return readImages(rootReal, dir, filepath.ToSlash(clean))
+		folder, openErr := top.OpenRoot(relDir)
+		if openErr != nil {
+			return Listing{}, ErrNotFound
+		}
+		defer func() { _ = folder.Close() }()
+		return readImages(top, folder, rootReal, dir, filepath.ToSlash(clean))
 	})
 }
 
-// readImages reads dir and keeps its folders and image files. relDir is
-// dir's path under root, with forward slashes.
-func readImages(root, dir, relDir string) (Listing, error) {
-	file, err := os.Open(dir) //nolint:gosec // dir was resolved inside a browse root
+// checked runs the test hook between a path's check and its open.
+func (b *Browser) checked() {
+	if b.afterCheck != nil {
+		b.afterCheck()
+	}
+}
+
+// readImages reads folder and keeps its folders and image files. top is the
+// browse root at rootReal, dir is folder's real path when it was checked and
+// relDir its path under the root as the client named it, with forward
+// slashes.
+func readImages(top, folder *os.Root, rootReal, dir, relDir string) (Listing, error) {
+	file, err := folder.Open(".")
 	if err != nil {
 		return Listing{}, ErrNotFound
 	}
@@ -399,15 +459,8 @@ func readImages(root, dir, relDir string) (Listing, error) {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		if dirEntry.Type()&os.ModeSymlink != 0 {
-			target, linkErr := filepath.EvalSymlinks(path)
-			if linkErr != nil || !within(root, target) {
-				continue
-			}
-		}
-		info, statErr := os.Stat(path)
-		if statErr != nil {
+		info, ok := entryInfo(top, folder, rootReal, filepath.Join(dir, name), dirEntry)
+		if !ok {
 			continue
 		}
 		entry := Entry{Name: name, IsDir: info.IsDir(), Modified: info.ModTime()}
@@ -435,4 +488,25 @@ func readImages(root, dir, relDir string) (Listing, error) {
 		return a.Name < c.Name
 	})
 	return listing, nil
+}
+
+// entryInfo describes one folder entry, read through the roots. A symlink is
+// described by its target, and left out when the target is outside the root.
+func entryInfo(top, folder *os.Root, rootReal, path string, dirEntry os.DirEntry) (os.FileInfo, bool) {
+	if dirEntry.Type()&os.ModeSymlink == 0 {
+		info, err := folder.Lstat(dirEntry.Name())
+		return info, err == nil
+	}
+	// An absolute link inside the root is kept, which os.Root alone refuses,
+	// so the target is resolved here and then read through the root.
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil || !within(rootReal, target) {
+		return nil, false
+	}
+	relTarget, err := filepath.Rel(rootReal, target)
+	if err != nil {
+		return nil, false
+	}
+	info, err := top.Stat(relTarget)
+	return info, err == nil
 }

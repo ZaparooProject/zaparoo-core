@@ -133,13 +133,15 @@ func HandleFilesImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err != nil {
 		return nil, err
 	}
-	path, err := browser.ResolveImage(env.Context, params.Root, params.Path)
+	image, err := browser.OpenImage(env.Context, params.Root, params.Path)
 	if err != nil {
 		return nil, hostFilesClientError(err)
 	}
+	defer func() { _ = image.File.Close() }()
 	maxSize := 0
 	if params.MaxSize != nil {
 		maxSize = int(snapThumbMaxSize(*params.MaxSize))
 	}
-	return serveDeckImage(env.Context, deckImageSource{localPath: path}, filesImageTypeTag, maxSize, localPath)
+	source := deckImageSource{localPath: image.Path, opened: image.File, openedInfo: image.Info}
+	return serveDeckImage(env.Context, source, filesImageTypeTag, maxSize, localPath)
 }

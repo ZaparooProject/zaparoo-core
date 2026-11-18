@@ -21,6 +21,7 @@ package hostfiles_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -117,7 +118,7 @@ func TestListImagesKeepsFoldersAndImages(t *testing.T) {
 	require.ErrorIs(t, err, hostfiles.ErrUnknownRoot)
 }
 
-func TestResolveRefusesPathsThatLeaveTheRoot(t *testing.T) {
+func TestPathsThatLeaveTheRootAreRefused(t *testing.T) {
 	t.Parallel()
 	tr := buildTree(t)
 	browser, games, _, outside := tr.browser, tr.games, tr.images, tr.outside
@@ -127,18 +128,23 @@ func TestResolveRefusesPathsThatLeaveTheRoot(t *testing.T) {
 		"..", "../private", "SNES/../../private/secret.png", "/etc", filepath.ToSlash(outside),
 		`SNES\covers`, "SNES/\x00",
 	} {
-		_, err := browser.Resolve(context.Background(), root, rel)
+		_, err := browser.ListImages(context.Background(), root, rel)
+		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
+		_, err = browser.OpenImage(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
 	}
-	_, err := browser.Resolve(context.Background(), root, "SNES/nothing")
+	_, err := browser.ListImages(context.Background(), root, "SNES/nothing")
+	require.ErrorIs(t, err, hostfiles.ErrNotFound)
+	_, err = browser.OpenImage(context.Background(), root, "SNES/nothing.png")
 	require.ErrorIs(t, err, hostfiles.ErrNotFound)
 
-	path, err := browser.Resolve(context.Background(), root, "SNES/./covers")
+	listing, err := browser.ListImages(context.Background(), root, "SNES/./covers")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(games, "SNES", "covers"), path)
+	require.NotEmpty(t, listing.Entries)
+	assert.Equal(t, "SNES/covers/Zeta", listing.Entries[0].Path)
 }
 
-func TestSymlinksOutOfTheRootAreNeitherListedNorResolved(t *testing.T) {
+func TestSymlinksOutOfTheRootAreNeitherListedNorOpened(t *testing.T) {
 	t.Parallel()
 	tr := buildTree(t)
 	browser, games, _, outside := tr.browser, tr.games, tr.images, tr.outside
@@ -149,6 +155,7 @@ func TestSymlinksOutOfTheRootAreNeitherListedNorResolved(t *testing.T) {
 	}
 	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.png"), filepath.Join(covers, "leak.png")))
 	require.NoError(t, os.Symlink(filepath.Join(covers, "a.jpg"), filepath.Join(covers, "inside.jpg")))
+	require.NoError(t, os.Symlink("Zeta", filepath.Join(covers, "alias")))
 
 	listing, err := browser.ListImages(context.Background(), root, "SNES/covers")
 	require.NoError(t, err)
@@ -156,26 +163,42 @@ func TestSymlinksOutOfTheRootAreNeitherListedNorResolved(t *testing.T) {
 	for _, entry := range listing.Entries {
 		names = append(names, entry.Name)
 	}
-	assert.Equal(t, []string{"Zeta", "a.jpg", "b.PNG", "inside.jpg"}, names)
+	assert.Equal(t, []string{"alias", "Zeta", "a.jpg", "b.PNG", "inside.jpg"}, names)
 
-	for _, rel := range []string{"SNES/covers/escape", "SNES/covers/escape/secret.png", "SNES/covers/leak.png"} {
-		_, err = browser.Resolve(context.Background(), root, rel)
+	_, err = browser.ListImages(context.Background(), root, "SNES/covers/escape")
+	require.ErrorIs(t, err, hostfiles.ErrInvalidPath)
+	for _, rel := range []string{"SNES/covers/escape/secret.png", "SNES/covers/leak.png"} {
+		_, err = browser.OpenImage(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
 	}
+
+	image, err := browser.OpenImage(context.Background(), root, "SNES/covers/inside.jpg")
+	require.NoError(t, err, "an absolute link that stays inside the root is kept")
+	require.NoError(t, image.File.Close())
+	assert.Equal(t, filepath.Join(covers, "a.jpg"), image.Path)
+	aliased, err := browser.ListImages(context.Background(), root, "SNES/covers/alias")
+	require.NoError(t, err)
+	require.Len(t, aliased.Entries, 1)
+	assert.Equal(t, "SNES/covers/alias/c.webp", aliased.Entries[0].Path)
 }
 
-func TestResolveImageNeedsAnImageFile(t *testing.T) {
+func TestOpenImageNeedsAnImageFile(t *testing.T) {
 	t.Parallel()
 	tr := buildTree(t)
 	browser, games, images, _ := tr.browser, tr.games, tr.images, tr.outside
 	root := rootIDFor(t, browser, games)
 
-	path, err := browser.ResolveImage(context.Background(), hostfiles.ImagesRootID, "thumb.gif")
+	image, err := browser.OpenImage(context.Background(), hostfiles.ImagesRootID, "thumb.gif")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(images, "thumb.gif"), path)
+	t.Cleanup(func() { _ = image.File.Close() })
+	assert.Equal(t, filepath.Join(images, "thumb.gif"), image.Path)
+	assert.Equal(t, int64(1), image.Info.Size())
+	data, err := io.ReadAll(image.File)
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(data))
 
 	for _, rel := range []string{"SNES/game.sfc", "SNES/covers", "SNES/covers/notes.txt"} {
-		_, err = browser.ResolveImage(context.Background(), root, rel)
+		_, err = browser.OpenImage(context.Background(), root, rel)
 		require.ErrorIs(t, err, hostfiles.ErrNotFile, "path %q", rel)
 	}
 }

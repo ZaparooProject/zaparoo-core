@@ -2071,6 +2071,22 @@ func readMediaBinaryFile(fs afero.Fs, path string, maxBytes int64) ([]byte, erro
 	return data, nil
 }
 
+// readOpenedMediaFile is readMediaBinaryFile for a file already opened, with
+// info from that file.
+func readOpenedMediaFile(file *os.File, info os.FileInfo, maxBytes int64) ([]byte, error) {
+	if info.Size() > maxBytes {
+		return nil, &mediaBinaryTooLargeError{path: file.Name(), size: info.Size(), max: maxBytes}
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read media binary file %q: %w", file.Name(), err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, &mediaBinaryTooLargeError{path: file.Name(), size: int64(len(data)), max: maxBytes}
+	}
+	return data, nil
+}
+
 func mediaImageReadError(path string, err error) error {
 	var tooLarge *mediaBinaryTooLargeError
 	if errors.As(err, &tooLarge) {
