@@ -540,3 +540,67 @@ func TestGatherSignals_MergesVersionsAndFlags(t *testing.T) {
 	assert.False(t, game.Disliked, "a like on one version outweighs a dislike on another")
 	assert.True(t, signals.ByGroup[3].Disliked)
 }
+
+// A queue ranks every pick in one list and says what each was picked for.
+func TestBuildPlan_Queue(t *testing.T) {
+	t.Parallel()
+	lib := seriesLibrary()
+	lib.flag(1, tags.TagUserFavorite)
+	lib.play("", 21, hours(4), planNow.Add(-2*24*time.Hour))
+	lib.flag(61, tags.TagUserPlayLater)
+	lib.flag(91, tags.TagUserPlayLater)
+	lib.flag(2, tags.TagUserDisliked)
+
+	plan := planFor(t, lib, "", Options{Queue: true, MaxResults: 30})
+	require.Equal(t, []string{SectionQueue}, sectionKinds(plan))
+	items := plan.Sections[0].Items
+
+	all := planTitles(plan)
+	sorted := slices.Clone(all)
+	slices.Sort(sorted)
+	assert.Len(t, slices.Compact(sorted), len(all), "a title appears once")
+	assert.NotContains(t, all, int64(1), "a seed is not recommended")
+	assert.NotContains(t, all, int64(21))
+	assert.NotContains(t, all, int64(2), "a disliked game is not recommended")
+
+	mario := 0
+	seeds := make(map[int64]string)
+	for _, item := range items {
+		if item.TitleDBID <= 10 {
+			mario++
+		}
+		switch item.TitleDBID {
+		case 61, 91:
+			assert.Equal(t, SignalPlayLater, item.Signal, "title %d", item.TitleDBID)
+			assert.Zero(t, item.SeedTitleDBID, "title %d", item.TitleDBID)
+		default:
+			require.NotZero(t, item.SeedTitleDBID, "title %d", item.TitleDBID)
+			require.NotEmpty(t, item.Reasons, "title %d", item.TitleDBID)
+			seeds[item.SeedTitleDBID] = item.Signal
+		}
+	}
+	assert.Equal(t, maxPerSeries, mario, "the series cap holds across the whole queue")
+	assert.Equal(t, map[int64]string{1: SignalFavorite, 21: SignalPlayed}, seeds,
+		"both seeds supply the queue, each under its own signal")
+	assert.Contains(t, all, int64(61))
+	assert.Contains(t, all, int64(91), "a marked game the index knows nothing about is still queued")
+
+	// The same signals give the same queue.
+	assert.Equal(t, plan, planFor(t, lib, "", Options{Queue: true, MaxResults: 30}))
+	assert.LessOrEqual(t, len(planFor(t, lib, "", Options{Queue: true, MaxResults: 3}).Sections[0].Items),
+		3+planSpare)
+}
+
+// A marked game no seed reaches still has a queue to be in.
+func TestBuildPlan_QueuePlayLaterOnly(t *testing.T) {
+	t.Parallel()
+	lib := seriesLibrary()
+	lib.flag(61, tags.TagUserPlayLater)
+
+	plan := planFor(t, lib, "", Options{Queue: true})
+	require.Equal(t, []string{SectionQueue}, sectionKinds(plan))
+	assert.Equal(t, []PlanItem{{TitleDBID: 61, Signal: SignalPlayLater}}, plan.Sections[0].Items)
+
+	assert.Empty(t, planFor(t, newFakeLibrary(), "", Options{Queue: true}).Sections,
+		"no signals, no queue")
+}

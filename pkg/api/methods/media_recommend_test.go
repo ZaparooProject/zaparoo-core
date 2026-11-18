@@ -303,6 +303,41 @@ func TestHandleMediaRecommended_PlanIsReusedUntilSomethingChanges(t *testing.T) 
 	assert.Equal(t, built+1, fixture.plansBuilt(), "a new day weighs play afresh")
 }
 
+// The queue layout is one ranked section whose items name the seed they are
+// like, and it is a plan of its own in the cache.
+//
+//nolint:paralleltest // swaps the package's recommendation clock and plan cache
+func TestHandleMediaRecommended_Queue(t *testing.T) {
+	fixture := newRecommendedFixture(t)
+	fixture.mediaDB.On("MediaPreferencesRevision", mock.Anything).Return("1", nil)
+	sections := fixture.call(t, nil)
+	require.Equal(t, 1, fixture.plansBuilt())
+
+	queue := models.RecommendedLayoutQueue
+	response := fixture.call(t, models.MediaRecommendedParams{Layout: &queue})
+	assert.Equal(t, 2, fixture.plansBuilt(), "a queue is not served from the sections plan")
+	require.Len(t, response.Sections, 1)
+	section := response.Sections[0]
+	assert.Equal(t, recommend.SectionQueue, section.Kind)
+	assert.Nil(t, section.Seed)
+	require.Len(t, section.Items, 4)
+	for i := range section.Items {
+		assert.Equal(t, sections.Sections[0].Items[i].MediaID, section.Items[i].MediaID,
+			"one seed ranks the queue as it ranks its section")
+		assert.Equal(t, recommend.SignalPlayed, section.Items[i].Signal)
+		require.NotNil(t, section.Items[i].Seed)
+		assert.Equal(t, int64(11), section.Items[i].Seed.MediaID)
+	}
+
+	encoded, err := json.Marshal(response)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"kind":"queue"`)
+	assert.Contains(t, string(encoded), `"signal":"played"`)
+
+	fixture.call(t, models.MediaRecommendedParams{Layout: &queue})
+	assert.Equal(t, 2, fixture.plansBuilt(), "the queue plan is reused")
+}
+
 // A running index rewrites title rows before its generation moves on, so a
 // plan cached before it is not served until the index finishes.
 //
@@ -347,7 +382,9 @@ func TestHandleMediaRecommended_RejectsBadRequests(t *testing.T) {
 	t.Parallel()
 	tooMany, tooManySections := 31, 13
 	unknown := []string{"NotASystem"}
+	layout := "grid"
 	for name, params := range map[string]models.MediaRecommendedParams{
+		"unknown layout":    {Layout: &layout},
 		"section too large": {MaxResults: &tooMany},
 		"too many sections": {MaxSections: &tooManySections},
 		"unknown system":    {Systems: &unknown},

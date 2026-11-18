@@ -132,4 +132,26 @@ func TestHydrateRecommendedPlan_KioskDropsClosedSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, response.Sections, 1)
 	assert.Len(t, response.Sections[0].Items, 3)
+
+	// A queue item only names its seed, so a closed seed is left off the
+	// item and the item stays.
+	queue := &recommend.Plan{Sections: []recommend.PlanSection{{
+		Kind: recommend.SectionQueue,
+		Items: []recommend.PlanItem{
+			{TitleDBID: 2, SeedTitleDBID: 1, Signal: recommend.SignalPlayed},
+			{TitleDBID: 3, SeedTitleDBID: 1, Signal: recommend.SignalPlayed},
+		},
+	}}}
+	response, err = hydrateRecommendedPlan(&locked, queue, nil, recommend.DefaultMaxResults)
+	require.NoError(t, err)
+	require.Len(t, response.Sections, 1)
+	require.Len(t, response.Sections[0].Items, 2)
+	for _, item := range response.Sections[0].Items {
+		assert.Nil(t, item.Seed)
+		assert.Equal(t, recommend.SignalPlayed, item.Signal)
+	}
+	response, err = hydrateRecommendedPlan(&admin, queue, nil, recommend.DefaultMaxResults)
+	require.NoError(t, err)
+	require.NotNil(t, response.Sections[0].Items[0].Seed)
+	assert.Equal(t, "Gradius", response.Sections[0].Items[0].Seed.Name)
 }

@@ -38,6 +38,8 @@ const (
 	SignalFavorite = "favorite"
 	SignalLiked    = "liked"
 	SignalDeck     = "deck"
+	// SignalPlayLater marks a queue item the profile marked to play later.
+	SignalPlayLater = "playLater"
 )
 
 const (

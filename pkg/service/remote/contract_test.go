@@ -278,6 +278,8 @@ func TestContract_RecommendedResults(t *testing.T) {
 	}
 	unexplained := item
 	unexplained.Reasons = []models.MediaReason{}
+	queued := item
+	queued.Signal, queued.Seed = "played", &seed
 	response := models.MediaRecommendedResponse{Sections: []models.RecommendedSection{
 		{Kind: "seed", Signal: "played", Seed: &seed, Items: []models.SuggestedMedia{item}},
 		{Kind: "playLater", Items: []models.SuggestedMedia{unexplained}},
@@ -285,6 +287,7 @@ func TestContract_RecommendedResults(t *testing.T) {
 			Kind: "series", Tag: &database.TagInfo{Type: "search", Tag: "franchise:gradius"},
 			Items: []models.SuggestedMedia{},
 		},
+		{Kind: "queue", Items: []models.SuggestedMedia{queued}},
 	}}
 
 	rtype := `"name": "R-Type", "path": "/roms/NES/R-Type.nes", "zap_script": "@NES/R-Type",
@@ -307,6 +310,18 @@ func TestContract_RecommendedResults(t *testing.T) {
 		}, {
 			"kind": "series", "tag": {"tag": "franchise:gradius", "type": "search"},
 			"items": []
+		}, {
+			"kind": "queue",
+			"items": [{
+				"signal": "played",
+				"seed": {
+					"name": "Gradius", "path": "/roms/NES/Gradius.nes", "zap_script": "@NES/Gradius",
+					"media_id": 11, "title_id": 1, "has_cover": false,
+					"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+					"tags": null
+				},
+				"reasons": [{"code": "genre", "tags": [{"tag": "shooter", "type": "genre"}]}], `+rtype+`
+			}]
 		}]
 	}`, mustEncode(t, encodeRecommendedResults, response))
 

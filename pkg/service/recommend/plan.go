@@ -35,6 +35,9 @@ const (
 	SectionSeed      = "seed"
 	SectionPlayLater = "playLater"
 	SectionSeries    = "series"
+	// SectionQueue is the one section of a queue plan: every pick, best
+	// first, whatever it was picked for.
+	SectionQueue = "queue"
 )
 
 const (
@@ -97,13 +100,20 @@ type Options struct {
 	Systems     map[string]struct{}
 	MaxResults  int
 	MaxSections int
+	// Queue lays the plan out as one ranked list instead of sections.
+	Queue bool
 }
 
 // PlanItem is one recommended title and why it was picked. Reasons is empty
 // for an item that is in a section for what it is, not for what it shares.
 type PlanItem struct {
-	Reasons   []Reason
-	TitleDBID int64
+	// Signal says why a queue item was picked: the signal of the seed it is
+	// like, or SignalPlayLater for a game the profile marked.
+	Signal  string
+	Reasons []Reason
+	// SeedTitleDBID is the seed a queue item is most like.
+	SeedTitleDBID int64
+	TitleDBID     int64
 }
 
 // PlanSection is one group of recommendations.
@@ -125,6 +135,8 @@ func (s *PlanSection) MinItems() int {
 		return minPlayLaterSection
 	case SectionSeries:
 		return minSeriesSection
+	case SectionQueue:
+		return 1
 	default:
 		return minSeedSection
 	}
@@ -191,7 +203,11 @@ func BuildPlan(ctx context.Context, deps *Deps, profileID string, now time.Time,
 	if err := builder.gatherCandidates(ctx); err != nil {
 		return nil, err
 	}
-	plan.Sections = builder.sections()
+	if opts.Queue {
+		plan.Sections = builder.queue()
+	} else {
+		plan.Sections = builder.sections()
+	}
 	return plan, nil
 }
 
@@ -600,6 +616,71 @@ func (b *planBuilder) sections() []PlanSection {
 	return sections[:min(len(sections), b.opts.MaxSections)]
 }
 
+// queue lists every pick in one ranking: the games the seeds reach by their
+// score, and the games marked to play later that no seed reached at the play
+// later boost alone. The series and system caps hold across the whole list.
+func (b *planBuilder) queue() []PlanSection {
+	used := make(map[int64]struct{}, len(b.seeds))
+	for i := range b.seeds {
+		used[b.seeds[i].game.Group] = struct{}{}
+	}
+	entries := make([]*candidate, 0, len(b.candidates))
+	for _, entry := range b.candidates {
+		entries = append(entries, entry)
+	}
+	for group, state := range b.games {
+		if _, scored := b.candidates[group]; scored || len(state.playLater) == 0 || !b.suggestable(group) {
+			continue
+		}
+		game := b.playLaterTitle(state)
+		if game == nil {
+			continue
+		}
+		entry := &candidate{group: group, topSeed: -1, total: playLaterBoost, best: Pick{TitleDBID: game.TitleDBID}}
+		if profile, ok := b.profiles[game.TitleDBID]; ok {
+			entry.profile, entry.best.SystemID, entry.best.Rating = profile, profile.systemID, profile.rating
+		}
+		entries = append(entries, entry)
+	}
+	slices.SortFunc(entries, compareCandidates)
+
+	section := PlanSection{Kind: SectionQueue}
+	for _, entry := range capCandidates(entries, used, b.opts.MaxResults+planSpare) {
+		item := PlanItem{TitleDBID: entry.best.TitleDBID, Reasons: entry.best.Reasons}
+		if state, ok := b.games[entry.group]; ok && len(state.playLater) > 0 {
+			item.Signal = SignalPlayLater
+		} else if entry.topSeed >= 0 {
+			item.Signal = b.seeds[entry.topSeed].signal
+			item.SeedTitleDBID = b.seeds[entry.topSeed].game.TitleDBID
+		}
+		section.Items = append(section.Items, item)
+	}
+	if len(section.Items) == 0 {
+		return []PlanSection{}
+	}
+	return []PlanSection{section}
+}
+
+// playLaterTitle is the version of a marked game a list shows: the first
+// marked one on a system the request may show.
+func (b *planBuilder) playLaterTitle(state *gameState) *GameSignal {
+	for _, signal := range state.playLater {
+		if profile, ok := b.profiles[signal.TitleDBID]; !ok || b.allowedSystem(profile.systemID) {
+			return signal
+		}
+	}
+	return nil
+}
+
+// seriesOf is the series a candidate belongs to. A marked game the index
+// could not describe belongs to none.
+func seriesOf(entry *candidate) []string {
+	if entry.profile == nil {
+		return nil
+	}
+	return entry.profile.series
+}
+
 // compareCandidates orders candidates best first, deterministically.
 func compareCandidates(a, b *candidate) int {
 	return cmp.Or(
@@ -625,7 +706,7 @@ func capCandidates(entries []*candidate, used map[int64]struct{}, limit int) []*
 			continue
 		}
 		crowded := false
-		for _, series := range entry.profile.series {
+		for _, series := range seriesOf(entry) {
 			if perSeries[series] >= maxPerSeries {
 				crowded = true
 			}
@@ -637,7 +718,7 @@ func capCandidates(entries []*candidate, used map[int64]struct{}, limit int) []*
 			passedOver = append(passedOver, entry)
 			continue
 		}
-		for _, series := range entry.profile.series {
+		for _, series := range seriesOf(entry) {
 			perSeries[series]++
 		}
 		perSystem[entry.best.SystemID]++
@@ -648,7 +729,7 @@ func capCandidates(entries []*candidate, used map[int64]struct{}, limit int) []*
 			break
 		}
 		crowded := false
-		for _, series := range entry.profile.series {
+		for _, series := range seriesOf(entry) {
 			if perSeries[series] >= maxPerSeries {
 				crowded = true
 			}
@@ -656,7 +737,7 @@ func capCandidates(entries []*candidate, used map[int64]struct{}, limit int) []*
 		if crowded {
 			continue
 		}
-		for _, series := range entry.profile.series {
+		for _, series := range seriesOf(entry) {
 			perSeries[series]++
 		}
 		taken = append(taken, entry)
@@ -685,13 +766,7 @@ func (b *planBuilder) playLaterSection(used map[int64]struct{}, limit int) PlanS
 		}
 		// The game is listed once, as the first marked version the request
 		// may show.
-		var game *GameSignal
-		for _, signal := range state.playLater {
-			if profile, ok := b.profiles[signal.TitleDBID]; !ok || b.allowedSystem(profile.systemID) {
-				game = signal
-				break
-			}
-		}
+		game := b.playLaterTitle(state)
 		if game == nil {
 			continue
 		}

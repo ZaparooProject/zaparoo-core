@@ -132,9 +132,14 @@ type MediaReason struct {
 	Tags []database.TagInfo `json:"tags,omitempty"`
 }
 
-// SuggestedMedia is a search result with the reasons it was suggested.
+// SuggestedMedia is a search result with the reasons it was suggested. Seed
+// and Signal are set on queue items only: the media the item is most like and
+// the interest shown in it, or Signal "playLater" for media the profile
+// marked to play.
 type SuggestedMedia struct {
-	Reasons []MediaReason `json:"reasons"`
+	Seed    *SearchResultMedia `json:"seed,omitempty"`
+	Signal  string             `json:"signal,omitempty"`
+	Reasons []MediaReason      `json:"reasons"`
 	SearchResultMedia
 }
 
@@ -144,7 +149,8 @@ type MediaSimilarResponse struct {
 
 // RecommendedSection is one group of recommendations. Kind is "seed" for
 // media like one the profile showed interest in, "playLater" for media it
-// marked to play, and "series" for more of a series it plays.
+// marked to play, "series" for more of a series it plays, and "queue" for
+// the single ranked list of the queue layout.
 type RecommendedSection struct {
 	// Seed is the media a seed section is built around.
 	Seed *SearchResultMedia `json:"seed,omitempty"`

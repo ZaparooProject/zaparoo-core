@@ -291,7 +291,7 @@ func TestTranslateRecommendedParams_ProducesMethodParams(t *testing.T) {
 	t.Parallel()
 
 	translated, err := translateRecommendedParams(json.RawMessage(
-		`{"systems": ["SNES"], "max_results": 6, "max_sections": 3}`))
+		`{"systems": ["SNES"], "max_results": 6, "max_sections": 3, "layout": "queue"}`))
 	require.NoError(t, err)
 	var params models.MediaRecommendedParams
 	require.NoError(t, json.Unmarshal(translated, &params))
@@ -301,6 +301,11 @@ func TestTranslateRecommendedParams_ProducesMethodParams(t *testing.T) {
 	assert.Equal(t, 6, *params.MaxResults)
 	require.NotNil(t, params.MaxSections)
 	assert.Equal(t, 3, *params.MaxSections)
+	require.NotNil(t, params.Layout)
+	assert.Equal(t, models.RecommendedLayoutQueue, *params.Layout)
+
+	_, err = translateRecommendedParams(json.RawMessage(`{"layout": "grid"}`))
+	require.Error(t, err, "an unknown layout is refused before it reaches the method")
 
 	translated, err = translateRecommendedParams(nil)
 	require.NoError(t, err)

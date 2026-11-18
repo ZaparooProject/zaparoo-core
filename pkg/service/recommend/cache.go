@@ -45,6 +45,7 @@ type PlanKey struct {
 	IndexGeneration int64
 	MaxResults      int
 	MaxSections     int
+	Queue           bool
 }
 
 type planEntry struct {

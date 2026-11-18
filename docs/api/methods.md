@@ -1086,6 +1086,8 @@ Every field of a [Media object](#media-object), for the version of the game a ti
 | Key     | Type      | Required | Description                                                                                  |
 | :------ | :-------- | :------- | :------------------------------------------------------------------------------------------- |
 | reasons | Reason[]  | Yes      | Up to three things the media shares with the media it was suggested for, strongest first.     |
+| signal  | string    | No       | In a `queue` section from [media.recommended](#mediarecommended): why the item is there. `played`, `favorite`, `liked` or `deck` for the interest shown in `seed`, or `playLater` for media marked to play later. |
+| seed    | [Media](#media-object) | No | In a `queue` section: the media the item is most like. Left out for `playLater` items, and when the seed is hidden or not allowed for the client. |
 
 ##### Reason object
 
@@ -1202,7 +1204,8 @@ Optionally, an object:
 | systems     | string[] | No       | Only recommend media on these systems. Defaults to every system.                   |
 | fuzzySystem | boolean  | No       | Match `systems` loosely, as in [media.search](#mediasearch). Defaults to `false`.  |
 | maxResults  | number   | No       | Max number of items in one section. Default is 12, maximum is 30.                  |
-| maxSections | number   | No       | Max number of sections. Default is 6, maximum is 12.                               |
+| maxSections | number   | No       | Max number of sections. Default is 6, maximum is 12. Ignored for the `queue` layout. |
+| layout      | string   | No       | `sections` (default) or `queue`. A `queue` returns one `queue` section: a single ranked list for "play next", up to `maxResults` items. |
 
 #### Result
 
@@ -1225,8 +1228,9 @@ Optionally, an object:
 | `seed`      | Media like one game the profile showed interest in. Each item's `reasons` say what it shares with `seed`.   |
 | `playLater` | Media marked to play later, the ones most like the seeds first. An item's `reasons` may be empty.           |
 | `series`    | More of the series the seeds lean on most.                                                                  |
+| `queue`     | With `layout: "queue"`: every candidate in one list, best first, including media marked to play later. Each item's `signal` and `seed` say why it is there. |
 
-The section for the strongest seed comes first, then `playLater`, then `series`, then the other seeds. A section with too little to show is left out.
+The section for the strongest seed comes first, then `playLater`, then `series`, then the other seeds. A section with too little to show is left out. The `queue` layout returns at most one section, the same series and system caps apply, and a game appears once.
 
 #### Example
 

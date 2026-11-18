@@ -517,13 +517,22 @@ type MediaSimilarParams struct {
 }
 
 // MediaRecommendedParams shapes the active profile's recommendations.
-// MaxResults is the most items one section holds.
+// MaxResults is the most items one section holds. Layout "queue" returns one
+// ranked section of kind "queue" instead of sections, and ignores
+// MaxSections.
 type MediaRecommendedParams struct {
 	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=30"`
 	MaxSections *int      `json:"maxSections,omitempty" validate:"omitempty,gt=0,max=12"`
+	Layout      *string   `json:"layout,omitempty" validate:"omitempty,oneof=sections queue"`
 }
+
+// Layouts of media.recommended.
+const (
+	RecommendedLayoutSections = "sections"
+	RecommendedLayoutQueue    = "queue"
+)
 
 type MediaTagsUpdateParams struct {
 	MediaID *int64   `json:"mediaId,omitempty"`

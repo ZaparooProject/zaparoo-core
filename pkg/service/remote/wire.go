@@ -156,6 +156,7 @@ type wireRecommendedParams struct {
 	FuzzySystem *bool     `json:"fuzzy_system"`
 	MaxResults  *int      `json:"max_results" validate:"omitempty,gt=0,max=30"`
 	MaxSections *int      `json:"max_sections" validate:"omitempty,gt=0,max=12"`
+	Layout      *string   `json:"layout" validate:"omitempty,oneof=sections queue"`
 }
 
 func translateRecommendedParams(raw json.RawMessage) (json.RawMessage, error) {
@@ -172,6 +173,7 @@ func translateRecommendedParams(raw json.RawMessage) (json.RawMessage, error) {
 		FuzzySystem: params.FuzzySystem,
 		MaxResults:  &maxResults,
 		MaxSections: params.MaxSections,
+		Layout:      params.Layout,
 	})
 }
 
@@ -516,7 +518,9 @@ type wireReason struct {
 }
 
 type wireSuggestedMedia struct {
-	Reasons []wireReason `json:"reasons"`
+	Seed    *wireSearchResult `json:"seed,omitempty"`
+	Signal  string            `json:"signal,omitempty"`
+	Reasons []wireReason      `json:"reasons"`
 	wireSearchResult
 }
 
@@ -527,10 +531,16 @@ func encodeSuggestedMedia(items []models.SuggestedMedia) []wireSuggestedMedia {
 		for _, reason := range items[i].Reasons {
 			reasons = append(reasons, wireReason{Code: reason.Code, Tags: encodeTags(reason.Tags)})
 		}
-		out = append(out, wireSuggestedMedia{
+		item := wireSuggestedMedia{
 			wireSearchResult: encodeSearchResult(&items[i].SearchResultMedia),
+			Signal:           items[i].Signal,
 			Reasons:          reasons,
-		})
+		}
+		if items[i].Seed != nil {
+			seed := encodeSearchResult(items[i].Seed)
+			item.Seed = &seed
+		}
+		out = append(out, item)
 	}
 	return out
 }

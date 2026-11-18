@@ -283,6 +283,7 @@ func recommendedPlanKey(
 		Day:         recommendClock.Now().UTC().Format(planDayLayout),
 		MaxResults:  opts.MaxResults,
 		MaxSections: opts.MaxSections,
+		Queue:       opts.Queue,
 	}
 	names := make([]string, 0, len(systems))
 	for id := range systems {
@@ -342,6 +343,12 @@ func HandleMediaRecommended(env requests.RequestEnv) (any, error) {
 	if params.MaxSections != nil {
 		opts.MaxSections = *params.MaxSections
 	}
+	if params.Layout != nil && *params.Layout == models.RecommendedLayoutQueue {
+		opts.Queue = true
+		// One section is all a queue has, so the section count is no part
+		// of what it is built from.
+		opts.MaxSections = recommend.DefaultMaxSections
+	}
 
 	select {
 	case searchSem <- struct{}{}:
@@ -399,6 +406,7 @@ func hydrateRecommendedPlan(
 		add(plan.Sections[i].SeedTitleDBID)
 		for j := range plan.Sections[i].Items {
 			add(plan.Sections[i].Items[j].TitleDBID)
+			add(plan.Sections[i].Items[j].SeedTitleDBID)
 		}
 	}
 	if len(titleDBIDs) == 0 {
@@ -442,10 +450,19 @@ func hydrateRecommendedPlan(
 			if _, allowed := systems[result.systemID]; systems != nil && !allowed {
 				continue
 			}
-			section.Items = append(section.Items, models.SuggestedMedia{
+			item := models.SuggestedMedia{
 				SearchResultMedia: result.result,
 				Reasons:           mediaReasons(planned.Items[j].Reasons),
-			})
+				Signal:            planned.Items[j].Signal,
+			}
+			// The seed of a queue item only explains it, so a hidden seed,
+			// or one a locked profile cannot see, is left off the item
+			// rather than taking the item with it.
+			if seed, ok := media[planned.Items[j].SeedTitleDBID]; ok &&
+				(!kioskCapped || kioskSystems.Permits(seed.systemID)) {
+				item.Seed = &seed.result
+			}
+			section.Items = append(section.Items, item)
 		}
 		// A request for fewer items than a section normally needs still gets
 		// its sections, as long as each is full.
