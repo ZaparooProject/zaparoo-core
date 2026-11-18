@@ -414,13 +414,14 @@ func HandleMediaVersions(env requests.RequestEnv) (any, error) {
 	ctx := env.Context
 	mediaDB := env.Database.MediaDB
 
+	kioskSystems, kioskCapped := kioskScope(&env)
 	titleIDs, err := versionGroupTitles(ctx, mediaDB, current.Title.DBID)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := mediaDB.SearchMediaWithFilters(ctx, &database.SearchFilters{
 		TitleDBIDs:    titleIDs,
-		ExcludeHidden: params.IncludeHidden == nil || !*params.IncludeHidden,
+		ExcludeHidden: kioskCapped || params.IncludeHidden == nil || !*params.IncludeHidden,
 		Limit:         titleVersionsLimit,
 	})
 	if err != nil {
@@ -432,6 +433,13 @@ func HandleMediaVersions(env requests.RequestEnv) (any, error) {
 	versions, err := foldVersions(ctx, mediaDB, rows)
 	if err != nil {
 		return nil, fmt.Errorf("error folding versions: %w", err)
+	}
+	// Versions are looked up by group alone, so the system scope a locked
+	// device holds its callers to is applied here.
+	if kioskSystems.Limited() {
+		versions = slices.DeleteFunc(versions, func(row database.SearchResultWithCursor) bool {
+			return !kioskSystems.Permits(row.SystemID)
+		})
 	}
 
 	// An alias folds into its target, so asking about one marks the target.

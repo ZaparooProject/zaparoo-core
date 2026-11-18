@@ -238,6 +238,10 @@ func TestScanSkip_ScannerOwnedTablesHaveKnownWriters(t *testing.T) {
 		filepath.Join("database", "mediadb", "sql_parent_dir_repair.go"),
 		// The reconcile itself.
 		filepath.Join("database", "mediadb", "sql_scan_reconcile.go"),
+		// Version group and count recompute write columns derived from the
+		// version keys and the present media; the reconcile never sets them.
+		filepath.Join("database", "mediadb", "sql_version_counts.go"),
+		filepath.Join("database", "mediadb", "sql_version_groups.go"),
 	}
 	sort.Strings(known)
 

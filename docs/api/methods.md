@@ -5490,7 +5490,7 @@ While the state is `locked`:
 - Every launch is checked against the active profile's content rule, whatever started it. See [`profiles.content`](#profilescontent).
 - A card cannot download media.
 - The active profile cannot be changed to an admin profile or to the shared profile.
-- Browse, search and system listings returned to a capped caller leave out hidden media and systems the active profile's rule closes.
+- Browse, search, system listings, versions, similar media and recommendations returned to a capped caller leave out hidden media and systems the active profile's rule closes.
 
 For as long as kiosk mode is on, `locked` or `unlocked`, remote clients must be paired: Core behaves as if `service.encryption` were enabled, without changing the stored setting. Unpaired connections are closed when kiosk mode is turned on.
 

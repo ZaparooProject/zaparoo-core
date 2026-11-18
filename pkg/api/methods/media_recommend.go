@@ -160,6 +160,11 @@ func HandleMediaSimilar(env requests.RequestEnv) (any, error) {
 	if env.Database == nil || env.Database.MediaDB == nil {
 		return nil, errors.New("media database is not available")
 	}
+	narrowedSystems, err := kioskNarrowSystems(&env, params.Systems)
+	if err != nil {
+		return nil, err
+	}
+	params.Systems = narrowedSystems
 	systems, err := suggestionSystems(params.Systems, params.FuzzySystem)
 	if err != nil {
 		return nil, err
@@ -317,6 +322,11 @@ func HandleMediaRecommended(env requests.RequestEnv) (any, error) {
 	if env.Database == nil || env.Database.MediaDB == nil {
 		return nil, errors.New("media database is not available")
 	}
+	narrowedSystems, err := kioskNarrowSystems(&env, params.Systems)
+	if err != nil {
+		return nil, err
+	}
+	params.Systems = narrowedSystems
 	systems, err := suggestionSystems(params.Systems, params.FuzzySystem)
 	if err != nil {
 		return nil, err
@@ -391,6 +401,7 @@ func hydrateRecommendedPlan(
 	if err != nil {
 		return response, err
 	}
+	kioskSystems, kioskCapped := kioskScope(env)
 	for i := range plan.Sections {
 		planned := &plan.Sections[i]
 		section := models.RecommendedSection{
@@ -402,6 +413,11 @@ func hydrateRecommendedPlan(
 		if planned.Kind == recommend.SectionSeed {
 			seed, ok := media[planned.SeedTitleDBID]
 			if !ok {
+				continue
+			}
+			// A seed is shown as the section's heading, so one from a system a
+			// locked profile cannot see takes its section with it.
+			if kioskCapped && !kioskSystems.Permits(seed.systemID) {
 				continue
 			}
 			section.Seed = &seed.result
