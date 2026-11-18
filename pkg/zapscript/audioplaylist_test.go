@@ -474,6 +474,42 @@ func TestReadPlaylistFile_Nesting(t *testing.T) {
 	}, items)
 }
 
+// A pls entry with launch arguments that names a playlist file being read
+// would replace the playlist with a fresh read of itself when it runs.
+func TestReadPlaylistFile_SkipsSelfReferenceWithArgs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.mp3"), nil, 0o600))
+	writePlaylistFile(t, dir, "inner.pls", "[playlist]\nFile1=outer.m3u?launcher=native-audio\nFile2=a.mp3\n")
+	outer := writePlaylistFile(t, dir, "outer.m3u", "inner.pls\n")
+
+	items, err := readPlaylistFile(nil, nil, outer)
+	require.NoError(t, err)
+	assert.Equal(t, []playlists.PlaylistItem{
+		{ZapScript: filepath.Join(dir, "a.mp3")},
+	}, items)
+}
+
+// A symlinked folder that leads back to the playlist's own folder does not
+// let the playlist read itself again under a longer path.
+func TestReadPlaylistFile_DetectsCyclesThroughSymlinks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "song.mp3"), nil, 0o600))
+	if err := os.Symlink(dir, filepath.Join(dir, "again")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	path := writePlaylistFile(t, dir, "list.m3u", "song.mp3\n"+filepath.Join("again", "list.m3u")+"\n")
+
+	items, err := readPlaylistFile(nil, nil, path)
+	require.NoError(t, err)
+	assert.Equal(t, []playlists.PlaylistItem{
+		{ZapScript: literalLaunch(filepath.Join(dir, "song.mp3"))},
+	}, items)
+}
+
 func TestReadPlaylistFile_NestedReadsAreBounded(t *testing.T) {
 	t.Parallel()
 

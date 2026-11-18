@@ -134,7 +134,8 @@ type playlistFileReader struct {
 	cfg      *config.Instance
 	pl       platforms.Platform
 	pathRoot string
-	// reading is the chain of playlist files being read, outermost first.
+	// reading is the chain of playlist files being read, outermost first,
+	// as resolved by playlistChainKey.
 	reading   []string
 	items     []playlists.PlaylistItem
 	reads     int
@@ -172,7 +173,7 @@ func (r *playlistFileReader) read(path string) error {
 	if err != nil {
 		return err
 	}
-	r.reading = append(r.reading, filepath.Clean(path))
+	r.reading = append(r.reading, playlistChainKey(path))
 	defer func() { r.reading = r.reading[:len(r.reading)-1] }()
 	for _, e := range entries {
 		if len(r.items) >= maxPlaylistItems {
@@ -209,6 +210,12 @@ func (r *playlistFileReader) add(playlistPath string, e playlistEntry) {
 		// A pls file entry may carry launch arguments after its name.
 		if file, args, ok := splitEntryArgs(loc); ok {
 			if found, ok := r.find(playlistPath, file); ok {
+				// Running it would replace this playlist with a fresh read
+				// of a file in the chain, which can list itself again.
+				if r.isReading(found) {
+					log.Warn().Str("path", found).Msg("playlist file lists itself, skipping the entry")
+					return
+				}
 				r.items = append(r.items, playlists.PlaylistItem{Name: e.title, ZapScript: found + args})
 				return
 			}
@@ -240,8 +247,7 @@ func (r *playlistFileReader) isNestedPlaylist(path string) bool {
 }
 
 func (r *playlistFileReader) readNested(path string) {
-	path = filepath.Clean(path)
-	if slices.Contains(r.reading, path) {
+	if r.isReading(path) {
 		log.Warn().Str("path", path).Msg("playlist file lists itself, skipping the entry")
 		return
 	}
@@ -253,6 +259,21 @@ func (r *playlistFileReader) readNested(path string) {
 	if err := r.read(path); err != nil {
 		log.Warn().Err(err).Str("path", path).Msg("skipping a listed playlist file")
 	}
+}
+
+// isReading reports whether path is a playlist file in the chain being read.
+func (r *playlistFileReader) isReading(path string) bool {
+	return slices.Contains(r.reading, playlistChainKey(path))
+}
+
+// playlistChainKey identifies a playlist file in the chain being read by its
+// path with symlinks resolved, so a symlinked folder cannot lead back to a
+// file already being read under a longer path.
+func playlistChainKey(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
 }
 
 // find resolves a file entry to the file, or track of a file, it names: as
