@@ -372,7 +372,8 @@ bool BW_MidiSequencer::hmi_parseEvent(const HMIData &hmi_data, const HMITrackDir
     if(byte == MidiEvent::T_SYSEX || byte == MidiEvent::T_SYSEX2)
     {
         length = hmi_data.fReadVarLen(fr, d.end, ok);
-        if(!ok || (fr.tell() + length > d.end))
+        /* Zaparoo: a long length VLQ overflows readVarLenEx, so compare without fr.tell() + length wrapping */
+        if(!ok || fr.tell() > d.end || length > d.end - fr.tell())
         {
             m_errorString.append("HMI/HMP: Can't read SysEx event - Unexpected end of track data.\n");
             return false;
@@ -408,7 +409,8 @@ bool BW_MidiSequencer::hmi_parseEvent(const HMIData &hmi_data, const HMITrackDir
         else
             length = hmi_data.fReadVarLen(fr, d.end, ok);
 
-        if(!ok || (fr.tell() + length > d.end))
+        /* Zaparoo: a long length VLQ overflows readVarLenEx, so compare without fr.tell() + length wrapping */
+        if(!ok || fr.tell() > d.end || length > d.end - fr.tell())
         {
             m_errorString.append("HMI/HMP: Can't read Special event - Unexpected end of track data.\n");
             return false;
