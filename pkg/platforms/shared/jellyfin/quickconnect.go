@@ -113,6 +113,10 @@ func (c *LinkClient) QuickConnectState(ctx context.Context, secret string) (*Qui
 	if errors.Is(err, ErrItemNotFound) {
 		return nil, ErrQuickConnectExpired
 	}
+	// Jellyfin answers 401 here when Quick Connect has been turned off.
+	if errors.Is(err, ErrUnauthorized) {
+		return nil, ErrQuickConnectDisabled
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to poll jellyfin quick connect: %w", err)
 	}

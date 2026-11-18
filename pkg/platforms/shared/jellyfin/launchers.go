@@ -87,10 +87,7 @@ func launchPath(ctx context.Context, c Client, kind *mediaKind, path string) ([]
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("jellyfin %s %q has nothing to play", kind.label, kind.name(item))
 	}
-	if err := playItems(ctx, c, session.ID, ids); err != nil {
-		return nil, err
-	}
-	return ids, nil
+	return playItems(ctx, c, session.ID, ids)
 }
 
 // launchRecord holds the item IDs the last launch sent to the player, so
@@ -226,11 +223,15 @@ func playstateControls(newClient clientFactory, exit *shared.LaunchExit) map[str
 				if err != nil {
 					return err
 				}
+				var report func()
+				if control == platforms.ControlStop {
+					report = exit.Capture()
+				}
 				if err := sendPlaystate(ctx, c, command); err != nil {
 					return err
 				}
-				if control == platforms.ControlStop {
-					exit.Report()
+				if report != nil {
+					report()
 				}
 				return nil
 			},

@@ -376,7 +376,7 @@ func (c *Client) GetEpisodeDetails(ctx context.Context, episodeID int) (*Episode
 // library ID names no item.
 func isMissingItem(err error) bool {
 	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.Code == apiErrorInvalidParams
+	return errors.As(err, &apiErr) && (apiErr.Code == apiErrorInvalidParams || apiErr.Code == apiErrorNotFound)
 }
 
 // GetTVShows retrieves all TV shows from Kodi's library

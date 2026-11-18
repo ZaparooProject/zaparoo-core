@@ -284,9 +284,8 @@ func findByGUID(
 		case 1:
 			return &matches[0], nil
 		default:
-			named := matchingName(kind, ref.Name, matches)
-			if len(named) == 1 {
-				return &named[0], nil
+			if md := pickIdentified(kind, ref, matches); md != nil {
+				return md, nil
 			}
 			return nil, fmt.Errorf("%w: multiple plex %ss match %s", errAmbiguousGUID, kind.typeName, guid)
 		}
@@ -294,31 +293,43 @@ func findByGUID(
 	return nil, nil //nolint:nilnil // no item holds any of the identities
 }
 
-// findByName finds the one item with the card's exact name and no
-// conflicting identity.
+// findByName walks the whole library for the card's item: one holding the
+// card's identities, which a server that filters by guid only on an item's
+// primary Plex guid does not return to findByGUID, or else the one item with
+// the card's exact name and no conflicting identity.
 func findByName(
 	ctx context.Context, client PlexClient, kind *mediaKind, ref itemRef, sections []Section,
 ) (*Metadata, error) {
-	if strings.TrimSpace(ref.Name) == "" {
+	if strings.TrimSpace(ref.Name) == "" && len(ref.IDs) == 0 {
 		return nil, fmt.Errorf("plex %s %s is no longer available", kind.typeName, ref.RatingKey)
 	}
-	var matches []Metadata
+	var identified, matches []Metadata
 	for _, s := range sections {
 		err := client.Items(ctx, s.Key, kind.plexType, nil, func(items []Metadata) error {
 			for i := range items {
-				if !sameName(displayName(kind, &items[i]), ref.Name) {
-					continue
+				matched, conflicted := identityMatch(ref.IDs, &items[i])
+				switch {
+				case conflicted:
+				case matched:
+					identified = appendUnique(identified, &items[i])
+				case ref.Name != "" && sameName(displayName(kind, &items[i]), ref.Name):
+					matches = appendUnique(matches, &items[i])
 				}
-				if _, conflicted := identityMatch(ref.IDs, &items[i]); conflicted {
-					continue
-				}
-				matches = appendUnique(matches, &items[i])
 			}
 			return nil
 		})
 		if err != nil {
 			return nil, err //nolint:wrapcheck // the client error already names the request
 		}
+	}
+	if len(identified) > 0 {
+		if md := pickIdentified(kind, ref, identified); md != nil {
+			return md, nil
+		}
+		return nil, fmt.Errorf("%w: multiple plex %ss match %q", errAmbiguousGUID, kind.typeName, refLabel(ref))
+	}
+	if strings.TrimSpace(ref.Name) == "" {
+		return nil, fmt.Errorf("plex %s %s is no longer available", kind.typeName, ref.RatingKey)
 	}
 	switch len(matches) {
 	case 1:
@@ -356,6 +367,42 @@ func appendUnique(list []Metadata, md *Metadata) []Metadata {
 		}
 	}
 	return append(list, *md)
+}
+
+// pickIdentified returns the one item holding the most of the card's
+// identities, with the card's name breaking a tie, or nil when the items
+// still tie.
+func pickIdentified(kind *mediaKind, ref itemRef, items []Metadata) *Metadata {
+	var best []Metadata
+	bestCount := 0
+	for i := range items {
+		n := agreeingIdentities(ref.IDs, &items[i])
+		switch {
+		case n > bestCount:
+			best, bestCount = append(best[:0], items[i]), n
+		case n == bestCount:
+			best = append(best, items[i])
+		}
+	}
+	if len(best) == 1 {
+		return &best[0]
+	}
+	if named := matchingName(kind, ref.Name, best); len(named) == 1 {
+		return &named[0]
+	}
+	return nil
+}
+
+// agreeingIdentities counts the stored identities an item also holds.
+func agreeingIdentities(stored map[string]string, md *Metadata) int {
+	actual := itemIdentities(md)
+	n := 0
+	for key, want := range stored {
+		if got, ok := actual[key]; ok && strings.EqualFold(got, want) {
+			n++
+		}
+	}
+	return n
 }
 
 func matchingName(kind *mediaKind, name string, items []Metadata) []Metadata {

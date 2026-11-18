@@ -108,8 +108,17 @@ func (f *fakeAPI) ReloadGames() error {
 
 func runningPlatform(t *testing.T, opts *Options) (*Platform, *[]*models.ActiveMedia) {
 	t.Helper()
+	return runningPlatformWith(t, opts,
+		models.NewActiveMedia("NES", "Nintendo Entertainment System", "/roms/nes/a.nes", "A", ""))
+}
+
+// runningPlatformWith is runningPlatform with media as the active media,
+// read and written through the same state.
+func runningPlatformWith(
+	t *testing.T, opts *Options, media *models.ActiveMedia,
+) (*Platform, *[]*models.ActiveMedia) {
+	t.Helper()
 	p := New(opts)
-	media := models.NewActiveMedia("NES", "Nintendo Entertainment System", "/roms/nes/a.nes", "A", "")
 	var published []*models.ActiveMedia
 	p.activeMedia = func() *models.ActiveMedia { return media }
 	p.setActiveMedia = func(m *models.ActiveMedia) {
@@ -211,34 +220,30 @@ func TestStopActiveLauncher_RemoteServerMediaLeavesESAlone(t *testing.T) {
 			return nil
 		},
 	}
-	p, published := runningPlatform(t, &opts)
-	media := models.NewActiveMedia("Movie", "Movies", "jellyfin-movie://abc/Alien", "Alien",
-		shared.LauncherJellyfinMovie)
-	p.activeMedia = func() *models.ActiveMedia { return media }
+	p, published := runningPlatformWith(t, &opts, models.NewActiveMedia(
+		"Movie", "Movies", "jellyfin-movie://abc/Alien", "Alien", shared.LauncherJellyfinMovie))
 
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
 	assert.Zero(t, exits, "nothing runs in EmulationStation")
 	assert.Zero(t, kills)
 	require.NotEmpty(t, *published)
-	assert.Nil(t, (*published)[len(*published)-1])
+	assert.Nil(t, p.activeMedia())
 }
 
 func TestStopActiveLauncher_RemoteServerMediaLeavesRunningKodiAlone(t *testing.T) {
 	t.Parallel()
 
 	opts := Options{ID: "batocera", API: &fakeAPI{}}
-	p, published := runningPlatform(t, &opts)
+	p, published := runningPlatformWith(t, &opts, models.NewActiveMedia(
+		"Movie", "Movies", "plex-movie://1/Alien", "Alien", shared.LauncherPlexMovie))
 	p.trackerMu.Lock()
 	p.kodiActive = true
 	p.trackerMu.Unlock()
-	media := models.NewActiveMedia("Movie", "Movies", "plex-movie://1/Alien", "Alien",
-		shared.LauncherPlexMovie)
-	p.activeMedia = func() *models.ActiveMedia { return media }
 
 	// Kodi is not reachable here, so reaching its stop path would fail.
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
 	require.NotEmpty(t, *published)
-	assert.Nil(t, (*published)[len(*published)-1])
+	assert.Nil(t, p.activeMedia())
 }
 
 func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {

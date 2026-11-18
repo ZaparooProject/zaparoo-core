@@ -177,6 +177,46 @@ func TestResolveItemServerIgnoresGUIDFilter(t *testing.T) {
 	assert.Equal(t, "201", md.RatingKey)
 }
 
+// TestResolveItemByExternalIDWhenFilterMissesIt guards that a renamed movie
+// is still found by its stored identity on a server whose guid filter only
+// matches an item's primary Plex guid.
+func TestResolveItemByExternalIDWhenFilterMissesIt(t *testing.T) {
+	// Not parallel: uses the global auth config.
+	srv := newFakeServer(t)
+	srv.primaryGUIDOnly = true
+	useTokens(t, srv.URL, "", "")
+	srv.addSection("1", "movie", "Movies",
+		movie("200", "Alien: Director's Cut", 1979, "plex://movie/5d77", "tmdb://348"),
+		movie("201", "Aliens", 1986, "plex://movie/5d78", "tmdb://679"),
+		movie("202", "Thing A", 1982, "tmdb://1091"),
+		movie("203", "Thing B", 1982, "tmdb://1091"),
+	)
+	md, err := resolveItem(context.Background(), srv.client(""), kindMovie,
+		shared.SchemePlexMovie+"://999/Alien (1979)?tmdb=348")
+	require.NoError(t, err)
+	assert.Equal(t, "200", md.RatingKey)
+
+	_, err = resolveItem(context.Background(), srv.client(""), kindMovie,
+		shared.SchemePlexMovie+"://999/The Thing (1982)?tmdb=1091")
+	require.ErrorContains(t, err, "multiple plex movies")
+}
+
+// TestResolveItemNarrowsByLaterIdentity guards that items sharing the first
+// identity are told apart by another identity the card holds.
+func TestResolveItemNarrowsByLaterIdentity(t *testing.T) {
+	// Not parallel: uses the global auth config.
+	srv := newFakeServer(t)
+	useTokens(t, srv.URL, "", "")
+	srv.addSection("1", "movie", "Movies",
+		movie("400", "The Thing", 1982, "tmdb://1091"),
+		movie("401", "The Thing", 1982, "tmdb://1091", "imdb://tt0084787"),
+	)
+	md, err := resolveItem(context.Background(), srv.client(""), kindMovie,
+		shared.SchemePlexMovie+"://999/The Thing (1982)?tmdb=1091&imdb=tt0084787")
+	require.NoError(t, err)
+	assert.Equal(t, "401", md.RatingKey)
+}
+
 func FuzzParseItemRef(f *testing.F) {
 	f.Add(shared.SchemePlexMovie + "://123/Alien (1979)?tmdb=348&imdb=tt0078748")
 	f.Add(shared.SchemePlexMovie + "://1/X?tmdb=1&tmdb=2")

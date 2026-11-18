@@ -295,6 +295,25 @@ func TestSettingsAuthLinkJellyfin_ForgottenByServer(t *testing.T) {
 	assert.Contains(t, failed.Error, "expired")
 }
 
+func TestSettingsAuthLinkJellyfin_DisabledWhilePolling(t *testing.T) {
+	// Not parallel: swaps the link clock and uses package-level link state.
+	resetAuthLinkState(t)
+	useEmptyAuthCfg(t)
+	clock := useJellyfinLinkClock(t)
+	f := newFakeQuickConnect(t)
+
+	env, _, _ := jellyfinLinkEnv(t, f.srv.URL)
+	_, err := HandleSettingsAuthLink(env, nil)
+	require.NoError(t, err)
+	f.mu.Lock()
+	f.connectStatus = http.StatusUnauthorized
+	f.mu.Unlock()
+	advanceJellyfinPoll(t, clock, jellyfinLinkInterval)
+
+	failed := waitForAuthLinkStatus(t, models.AuthLinkStatusFailed, 10*time.Second)
+	assert.Contains(t, failed.Error, "Quick Connect is disabled")
+}
+
 func TestSettingsAuthLinkJellyfin_RetriesServerErrors(t *testing.T) {
 	// Not parallel: swaps the link clock and uses package-level link state.
 	resetAuthLinkState(t)

@@ -34,6 +34,8 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +56,9 @@ type fakeCastDevice struct {
 	received    []castMessage
 	mu          syncutil.Mutex
 	appRunning  bool
+	// broadcast makes the device send a stale status of its own (request
+	// ID 0) ahead of every reply, as real devices do when state changes.
+	broadcast bool
 }
 
 func selfSignedCert(t *testing.T) tls.Certificate {
@@ -126,6 +131,7 @@ func (d *fakeCastDevice) handle(conn net.Conn) {
 		running := d.appRunning
 		loadReply := d.loadReply
 		playerState := d.playerState
+		broadcast := d.broadcast
 		d.mu.Unlock()
 
 		var p map[string]any
@@ -151,14 +157,31 @@ func (d *fakeCastDevice) handle(conn net.Conn) {
 				},
 			})
 		case m.Namespace == nsReceiver && p["type"] == "GET_STATUS":
+			if broadcast {
+				d.reply(conn, castReceiverID, nsReceiver, map[string]any{
+					"type": "RECEIVER_STATUS", "requestId": 0, "status": map[string]any{"applications": []any{}},
+				})
+			}
 			d.reply(conn, castReceiverID, nsReceiver, map[string]any{
 				"type": "RECEIVER_STATUS", "requestId": reqID, "status": map[string]any{"applications": apps},
 			})
 		case m.Namespace == nsMedia && p["type"] == "LOAD" && loadReply != "":
+			if broadcast {
+				d.reply(conn, "transport-1", nsMedia, map[string]any{
+					"type": "MEDIA_STATUS", "requestId": 0, "status": []any{},
+				})
+			}
 			d.reply(conn, "transport-1", nsMedia, map[string]any{
 				"type": loadReply, "requestId": reqID, "reason": "NOT_FOUND", "status": []any{},
 			})
 		case m.Namespace == nsMedia && p["type"] == "GET_STATUS":
+			if broadcast {
+				d.reply(conn, "transport-1", nsMedia, map[string]any{
+					"type": "MEDIA_STATUS", "requestId": 0, "status": []any{map[string]any{
+						"mediaSessionId": 1, "playerState": "IDLE",
+					}},
+				})
+			}
 			d.reply(conn, "transport-1", nsMedia, map[string]any{
 				"type": "MEDIA_STATUS", "requestId": reqID, "status": []any{map[string]any{
 					"mediaSessionId": 1, "playerState": playerState,
@@ -294,6 +317,81 @@ func TestCastCommandAndState(t *testing.T) {
 	state, err = p.State(ctx)
 	require.NoError(t, err)
 	assert.True(t, state.Paused)
+}
+
+// TestCastIgnoresBroadcastStatus guards that a status the device sends on
+// its own is not taken for the reply to a request.
+func TestCastIgnoresBroadcastStatus(t *testing.T) {
+	t.Parallel()
+	dev := newFakeCastDevice(t)
+	dev.broadcast = true
+	dev.appRunning = true
+	p := &castPlayer{name: "TV", addr: dev.addr(), dial: dialCastTLS}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, p.Command(ctx, cmdPause, kindMovie), "a stale status does not mean plex is not running")
+
+	state, err := p.State(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.Playing)
+	assert.Equal(t, "200", state.RatingKey)
+
+	dev.mu.Lock()
+	dev.loadReply = "LOAD_FAILED"
+	dev.mu.Unlock()
+	require.ErrorContains(t, p.Play(ctx, castTestRequest()), "NOT_FOUND",
+		"a stale media status does not acknowledge the load")
+}
+
+// cancelOnLoadConn cancels a context once a LOAD has been written, and
+// returns from that write only after the context's callback has cut the
+// connection's deadline short: the order in which Play setting the
+// acknowledgment deadline used to undo the cancel.
+type cancelOnLoadConn struct {
+	net.Conn
+	cancel   context.CancelFunc
+	cut      chan struct{}
+	canceled atomic.Bool
+	once     sync.Once
+}
+
+func (c *cancelOnLoadConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if bytes.Contains(b, []byte(`"LOAD"`)) {
+		c.canceled.Store(true)
+		c.cancel()
+		<-c.cut
+	}
+	return n, err //nolint:wrapcheck // passes the wrapped connection's result through
+}
+
+func (c *cancelOnLoadConn) SetDeadline(t time.Time) error {
+	err := c.Conn.SetDeadline(t)
+	if c.canceled.Load() {
+		c.once.Do(func() { close(c.cut) })
+	}
+	return err //nolint:wrapcheck // passes the wrapped connection's error through
+}
+
+func TestCastPlayCancelDuringLoadIsNotOverridden(t *testing.T) {
+	t.Parallel()
+	dev := newFakeCastDevice(t)
+	dev.loadReply = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := &castPlayer{name: "TV", addr: dev.addr(), dial: func(ctx context.Context, addr string) (net.Conn, error) {
+		conn, err := dialCastTLS(ctx, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &cancelOnLoadConn{Conn: conn, cancel: cancel, cut: make(chan struct{})}, nil
+	}}
+
+	start := time.Now()
+	err := p.Play(ctx, castTestRequest())
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), castLoadAckWait/2, "the cancel ends the wait for an acknowledgment")
 }
 
 func TestCastCommandTypes(t *testing.T) {

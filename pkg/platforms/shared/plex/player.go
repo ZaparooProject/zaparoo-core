@@ -56,6 +56,10 @@ const (
 // at once; a wedged one leaves the request open until the server gives up.
 const companionTimeout = 10 * time.Second
 
+// accountLookupTimeout bounds the optional plex.tv player lookup, which
+// shares a control's deadline with the command it finds a player for.
+const accountLookupTimeout = 5 * time.Second
+
 // errPlayerNoAnswer is a Companion command the player never answered.
 var errPlayerNoAnswer = errors.New("plex player did not answer")
 
@@ -324,30 +328,46 @@ func pickConnection(conns []Connection) *Connection {
 	return direct
 }
 
-func (f *playerFinder) companionPlayers(ctx context.Context, client PlexClient) []player {
+// serverPlayers lists the Companion players the Plex server knows.
+func (f *playerFinder) serverPlayers(ctx context.Context, client PlexClient) []player {
 	var players []player
-	seen := map[string]bool{}
 	clients, err := client.Clients(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to list players known to the plex server")
 	}
 	for i := range clients {
-		if p := newCompanionFromServer(f, client, &clients[i]); p != nil && !seen[p.machineID] {
-			seen[p.machineID] = true
-			players = append(players, p)
-		}
-	}
-	resources, err := client.PlayerResources(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list players registered with plex.tv")
-	}
-	for i := range resources {
-		if p := newCompanionFromResource(f, client, &resources[i]); p != nil && !seen[p.machineID] {
-			seen[p.machineID] = true
+		if p := newCompanionFromServer(f, client, &clients[i]); p != nil && !hasMachine(players, p.machineID) {
 			players = append(players, p)
 		}
 	}
 	return players
+}
+
+// withAccountPlayers adds the Companion players registered with plex.tv
+// that the server did not list. The lookup gets its own budget so a slow
+// plex.tv leaves time for the command the player was found for.
+func (f *playerFinder) withAccountPlayers(ctx context.Context, client PlexClient, players []player) []player {
+	lookupCtx, cancel := context.WithTimeout(ctx, accountLookupTimeout)
+	defer cancel()
+	resources, err := client.PlayerResources(lookupCtx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list players registered with plex.tv")
+	}
+	for i := range resources {
+		if p := newCompanionFromResource(f, client, &resources[i]); p != nil && !hasMachine(players, p.machineID) {
+			players = append(players, p)
+		}
+	}
+	return players
+}
+
+func hasMachine(players []player, machineID string) bool {
+	for _, p := range players {
+		if cp, ok := p.(*companionPlayer); ok && cp.machineID == machineID {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *playerFinder) castPlayers(ctx context.Context, client PlexClient) []player {
@@ -374,29 +394,50 @@ func (f *playerFinder) castPlayers(ctx context.Context, client PlexClient) []pla
 	return players
 }
 
-func matchPlayer(players []player, name string) player {
+// matchPlayer returns the one player with the given name, or an error when
+// several distinct players share it, since picking one could start playback
+// on the wrong device.
+func matchPlayer(players []player, name string) (player, error) {
+	var matches []player
 	for _, p := range players {
 		if strings.EqualFold(strings.TrimSpace(p.Name()), name) {
-			return p
+			matches = append(matches, p)
 		}
 	}
-	return nil
+	switch len(matches) {
+	case 0:
+		return nil, nil //nolint:nilnil // no player has the name
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, fmt.Errorf("several plex players are named %q, give each a unique name; %s",
+			name, describePlayers(matches))
+	}
 }
 
 // find returns the player the client setting names, or the only player
-// there is when it names none.
+// there is when it names none. A named player is looked for among the
+// players the server knows, then those registered with plex.tv, then Cast
+// devices, so a player reachable both ways is driven over Companion.
 func (f *playerFinder) find(ctx context.Context, client PlexClient) (player, error) {
 	name := strings.TrimSpace(client.PlayerName())
-	companions := f.companionPlayers(ctx, client)
+	companions := f.serverPlayers(ctx, client)
 	if name != "" {
-		if p := matchPlayer(companions, name); p != nil {
-			return p, nil
+		if p, err := matchPlayer(companions, name); p != nil || err != nil {
+			return p, err
 		}
 	}
-	all := append(companions, f.castPlayers(ctx, client)...) //nolint:gocritic // companions is not used after this
+	companions = f.withAccountPlayers(ctx, client, companions)
 	if name != "" {
-		if p := matchPlayer(all, name); p != nil {
-			return p, nil
+		if p, err := matchPlayer(companions, name); p != nil || err != nil {
+			return p, err
+		}
+	}
+	casts := f.castPlayers(ctx, client)
+	all := append(companions, casts...) //nolint:gocritic // companions is not used after this
+	if name != "" {
+		if p, err := matchPlayer(casts, name); p != nil || err != nil {
+			return p, err
 		}
 		return nil, fmt.Errorf("plex player %q not found; %s", name, describePlayers(all))
 	}

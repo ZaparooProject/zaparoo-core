@@ -194,10 +194,11 @@ func (d *deps) controls(
 		return p.Command(ctx, cmdPlay, k)
 	}
 	stop := func(ctx context.Context, cfg *config.Instance, params platforms.ControlParams) error {
+		report := exit.Capture()
 		if err := command(cmdStop)(ctx, cfg, params); err != nil {
 			return err
 		}
-		exit.Report()
+		report()
 		return nil
 	}
 	return map[string]platforms.Control{

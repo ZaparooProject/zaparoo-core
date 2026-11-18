@@ -801,48 +801,75 @@ func runAuthLinkFlow(
 	req *authLinkRequest,
 	onDone func(),
 ) {
-	ctx, cancel := tuiContext()
-	defer cancel()
-	link, err := svc.StartAuthLink(ctx, req.provider, req.serverURL)
-	if err != nil {
-		log.Warn().Err(err).Str("provider", req.provider).Msg("error starting device link")
-		message := "Failed to start device linking"
-		if rpcErr, ok := errors.AsType[*client.RPCError](err); ok && req.provider != "" {
-			message = "Failed to start linking: " + rpcErr.Message
-		}
-		ShowErrorModal(pages, app, message, onDone)
-		return
-	}
-
 	done := make(chan struct{})
 	closeModal := func() {
 		pages.HidePage(authLinkModalPage)
 		pages.RemovePage(authLinkModalPage)
 	}
 
-	text := authLinkMessage(link.VerificationURL, link.UserCode)
-	if req.message != nil {
-		text = req.message(link)
-	}
+	// The link starts off the UI goroutine, since the server may be slow to
+	// answer. These are only touched on the UI goroutine.
+	var started, dismissed bool
 	dialog := NewDialog().
-		SetText(text).
+		SetText("Starting link...").
 		SetTextAlign(tview.AlignLeft).
 		SetTitle(req.title).
-		AddButtons([]string{"Cancel"}).
-		SetDoneFunc(func(_ int) {
+		AddButtons([]string{"Cancel"})
+	dialog.SetDoneFunc(func(_ int) {
+		if dismissed {
+			return
+		}
+		dismissed = true
+		closeModal()
+		if started {
 			close(done)
-			cancelCtx, cancelCancel := tuiContext()
-			defer cancelCancel()
-			if cancelErr := svc.CancelAuthLink(cancelCtx); cancelErr != nil {
-				log.Warn().Err(cancelErr).Msg("error cancelling device link")
-			}
-			closeModal()
-			onDone()
-		})
+			cancelAuthLink(svc)
+		}
+		onDone()
+	})
 	pages.AddPage(authLinkModalPage, dialog, true, true)
 	app.SetFocus(dialog)
 
-	go pollAuthLinkStatus(svc, pages, app, done, closeModal, req.onApproved, onDone)
+	go func() {
+		ctx, cancel := tuiContext()
+		link, err := svc.StartAuthLink(ctx, req.provider, req.serverURL)
+		cancel()
+		app.QueueUpdateDraw(func() {
+			if dismissed {
+				// Cancelled while starting: stop the link this call began.
+				if err == nil {
+					go cancelAuthLink(svc)
+				}
+				return
+			}
+			if err != nil {
+				dismissed = true
+				closeModal()
+				log.Warn().Err(err).Str("provider", req.provider).Msg("error starting device link")
+				message := "Failed to start device linking"
+				if rpcErr, ok := errors.AsType[*client.RPCError](err); ok && req.provider != "" {
+					message = "Failed to start linking: " + rpcErr.Message
+				}
+				ShowErrorModal(pages, app, message, onDone)
+				return
+			}
+			started = true
+			text := authLinkMessage(link.VerificationURL, link.UserCode)
+			if req.message != nil {
+				text = req.message(link)
+			}
+			dialog.SetText(text)
+			go pollAuthLinkStatus(svc, pages, app, done, closeModal, req.onApproved, onDone)
+		})
+	}()
+}
+
+func cancelAuthLink(svc SettingsService) {
+	ctx, cancel := tuiContext()
+	defer cancel()
+	if err := svc.CancelAuthLink(ctx); err != nil {
+		log.Warn().Err(err).Msg("error cancelling device link")
+	}
 }
 
 // authLinkMessage lays out the link instructions so the two things the user

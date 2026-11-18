@@ -52,6 +52,9 @@ type fakeServer struct {
 	// filtersGUID makes the server honour the guid filter; a server that
 	// ignores it returns every item of the type.
 	filtersGUID bool
+	// primaryGUIDOnly makes the guid filter match only an item's own
+	// plex:// guid, so a filter on an external identity finds nothing.
+	primaryGUIDOnly bool
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -141,7 +144,8 @@ func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 			if q.Get("type") != "" && typeNumber(md.Type) != q.Get("type") {
 				continue
 			}
-			if guid := q.Get("guid"); guid != "" && f.filtersGUID && !hasGUID(md, guid) {
+			if guid := q.Get("guid"); guid != "" && f.filtersGUID &&
+				(!hasGUID(md, guid) || f.primaryGUIDOnly && !strings.HasPrefix(guid, "plex://")) {
 				continue
 			}
 			out = append(out, *md)

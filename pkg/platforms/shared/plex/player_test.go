@@ -283,15 +283,42 @@ func TestCompanionCommandAndState(t *testing.T) {
 	require.Error(t, err)
 }
 
+// wedgedTransport records each request's path, then leaves it open until the
+// request's context ends, as a wedged player does. Recording happens before
+// the wait, so it does not depend on how fast a request reaches a server.
+type wedgedTransport struct {
+	paths []string
+	mu    syncutil.Mutex
+}
+
+func (w *wedgedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	w.mu.Lock()
+	w.paths = append(w.paths, r.URL.Path)
+	w.mu.Unlock()
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+func (w *wedgedTransport) calls(path string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, p := range w.paths {
+		if p == path {
+			n++
+		}
+	}
+	return n
+}
+
 func TestCompanionPlayFailsFastOnWedgedPlayer(t *testing.T) {
 	t.Parallel()
-	fake := newFakeCompanion(t)
-	fake.hang.Store(true)
+	wedged := &wedgedTransport{}
 	p := &companionPlayer{
-		http:      fake.Client(),
+		http:      &http.Client{Transport: wedged},
 		name:      "Desktop",
 		machineID: "player-1",
-		baseURL:   fake.URL,
+		baseURL:   "http://player.invalid:32500",
 		timeout:   50 * time.Millisecond,
 	}
 
@@ -303,8 +330,8 @@ func TestCompanionPlayFailsFastOnWedgedPlayer(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errPlayerNoAnswer)
 	assert.Contains(t, err.Error(), `"Desktop"`)
-	assert.Len(t, fake.calls("/player/playback/createPlayQueue"), 1)
-	assert.Empty(t, fake.calls("/player/playback/playMedia"), "no playMedia after an unanswered command")
+	assert.Equal(t, 1, wedged.calls("/player/playback/createPlayQueue"))
+	assert.Zero(t, wedged.calls("/player/playback/playMedia"), "no playMedia after an unanswered command")
 
 	err = p.Command(context.Background(), cmdPause, kindMovie)
 	require.ErrorIs(t, err, errPlayerNoAnswer)
@@ -385,6 +412,47 @@ func TestFindPlayer(t *testing.T) {
 	finder.browseCast = func(context.Context) ([]castDevice, error) { return nil, errors.New("no network") }
 	_, err = finder.find(context.Background(), newClient(""))
 	require.ErrorContains(t, err, "no plex players found")
+}
+
+// TestFindPlayerPrefersServerPlayers guards that a player the server knows
+// is found without the optional plex.tv lookup, which can be slow enough to
+// use up a control's whole deadline.
+func TestFindPlayerPrefersServerPlayers(t *testing.T) {
+	// Not parallel: uses the global auth config.
+	srv := newFakeServer(t)
+	tv := newFakeTV(t)
+	useTokens(t, srv.URL, tv.URL, "account-token")
+	lan := newFakeCompanion(t)
+	srv.clients = []ServerClient{lan.serverClient("Shield", "shield-1")}
+	devices := []castDevice{{Name: "Shield", ID: "cast-1", Host: "10.0.0.20", Port: 8009}}
+	finder := testFinder(srv, devices, nil)
+
+	p, err := finder.find(context.Background(), NewClient(srv.URL, tv.URL, testClientID, "shield", srv.Client()))
+	require.NoError(t, err)
+	assert.Equal(t, playerKindCompanion, p.Kind(), "a player reachable both ways is driven over Companion")
+	tv.mu.Lock()
+	defer tv.mu.Unlock()
+	assert.Empty(t, tv.tokens, "plex.tv is not asked when the server knows the player")
+}
+
+func TestFindPlayerRejectsAmbiguousName(t *testing.T) {
+	// Not parallel: uses the global auth config.
+	srv := newFakeServer(t)
+	useTokens(t, srv.URL, "", "")
+	one := newFakeCompanion(t)
+	two := newFakeCompanion(t)
+	srv.clients = []ServerClient{one.serverClient("Living Room", "lr-1"), two.serverClient("living room", "lr-2")}
+	devices := []castDevice{
+		{Name: "Kitchen", ID: "cast-1", Host: "10.0.0.20", Port: 8009},
+		{Name: "Kitchen", ID: "cast-2", Host: "10.0.0.21", Port: 8009},
+	}
+	finder := testFinder(srv, devices, nil)
+
+	_, err := finder.find(context.Background(), srv.client("Living Room"))
+	require.ErrorContains(t, err, `several plex players are named "Living Room"`)
+
+	_, err = finder.find(context.Background(), srv.client("Kitchen"))
+	require.ErrorContains(t, err, `several plex players are named "Kitchen"`)
 }
 
 func TestCompanionFromServerSkipsUnusable(t *testing.T) {

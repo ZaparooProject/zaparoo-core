@@ -59,6 +59,9 @@ var newJellyfinLinkClient = func(serverURL, deviceID string) (jellyfinLinkClient
 	return jellyfin.NewLinkClient(serverURL, deviceID)
 }
 
+const quickConnectDisabledMsg = "Quick Connect is disabled on this Jellyfin server; " +
+	"enable it in Dashboard → General"
+
 // jellyfinLinkClock times a Jellyfin link's polls and expiry; tests replace it.
 var jellyfinLinkClock = clockwork.NewRealClock()
 
@@ -94,8 +97,7 @@ func startJellyfinAuthLink(env *requests.RequestEnv, serverURL string) (any, err
 	}
 	if errors.Is(err, jellyfin.ErrQuickConnectDisabled) {
 		finishAuthLinkStart(nil)
-		return nil, models.ClientErrf(
-			"Quick Connect is disabled on this Jellyfin server; enable it in Dashboard → General")
+		return nil, models.ClientErrf("%s", quickConnectDisabledMsg)
 	}
 	if err != nil {
 		finishAuthLinkStart(nil)
@@ -103,7 +105,8 @@ func startJellyfinAuthLink(env *requests.RequestEnv, serverURL string) (any, err
 		return nil, remoteRequestError("failed to start Jellyfin link", err)
 	}
 
-	expiresAt := jellyfinLinkClock.Now().Add(jellyfinLinkTTL)
+	clock := jellyfinLinkClock
+	expiresAt := clock.Now().Add(jellyfinLinkTTL)
 	status := models.AuthLinkStatusResponse{
 		Status:          models.AuthLinkStatusPending,
 		Provider:        models.AuthLinkProviderJellyfin,
@@ -133,7 +136,7 @@ func startJellyfinAuthLink(env *requests.RequestEnv, serverURL string) (any, err
 	}
 	go func() {
 		defer cancel()
-		pollJellyfinLink(linkCtx, session, deps, client, qc.Secret, expiresAt)
+		pollJellyfinLink(linkCtx, session, deps, client, clock, qc.Secret, expiresAt)
 	}()
 
 	log.Info().Msg("settings.auth.link started for a Jellyfin server")
@@ -147,6 +150,7 @@ func pollJellyfinLink(
 	session *authLinkSession,
 	deps *authLinkDeps,
 	client jellyfinLinkClient,
+	clock clockwork.Clock,
 	secret string,
 	expiresAt time.Time,
 ) {
@@ -161,9 +165,9 @@ func pollJellyfinLink(
 			}
 			finishAuthLink(session, deps, models.AuthLinkStatusFailed, errMsg)
 			return
-		case <-jellyfinLinkClock.After(jellyfinLinkInterval):
+		case <-clock.After(jellyfinLinkInterval):
 		}
-		if !jellyfinLinkClock.Now().Before(expiresAt) {
+		if !clock.Now().Before(expiresAt) {
 			log.Warn().Int("poll_failures", consecutiveFailures).Msg("jellyfin link polling expired")
 			finishAuthLink(session, deps, models.AuthLinkStatusFailed, expiredMsg)
 			return
@@ -192,6 +196,9 @@ func pollJellyfinLink(
 			consecutiveFailures = 0
 		case errors.Is(err, jellyfin.ErrQuickConnectExpired):
 			finishAuthLink(session, deps, models.AuthLinkStatusFailed, expiredMsg)
+			return
+		case errors.Is(err, jellyfin.ErrQuickConnectDisabled):
+			finishAuthLink(session, deps, models.AuthLinkStatusFailed, quickConnectDisabledMsg)
 			return
 		default:
 			if ctx.Err() != nil {

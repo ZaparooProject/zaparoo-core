@@ -389,6 +389,10 @@ func plexServerHasURL(s *plex.Resource, serverURL string) (uriMatch, addrMatch b
 	wantHostPort := plexHostPort(want)
 	for i := range s.Connections {
 		c := &s.Connections[i]
+		if c.Relay {
+			// A relay is never stored as the server's address.
+			continue
+		}
 		if c.URI != "" && strings.EqualFold(plex.NormalizeURL(c.URI), serverURL) {
 			uriMatch = true
 		}

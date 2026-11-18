@@ -132,9 +132,12 @@ type APIError struct {
 	Code    int    `json:"code"`
 }
 
-// apiErrorInvalidParams is the JSON-RPC code Kodi answers with when a library
-// ID names no item.
-const apiErrorInvalidParams = -32602
+// Kodi answers a details request for a library ID that names no item with
+// InvalidParams up to Kodi 21 and with its own NotFound code from Kodi 22.
+const (
+	apiErrorInvalidParams = -32602
+	apiErrorNotFound      = -32098
+)
 
 func (e *APIError) Error() string { return e.Message }
 

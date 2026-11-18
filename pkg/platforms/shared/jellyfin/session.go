@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ErrNoPlayer is returned when no controllable Jellyfin player matches the
@@ -95,17 +97,27 @@ func describeSessions(sessions []Session) string {
 }
 
 // playItems starts items on a session. Lists longer than one command carries
-// are queued behind the first chunk.
-func playItems(ctx context.Context, c Client, sessionID string, ids []string) error {
+// are queued behind the first chunk. It returns the IDs the player accepted:
+// once the first chunk plays, a failure to queue the rest is logged rather
+// than returned, since the media Core asked for is playing and failing the
+// launch would leave it running with no stop or exit tracking.
+func playItems(ctx context.Context, c Client, sessionID string, ids []string) ([]string, error) {
 	if len(ids) == 0 {
-		return errors.New("nothing to play")
+		return nil, errors.New("nothing to play")
 	}
 	command := "PlayNow"
+	sent := 0
 	for chunk := range slices.Chunk(ids, playChunk) {
 		if err := c.Play(ctx, sessionID, command, chunk); err != nil {
-			return fmt.Errorf("failed to send %s to jellyfin player: %w", command, err)
+			if sent == 0 {
+				return nil, fmt.Errorf("failed to send %s to jellyfin player: %w", command, err)
+			}
+			log.Warn().Err(err).Int("queued", sent).Int("total", len(ids)).
+				Msg("jellyfin player is playing, but the rest of the queue could not be added")
+			return ids[:sent], nil
 		}
+		sent += len(chunk)
 		command = "PlayLast"
 	}
-	return nil
+	return ids, nil
 }

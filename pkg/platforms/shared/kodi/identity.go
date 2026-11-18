@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/rs/zerolog/log"
 )
 
 // Library IDs in Kodi change whenever its database is rebuilt, so a card that
@@ -113,20 +114,6 @@ func identityAgreement(card, item map[string]string) (matched, conflicted bool) 
 	return matched, conflicted
 }
 
-// sameLibraryItem decides whether the item at a card's stored ID is still the
-// card's item: provider IDs decide when both sides have one, the name
-// otherwise.
-func sameLibraryItem(cardIDs, itemIDs map[string]string, cardName, itemName string) bool {
-	matched, conflicted := identityAgreement(cardIDs, itemIDs)
-	if conflicted {
-		return false
-	}
-	if matched {
-		return true
-	}
-	return equalTVShowTitle(cardName, itemName)
-}
-
 // libraryPath is a parsed Kodi library virtual path.
 type libraryPath struct {
 	Query url.Values
@@ -148,7 +135,10 @@ func parseLibraryPath(path, scheme string) (libraryPath, error) {
 	}
 	values, err := virtualpath.ParseParams(path)
 	if err != nil {
-		return libraryPath{}, fmt.Errorf("failed to parse identity: %w", err)
+		// Paths written before identities were stored carry only the ID, and
+		// stray query text never stopped them launching.
+		log.Debug().Err(err).Str("path", path).Msg("kodi: ignoring unreadable path parameters")
+		values = url.Values{}
 	}
 	return libraryPath{Query: values, Name: parsed.Name, ID: id}, nil
 }
@@ -225,8 +215,15 @@ func resolveMovie(ctx context.Context, client KodiClient, path string) (int, err
 	if len(ref.UniqueIDs) == 0 && movie != nil {
 		return ref.ID, nil
 	}
-	if movie != nil && sameLibraryItem(ref.UniqueIDs, movie.UniqueIDs, ref.Name, movie.Label) {
-		return ref.ID, nil
+	// A movie at the stored ID that only shares the card's title is used
+	// only when no movie holds the card's provider ID.
+	keptByName := false
+	if movie != nil {
+		matched, conflicted := identityAgreement(ref.UniqueIDs, movie.UniqueIDs)
+		if matched && !conflicted {
+			return ref.ID, nil
+		}
+		keptByName = !matched && !conflicted && equalTVShowTitle(ref.Name, movie.Label)
 	}
 
 	movies, err := client.GetMovies(ctx)
@@ -250,7 +247,16 @@ func resolveMovie(ctx context.Context, client KodiClient, path string) (int, err
 			return 0, fmt.Errorf("multiple Kodi movies match %q", ref.Name)
 		}
 	}
-	if id, ok := uniqueByName(movies, ref.Name, movieLabel); ok {
+	if keptByName {
+		return ref.ID, nil
+	}
+	eligible := make([]Movie, 0, len(movies))
+	for _, m := range movies {
+		if _, conflicted := identityAgreement(ref.UniqueIDs, m.UniqueIDs); !conflicted {
+			eligible = append(eligible, m)
+		}
+	}
+	if id, ok := uniqueByName(eligible, ref.Name, movieLabel); ok {
 		return id, nil
 	}
 	return 0, fmt.Errorf("kodi movie %q is no longer available", ref.Name)
@@ -267,19 +273,45 @@ func resolveEpisode(ctx context.Context, client KodiClient, path string) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("failed to look up Kodi episode %d: %w", ref.ID, err)
 	}
+	var shows []TVShow
+	listShows := func() error {
+		if shows != nil {
+			return nil
+		}
+		var listErr error
+		if shows, listErr = client.GetTVShows(ctx); listErr != nil {
+			return fmt.Errorf("failed to list Kodi TV shows: %w", listErr)
+		}
+		if shows == nil {
+			shows = []TVShow{}
+		}
+		return nil
+	}
 	if episode != nil {
 		if !ref.hasIdentity() {
 			return ref.ID, nil
 		}
-		name := episode.ShowTitle + " - " + episode.Label
-		if sameEpisode(&ref, episode, name) {
+		matched, conflicted := identityAgreement(ref.UniqueIDs, episode.UniqueIDs)
+		switch {
+		case matched && !conflicted:
 			return ref.ID, nil
+		case !conflicted && sameEpisode(&ref, episode, episode.ShowTitle+" - "+episode.Label):
+			// Only the title or place matched, so the episode must also
+			// belong to the card's show.
+			if len(ref.ShowUniqueIDs) == 0 {
+				return ref.ID, nil
+			}
+			if err := listShows(); err != nil {
+				return 0, err
+			}
+			if !showConflicts(ref.ShowUniqueIDs, shows, episode.TVShowID) {
+				return ref.ID, nil
+			}
 		}
 	}
 
-	shows, err := client.GetTVShows(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to list Kodi TV shows: %w", err)
+	if err := listShows(); err != nil {
+		return 0, err
 	}
 	var candidates []TVShow
 	if len(ref.ShowUniqueIDs) > 0 {
@@ -300,7 +332,11 @@ func resolveEpisode(ctx context.Context, client KodiClient, path string) (int, e
 			return 0, fmt.Errorf("failed to list episodes for Kodi show %d: %w", show.ID, err)
 		}
 		for _, ep := range episodes {
-			if matched, conflicted := identityAgreement(ref.UniqueIDs, ep.UniqueIDs); matched && !conflicted {
+			matched, conflicted := identityAgreement(ref.UniqueIDs, ep.UniqueIDs)
+			if conflicted {
+				continue
+			}
+			if matched {
 				byIdentity = append(byIdentity, ep.ID)
 			}
 			if ref.Episode > 0 && ep.Season == ref.Season && ep.Episode == ref.Episode {
@@ -308,6 +344,19 @@ func resolveEpisode(ctx context.Context, client KodiClient, path string) (int, e
 			}
 			if equalTVShowTitle(episodeName(show, &ep), ref.Name) {
 				byName = append(byName, ep.ID)
+			}
+		}
+	}
+	if len(byIdentity) == 0 && len(ref.UniqueIDs) > 0 {
+		// The show may have been renamed or lost its provider IDs, so look
+		// for the episode's own provider ID across the whole library.
+		episodes, err := client.GetEpisodes(ctx, allTVShows)
+		if err != nil {
+			return 0, fmt.Errorf("failed to list Kodi episodes: %w", err)
+		}
+		for _, ep := range episodes {
+			if matched, conflicted := identityAgreement(ref.UniqueIDs, ep.UniqueIDs); matched && !conflicted {
+				byIdentity = append(byIdentity, ep.ID)
 			}
 		}
 	}
@@ -322,16 +371,24 @@ func resolveEpisode(ctx context.Context, client KodiClient, path string) (int, e
 	return 0, fmt.Errorf("kodi episode %q is no longer available", ref.Name)
 }
 
-// sameEpisode decides whether the episode at a card's stored ID is still the
-// card's episode.
+// allTVShows asks GetEpisodes for every episode in the library.
+const allTVShows = -1
+
+// showConflicts reports whether the show with the given ID holds provider
+// IDs that contradict the card's show identity. An unknown show does not.
+func showConflicts(cardShowIDs map[string]string, shows []TVShow, showID int) bool {
+	for _, show := range shows {
+		if show.ID == showID {
+			_, conflicted := identityAgreement(cardShowIDs, show.UniqueIDs)
+			return conflicted
+		}
+	}
+	return false
+}
+
+// sameEpisode decides whether the episode at a card's stored ID still has
+// the card's title, or the same place in the same-titled show.
 func sameEpisode(ref *episodeReference, episode *Episode, name string) bool {
-	matched, conflicted := identityAgreement(ref.UniqueIDs, episode.UniqueIDs)
-	if conflicted {
-		return false
-	}
-	if matched {
-		return true
-	}
 	if equalTVShowTitle(name, ref.Name) {
 		return true
 	}

@@ -225,6 +225,33 @@ func TestLaunchQueuesLongListsInChunks(t *testing.T) {
 	assert.Equal(t, want[100:], plays[1].ids)
 }
 
+// TestLaunchKeepsPlaybackWhenQueueingFails guards that a launch whose first
+// chunk is playing succeeds, reporting the IDs actually sent, when a later
+// chunk cannot be queued.
+func TestLaunchKeepsPlaybackWhenQueueingFails(t *testing.T) {
+	t.Parallel()
+	f := newFakeJellyfin(t)
+	f.failPlayLast = true
+	f.setSessions(Session{ID: "sess-1", DeviceName: "TV"})
+	f.addItems(fakeItem{Item: Item{ID: albumAID, Name: "Box Set", Type: typeAlbum}})
+	want := make([]string, 0, 150)
+	for i := range 150 {
+		tid := id(1000 + i)
+		want = append(want, tid)
+		f.addItems(fakeItem{Item: Item{
+			ID: tid, Name: strconv.Itoa(i), Type: typeAudio, AlbumID: albumAID,
+			Album: "Box Set", ParentIndexNumber: intPtr(1), IndexNumber: intPtr(i + 1),
+		}})
+	}
+	ids, err := launchPath(context.Background(), testClient(t, f, ""), kindAlbum,
+		"jellyfin-album://"+albumAID+"/Box%20Set")
+	require.NoError(t, err)
+	assert.Equal(t, want[:100], ids)
+	plays := f.playCalls()
+	require.Len(t, plays, 1)
+	assert.Equal(t, "PlayNow", plays[0].command)
+}
+
 func TestLaunchFailsWithoutPlayer(t *testing.T) {
 	t.Parallel()
 	f := newFakeJellyfin(t)
@@ -550,6 +577,30 @@ func TestStaleIDProviderQuery(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+// TestStaleIDProviderFilterIgnored guards that the provider ID is still
+// matched across every page when the server returns its whole library.
+func TestStaleIDProviderFilterIgnored(t *testing.T) {
+	t.Parallel()
+	f := newFakeJellyfin(t)
+	f.ignoresProviderFilter = true
+	for i := range pageSize + 50 {
+		f.addItems(fakeItem{Item: Item{ID: id(5000 + i), Name: "Filler " + strconv.Itoa(i), Type: typeMovie}})
+	}
+	f.addItems(
+		fakeItem{Item: Item{
+			ID: id(9000), Name: "Heat", Type: typeMovie, ProviderIDs: map[string]string{"Tmdb": "1"},
+		}},
+		fakeItem{Item: Item{
+			ID: movieID, Name: "Heat (Director's Cut)", Type: typeMovie, ProviderIDs: map[string]string{"Tmdb": "949"},
+		}},
+	)
+	ref, err := parseReference("jellyfin-movie://"+id(4242)+"/Heat?tmdb=949", kindMovie)
+	require.NoError(t, err)
+	item, err := resolveItem(context.Background(), testClient(t, f, ""), kindMovie, ref)
+	require.NoError(t, err)
+	assert.Equal(t, movieID, item.ID)
 }
 
 func TestStaleIDServerErrorDoesNotFallBack(t *testing.T) {

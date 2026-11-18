@@ -31,6 +31,7 @@ import (
 // that media is no longer active.
 type LaunchExit struct {
 	exited func()
+	gen    uint64
 	mu     syncutil.Mutex
 }
 
@@ -42,15 +43,30 @@ func (e *LaunchExit) Set(opts *platforms.LaunchOptions) {
 	}
 	e.mu.Lock()
 	e.exited = exited
+	e.gen++
 	e.mu.Unlock()
 }
 
-// Report calls the recorded exit callback, if any.
-func (e *LaunchExit) Report() {
+// Capture binds a report to the launch recorded now. A stop captures before
+// it sends its command, so a launch that records its own callback while the
+// command is in flight is not reported as exited. Calling the returned
+// function reports the captured launch's exit, at most once per launch.
+func (e *LaunchExit) Capture() func() {
 	e.mu.Lock()
-	exited := e.exited
+	gen, exited := e.gen, e.exited
 	e.mu.Unlock()
-	if exited != nil {
-		exited()
+	return func() {
+		e.mu.Lock()
+		if e.gen == gen {
+			if e.exited == nil {
+				e.mu.Unlock()
+				return
+			}
+			e.exited = nil
+		}
+		e.mu.Unlock()
+		if exited != nil {
+			exited()
+		}
 	}
 }

@@ -47,7 +47,7 @@ var mediaServers = []mediaServer{
 	{
 		provider:  models.AuthLinkProviderJellyfin,
 		name:      "Jellyfin",
-		urlHelp:   "The address you open Jellyfin at, like http://192.168.1.10:8096",
+		urlHelp:   "The Jellyfin server address, like http://192.168.1.10:8096, without /web",
 		urlNeeded: true,
 		message:   jellyfinLinkMessage,
 	},
@@ -93,7 +93,11 @@ func buildMediaServersMenu(svc SettingsService, pages *tview.Pages, app *tview.A
 				Validate:     validateServerURL,
 			}, nil).
 			AddAction("Link "+server.name, "Sign in to "+server.name+" and let Core use its library", func() {
-				address := strings.TrimSpace(serverURL)
+				address, err := normalizeServerURL(serverURL)
+				if err != nil {
+					ShowErrorModal(pages, app, err.Error(), rebuild)
+					return
+				}
 				if server.urlNeeded && address == "" {
 					ShowErrorModal(pages, app, "Enter the "+server.name+" server address first.", rebuild)
 					return
@@ -140,25 +144,41 @@ func jellyfinLinkMessage(serverURL string, link *models.AuthLinkStatusResponse) 
 	t := CurrentTheme()
 	accent := colorToHex(t.LabelColor)
 	dim := colorToHex(t.SecondaryTextColor)
-	displayURL := strings.TrimPrefix(strings.TrimPrefix(serverURL, "https://"), "http://")
 	return fmt.Sprintf(
 		"Sign in to Jellyfin at [%s::b]%s[-::-], open\n  [%s::b]Settings > Quick Connect[-::-]\n\n"+
 			"and enter this code:\n  [%s::b]%s[-::-]\n\n"+
 			"[%s]Waiting for approval...[-::-]",
-		accent, displayURL, accent, accent, link.UserCode, dim,
+		accent, serverURL, accent, accent, link.UserCode, dim,
 	)
 }
 
-var errServerURL = errors.New("enter a full address starting with http:// or https://")
+var (
+	errServerURL      = errors.New("enter an http:// or https:// address, like http://192.168.1.10:8096")
+	errServerURLParts = errors.New("enter the server address only, without a login, ? or #")
+)
 
 func validateServerURL(text string) error {
+	_, err := normalizeServerURL(text)
+	return err
+}
+
+// normalizeServerURL reads a server address the way the link flows do: one
+// without a scheme is http. A base path is kept; a login, query or fragment
+// is not part of a server address.
+func normalizeServerURL(text string) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil
+		return "", nil
+	}
+	if !strings.Contains(text, "://") {
+		text = "http://" + text
 	}
 	parsed, err := url.Parse(text)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return errServerURL
+		return "", errServerURL
 	}
-	return nil
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", errServerURLParts
+	}
+	return text, nil
 }

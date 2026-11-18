@@ -101,7 +101,7 @@ func TestMediaServersMenu_LinkJellyfinShowsQuickConnect_Integration(t *testing.T
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Jellyfin server address", uiSettleTimeout))
-	runner.SimulateString("http://jf.lan:8096")
+	runner.SimulateString("jf.lan:8096")
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("jf.lan:8096", uiSettleTimeout))
 
@@ -109,6 +109,7 @@ func TestMediaServersMenu_LinkJellyfinShowsQuickConnect_Integration(t *testing.T
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("123456", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Quick Connect"))
+	assert.True(t, runner.ContainsText("http://jf.lan:8096"), "the sign-in address keeps its scheme")
 
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForSignal(cancelled, uiSettleTimeout))
@@ -117,10 +118,25 @@ func TestMediaServersMenu_LinkJellyfinShowsQuickConnect_Integration(t *testing.T
 func TestValidateServerURL(t *testing.T) {
 	t.Parallel()
 
-	for _, ok := range []string{"", "  ", "http://jf.lan:8096", "https://plex.example.com/"} {
-		require.NoError(t, validateServerURL(ok), ok)
+	for text, want := range map[string]string{
+		"":                           "",
+		"  ":                         "",
+		"http://jf.lan:8096":         "http://jf.lan:8096",
+		"https://plex.example.com/":  "https://plex.example.com/",
+		" jf.lan:8096 ":              "http://jf.lan:8096",
+		"https://media.lan/jellyfin": "https://media.lan/jellyfin",
+	} {
+		got, err := normalizeServerURL(text)
+		require.NoError(t, err, text)
+		assert.Equal(t, want, got, text)
+		require.NoError(t, validateServerURL(text), text)
 	}
-	for _, bad := range []string{"jf.lan:8096", "ftp://jf.lan", "http://", "not a url"} {
+	for _, bad := range []string{"ftp://jf.lan", "http://", "not a url"} {
 		require.ErrorIs(t, validateServerURL(bad), errServerURL, bad)
+	}
+	for _, bad := range []string{
+		"http://jf.lan:8096/web/#/home", "http://jf.lan:8096/?api_key=x", "http://jf.lan:8096/?", "http://u:p@jf.lan",
+	} {
+		require.ErrorIs(t, validateServerURL(bad), errServerURLParts, bad)
 	}
 }

@@ -316,11 +316,12 @@ func (s *castSession) plexTransport(launch bool) (string, error) {
 	} else {
 		payload = map[string]any{"type": "GET_STATUS"}
 	}
-	if _, err := s.request(castReceiverID, nsReceiver, payload); err != nil {
+	id, err := s.request(castReceiverID, nsReceiver, payload)
+	if err != nil {
 		return "", err
 	}
 	var transport string
-	err := s.await(func(m *castMessage, p *castPayload) (bool, error) {
+	err = s.await(func(m *castMessage, p *castPayload) (bool, error) {
 		if m.Namespace != nsReceiver {
 			return false, nil
 		}
@@ -332,7 +333,7 @@ func (s *castSession) plexTransport(launch bool) (string, error) {
 			return false, nil
 		}
 		var status castReceiverStatus
-		if err := json.Unmarshal(p.Status, &status); err != nil {
+		if jsonErr := json.Unmarshal(p.Status, &status); jsonErr != nil {
 			return false, nil //nolint:nilerr // a status without applications is not the one awaited
 		}
 		for _, app := range status.Applications {
@@ -341,7 +342,9 @@ func (s *castSession) plexTransport(launch bool) (string, error) {
 				return true, nil
 			}
 		}
-		if !launch {
+		// Only the reply settles that Plex is not running; a status the
+		// device broadcast on its own may predate it.
+		if !launch && p.RequestID == id {
 			return false, errors.New("plex is not running on the cast device")
 		}
 		return false, nil
@@ -414,7 +417,8 @@ func (p *castPlayer) Play(ctx context.Context, req *playRequest) error {
 	if err != nil {
 		return err
 	}
-	if _, err = s.request(transport, nsMedia, castLoadPayload(req)); err != nil {
+	id, err := s.request(transport, nsMedia, castLoadPayload(req))
+	if err != nil {
 		return err
 	}
 
@@ -423,8 +427,15 @@ func (p *castPlayer) Play(ctx context.Context, req *playRequest) error {
 		ackDeadline = d
 	}
 	_ = s.conn.SetDeadline(ackDeadline)
+	// A cancel that landed before the deadline above was set has had its
+	// immediate deadline replaced, so it is checked here.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	err = s.await(func(m *castMessage, p *castPayload) (bool, error) {
-		if m.Namespace != nsMedia {
+		// Status the player broadcasts on its own (request ID 0) describes
+		// what was playing before, not the outcome of this LOAD.
+		if m.Namespace != nsMedia || p.RequestID != id {
 			return false, nil
 		}
 		switch p.Type {
@@ -498,12 +509,14 @@ func (p *castPlayer) State(ctx context.Context) (*playerState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = s.request(transport, nsMedia, map[string]any{"type": "GET_STATUS"}); err != nil {
+	id, err := s.request(transport, nsMedia, map[string]any{"type": "GET_STATUS"})
+	if err != nil {
 		return nil, err
 	}
 	state := &playerState{}
 	err = s.await(func(m *castMessage, p *castPayload) (bool, error) {
-		if m.Namespace != nsMedia || p.Type != "MEDIA_STATUS" {
+		// Broadcast updates can be partial; only the reply is a full status.
+		if m.Namespace != nsMedia || p.Type != "MEDIA_STATUS" || p.RequestID != id {
 			return false, nil
 		}
 		var statuses []castMediaStatus

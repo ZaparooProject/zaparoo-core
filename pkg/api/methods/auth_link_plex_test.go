@@ -392,6 +392,9 @@ func TestSelectPlexServer(t *testing.T) {
 	_, _, msg = selectPlexServer([]plex.Resource{{Name: "Phone", Provides: "player"}}, "")
 	assert.Contains(t, msg, "has no servers")
 
+	_, _, msg = selectPlexServer([]plex.Resource{remoteOnly}, "https://relay.plex.direct")
+	assert.Contains(t, msg, "no Plex server on the account answers at", "a relay is not a match")
+
 	_, _, msg = selectPlexServer([]plex.Resource{remoteOnly}, "http://10.0.0.1:32400")
 	assert.Contains(t, msg, "no Plex server on the account answers at http://10.0.0.1:32400")
 	assert.Contains(t, msg, `"Remote"`)

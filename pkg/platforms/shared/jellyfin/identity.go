@@ -265,11 +265,10 @@ func resolveItem(ctx context.Context, c Client, kind *mediaKind, ref reference) 
 	}
 
 	if len(ref.ProviderIDs) > 0 {
-		candidates, listErr := providerCandidates(ctx, c, kind, ref)
+		matches, listErr := providerMatches(ctx, c, kind, ref)
 		if listErr != nil {
 			return nil, listErr
 		}
-		matches := matchingByIdentity(kind, ref.ProviderIDs, candidates)
 		switch len(matches) {
 		case 0:
 		case 1:
@@ -301,26 +300,44 @@ func resolveItem(ctx context.Context, c Client, kind *mediaKind, ref reference) 
 	}
 }
 
-// providerCandidates asks the server for items with any of the card's
-// provider IDs. Album artists cannot be filtered by provider, so they are
-// searched by name and then matched by provider.
-func providerCandidates(ctx context.Context, c Client, kind *mediaKind, ref reference) ([]Item, error) {
+// providerMatches asks the server for items with any of the card's
+// provider IDs and keeps those matchingByIdentity accepts. Album artists
+// cannot be filtered by provider, so they are searched by name and then
+// matched by provider. Each page is matched as it arrives, so a server that
+// ignores the filter and returns its whole library is not held in memory.
+func providerMatches(ctx context.Context, c Client, kind *mediaKind, ref reference) ([]Item, error) {
+	var list pageLister = c.ListItems
+	var q url.Values
 	if kind == kindArtist {
-		return searchCandidates(ctx, c, kind, ref.Name)
-	}
-	ids := make([]string, 0, len(ref.ProviderIDs))
-	for _, p := range kind.providers {
-		if v, ok := ref.ProviderIDs[p.key]; ok {
-			ids = append(ids, p.jellyfin+"."+v)
+		term := kind.searchTerm(ref.Name)
+		if term == "" {
+			return nil, nil
+		}
+		list = kindLister(c, kind)
+		q = kindQuery(kind)
+		q.Set("searchTerm", term)
+	} else {
+		ids := make([]string, 0, len(ref.ProviderIDs))
+		for _, p := range kind.providers {
+			if v, ok := ref.ProviderIDs[p.key]; ok {
+				ids = append(ids, p.jellyfin+"."+v)
+			}
+		}
+		q = url.Values{
+			"Recursive":           {"true"},
+			"IncludeItemTypes":    {kind.itemType},
+			"AnyProviderIdEquals": {strings.Join(ids, ",")},
+			"Fields":              {itemFields},
 		}
 	}
-	q := url.Values{
-		"Recursive":           {"true"},
-		"IncludeItemTypes":    {kind.itemType},
-		"AnyProviderIdEquals": {strings.Join(ids, ",")},
-		"Fields":              {itemFields},
+	var matches []Item
+	err := eachPage(ctx, list, q, func(page []Item) {
+		matches = append(matches, matchingByIdentity(kind, ref.ProviderIDs, page)...)
+	})
+	if err != nil {
+		return nil, err
 	}
-	return collectAll(ctx, c.ListItems, q)
+	return matches, nil
 }
 
 func searchCandidates(ctx context.Context, c Client, kind *mediaKind, name string) ([]Item, error) {

@@ -230,6 +230,30 @@ func cancelWatcher(serverURL string) {
 	}
 }
 
+// launchLibraryItem launches a library item after finding its current ID.
+// The earlier launch's watcher is cancelled before the lookup, so that launch
+// cannot finish and advance its playlist while a new selection is pending. If
+// the lookup fails, the earlier media keeps playing untracked.
+func launchLibraryItem(
+	client KodiClient,
+	opts *platforms.LaunchOptions,
+	path, scheme, kind string,
+	resolve func(context.Context, KodiClient, string) (int, error),
+	launch func(KodiClient, string) error,
+) error {
+	if c, ok := client.(*Client); ok {
+		cancelWatcher(c.url)
+	}
+	resolved, err := resolveLibraryPath(client, path, scheme, resolve)
+	if err != nil {
+		return err
+	}
+	exp := libraryExpectation(resolved, scheme, kind)
+	return launchTracked(client, opts, exp, func(c KodiClient) error {
+		return launch(c, resolved)
+	})
+}
+
 // Tracking reports whether a watcher is currently following a launch on the
 // Kodi at serverURL (the URL a client's GetURL returns). A tracked launch
 // reports its own end, so a poller that sees no players must leave the media

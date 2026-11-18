@@ -168,8 +168,10 @@ type SettingsAuthStatusParams struct {
 
 type SettingsAuthLinkParams struct {
 	// URL overrides the auth server base URL; defaults to the official
-	// Zaparoo API. It is required for the romm and jellyfin providers, and
-	// for plex when the account has more than one server.
+	// Zaparoo API. It is required for the romm and jellyfin providers. For
+	// plex it may be omitted when the account owns one server with a direct
+	// connection, shared servers aside; otherwise it must be an address Plex
+	// lists for the server.
 	URL string `json:"url,omitempty" validate:"omitempty,url"`
 	// Provider is the service the device links to: zaparoo (the default),
 	// romm, a RomM server Core then uses as a game library, or plex or

@@ -37,18 +37,21 @@ func TestCollectTVShow_ListsEpisodesOfTheResolvedShow(t *testing.T) {
 	client := &MockKodiClient{}
 	client.On("GetTVShows", mock.Anything).Return([]TVShow{
 		{ID: 7, Label: "Other Show"},
-		{ID: 42, Label: "Purpley"},
+		{ID: 42, Label: "Purpley", UniqueIDs: map[string]string{"tvdb": "555"}},
 	}, nil)
 	client.On("GetEpisodes", mock.Anything, 42).Return([]Episode{
-		{ID: 100, Label: "Pilot"},
+		{ID: 100, Label: "Pilot", Season: 1, Episode: 1, UniqueIDs: map[string]string{"tvdb": "9001"}},
 		{ID: 101, Label: "Second"},
 	}, nil)
 
 	items, err := CollectTVShow(context.Background(), client, "kodi-show://42/Purpley")
 	require.NoError(t, err)
 	assert.Equal(t, []platforms.CollectionItem{
-		{Name: "Purpley - Pilot", Path: "kodi-episode://100/Purpley%20-%20Pilot"},
-		{Name: "Purpley - Second", Path: "kodi-episode://101/Purpley%20-%20Second"},
+		{Name: "Purpley - Second", Path: "kodi-episode://101/Purpley%20-%20Second;show_tvdb=555"},
+		{
+			Name: "Purpley - Pilot",
+			Path: "kodi-episode://100/Purpley%20-%20Pilot;tvdb=9001;season=1;episode=1;show_tvdb=555",
+		},
 	}, items)
 	client.AssertExpectations(t)
 }

@@ -77,6 +77,11 @@ type fakeJellyfin struct {
 	requests   []recordedRequest
 	getItemErr int
 	mu         syncutil.Mutex
+	// failPlayLast makes the server refuse to add items to a queue.
+	failPlayLast bool
+	// ignoresProviderFilter makes the server return every item regardless
+	// of AnyProviderIdEquals, as some server versions do.
+	ignoresProviderFilter bool
 }
 
 func newFakeJellyfin(t *testing.T) *fakeJellyfin {
@@ -195,6 +200,9 @@ func (f *fakeJellyfin) serve(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(path, "/Sessions/")
 		parts := strings.Split(rest, "/")
 		switch {
+		case len(parts) == 2 && parts[1] == "Playing" && f.failPlayLast && q.Get("playCommand") == "PlayLast":
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		case len(parts) == 2 && parts[1] == "Playing":
 			f.plays = append(f.plays, playCall{
 				session: parts[0], command: q.Get("playCommand"), ids: strings.Split(q.Get("itemIds"), ","),
@@ -234,7 +242,8 @@ func (f *fakeJellyfin) queryItems(q url.Values) []Item {
 		if a := q.Get("ArtistIds"); a != "" && it.artistID != a {
 			continue
 		}
-		if ids := q.Get("AnyProviderIdEquals"); ids != "" && !hasAnyProvider(it.ProviderIDs, ids) {
+		if ids := q.Get("AnyProviderIdEquals"); ids != "" && !f.ignoresProviderFilter &&
+			!hasAnyProvider(it.ProviderIDs, ids) {
 			continue
 		}
 		if it.missing && q.Get("IsMissing") == "false" {

@@ -1914,3 +1914,37 @@ func TestStartAuthLinkFlow_TurnOnEverything_Integration(t *testing.T) {
 			boolIs(p.LibrarySyncEnabled, true) && boolIs(p.BackupRemoteEnabled, true)
 	}))
 }
+
+func TestRunAuthLinkFlow_CancelWhileStarting_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	mockSvc := NewMockSettingsService()
+	release := make(chan time.Time)
+	mockSvc.On("StartAuthLink", mock.Anything, "", "").WaitUntil(release).Return(&models.AuthLinkStatusResponse{
+		Status:          models.AuthLinkStatusPending,
+		UserCode:        "ABCD-1234",
+		VerificationURL: "https://zaparoo.com/link",
+	}, nil)
+	cancelled := make(chan struct{})
+	mockSvc.On("CancelAuthLink", mock.Anything).Return(nil).Run(func(mock.Arguments) { close(cancelled) })
+	done := make(chan struct{})
+	pages := tview.NewPages()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		startAuthLinkFlow(mockSvc, pages, runner.App(), func() { close(done) })
+	})
+	require.True(t, runner.WaitForText("Starting link", uiSettleTimeout),
+		"the dialog shows while the link is still starting")
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(done, uiSettleTimeout), "cancel works before the start returns")
+	mockSvc.AssertNotCalled(t, "CancelAuthLink", mock.Anything)
+
+	close(release)
+	require.True(t, runner.WaitForSignal(cancelled, uiSettleTimeout),
+		"the link that started after cancel is stopped")
+	assert.False(t, runner.ContainsText("ABCD-1234"))
+}
