@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -75,14 +76,26 @@ type failedProbeEntry struct {
 var (
 	probeStateMu     syncutil.RWMutex
 	failedProbePaths = make(map[string]failedProbeEntry)
-	// unprobedPaths holds guarded ports detection passed over, by path, with
-	// the device file's identity at the time.
-	unprobedPaths = make(map[string]string)
+	// unprobedPaths holds guarded ports detection passed over, by path.
+	unprobedPaths = make(map[string]unprobedEntry)
 )
+
+// unprobedRetry is how long a port detection passed over is kept out of
+// detection before it is guarded and offered again. It matches how long
+// go-pn532 serves a found reader from its cache without probing anything.
+const unprobedRetry = 30 * time.Second
+
+// unprobedEntry is a port detection passed over, with the device file's
+// identity at the time and when to offer it again.
+type unprobedEntry struct {
+	retryAt time.Time
+	nodeID  string
+}
 
 // probeNodeID, listProbePorts and guardProbes are indirected for tests.
 var (
 	probeNodeID    = serialport.NodeID
+	probeClock     = clockwork.NewRealClock()
 	listProbePorts = serialport.USBPorts
 	guardProbes    = serialport.GuardProbes
 )
@@ -767,9 +780,10 @@ func (*Reader) Detect(connected []string) string {
 
 	// Ports another program has open are left alone, and the rest get their
 	// settings put back once probing shows they are not a PN532.
-	guarded := guardablePorts(listProbePorts(), ignorePaths)
+	guarded, deferred := guardablePorts(listProbePorts(), ignorePaths)
 	guard := guardProbes(guarded)
 	ignorePaths = append(ignorePaths, guard.BusyPaths()...)
+	ignorePaths = append(ignorePaths, deferred...)
 
 	// TODO: The error branches for detection.DetectAll are not unit-tested
 	// because it depends on hardware enumeration which is not injectable.
@@ -1026,19 +1040,22 @@ func defaultDetectionTransports() []string {
 	return []string{detection.TransportUART}
 }
 
-// guardablePorts returns the ports detection is about to probe, which are
-// the ones to guard: not ignored, not on the VID:PID blocklist, and not
-// already seen to be passed over by detection.
-func guardablePorts(ports []serialport.USBPort, ignorePaths []string) []string {
+// guardablePorts splits the ports detection could reach into those to guard
+// and probe now, and those deferred because detection passed over them a
+// moment ago. Ignored ports and ports on the VID:PID blocklist are neither:
+// detection does not open them, so nor should a guard.
+func guardablePorts(ports []serialport.USBPort, ignorePaths []string) (guarded, deferred []string) {
 	blocklist := createVIDPIDBlocklist()
+	now := probeClock.Now()
 	probeStateMu.Lock()
 	defer probeStateMu.Unlock()
-	for path, nodeID := range unprobedPaths {
-		if current, err := probeNodeID(path); err != nil || current != nodeID {
+	for path, entry := range unprobedPaths {
+		nodeID, err := probeNodeID(path)
+		if err != nil || nodeID != entry.nodeID || !now.Before(entry.retryAt) {
 			delete(unprobedPaths, path)
 		}
 	}
-	free := make([]string, 0, len(ports))
+	guarded = make([]string, 0, len(ports))
 	for _, port := range ports {
 		if slices.Contains(ignorePaths, port.Path) {
 			continue
@@ -1047,17 +1064,21 @@ func guardablePorts(ports []serialport.USBPort, ignorePaths []string) []string {
 			continue
 		}
 		if _, unprobed := unprobedPaths[port.Path]; unprobed {
+			deferred = append(deferred, port.Path)
 			continue
 		}
-		free = append(free, port.Path)
+		guarded = append(guarded, port.Path)
 	}
-	return free
+	return guarded, deferred
 }
 
-// recordUnprobedPorts remembers guarded ports that detection did not probe.
-// Guarding opens the port, so without this a port detection passes over for
-// its own reasons would be opened on every tick.
+// recordUnprobedPorts defers guarded ports that detection did not probe, as
+// happens while it serves a found reader from its cache. Guarding opens the
+// port, so without this such a port would be opened on every tick. A deferred
+// port is kept out of detection altogether until it is guarded again, so it
+// is never probed without its settings saved or while another program has it.
 func recordUnprobedPorts(guarded []string, guard *serialport.ProbeGuard, probes []detection.ProbeResult) {
+	retryAt := probeClock.Now().Add(unprobedRetry)
 	probeStateMu.Lock()
 	defer probeStateMu.Unlock()
 	for _, path := range guarded {
@@ -1067,7 +1088,7 @@ func recordUnprobedPorts(guarded []string, guard *serialport.ProbeGuard, probes 
 			continue
 		}
 		if nodeID, err := probeNodeID(path); err == nil {
-			unprobedPaths[path] = nodeID
+			unprobedPaths[path] = unprobedEntry{nodeID: nodeID, retryAt: retryAt}
 		}
 	}
 }

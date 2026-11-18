@@ -22,10 +22,13 @@ package pn532
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-pn532/detection"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,7 +39,7 @@ func stubGuard(t *testing.T, ports []serialport.USBPort, busy ...string) *[][]st
 	origList, origGuard := listProbePorts, guardProbes
 	probeStateMu.Lock()
 	origUnprobed := unprobedPaths
-	unprobedPaths = make(map[string]string)
+	unprobedPaths = make(map[string]unprobedEntry)
 	probeStateMu.Unlock()
 	t.Cleanup(func() {
 		listProbePorts, guardProbes = origList, origGuard
@@ -90,9 +93,59 @@ func TestDetect_LeavesPortsOpenInAnotherProgramAlone(t *testing.T) {
 	assert.Contains(t, failedProbePaths, "/dev/ttyUSB1")
 }
 
-func TestDetect_StopsGuardingPortsDetectionPassesOver(t *testing.T) {
-	// Guarding opens the port. A port detection never probes would otherwise
-	// be opened on every tick, until it is replugged.
+func TestDetect_DefersAPortDetectionPassesOverThenOffersItAgain(t *testing.T) {
+	// go-pn532 serves a found reader from its cache for a while and probes
+	// nothing. A port plugged in meanwhile is guarded once, which opens it,
+	// and must then be left alone rather than opened on every tick. It must
+	// also stay out of detection until it is guarded again: once the cache
+	// expires it would otherwise be probed with no settings saved and no
+	// check for another program holding it.
+	resetFailedProbes(t)
+	resetDetectSummary(t)
+	stubProbeNodeID(t, map[string]string{"/dev/ttyUSB0": "a"})
+	guarded := stubGuard(t, []serialport.USBPort{{Path: "/dev/ttyUSB0"}})
+	clock := clockwork.NewFakeClock()
+	origClock := probeClock
+	t.Cleanup(func() { probeClock = origClock })
+	probeClock = clock
+
+	orig := detectAll
+	t.Cleanup(func() { detectAll = orig })
+	cacheHit := true
+	var ignored [][]string
+	detectAll = func(_ context.Context, opts *detection.Options) ([]detection.DeviceInfo, error) {
+		ignored = append(ignored, opts.IgnorePaths)
+		if !cacheHit && !slices.Contains(opts.IgnorePaths, "/dev/ttyUSB0") {
+			opts.ReportProbe(detection.ProbeResult{Transport: detection.TransportUART, Path: "/dev/ttyUSB0"})
+		}
+		return nil, detection.ErrNoDevicesFound
+	}
+
+	reader := &Reader{}
+	assert.Empty(t, reader.Detect(nil))
+	assert.Empty(t, reader.Detect(nil))
+	assert.Equal(t, [][]string{{"/dev/ttyUSB0"}, {}}, *guarded, "a passed-over port is not opened again next tick")
+	assert.NotContains(t, ignored[0], "/dev/ttyUSB0")
+	assert.Contains(t, ignored[1], "/dev/ttyUSB0", "an unguarded port must be kept out of detection")
+
+	cacheHit = false
+	clock.Advance(unprobedRetry - time.Second)
+	assert.Empty(t, reader.Detect(nil))
+	assert.Empty(t, (*guarded)[2], "the cache expiring must not get the port probed unguarded")
+	assert.Contains(t, ignored[2], "/dev/ttyUSB0")
+
+	clock.Advance(time.Second)
+	assert.Empty(t, reader.Detect(nil))
+	assert.Equal(t, []string{"/dev/ttyUSB0"}, (*guarded)[3], "the port is guarded again and offered to detection")
+	assert.NotContains(t, ignored[3], "/dev/ttyUSB0")
+
+	probeStateMu.RLock()
+	defer probeStateMu.RUnlock()
+	assert.Contains(t, failedProbePaths, "/dev/ttyUSB0", "this time it was probed, and did not answer")
+	assert.Empty(t, unprobedPaths)
+}
+
+func TestDetect_OffersAReplacedPortStraightAway(t *testing.T) {
 	resetFailedProbes(t)
 	resetDetectSummary(t)
 	ids := map[string]string{"/dev/ttyUSB0": "a"}
@@ -107,10 +160,8 @@ func TestDetect_StopsGuardingPortsDetectionPassesOver(t *testing.T) {
 
 	reader := &Reader{}
 	assert.Empty(t, reader.Detect(nil))
-	assert.Empty(t, reader.Detect(nil))
-	assert.Equal(t, [][]string{{"/dev/ttyUSB0"}, {}}, *guarded)
-
 	ids["/dev/ttyUSB0"] = "b"
 	assert.Empty(t, reader.Detect(nil))
-	assert.Equal(t, []string{"/dev/ttyUSB0"}, (*guarded)[2], "a replugged port is guarded afresh")
+	assert.Equal(t, [][]string{{"/dev/ttyUSB0"}, {"/dev/ttyUSB0"}}, *guarded,
+		"a different device at the same path is not held to the old one's deferral")
 }
