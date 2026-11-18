@@ -494,6 +494,46 @@ type MediaMetaParams struct {
 	Path    string `json:"path"   validate:"omitempty,min=1"`
 }
 
+// MediaVersionsParams names one media item, by mediaId or by system and path,
+// whose other versions are wanted.
+type MediaVersionsParams struct {
+	MediaID       *int64  `json:"mediaId,omitempty"`
+	MaxResults    *int    `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor        *string `json:"cursor,omitempty"`
+	IncludeHidden *bool   `json:"includeHidden,omitempty"`
+	System        string  `json:"system,omitempty" validate:"omitempty,min=1"`
+	Path          string  `json:"path,omitempty" validate:"omitempty,min=1"`
+}
+
+// MediaSimilarParams names one media item, by mediaId or by system and path,
+// to find media like.
+type MediaSimilarParams struct {
+	MediaID     *int64    `json:"mediaId,omitempty"`
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=50"`
+	System      string    `json:"system,omitempty" validate:"omitempty,min=1"`
+	Path        string    `json:"path,omitempty" validate:"omitempty,min=1"`
+}
+
+// MediaRecommendedParams shapes the active profile's recommendations.
+// MaxResults is the most items one section holds. Layout "queue" returns one
+// ranked section of kind "queue" instead of sections, and ignores
+// MaxSections.
+type MediaRecommendedParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=30"`
+	MaxSections *int      `json:"maxSections,omitempty" validate:"omitempty,gt=0,max=12"`
+	Layout      *string   `json:"layout,omitempty" validate:"omitempty,oneof=sections queue"`
+}
+
+// Layouts of media.recommended.
+const (
+	RecommendedLayoutSections = "sections"
+	RecommendedLayoutQueue    = "queue"
+)
+
 type MediaTagsUpdateParams struct {
 	MediaID *int64   `json:"mediaId,omitempty"`
 	System  string   `json:"system" validate:"omitempty,min=1"`

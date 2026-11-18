@@ -154,6 +154,7 @@ func TestContract_BrowseResults(t *testing.T) {
 	systemID := "SNES"
 	nextCursor := "cursor-2"
 	fileCount := 12
+	versionCount := 3
 	group := "Consoles"
 	zapScript := "**launch.system:SNES"
 	response := models.BrowseResults{
@@ -164,7 +165,7 @@ func TestContract_BrowseResults(t *testing.T) {
 			SystemIDs: []string{"SNES"}, FileCount: &fileCount, Group: &group, ZapScript: &zapScript,
 		}, {
 			Type: "file", Name: "Chrono Trigger.sfc", Path: "/roms/SNES/Chrono Trigger.sfc",
-			SystemID: &systemID, MediaID: 42, HasCover: true,
+			SystemID: &systemID, MediaID: 42, HasCover: true, VersionCount: &versionCount,
 			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre"}},
 		}},
 	}
@@ -178,10 +179,154 @@ func TestContract_BrowseResults(t *testing.T) {
 			"zap_script": "**launch.system:SNES", "has_cover": false
 		}, {
 			"type": "file", "name": "Chrono Trigger.sfc", "path": "/roms/SNES/Chrono Trigger.sfc",
-			"system_id": "SNES", "media_id": 42, "has_cover": true,
+			"system_id": "SNES", "media_id": 42, "has_cover": true, "version_count": 3,
 			"tags": [{"tag": "rpg", "type": "genre"}]
 		}]
 	}`, mustEncode(t, encodeBrowseResults, response))
+}
+
+func TestContract_VersionsResults(t *testing.T) {
+	t.Parallel()
+
+	nextCursor := "cursor-3"
+	system := models.System{ID: "NES", Name: "NES", Category: "Console", Categories: []string{"Console"}}
+	response := models.MediaVersionsResponse{
+		Total:      5,
+		Pagination: &models.PaginationInfo{NextCursor: &nextCursor, HasNextPage: true, PageSize: 2},
+		Versions: []models.MediaVersion{{
+			Reason: models.VersionReasonTitle, Current: true,
+			SearchResultMedia: models.SearchResultMedia{
+				Name: "Contra", Path: "/roms/NES/Contra (USA).nes", ZapScript: "@NES/Contra (region:us)",
+				MediaID: 101, TitleID: 10, HasCover: true, System: system,
+				Tags:               []database.TagInfo{{Tag: "us", Type: "region"}},
+				DisambiguatingTags: []database.TagInfo{{Tag: "us", Type: "region"}},
+			},
+		}, {
+			Reason: models.VersionReasonLink, Sources: []string{"gamedatabase-id"},
+			SearchResultMedia: models.SearchResultMedia{
+				Name: "Probotector", Path: "/roms/NES/Probotector (Europe).nes", ZapScript: "@NES/Probotector",
+				MediaID: 111, TitleID: 11, System: system,
+			},
+		}},
+	}
+
+	assert.JSONEq(t, `{
+		"total": 5,
+		"pagination": {"next_cursor": "cursor-3", "has_next_page": true, "page_size": 2},
+		"versions": [{
+			"reason": "title", "current": true,
+			"name": "Contra", "path": "/roms/NES/Contra (USA).nes", "zap_script": "@NES/Contra (region:us)",
+			"media_id": 101, "title_id": 10, "has_cover": true,
+			"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+			"tags": [{"tag": "us", "type": "region"}],
+			"disambiguating_tags": [{"tag": "us", "type": "region"}]
+		}, {
+			"reason": "link", "sources": ["gamedatabase-id"],
+			"name": "Probotector", "path": "/roms/NES/Probotector (Europe).nes", "zap_script": "@NES/Probotector",
+			"media_id": 111, "title_id": 11, "has_cover": false,
+			"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+			"tags": null
+		}]
+	}`, mustEncode(t, encodeVersionsResults, response))
+}
+
+func TestContract_SimilarResults(t *testing.T) {
+	t.Parallel()
+
+	system := models.System{ID: "NES", Name: "NES", Category: "Console", Categories: []string{"Console"}}
+	response := models.MediaSimilarResponse{Results: []models.SuggestedMedia{{
+		Reasons: []models.MediaReason{
+			{Code: "series", Tags: []database.TagInfo{{Type: "search", Tag: "franchise:gradius"}}},
+			{Code: "decade"},
+		},
+		SearchResultMedia: models.SearchResultMedia{
+			Name: "Gradius II", Path: "/roms/NES/Gradius II.nes", ZapScript: "@NES/Gradius II",
+			MediaID: 21, TitleID: 2, HasCover: true, System: system,
+		},
+	}}}
+
+	assert.JSONEq(t, `{
+		"results": [{
+			"reasons": [
+				{"code": "series", "tags": [{"tag": "franchise:gradius", "type": "search"}]},
+				{"code": "decade"}
+			],
+			"name": "Gradius II", "path": "/roms/NES/Gradius II.nes", "zap_script": "@NES/Gradius II",
+			"media_id": 21, "title_id": 2, "has_cover": true,
+			"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+			"tags": null
+		}]
+	}`, mustEncode(t, encodeSimilarResults, response))
+
+	assert.JSONEq(t, `{"results": []}`, mustEncode(t, encodeSimilarResults, models.MediaSimilarResponse{}))
+}
+
+func TestContract_RecommendedResults(t *testing.T) {
+	t.Parallel()
+
+	system := models.System{ID: "NES", Name: "NES", Category: "Console", Categories: []string{"Console"}}
+	seed := models.SearchResultMedia{
+		Name: "Gradius", Path: "/roms/NES/Gradius.nes", ZapScript: "@NES/Gradius",
+		MediaID: 11, TitleID: 1, System: system,
+	}
+	item := models.SuggestedMedia{
+		Reasons: []models.MediaReason{{Code: "genre", Tags: []database.TagInfo{{Type: "genre", Tag: "shooter"}}}},
+		SearchResultMedia: models.SearchResultMedia{
+			Name: "R-Type", Path: "/roms/NES/R-Type.nes", ZapScript: "@NES/R-Type",
+			MediaID: 31, TitleID: 3, System: system,
+		},
+	}
+	unexplained := item
+	unexplained.Reasons = []models.MediaReason{}
+	queued := item
+	queued.Signal, queued.Seed = "played", &seed
+	response := models.MediaRecommendedResponse{Sections: []models.RecommendedSection{
+		{Kind: "seed", Signal: "played", Seed: &seed, Items: []models.SuggestedMedia{item}},
+		{Kind: "playLater", Items: []models.SuggestedMedia{unexplained}},
+		{
+			Kind: "series", Tag: &database.TagInfo{Type: "search", Tag: "franchise:gradius"},
+			Items: []models.SuggestedMedia{},
+		},
+		{Kind: "queue", Items: []models.SuggestedMedia{queued}},
+	}}
+
+	rtype := `"name": "R-Type", "path": "/roms/NES/R-Type.nes", "zap_script": "@NES/R-Type",
+		"media_id": 31, "title_id": 3, "has_cover": false,
+		"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+		"tags": null`
+	assert.JSONEq(t, `{
+		"sections": [{
+			"kind": "seed", "signal": "played",
+			"seed": {
+				"name": "Gradius", "path": "/roms/NES/Gradius.nes", "zap_script": "@NES/Gradius",
+				"media_id": 11, "title_id": 1, "has_cover": false,
+				"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+				"tags": null
+			},
+			"items": [{"reasons": [{"code": "genre", "tags": [{"tag": "shooter", "type": "genre"}]}], `+rtype+`}]
+		}, {
+			"kind": "playLater",
+			"items": [{"reasons": [], `+rtype+`}]
+		}, {
+			"kind": "series", "tag": {"tag": "franchise:gradius", "type": "search"},
+			"items": []
+		}, {
+			"kind": "queue",
+			"items": [{
+				"signal": "played",
+				"seed": {
+					"name": "Gradius", "path": "/roms/NES/Gradius.nes", "zap_script": "@NES/Gradius",
+					"media_id": 11, "title_id": 1, "has_cover": false,
+					"system": {"id": "NES", "name": "NES", "category": "Console", "categories": ["Console"]},
+					"tags": null
+				},
+				"reasons": [{"code": "genre", "tags": [{"tag": "shooter", "type": "genre"}]}], `+rtype+`
+			}]
+		}]
+	}`, mustEncode(t, encodeRecommendedResults, response))
+
+	assert.JSONEq(t, `{"sections": []}`,
+		mustEncode(t, encodeRecommendedResults, models.MediaRecommendedResponse{}))
 }
 
 func TestContract_VersionResponse(t *testing.T) {
@@ -198,11 +343,14 @@ func TestContract_EncodersRejectForeignResponses(t *testing.T) {
 	t.Parallel()
 
 	encoders := map[string]func(any) (any, error){
-		"systems":   encodeSystemsResponse,
-		"launchers": encodeLaunchersResponse,
-		"search":    encodeSearchResults,
-		"browse":    encodeBrowseResults,
-		"version":   encodeVersionResponse,
+		"systems":     encodeSystemsResponse,
+		"launchers":   encodeLaunchersResponse,
+		"search":      encodeSearchResults,
+		"browse":      encodeBrowseResults,
+		"versions":    encodeVersionsResults,
+		"similar":     encodeSimilarResults,
+		"recommended": encodeRecommendedResults,
+		"version":     encodeVersionResponse,
 	}
 	for name, encode := range encoders {
 		t.Run(name, func(t *testing.T) {

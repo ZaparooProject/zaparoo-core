@@ -27,7 +27,7 @@ var knownMethods = func() map[string]struct{} {
 	methods := strings.Fields(`
 launch run confirm ui ui.respond ui.shown run.script stop tokens media
 media.generate media.generate.cancel media.generate.resume media.index
-media.search media.tags media.tags.update media.meta.update media.active
+media.search media.versions media.similar media.recommended media.tags media.tags.update media.meta.update media.active
 media.history media.history.latest media.history.top media.lookup media.lookup.candidates
 media.meta media.image media.asset
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume

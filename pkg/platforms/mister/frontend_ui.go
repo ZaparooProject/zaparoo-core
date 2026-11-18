@@ -80,8 +80,15 @@ const (
 	// statusOrphaned is a status file saying active whose writer has gone:
 	// Main is between processes, or a stock Main replaced the fork.
 	statusOrphaned
+	// statusUnreadable is a status file that is there but cannot be parsed,
+	// as when it is read halfway through a rewrite.
+	statusUnreadable
 	statusLive
 )
+
+// unreadableStatusPID stands in for the pid of an unreadable status file in
+// the abandoned record, so a file that stays unreadable is waited on once.
+const unreadableStatusPID = -1
 
 // readFrontendStatus reads the status file and the pid it names.
 func readFrontendStatus(fs afero.Fs) (state statusState, pid int) {
@@ -93,12 +100,12 @@ func readFrontendStatus(fs afero.Fs) (state statusState, pid int) {
 	data, err := io.ReadAll(io.LimitReader(file, frontendStatusMaxBytes+1))
 	if err != nil || len(data) > frontendStatusMaxBytes {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return statusOff, 0
+		return statusUnreadable, unreadableStatusPID
 	}
 	var status frontendStatus
 	if err := json.Unmarshal(data, &status); err != nil {
 		log.Debug().Err(err).Msg("frontend status file is not readable")
-		return statusOff, 0
+		return statusUnreadable, unreadableStatusPID
 	}
 	if !status.Active || status.PID <= 0 {
 		return statusOff, 0
@@ -110,10 +117,11 @@ func readFrontendStatus(fs afero.Fs) (state statusState, pid int) {
 }
 
 // frontendActiveSettled is frontendActive that waits out a core load: a
-// status file whose writer has just gone is reread until Main names its new
-// process, or until wait passes, when a stock Main is taken to have replaced
-// the fork. The pid a wait gave up on is kept in abandoned, so a file a stock
-// Main never rewrites delays only the first event, not every one after it.
+// status file whose writer has just gone, or that is caught halfway through
+// a rewrite, is reread until Main names its new process, or until wait
+// passes, when a stock Main is taken to have replaced the fork. The pid a
+// wait gave up on is kept in abandoned, so a file a stock Main never
+// rewrites delays only the first event, not every one after it.
 func frontendActiveSettled(
 	ctx context.Context,
 	fs afero.Fs,
@@ -128,7 +136,7 @@ func frontendActiveSettled(
 			return true
 		case statusOff:
 			return false
-		case statusOrphaned:
+		case statusOrphaned, statusUnreadable:
 			if abandoned.Load() == int64(pid) {
 				return false
 			}

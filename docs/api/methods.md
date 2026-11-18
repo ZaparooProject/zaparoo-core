@@ -732,7 +732,7 @@ An object:
 | sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, `filename-desc` or `added-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. `added-desc` orders by when each game got a flag; see [Sorting by date added](#sorting-by-date-added). Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | groupBy    | string   | No       | `title` returns one result per title and system instead of one per media file. See [Grouped search](#grouped-search). Only `name-asc` and `name-desc` sorts apply. Cannot be combined with `titleId`. |
-| titleId    | number   | No       | List the versions of one title: its media matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. |
+| titleId    | number   | No       | List the versions of one title's game: the title's media and the media of every title [linked](#versions-and-links) to it, matching `tags`, `pathPrefix` and visibility, folded the same way as a grouped search's `versionCount`. `query`, `systems` and `letter` are ignored. Use the `titleId` of a search result. To list versions of a specific media item, with the reason each belongs, use [media.versions](#mediaversions). |
 
 #### Sorting by date added
 
@@ -742,9 +742,11 @@ An object:
 
 With `groupBy: "title"`, each result stands for one title on one system. Regional releases, revisions and copies in other folders are one title. The same name on two systems gives two results. `maxResults`, `hasNextPage` and cursors count titles rather than files.
 
-A title's media that launch through one container (a `.cue` and its `.bin` tracks, or a folder of discs) count as one version, the file the container launches.
+A title's media that launch through one container (a `.cue` and its `.bin` tracks, or a folder of discs) count as one version, the file the container launches. A symlink alias of a file, such as an Arcade Organizer entry, is the same version as the file it points at.
 
-Each result carries the fields of the version Core prefers for the title, chosen the same way a title launch chooses: main releases before variants, then your preferred regions and languages, then the launcher's file type order. Its `zapScript` launches that version. `versionCount` is the number of versions matching the search's tags, `pathPrefix` and visibility, across the whole search rather than the page. A search with the result's `titleId` lists the same versions.
+Each result carries the fields of the version Core prefers for the title, chosen the same way a title launch chooses: main releases before variants, then your preferred regions and languages, then the launcher's file type order. Its `zapScript` launches that version. `versionCount` is the number of versions of the title's game matching the search's tags, `pathPrefix` and visibility, across the whole search rather than the page. A search with the result's `titleId` lists the same versions.
+
+Titles Core knows to be the same game under different names (see [Versions and links](#versions-and-links)) stay separate results, each under its own name. Each counts the versions of all of them in its `versionCount`.
 
 #### Result
 
@@ -759,8 +761,8 @@ Each result carries the fields of the version Core prefers for the title, chosen
 | Key       | Type                     | Required | Description                                                                                                 |
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
 | mediaId   | number                   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests.                |
-| titleId   | number                   | No       | Opaque title ID for a `titleId` search listing this title's versions. Changes when media is re-indexed. |
-| versionCount | number                | No       | Grouped searches only. Number of versions of this title that match the search. |
+| titleId   | number                   | No       | Opaque title ID for a `titleId` search listing the versions of this title's game. Changes when media is re-indexed. |
+| versionCount | number                | No       | Grouped searches only. Number of versions of this title's game that match the search, including versions under [linked](#versions-and-links) titles. |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
@@ -918,6 +920,411 @@ Available categories remain dynamic: derive them from `categories` on systems re
 }
 ```
 
+### media.versions
+
+**Access:** All clients.
+
+List the other versions of a media item's game on the same system: regional releases, revisions, translations, hacks, bootlegs and releases under another name. The media item asked about is included, marked `current`, so the result is the whole list a version picker shows.
+
+#### Versions and links
+
+Two things make media versions of one game:
+
+- **A shared title.** Core gives files whose names differ only in bracketed details, such as `Game (USA)` and `Game (Europe) (Rev 1)`, one title. This covers most regional and revision sets on every system.
+- **A link.** Some versions share no name: ASO and Alpha Mission, Contra and Probotector. Core links their titles when a source says they are the same game. The sources are identities Core already holds for a file or gets from a scraper:
+
+| Source            | What ties the titles together                                                                 |
+| :---------------- | :-------------------------------------------------------------------------------------------- |
+| `mame-set`        | An arcade romset and the parent set it is a clone of.                                          |
+| `gamedatabase-id` | The game ID GameDataBase gives every release of one game.                                      |
+| `alt-folder`      | The folder a platform files a game's alternates in, such as MiSTer's `_alternatives/_<Game>/`. |
+
+Links never cross systems. They are worked out at the end of a media index and of a scraper run, so a link appears once the source behind it has been scraped. More sources may be added; treat an unknown source as a link like any other.
+
+Media that launch through one container count as one version, and a symlink alias is the same version as its target, as in a [grouped search](#grouped-search).
+
+#### Parameters
+
+An object naming one media item, by `mediaId` or by `system` and `path`:
+
+| Key           | Type    | Required | Description                                                                                          |
+| :------------ | :------ | :------- | :--------------------------------------------------------------------------------------------------- |
+| mediaId       | number  | No\*     | Media database row ID, as returned by `media.search` and `media.browse`.                             |
+| system        | string  | No\*     | System ID of the media. Required with `path` when `mediaId` is not given.                            |
+| path          | string  | No\*     | Indexed path of the media. Required with `system` when `mediaId` is not given.                       |
+| maxResults    | number  | No       | Max number of versions to return. Default and maximum is 100.                                        |
+| cursor        | string  | No       | Cursor for pagination. Omit for the first page, use `nextCursor` from the previous response after.   |
+| includeHidden | boolean | No       | Include hidden versions. Defaults to `false`.                                                        |
+
+\* Give either `mediaId`, or both `system` and `path`.
+
+#### Result
+
+| Key        | Type                             | Required | Description                                                                                       |
+| :--------- | :------------------------------- | :------- | :------------------------------------------------------------------------------------------------ |
+| versions   | Version[]                        | Yes      | The versions on this page. Versions sharing the requested media's title come first, led by the one a title launch would pick, then versions under linked titles ordered by name. |
+| total      | number                           | Yes      | Number of versions across every page. Equal to the `versionCount` `media.browse` reports for the media. |
+| pagination | [Pagination](#pagination-object) | No       | Pagination information. Omitted when there are no versions to return.                             |
+
+##### Version object
+
+Every field of a [Media object](#media-object), and:
+
+| Key     | Type     | Required | Description                                                                                                   |
+| :------ | :------- | :------- | :------------------------------------------------------------------------------------------------------------ |
+| reason  | string   | Yes      | `title` when the version shares the requested media's title, `link` when it is filed under a linked title.     |
+| sources | string[] | No       | For a `link`: the sources that tie the version's title to the game, from the table above.                      |
+| current | boolean  | No       | `true` on the media the request asked about. When that media is a symlink alias, its target is marked instead. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "method": "media.versions",
+  "params": {
+    "mediaId": 456
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "versions": [
+      {
+        "reason": "title",
+        "current": true,
+        "mediaId": 456,
+        "titleId": 120,
+        "name": "Contra",
+        "path": "/media/fat/games/NES/Contra (USA).nes",
+        "relativePath": "NES/Contra (USA).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Contra (region:us)",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "us", "type": "region" }],
+        "disambiguatingTags": [{ "tag": "us", "type": "region" }]
+      },
+      {
+        "reason": "link",
+        "sources": ["gamedatabase-id"],
+        "mediaId": 457,
+        "titleId": 121,
+        "name": "Probotector",
+        "path": "/media/fat/games/NES/Probotector (Europe).nes",
+        "relativePath": "NES/Probotector (Europe).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Probotector",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "eu", "type": "region" }]
+      }
+    ],
+    "total": 2,
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    }
+  }
+}
+```
+
+### media.similar
+
+**Access:** All clients.
+
+List media like one media item, from anywhere in the library. Core compares what its scrapers recorded about each title: the series it belongs to, its genres, who developed and published it, how many play it and when it was released. A series counts for most, then genre, then the rest. A tag that most of the library carries counts for little, so a library of platformers is not told that every platformer is alike.
+
+Each result is a different game. Other versions of the requested media are never returned (use [media.versions](#mediaversions) for those), and neither is the same game on another system. A game with several versions, or held on several systems, appears once. Hidden media is left out.
+
+Media no scraper has matched has nothing to be compared by. The result is then an empty list, as it is when nothing in the library is like the media. Core does not fall back to comparing names.
+
+Everything is worked out on the device from its own index. Nothing is sent anywhere.
+
+#### Parameters
+
+An object naming one media item, by `mediaId` or by `system` and `path`:
+
+| Key         | Type     | Required | Description                                                                                  |
+| :---------- | :------- | :------- | :------------------------------------------------------------------------------------------- |
+| mediaId     | number   | No\*     | Media database row ID, as returned by `media.search` and `media.browse`.                     |
+| system      | string   | No\*     | System ID of the media. Required with `path` when `mediaId` is not given.                    |
+| path        | string   | No\*     | Indexed path of the media. Required with `system` when `mediaId` is not given.               |
+| systems     | string[] | No       | Only return media on these systems. Defaults to every system.                                |
+| fuzzySystem | boolean  | No       | Match `systems` loosely, as in [media.search](#mediasearch). Defaults to `false`.            |
+| maxResults  | number   | No       | Max number of results to return. Default is 20, maximum is 50.                               |
+
+\* Give either `mediaId`, or both `system` and `path`.
+
+#### Result
+
+| Key     | Type              | Required | Description                               |
+| :------ | :---------------- | :------- | :---------------------------------------- |
+| results | SuggestedMedia[]  | Yes      | The media most like the request, best first. |
+
+##### SuggestedMedia object
+
+Every field of a [Media object](#media-object), for the version of the game a title launch would pick, and:
+
+| Key     | Type      | Required | Description                                                                                  |
+| :------ | :-------- | :------- | :------------------------------------------------------------------------------------------- |
+| reasons | Reason[]  | Yes      | Up to three things the media shares with the media it was suggested for, strongest first.     |
+| signal  | string    | No       | In a `queue` section from [media.recommended](#mediarecommended): why the item is there. `played`, `favorite`, `liked` or `deck` for the interest shown in `seed`, or `playLater` for media marked to play later. |
+| seed    | [Media](#media-object) | No | In a `queue` section: the media the item is most like. Left out for `playLater` items, and when the seed is hidden or not allowed for the client. |
+
+##### Reason object
+
+| Key  | Type                 | Required | Description                                                                                         |
+| :--- | :------------------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| code | string               | Yes      | What is shared, from the table below. More codes may be added; show an unknown code generically.     |
+| tags | [TagInfo](#taginfo-object)[] | No       | The shared values.                                                                                   |
+
+| Code          | Shared                                                                                   |
+| :------------ | :--------------------------------------------------------------------------------------- |
+| `series`      | The series or franchise.                                                                 |
+| `genre`       | A genre, or a genre family such as `action` when the two have different genres within it. |
+| `perspective` | The camera perspective.                                                                  |
+| `art`         | The art style.                                                                           |
+| `based`       | What the game is based on, such as a film.                                               |
+| `developer`   | The developer.                                                                           |
+| `publisher`   | The publisher.                                                                           |
+| `players`     | The player count.                                                                        |
+| `year`        | The release year.                                                                        |
+| `decade`      | The release decade. The tag is the decade's first year, such as `1990`.                  |
+
+Reasons are codes and tags, not sentences, so a client words them in its own language.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "method": "media.similar",
+  "params": {
+    "mediaId": 456,
+    "maxResults": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "results": [
+      {
+        "reasons": [
+          { "code": "series", "tags": [{ "tag": "franchise:contra", "type": "search" }] },
+          { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+        ],
+        "mediaId": 512,
+        "titleId": 140,
+        "name": "Super C",
+        "path": "/media/fat/games/NES/Super C (USA).nes",
+        "relativePath": "NES/Super C (USA).nes",
+        "hasCover": true,
+        "zapScript": "@NES/Super C",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [{ "tag": "us", "type": "region" }]
+      },
+      {
+        "reasons": [
+          { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+        ],
+        "mediaId": 9031,
+        "titleId": 2210,
+        "name": "Gunstar Heroes",
+        "path": "/media/fat/games/Genesis/Gunstar Heroes (USA).md",
+        "relativePath": "Genesis/Gunstar Heroes (USA).md",
+        "hasCover": true,
+        "zapScript": "@Genesis/Gunstar Heroes",
+        "system": {
+          "category": "Console",
+          "categories": ["Console"],
+          "id": "Genesis",
+          "name": "Sega Genesis"
+        },
+        "tags": [{ "tag": "us", "type": "region" }]
+      }
+    ]
+  }
+}
+```
+
+### media.recommended
+
+**Access:** All clients.
+
+List media the active profile may want to play next, in sections that each say why. Core works it out on the device from what the profile has shown interest in:
+
+- **Play.** Games the profile played, weighed by how long and how recently. A session shorter than a minute does not count. With a profile active only its own play counts; with none active, only play made with none active.
+- **Favorites and likes.** These never fade.
+- **Decks made on this device.** A light sign of interest. Decks fetched from a link or saved from another account do not count.
+
+Those games are the seeds. Recommendations are the media most like them, found the way [media.similar](#mediasimilar) finds it, and are games the profile has not played for long. Disliked and hidden media is never recommended and never a seed, and media like a disliked game ranks lower. A game appears once across all sections, as the version a title launch would pick, and the same game on another system counts as that game.
+
+With nothing to go on, `sections` is empty. Core does not fill it with popular or random media, so a client can hide the row until there is something real to show. Media no scraper has matched cannot be recommended for what it is like, because nothing is known about it.
+
+There is no profile parameter: the method always answers for the active profile.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                        |
+| :---------- | :------- | :------- | :--------------------------------------------------------------------------------- |
+| systems     | string[] | No       | Only recommend media on these systems. Defaults to every system.                   |
+| fuzzySystem | boolean  | No       | Match `systems` loosely, as in [media.search](#mediasearch). Defaults to `false`.  |
+| maxResults  | number   | No       | Max number of items in one section. Default is 12, maximum is 30.                  |
+| maxSections | number   | No       | Max number of sections. Default is 6, maximum is 12. Ignored for the `queue` layout. |
+| layout      | string   | No       | `sections` (default) or `queue`. A `queue` returns one `queue` section: a single ranked list for "play next", up to `maxResults` items. |
+
+#### Result
+
+| Key      | Type      | Required | Description                                                |
+| :------- | :-------- | :------- | :--------------------------------------------------------- |
+| sections | Section[] | Yes      | The recommendations, most relevant section first. May be empty. |
+
+##### Section object
+
+| Key    | Type                                           | Required | Description                                                                                          |
+| :----- | :--------------------------------------------- | :------- | :--------------------------------------------------------------------------------------------------- |
+| kind   | string                                         | Yes      | What the section is built around, from the table below. More kinds may be added; skip an unknown one. |
+| seed   | [Media](#media-object)                         | No       | For a `seed` section: the media the items are like.                                                   |
+| signal | string                                         | No       | For a `seed` section: the interest shown in the seed. `played`, `favorite`, `liked` or `deck`.         |
+| tag    | [TagInfo](#taginfo-object)                             | No       | For a `series` section: the series.                                                                   |
+| items  | [SuggestedMedia](#suggestedmedia-object)[]     | Yes      | The recommended media, best first.                                                                    |
+
+| Kind        | Section                                                                                                    |
+| :---------- | :--------------------------------------------------------------------------------------------------------- |
+| `seed`      | Media like one game the profile showed interest in. Each item's `reasons` say what it shares with `seed`.   |
+| `playLater` | Media marked to play later, the ones most like the seeds first. An item's `reasons` may be empty.           |
+| `series`    | More of the series the seeds lean on most.                                                                  |
+| `queue`     | With `layout: "queue"`: one list for "play next". The seeds take turns, a stronger seed more often, each adding its next match, and every fourth place goes to media marked to play later. Each seed's matches are lightly reshuffled once a day (UTC): the best stay near the front, the rest trade places, so the list changes from day to day even when nothing else does. Within a day it is stable. Each item's `signal` and `seed` say why it is there. |
+
+The section for the strongest seed comes first, then `playLater`, then `series`, then the other seeds. A section with too little to show is left out. The `queue` layout returns at most one section, the same series and system caps apply, and a game appears once.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.recommended",
+  "params": {
+    "maxResults": 1,
+    "maxSections": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "sections": [
+      {
+        "kind": "seed",
+        "signal": "played",
+        "seed": {
+          "mediaId": 456,
+          "titleId": 120,
+          "name": "Contra",
+          "path": "/media/fat/games/NES/Contra (USA).nes",
+          "relativePath": "NES/Contra (USA).nes",
+          "hasCover": true,
+          "zapScript": "@NES/Contra",
+          "system": {
+            "category": "Console",
+            "categories": ["Console"],
+            "id": "NES",
+            "name": "Nintendo Entertainment System"
+          },
+          "tags": [{ "tag": "us", "type": "region" }]
+        },
+        "items": [
+          {
+            "reasons": [
+              { "code": "series", "tags": [{ "tag": "franchise:contra", "type": "search" }] },
+              { "code": "genre", "tags": [{ "tag": "action:runandgun", "type": "genre" }] }
+            ],
+            "mediaId": 512,
+            "titleId": 140,
+            "name": "Super C",
+            "path": "/media/fat/games/NES/Super C (USA).nes",
+            "relativePath": "NES/Super C (USA).nes",
+            "hasCover": true,
+            "zapScript": "@NES/Super C",
+            "system": {
+              "category": "Console",
+              "categories": ["Console"],
+              "id": "NES",
+              "name": "Nintendo Entertainment System"
+            },
+            "tags": [{ "tag": "us", "type": "region" }]
+          }
+        ]
+      },
+      {
+        "kind": "playLater",
+        "items": [
+          {
+            "reasons": [],
+            "mediaId": 7120,
+            "titleId": 1803,
+            "name": "Chrono Trigger",
+            "path": "/media/fat/games/SNES/Chrono Trigger (USA).sfc",
+            "relativePath": "SNES/Chrono Trigger (USA).sfc",
+            "hasCover": true,
+            "zapScript": "@SNES/Chrono Trigger",
+            "system": {
+              "category": "Console",
+              "categories": ["Console"],
+              "id": "SNES",
+              "name": "Super Nintendo Entertainment System"
+            },
+            "tags": [{ "tag": "us", "type": "region" }, { "tag": "playlater", "type": "user" }]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ### media.browse
 
 **Access:** All clients.
@@ -995,6 +1402,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries, and on `directory` and `root` entries that belong to exactly one system, where it names the folder itself (`SNES/USA`, or `SNES` for the system's launcher folder) and can be sent back as `path`. Omitted for unmatched absolute paths, virtual URIs, and folders shared by several systems. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Same object shape as `tags`. Omitted when there is nothing to disambiguate. |
+| versionCount | number   | No       | On `media` entries: how many versions of the entry's game the library holds, the entry included, counted as [media.versions](#mediaversions) lists them and respecting `includeHidden`. A client can offer a versions action when it is greater than 1. Omitted for directories, for a system not indexed or scraped since Core gained version counts (the next index or scrape of the system adds it), and when Core could not work it out in time. |
 | multiDisc    | boolean  | No       | `true` on a `directory` entry that stands for several disc images of one game. Its launch fields point at the disc last played from it, or the first disc; browse its `path` to list the others. Omitted otherwise. |
 | hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 | coverColor   | string   | No       | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Present on `media` entries and logical single-game container `directory` entries once Core has built a thumbnail for the media through `media.image` with a `maxSize`. Omitted on a container `directory` entry that has folder artwork of its own, because the colour describes the launch target's cover. |
@@ -5086,7 +5494,7 @@ While the state is `locked`:
 - Every launch is checked against the active profile's content rule, whatever started it. See [`profiles.content`](#profilescontent).
 - A card cannot download media.
 - The active profile cannot be changed to an admin profile or to the shared profile.
-- Browse, search and system listings returned to a capped caller leave out hidden media and systems the active profile's rule closes.
+- Browse, search, system listings, versions, similar media and recommendations returned to a capped caller leave out hidden media and systems the active profile's rule closes.
 
 For as long as kiosk mode is on, `locked` or `unlocked`, remote clients must be paired: Core behaves as if `service.encryption` were enabled, without changing the stored setting. Unpaired connections are closed when kiosk mode is turned on.
 

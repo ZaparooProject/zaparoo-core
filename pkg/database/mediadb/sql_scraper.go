@@ -2105,6 +2105,9 @@ func (db *MediaDB) ApplyScrapeResult(
 	if err := applyScrapeWriteTarget(ctx, writeCtx, target); err != nil {
 		return err
 	}
+	if err := replaceScrapeVersionKeys(ctx, tx, []database.ScrapeWriteTarget{target}); err != nil {
+		return fmt.Errorf("ApplyScrapeResult: %w", err)
+	}
 	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {
 		return err
 	}
@@ -2166,6 +2169,9 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 	stats, err := applyScrapeWriteTargetsBulk(ctx, writeCtx, targets)
 	if err != nil {
 		return err
+	}
+	if err := replaceScrapeVersionKeys(ctx, tx, targets); err != nil {
+		return fmt.Errorf("ApplyScrapeResults: %w", err)
 	}
 	stats.Begin = beginDuration
 	if err := deleteChangedCoverThumbRecords(ctx, writeCtx); err != nil {

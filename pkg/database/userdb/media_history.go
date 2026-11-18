@@ -123,6 +123,86 @@ func (db *UserDB) GetMediaHistoryTop(
 	return sqlGetMediaHistoryTop(db.ctx, db.sql.Load(), systemIDs, since, limit)
 }
 
+// mediaPlayTotalsSQL adds up each path's sessions. The path's identity is the
+// one its most recent session recorded.
+const mediaPlayTotalsSQL = `
+	SELECT sub.SystemID, sub.MediaPath, sub.TotalPlayTime, sub.SessionCount,
+		sub.LastPlayedAt, mh2.MediaIdentity
+	FROM (
+		SELECT SystemID, MediaPath,
+			SUM(PlayTime) AS TotalPlayTime,
+			COUNT(*) AS SessionCount,
+			MAX(StartTime) AS LastPlayedAt,
+			MAX(DBID) AS LatestDBID
+		FROM MediaHistory
+		WHERE ` + notDeleted + ` AND PlayTime >= ? AND StartTime >= ? AND %s
+		GROUP BY SystemID, MediaPath
+	) sub
+	INNER JOIN MediaHistory mh2 ON mh2.DBID = sub.LatestDBID
+	ORDER BY sub.LastPlayedAt DESC, sub.LatestDBID DESC
+	LIMIT ?`
+
+// GetMediaPlayTotals adds up the play of each media path for one profile.
+func (db *UserDB) GetMediaPlayTotals(
+	ctx context.Context, profileID string, since time.Time, minSessionSecs, limit int,
+) ([]database.MediaPlayTotal, error) {
+	conn := db.sql.Load()
+	if conn == nil {
+		return nil, ErrNullSQL
+	}
+	args := []any{minSessionSecs, since.Unix()}
+	profileCondition := "ProfileID IS NULL"
+	if profileID != "" {
+		profileCondition = "ProfileID = ?"
+		args = append(args, profileID)
+	}
+	args = append(args, limit)
+
+	//nolint:gosec // Safe: the condition is one of two fixed strings
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf(mediaPlayTotalsSQL, profileCondition), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media play totals: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var totals []database.MediaPlayTotal
+	for rows.Next() {
+		var total database.MediaPlayTotal
+		var lastPlayedUnix int64
+		var rawIdentity sql.NullString
+		if err := rows.Scan(
+			&total.SystemID, &total.MediaPath, &total.PlayTime, &total.SessionCount,
+			&lastPlayedUnix, &rawIdentity,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan media play total: %w", err)
+		}
+		total.MediaIdentity = database.DecodeMediaIdentity(rawIdentity.String)
+		total.LastPlayedAt = time.Unix(lastPlayedUnix, 0)
+		totals = append(totals, total)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating media play totals: %w", err)
+	}
+	return totals, nil
+}
+
+// MediaHistoryVersion changes when a session starts or ends. A running
+// session rewrites its play time every minute, which must not count as a
+// change, so the newest row and the number of open rows stand for the table.
+func (db *UserDB) MediaHistoryVersion(ctx context.Context) (string, error) {
+	conn := db.sql.Load()
+	if conn == nil {
+		return "", ErrNullSQL
+	}
+	var newest, open int64
+	err := conn.QueryRowContext(ctx, `SELECT
+		(SELECT COALESCE(MAX(DBID), 0) FROM MediaHistory),
+		(SELECT COUNT(*) FROM MediaHistory WHERE EndTime IS NULL)`).Scan(&newest, &open)
+	if err != nil {
+		return "", fmt.Errorf("failed to read media history version: %w", err)
+	}
+	return fmt.Sprintf("%d.%d", newest, open), nil
+}
+
 // CloseHangingMediaHistory closes any media history entries left open from unclean shutdowns.
 // It sets EndTime = StartTime + PlayTime for entries where EndTime is NULL.
 func (db *UserDB) CloseHangingMediaHistory() error {

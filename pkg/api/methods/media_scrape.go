@@ -883,6 +883,15 @@ func startMediaScrapeOperation(
 					terminal = &failed
 				}
 			}
+			// A scrape can give a game the identity that ties it to its other
+			// versions. Only the systems it touched are regrouped.
+			groupSystems := params.Systems
+			if operation.Scope != nil {
+				groupSystems = []string{operation.Scope.SystemID}
+			}
+			if groupErr := db.MediaDB.RecomputeVersionGroups(env.State.GetContext(), groupSystems); groupErr != nil {
+				log.Warn().Err(groupErr).Str("scraper", scraperID).Msg("failed to regroup versions after scrape")
+			}
 			if refreshStoredScrapedCounts(env.State.GetContext(), db.MediaDB) && terminal != nil {
 				// The terminal count was read before this refresh and may have come
 				// from a stale fallback; the refreshed value is the settled one.

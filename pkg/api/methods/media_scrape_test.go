@@ -253,6 +253,8 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	// Linked rows take the run's results once it finishes, across every
 	// system the run covered.
 	mockDB.On("SyncLinkedMedia", assertmock.Anything, []string(nil), (*database.ScrapeScope)(nil)).Return(nil).Once()
+	// What a scrape learned can tie a game to its other versions.
+	mockDB.On("RecomputeVersionGroups", assertmock.Anything, []string(nil)).Return(nil).Once()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
@@ -310,6 +312,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
+	mockDB.AssertCalled(t, "RecomputeVersionGroups", assertmock.Anything, []string(nil))
 
 	statusResult, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
 	require.NoError(t, err)
@@ -1785,6 +1788,9 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	// Each job's linked rows are synced for that job's own systems.
 	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Pinball"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
 	db.On("SyncLinkedMedia", assertmock.Anything, []string{"Arcade"}, (*database.ScrapeScope)(nil)).Return(nil).Once()
+	// Versions are regrouped for those systems alone, not the whole library.
+	db.On("RecomputeVersionGroups", assertmock.Anything, []string{"Pinball"}).Return(nil).Once()
+	db.On("RecomputeVersionGroups", assertmock.Anything, []string{"Arcade"}).Return(nil).Once()
 	db.On("GetScrapingOperation").Return(op, true, nil).Once()
 	db.On("GetScrapingStatus").Return(mediadb.IndexingStatusPending, nil).Once()
 	require.NoError(t, ResumeMediaScrape(&env, op))
@@ -1794,6 +1800,7 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 		t.Fatal("scraper queue did not finish")
 	}
 	require.Equal(t, []string{"first", "second"}, calls)
+	db.AssertNumberOfCalls(t, "RecomputeVersionGroups", 2)
 	require.Equal(t, 2, storedWhenRetiring,
 		"next job must be durable before retiring previous markers")
 	require.Equal(t, []string{"clear:first", "refresh", "clear:second", "refresh", "done"}, events,

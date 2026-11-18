@@ -240,9 +240,15 @@ func TestKioskHostSyncRetriesAHostThatRefused(t *testing.T) {
 	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
 	assert.Empty(t, pl.seen())
 
+	// The worker can be refused twice, once as it starts and once for the
+	// enable, and the second refusal may set its retry after an advance
+	// made here. Advancing until the lock is taken fires whichever retry
+	// is pending, however the two goroutines interleave.
 	pl.setFail(false)
-	clock.Advance(kioskHostRetry)
-	eventuallySeen(t, pl, []bool{true})
+	assert.Eventually(t, func() bool {
+		clock.Advance(kioskHostRetry)
+		return assert.ObjectsAreEqual([]bool{true}, collapse(pl.seen()))
+	}, 2*time.Second, time.Millisecond, "host lock calls")
 }
 
 func TestKioskHostSyncIgnoresPlatformsWithoutALock(t *testing.T) {

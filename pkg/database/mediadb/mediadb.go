@@ -1312,6 +1312,7 @@ var secondaryIndexes = []secondaryIndex{
 			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
 		replaceWhenEnsured: true,
 	},
+	{name: versionGroupIndexName, ddl: versionGroupIndexDDL},
 	{
 		// Serves media.search's name ordering, which is NOCASE on
 		// MediaTitles.Name; see searchSortExpr and the migration that adds it.
@@ -2832,6 +2833,15 @@ func (db *MediaDB) ReconcileStagedSystem(
 	if stats.LibraryRowsChanged > 0 {
 		db.txLibraryChanged = true
 	}
+	// The reconcile may have added, removed or relinked the system's media,
+	// so its version counts are worked out again at the next regroup. One
+	// that changed nothing leaves counts that are still right alone.
+	if stats.SystemKnown && stats.LibraryRowsChanged > 0 {
+		if _, staleErr := db.conn().ExecContext(ctx, markVersionCountsStaleSQL+`DBID = ?`,
+			stats.SystemDBID); staleErr != nil {
+			return stats, fmt.Errorf("mark version counts stale for %s: %w", systemID, staleErr)
+		}
+	}
 	// A reconcile that changed nothing leaves the revision alone, which is
 	// what lets an index-triggered scrape tell the system holds nothing new.
 	if stats.TitlesInserted > 0 || stats.TitlesRenamed > 0 || stats.MediaUpserted > 0 ||
@@ -3940,9 +3950,13 @@ func (db *MediaDB) SearchMediaWithFilters(
 	}
 	filters = &scoped
 
-	if filters.TitleDBID != 0 {
+	if filters.TitleDBID != 0 || len(filters.TitleDBIDs) > 0 {
+		titleDBIDs := filters.TitleDBIDs
+		if filters.TitleDBID != 0 {
+			titleDBIDs = append([]int64{filters.TitleDBID}, titleDBIDs...)
+		}
 		return sqlSearchMediaByTitleDBIDsSorted(
-			ctx, db.sql.Load(), []int64{filters.TitleDBID}, filters.PathPrefix, filters.Tags,
+			ctx, db.sql.Load(), titleDBIDs, filters.PathPrefix, filters.Tags,
 			nil, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit)
 	}
 

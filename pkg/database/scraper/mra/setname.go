@@ -49,6 +49,7 @@ const Ext = ".mra"
 const (
 	rootElement    = "misterromdescription"
 	setNameElement = "setname"
+	parentElement  = "parent"
 	// payloadElement opens the embedded ROM data. Everything that identifies
 	// the set is written before it.
 	payloadElement = "rom"
@@ -82,11 +83,25 @@ func SetStem(sourcePath string) string {
 	return base
 }
 
-// ReadSetName requires one complete, bounded descriptor header. Unlike optional
-// artwork lookup, this identity can select a different title's write target, so
-// malformed documents and repeated setname elements must not select a row. The
-// returned set name is lower-cased; an empty string means no identity.
+// Identity is what a descriptor says about which romset it is.
+type Identity struct {
+	// SetName is the descriptor's own MAME set, lower-cased.
+	SetName string
+	// Parent is the set this one is a clone of, lower-cased. Empty for a
+	// parent set and for a descriptor that does not say.
+	Parent string
+}
+
+// ReadSetName returns the descriptor's set name alone. See ReadIdentity.
 func ReadSetName(fs afero.Fs, filename string) string {
+	return ReadIdentity(fs, filename).SetName
+}
+
+// ReadIdentity requires one complete, bounded descriptor header. Unlike optional
+// artwork lookup, this identity can select a different title's write target, so
+// malformed documents and repeated setname elements must not select a row. A
+// zero Identity means the descriptor is not an identity source.
+func ReadIdentity(fs afero.Fs, filename string) Identity {
 	// Lstat, not Stat: Arcade Organizer aliases the same descriptor under its
 	// category folders, and an alias that reached the index would read as a
 	// second row for one set and block it as ambiguous. Skipping links keeps
@@ -99,62 +114,91 @@ func ReadSetName(fs afero.Fs, filename string) string {
 		info, err = fs.Stat(filename)
 	}
 	if err != nil || !info.Mode().IsRegular() {
-		return ""
+		return Identity{}
 	}
 	file, err := fs.Open(filename)
 	if err != nil {
-		return ""
+		return Identity{}
 	}
 	defer func() { _ = file.Close() }()
 	decoder := xml.NewDecoder(&io.LimitedReader{R: file, N: MaxHeaderBytes})
 	decoder.CharsetReader = charset.NewReaderLabel
-	setName, ok := decodeSetName(decoder)
-	if !ok || SetStem(setName) != setName {
-		return ""
-	}
-	return strings.ToLower(setName)
+	return NormalizeIdentity(decodeIdentity(decoder))
 }
 
-// decodeSetName returns the descriptor's single <setname>. Every element ahead
-// of the ROM payload is examined, so a repeated, nested or absent set name still
-// yields nothing; parsing then stops rather than reading megabytes of base64
-// that can carry no identity. A header that is malformed, outruns the read
-// bound, names another root, or is trailed by a second document is not an
-// identity source.
-func decodeSetName(decoder *xml.Decoder) (setName string, ok bool) {
-	var setNames, depth int
+// NormalizeIdentity validates the raw text of a descriptor's set and parent
+// elements. A set name that is not a plain romset name is no identity at all.
+// A parent that is not one, or that only repeats the set, is dropped and the
+// set name kept: the parent is a hint about other rows, not this row's key.
+func NormalizeIdentity(setName, parent string) Identity {
+	setName = strings.TrimSpace(setName)
+	if setName == "" || SetStem(setName) != setName {
+		return Identity{}
+	}
+	identity := Identity{SetName: strings.ToLower(setName)}
+	parent = strings.TrimSpace(parent)
+	if parent != "" && SetStem(parent) == parent && !strings.EqualFold(parent, setName) {
+		identity.Parent = strings.ToLower(parent)
+	}
+	return identity
+}
+
+// decodeIdentity returns the descriptor's single <setname> and, when it names
+// one, its <parent>. Every element ahead of the ROM payload is examined, so a
+// repeated, nested or absent set name still yields nothing; parsing then stops
+// rather than reading megabytes of base64 that can carry no identity. A header
+// that is malformed, outruns the read bound, names another root, or is trailed
+// by a second document is not an identity source. A repeated parent is
+// ambiguous and reads as none.
+func decodeIdentity(decoder *xml.Decoder) (setName, parent string) {
+	var setNames, parents, depth int
 	var rootClosed bool
+	result := func(complete bool) (string, string) {
+		if !complete || setNames != 1 {
+			return "", ""
+		}
+		if parents != 1 {
+			return setName, ""
+		}
+		return setName, parent
+	}
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
-			return setName, rootClosed && setNames == 1
+			return result(rootClosed)
 		}
 		if err != nil {
-			return "", false
+			return "", ""
 		}
 		switch data := token.(type) {
 		case xml.StartElement:
 			if rootClosed {
-				return "", false
+				return "", ""
 			}
 			depth++
 			switch {
 			case depth == 1:
 				if data.Name.Local != rootElement {
-					return "", false
+					return "", ""
 				}
 			case depth == 2 && data.Name.Local == payloadElement:
-				return setName, setNames == 1
+				return result(true)
 			case depth == 2 && data.Name.Local == setNameElement:
 				setNames++
 				if err := decoder.DecodeElement(&setName, &data); err != nil {
-					return "", false
+					return "", ""
 				}
 				setName = strings.TrimSpace(setName)
 				depth--
+			case depth == 2 && data.Name.Local == parentElement:
+				parents++
+				if err := decoder.DecodeElement(&parent, &data); err != nil {
+					return "", ""
+				}
+				depth--
 			default:
 				if err := decoder.Skip(); err != nil {
-					return "", false
+					return "", ""
 				}
 				depth--
 			}
@@ -165,13 +209,13 @@ func decodeSetName(decoder *xml.Decoder) (setName string, ok bool) {
 			}
 		case xml.CharData:
 			if depth == 0 && strings.TrimSpace(string(data)) != "" {
-				return "", false
+				return "", ""
 			}
 		case xml.Comment, xml.ProcInst:
 		case xml.Directive:
 			// Tolerated only ahead of the document it declares.
 			if rootClosed {
-				return "", false
+				return "", ""
 			}
 		}
 	}
