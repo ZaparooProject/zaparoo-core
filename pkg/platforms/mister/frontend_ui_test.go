@@ -232,3 +232,50 @@ func TestHandOffUIKeepsPickerOpenForFrontend(t *testing.T) {
 	require.NotNil(t, state.Events[0].ExpiresAt)
 	assert.False(t, state.Events[0].ExpiresAt.Before(start.Add(60*time.Second)))
 }
+
+// Main's rewrite of the status file can be read halfway through, empty or
+// cut short. The hand-off keeps waiting for the finished file instead of
+// handing the event to the widget.
+func TestHandOffUIWaitsThroughAHalfWrittenStatus(t *testing.T) {
+	t.Parallel()
+
+	for _, partial := range []string{``, `{"active":tr`} {
+		p, _ := handoffPlatform(t, "", false)
+		require.NoError(t, afero.WriteFile(p.fs, frontendStatusPath, []byte(partial), 0o600))
+		p.uiFrontendRunning = func() bool { return false }
+		wait := 5 * time.Second
+		p.uiReloadWait = &wait
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			time.Sleep(3 * frontendReloadPoll)
+			_ = afero.WriteFile(p.fs, frontendStatusPath, []byte(`{"active":true,"pid":4242}`), 0o600)
+		}()
+		handled, minOpen := p.HandOffUI(t.Context(), &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker})
+		<-done
+		assert.True(t, handled, "partial status %q", partial)
+		assert.Equal(t, frontendColdStartHold, minOpen)
+	}
+}
+
+// A status file that stays unreadable is waited on once, then given up on
+// without a wait, the same as an orphaned pid.
+func TestHandOffUIWaitsOnceForAnUnreadableStatus(t *testing.T) {
+	t.Parallel()
+
+	p, _ := handoffPlatform(t, `not json`, false)
+	wait := 2 * frontendReloadPoll
+	p.uiReloadWait = &wait
+	event := &models.UIEvent{ID: "e", Kind: models.UIEventKindPicker}
+	start := time.Now()
+	handled, _ := p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.GreaterOrEqual(t, time.Since(start), wait)
+
+	wait = time.Minute
+	start = time.Now()
+	handled, _ = p.HandOffUI(t.Context(), event)
+	assert.False(t, handled)
+	assert.Less(t, time.Since(start), frontendReloadPoll, "a file that stays unreadable is not waited on again")
+	assert.False(t, frontendActive(p.fs))
+}
