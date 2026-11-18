@@ -77,7 +77,7 @@ type scrapingStatus struct {
 	cancelRequested bool
 }
 
-func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
+func (s *scrapingStatus) startIfNotRunning(scraperID string, force, skipImages bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
@@ -87,13 +87,14 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	s.cancelRequested = false
 	s.scraperID = scraperID
 	s.force = force
-	s.skipImages = false
+	s.skipImages = skipImages
 	s.countCache = scrapedCountCache{}
 	s.latest = models.ScrapingStatusResponse{
-		ScraperID: scraperID,
-		State:     scrapeStateRunning,
-		Scraping:  true,
-		Force:     force,
+		ScraperID:  scraperID,
+		State:      scrapeStateRunning,
+		Scraping:   true,
+		Force:      force,
+		SkipImages: skipImages,
 	}
 	return true
 }
@@ -134,12 +135,9 @@ func (s *scrapingStatus) clearIfOwner(scraperID string) {
 	s.cancelFunc = nil
 }
 
-// setLatest also stamps the running job's metadata-only flag onto status, so
-// every published update carries it.
 func (s *scrapingStatus) setLatest(status *models.ScrapingStatusResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	status.SkipImages = s.running && s.skipImages && status.ScraperID == s.scraperID
 	s.latest = *status
 }
 
@@ -680,7 +678,7 @@ func startMediaScrapeOperation(
 		return nil, startErr
 	}
 
-	lease, err := startScraping(env.Database.MediaDB, params.ScraperID, params.Force)
+	lease, err := startScraping(env.Database.MediaDB, params.ScraperID, params.Force, params.SkipImages)
 	if err != nil {
 		return nil, err
 	}
@@ -720,6 +718,7 @@ func startMediaScrapeOperation(
 		State:              scrapeStateRunning,
 		Scraping:           true,
 		Force:              params.Force,
+		SkipImages:         params.SkipImages,
 		CurrentStepDisplay: ptrIfNotEmpty(preparingMediaScrapeDisplay),
 	}
 	publishScrapingStatus(ns, &preparingStatus)
@@ -730,11 +729,12 @@ func startMediaScrapeOperation(
 	if err := scrapingStatusInstance.persistStart(env.Database.MediaDB, &operation, resume); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
 		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
-			ScraperID: params.ScraperID,
-			State:     scrapeStateFailed,
-			Force:     params.Force,
-			Done:      true,
-			Error:     "failed to start media scrape",
+			ScraperID:  params.ScraperID,
+			State:      scrapeStateFailed,
+			Force:      params.Force,
+			SkipImages: params.SkipImages,
+			Done:       true,
+			Error:      "failed to start media scrape",
 		})
 		return nil, fmt.Errorf("failed to persist scraping operation: %w", err)
 	}
@@ -790,11 +790,12 @@ func startMediaScrapeOperation(
 				log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
 			}
 			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
-				ScraperID: scraperID,
-				State:     scrapeStateFailed,
-				Force:     params.Force,
-				Done:      true,
-				Error:     "failed to start media scrape",
+				ScraperID:  scraperID,
+				State:      scrapeStateFailed,
+				Force:      params.Force,
+				SkipImages: params.SkipImages,
+				Done:       true,
+				Error:      "failed to start media scrape",
 			})
 			return
 		}
@@ -804,12 +805,13 @@ func startMediaScrapeOperation(
 			initialState = scrapeStatePaused
 		}
 		initialStatus := models.ScrapingStatusResponse{
-			ScraperID: scraperID,
-			State:     initialState,
-			Scraping:  true,
-			Paused:    paused,
-			Throttled: throttled,
-			Force:     params.Force,
+			ScraperID:  scraperID,
+			State:      initialState,
+			Scraping:   true,
+			Paused:     paused,
+			Throttled:  throttled,
+			Force:      params.Force,
+			SkipImages: params.SkipImages,
 		}
 		populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
 		publishScrapingStatus(ns, &initialStatus)
@@ -841,6 +843,7 @@ func startMediaScrapeOperation(
 				paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 				throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
 				status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused, throttled)
+				status.SkipImages = params.SkipImages
 				if update.FatalErr != nil {
 					finalStatus = mediadb.IndexingStatusFailed
 				}
@@ -887,6 +890,7 @@ func startMediaScrapeOperation(
 					}
 					failed.ScraperID = scraperID
 					failed.Force = params.Force
+					failed.SkipImages = params.SkipImages
 					failed.Scraping = false
 					failed.Paused = false
 					failed.Done = true
@@ -924,6 +928,7 @@ func startMediaScrapeOperation(
 				terminalStatus := scrapingStatusInstance.getLatest()
 				terminalStatus.ScraperID = scraperID
 				terminalStatus.Force = params.Force
+				terminalStatus.SkipImages = params.SkipImages
 				terminalStatus.Scraping = false
 				terminalStatus.Done = true
 				terminalStatus.Paused = false
@@ -981,7 +986,7 @@ func startMediaScrapeOperation(
 			publishTerminal()
 			operation = next
 			scraperID, runID = operation.ScraperID, operation.RunID
-			params.Force = operation.Force
+			params.Force, params.SkipImages = operation.Force, operation.SkipImages
 			params.Systems = operation.Systems
 			if operation.Scope != nil {
 				params.Systems = []string{operation.Scope.SystemID}

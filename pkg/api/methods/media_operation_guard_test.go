@@ -131,10 +131,10 @@ func TestMediaOperationGuardDuplicateStartIsBusy(t *testing.T) {
 	requireBusyError(t, err, "indexing already in progress")
 	ClearIndexingStatus()
 
-	first, err := startScraping(mockDB, "test-scraper", false)
+	first, err := startScraping(mockDB, "test-scraper", false, false)
 	require.NoError(t, err)
 	defer first.Release()
-	second, err := startScraping(mockDB, "test-scraper", false)
+	second, err := startScraping(mockDB, "test-scraper", false, false)
 	assert.Nil(t, second)
 	requireBusyError(t, err, "scraping already in progress")
 	require.ErrorIs(t, err, database.ErrMediaWriteConflict)
@@ -151,7 +151,7 @@ func TestMediaOperationGuardRequiresWriteCoordinator(t *testing.T) {
 	assert.Nil(t, lease)
 	require.ErrorIs(t, err, database.ErrMediaWriteCoordinatorUnavailable)
 
-	lease, err = startScraping(db, "test-scraper", false)
+	lease, err = startScraping(db, "test-scraper", false, false)
 	assert.Nil(t, lease)
 	require.ErrorIs(t, err, database.ErrMediaWriteCoordinatorUnavailable)
 }
@@ -177,7 +177,7 @@ func TestMediaOperationGuardOptimizationConflictsAreClientErrors(t *testing.T) {
 			name:        "scraping",
 			expectedMsg: "database optimization in progress",
 			start: func(db database.MediaDBI) (*database.MediaWriteLease, error) {
-				return startScraping(db, "test-scraper", false)
+				return startScraping(db, "test-scraper", false, false)
 			},
 		},
 	}
@@ -309,8 +309,8 @@ func TestMediaOperationGuardReleasesLeaseWhenStatusClaimFails(t *testing.T) {
 	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
 
 	statusInstance.clear()
-	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
-	lease, err = startScraping(mockDB, "test-scraper", false)
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false, false)
+	lease, err = startScraping(mockDB, "test-scraper", false, false)
 	assert.Nil(t, lease)
 	require.Error(t, err)
 	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())

@@ -107,13 +107,26 @@ func makeScrapeEnv(
 	params any,
 ) requests.RequestEnv {
 	t.Helper()
+	env, ns := makeScrapeEnvWithNotifications(t, scrapers, mockMediaDB, params)
+	drainNotifications(t, ns)
+	return env
+}
+
+// makeScrapeEnvWithNotifications is makeScrapeEnv for tests that read the
+// published notifications themselves.
+func makeScrapeEnvWithNotifications(
+	t *testing.T,
+	scrapers map[string]platforms.Scraper,
+	mockMediaDB *testhelpers.MockMediaDBI,
+	params any,
+) (env requests.RequestEnv, ns <-chan models.Notification) {
+	t.Helper()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(scrapers)
 	pl.SetupBasicMock()
-	st, ns := state.NewState(pl, "test")
+	st, notifications := state.NewState(pl, "test")
 	t.Cleanup(st.StopService)
-	drainNotifications(t, ns)
 
 	var rawParams json.RawMessage
 	if params != nil {
@@ -128,7 +141,7 @@ func makeScrapeEnv(
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
 		Params:   rawParams,
-	}
+	}, notifications
 }
 
 // receiveScrapeOptions waits for a fake scraper to be started, which happens
@@ -201,7 +214,7 @@ func TestHandleMediaScrape_IndexingInProgress(t *testing.T) {
 func TestHandleMediaScrape_AlreadyRunning(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
-	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false, false)
 	defer scrapingStatusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -1600,7 +1613,7 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	ClearScrapingStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false, false)
 	scrapingStatusInstance.setCancelFunc(cancel)
 	defer func() {
 		cancel()
@@ -1955,7 +1968,7 @@ func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
 	t.Cleanup(st.StopService)
 	drainNotifications(t, ns)
 
-	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false, false)
 	defer scrapingStatusInstance.clear()
 	pauser := syncutil.NewPauser()
 	pauser.Pause()
@@ -2009,7 +2022,7 @@ func TestHandleMediaScrapeResume_NotPaused(t *testing.T) {
 func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("my-scraper", true)
+	s.startIfNotRunning("my-scraper", true, false)
 	s.clearIfOwner("my-scraper")
 	assert.False(t, s.isRunning())
 	assert.False(t, s.force)
@@ -2018,7 +2031,7 @@ func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
 func TestScrapingStatus_ClearIfOwner_MismatchedID_Preserves(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("owner-a", true)
+	s.startIfNotRunning("owner-a", true, false)
 	s.clearIfOwner("owner-b")
 	assert.True(t, s.isRunning(), "non-owner clearIfOwner must not clear state")
 	assert.True(t, s.force, "non-owner clearIfOwner must preserve force state")
@@ -2751,6 +2764,118 @@ func TestHandleMediaScrape_PassesSkipImagesToScraper(t *testing.T) {
 	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
 	assert.False(t, scrapingStatusInstance.getLatest().SkipImages, "the flag ends with the run")
 	mockDB.AssertExpectations(t)
+}
+
+// collectScrapingStatuses reads media.scraping notifications until want of
+// them are done.
+func collectScrapingStatuses(
+	t *testing.T, ns <-chan models.Notification, want int,
+) []models.ScrapingStatusResponse {
+	t.Helper()
+	var statuses []models.ScrapingStatusResponse
+	timeout := time.After(2 * time.Second)
+	for done := 0; done < want; {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var status models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &status))
+			statuses = append(statuses, status)
+			if status.Done {
+				done++
+			}
+		case <-timeout:
+			t.Fatalf("got %d of %d finished scrape notifications", len(statuses), want)
+		}
+	}
+	return statuses
+}
+
+// The preparing notification went out before the job record was written, and
+// reported a metadata-only run as a full one.
+func TestHandleMediaScrape_SkipImagesOnEveryNotification(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", assertmock.Anything).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", assertmock.Anything).Return(nil)
+	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
+	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "mixed").Return(0, nil)
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	mixed := skipImagesScraper("mixed", true, make(chan scraper.ScrapeOptions, 1), nil)
+	env, ns := makeScrapeEnvWithNotifications(t,
+		map[string]platforms.Scraper{"mixed": mixed},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "mixed", SkipImages: true},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	statuses := collectScrapingStatuses(t, ns, 1)
+	require.NotNil(t, statuses[0].CurrentStepDisplay)
+	assert.Equal(t, preparingMediaScrapeDisplay, *statuses[0].CurrentStepDisplay)
+	for i := range statuses {
+		assert.True(t, statuses[i].SkipImages, "notification %d: %+v", i, statuses[i])
+	}
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestScrapingStatusReportsSkipImagesFromAdmission(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	require.True(t, scrapingStatusInstance.startIfNotRunning("mixed", false, true))
+	assert.True(t, scrapingStatusInstance.getLatest().SkipImages,
+		"a status poll while the run prepares reports it as metadata-only")
+}
+
+// Two queued jobs for the same scraper: the first job's finished status was
+// published after the second was promoted, and took the second job's flag.
+func TestScrapeQueueReportsEachJobsSkipImages(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	db := testhelpers.NewMockMediaDBI()
+	op := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending, ScraperID: "mixed",
+		Pending: []database.ScrapeJob{{ScraperID: "mixed", SkipImages: true}},
+	}
+	db.On("GetScrapingOperation").Return(op, true, nil).Once()
+	db.On("SetScrapingOperation", assertmock.Anything).Return(nil).Twice()
+	db.On("SetScrapingStatus", assertmock.Anything).Return(nil)
+	db.On("ClearScrapingOperation").Return(nil).Once()
+	db.On("WALCheckpoint").Return(nil).Twice()
+	db.On("GetScrapedMediaCount", assertmock.Anything, assertmock.Anything).Return(0, nil)
+	db.On("TrackBackgroundOperation").Return().Once()
+	db.On("GetOptimizationStatus").Return("pending", nil).Maybe()
+	db.On("BackgroundOperationDone").Return().Once()
+	gotOptions := make(chan scraper.ScrapeOptions, 2)
+	env, ns := makeScrapeEnvWithNotifications(t,
+		map[string]platforms.Scraper{"mixed": skipImagesScraper("mixed", true, gotOptions, nil)}, db, nil)
+
+	require.NoError(t, ResumeMediaScrape(&env, op))
+	statuses := collectScrapingStatuses(t, ns, 2)
+	var finished []bool
+	for i := range statuses {
+		if statuses[i].Done {
+			finished = append(finished, statuses[i].SkipImages)
+		}
+	}
+	assert.Equal(t, []bool{false, true}, finished)
+	assert.False(t, receiveScrapeOptions(t, gotOptions).SkipImages)
+	assert.True(t, receiveScrapeOptions(t, gotOptions).SkipImages)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
 }
 
 // A queued job keeps its scope and metadata-only flag when its turn comes.

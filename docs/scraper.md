@@ -85,7 +85,7 @@ These checks and inserts share the existing single/batch scrape transaction. A b
 
 Art means `property:image-*`, `property:video` and `property:manual`. A metadata-only run builds none of them, so it does not stat art files, and the write path drops any that reach it (`ScrapeWrite.SkipImages`). Tags, descriptions and other metadata properties are written under the usual force or fill-missing policy, and art already stored is never touched: `mister-docs` skips its force cleanup of stale image and manual properties.
 
-A metadata-only write leaves out the scraper sentinel, and the run does not store an unchanged-system fingerprint. A later run without `skipImages`, manual or index-triggered, therefore still reaches those rows and adds their art. Those rows do not count towards `totalScraped`. Without a sentinel, a resumed metadata-only run over whole systems writes the rows it already reached again; a scoped run still skips them through its run marker.
+A metadata-only write leaves out the scraper sentinel, and the run does not store an unchanged-system fingerprint. A later run without `skipImages`, manual or index-triggered, therefore still reaches those rows and adds their art. Those rows do not count towards `totalScraped`. Without a sentinel, a resumed metadata-only run without `force` writes the rows it already reached again. A forced run skips them through its run marker, except a `mister-docs` run over whole systems, which marks rows only on scoped runs.
 
 ### Unchanged Systems
 
