@@ -30,12 +30,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -248,4 +250,37 @@ func TestSettingsAuthLinkRomM_Denied(t *testing.T) {
 	assert.Contains(t, failed.Error, "denied")
 	assert.Nil(t, config.LookupAuth(config.GetAuthCfg(), fakeRomMURL+"/api/roms"))
 	assert.Empty(t, romm.ServerURL(cfg))
+}
+
+// Linking makes the RomM launcher available at once, without a launcher
+// refresh or a restart.
+func TestSettingsAuthLinkRomM_ApprovedMakesLauncherAvailable(t *testing.T) {
+	// Not parallel: swaps the RomM client and uses package-level link state.
+	resetAuthLinkState(t)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	fake := &fakeRomMLink{polls: make(chan error, 1), token: "rmm_device_token"}
+	fake.polls <- nil
+	useFakeRomMLink(t, fake)
+
+	env, cfg, _ := rommLinkEnv(t, fakeRomMURL)
+	mockPlatform, ok := env.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{romm.NewLauncher(mockPlatform)}).Maybe()
+	cache := &helpers.LauncherCache{}
+	cache.Refresh(mockPlatform, cfg)
+	launcher := cache.GetLauncherByID(romm.LauncherID)
+	require.NotNil(t, launcher)
+	require.False(t, launcher.Available, "no server before linking")
+	env.LauncherCache = cache
+
+	_, err := HandleSettingsAuthLink(env, nil)
+	require.NoError(t, err)
+	waitForAuthLinkStatus(t, models.AuthLinkStatusApproved, 10*time.Second)
+
+	launcher = cache.GetLauncherByID(romm.LauncherID)
+	require.NotNil(t, launcher)
+	assert.True(t, launcher.Available, launcher.AvailabilityReason)
 }

@@ -38,7 +38,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var errKioskUnavailable = errors.New("kiosk mode is not available")
+var (
+	errKioskUnavailable       = errors.New("kiosk mode is not available")
+	errRecoveryTokenIncorrect = errors.New("incorrect recovery token")
+)
 
 // requireKioskAdmin passes a request that holds admin authority right now:
 // the device itself or an API key while the lock is not enforcing, or a
@@ -273,7 +276,9 @@ func authorizeKioskUnlock(env *requests.RequestEnv, params *models.KioskUnlockPa
 		if env.Kiosk.CheckRecoveryToken(*params.RecoveryToken) {
 			return nil
 		}
-		return models.ClientErrf("%w", ErrForbidden)
+		// The token file is rewritten after every use, so a stale copy is the
+		// usual cause. Saying so tells a local caller nothing it can exploit.
+		return models.ClientErrf("%w", errRecoveryTokenIncorrect)
 	}
 	if !env.Kiosk.Status().Settings.DeviceUnlock {
 		return models.ClientErrf("%w", ErrKioskLocked)

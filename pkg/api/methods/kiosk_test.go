@@ -346,7 +346,8 @@ func TestKioskUnlockAuthorization(t *testing.T) {
 
 		_, err = HandleKioskUnlock(withKioskParams(t, f.local(),
 			models.KioskUnlockParams{RecoveryToken: kioskStr("not-the-token")}))
-		require.ErrorIs(t, err, ErrForbidden)
+		require.ErrorIs(t, err, errRecoveryTokenIncorrect)
+		require.NotErrorIs(t, err, ErrForbidden)
 
 		// The token proves access to the device's files, so it is only
 		// honoured from the device.

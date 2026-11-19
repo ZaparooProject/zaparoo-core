@@ -104,7 +104,9 @@ func startRomMAuthLink(env *requests.RequestEnv, serverURL string) (any, error) 
 	}
 	//nolint:gosec // G118: session and polling goroutine both invoke the shared cancel function.
 	linkCtx, cancel := context.WithDeadline(appCtx, expiresAt.Add(interval))
-	deps := &authLinkDeps{cfg: env.Config, db: env.Database, pl: env.Platform}
+	deps := &authLinkDeps{
+		cfg: env.Config, db: env.Database, pl: env.Platform, launchers: env.LauncherCache,
+	}
 	if env.State != nil {
 		deps.ns = env.State.Notifications
 	}
@@ -179,6 +181,10 @@ func pollRomMLink(
 				finishAuthLink(session, deps, models.AuthLinkStatusFailed,
 					"linking failed, the RomM token could not be saved")
 				return
+			}
+			// The RomM launcher is only available once it has a server.
+			if deps.launchers != nil && deps.pl != nil {
+				deps.launchers.Refresh(deps.pl, deps.cfg)
 			}
 			log.Info().Msg("settings.auth.link completed for a RomM server")
 			finishAuthLink(session, deps, models.AuthLinkStatusApproved, "")

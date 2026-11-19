@@ -21,6 +21,7 @@ package methods
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -410,26 +411,139 @@ func storeMediaUserImage(env *requests.RequestEnv, edit *mediaFieldEdit, commit 
 	return commit(name)
 }
 
-// checkMediaUserImage accepts data that is a supported image whose header
-// decodes, not only bytes that start like one.
+// checkMediaUserImage accepts data that is a supported image which is whole,
+// not only bytes that start like one or a whole header: a cut-off file would
+// be stored and then never display. A still image must decode in full. An
+// animated GIF or WebP decodes its first frame where the decoder can, and its
+// block or chunk structure must run complete to the end, so every frame is
+// present without holding them all in memory. The frame its header declares is
+// checked against mediaImageMaxPixels before the decoder allocates it.
 func checkMediaUserImage(data []byte) error {
 	contentType, err := imagefiles.ContentType(data)
 	if err != nil {
 		return fmt.Errorf("check image type: %w", err)
 	}
-	decodeConfig := map[string]func(io.Reader) (image.Config, error){
-		"image/jpeg": jpeg.DecodeConfig,
-		"image/png":  png.DecodeConfig,
-		"image/gif":  gif.DecodeConfig,
-		"image/webp": webp.DecodeConfig,
+	type codec struct {
+		config func(io.Reader) (image.Config, error)
+		decode func(io.Reader) (image.Image, error)
+	}
+	c, ok := map[string]codec{
+		"image/jpeg": {jpeg.DecodeConfig, jpeg.Decode},
+		"image/png":  {png.DecodeConfig, png.Decode},
+		"image/gif":  {gif.DecodeConfig, gif.Decode},
+		"image/webp": {webp.DecodeConfig, webp.Decode},
 	}[contentType]
-	if decodeConfig == nil {
+	if !ok {
 		return imagefiles.ErrNotImage
 	}
-	if _, err := decodeConfig(bytes.NewReader(data)); err != nil {
+	cfg, err := c.config(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > mediaImageMaxPixels {
+		return fmt.Errorf("%w: %dx%d is past the %d pixel limit",
+			imagefiles.ErrNotImage, cfg.Width, cfg.Height, mediaImageMaxPixels)
+	}
+	switch contentType {
+	case "image/gif":
+		if err := checkGIFBlocks(data); err != nil {
+			return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
+		}
+	case "image/webp":
+		animated, err := checkWebPChunks(data)
+		if err != nil {
+			return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
+		}
+		// The WebP decoder reads no animation frames and refuses the file.
+		if animated {
+			return nil
+		}
+	}
+	if _, err := c.decode(bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
 	}
 	return nil
+}
+
+var errImageCutOff = errors.New("image ends before its last block")
+
+// checkGIFBlocks walks a GIF's blocks from the screen descriptor to the
+// trailer, so a frame cut off after the first one is caught without decoding
+// it. Bytes after the trailer are ignored, as decoders do.
+func checkGIFBlocks(data []byte) error {
+	// "GIF89a" and the logical screen descriptor.
+	p := 13
+	if len(data) < p {
+		return errImageCutOff
+	}
+	if flags := data[10]; flags&0x80 != 0 {
+		p += 3 << (flags&0x07 + 1)
+	}
+	for {
+		if p >= len(data) {
+			return errImageCutOff
+		}
+		switch data[p] {
+		case 0x3B:
+			return nil
+		case 0x21:
+			// Introducer and label, then data sub-blocks.
+			p += 2
+		case 0x2C:
+			if p+10 > len(data) {
+				return errImageCutOff
+			}
+			flags := data[p+9]
+			p += 10
+			if flags&0x80 != 0 {
+				p += 3 << (flags&0x07 + 1)
+			}
+			// LZW minimum code size, then data sub-blocks.
+			p++
+		default:
+			return fmt.Errorf("unknown gif block 0x%02x", data[p])
+		}
+		for {
+			if p >= len(data) {
+				return errImageCutOff
+			}
+			n := int(data[p])
+			p += 1 + n
+			if n == 0 {
+				break
+			}
+		}
+	}
+}
+
+// checkWebPChunks walks a WebP's top-level chunks to the end its RIFF header
+// declares, so a file cut off in a later animation frame is caught. It reports
+// whether the VP8X header marks the file as animated.
+func checkWebPChunks(data []byte) (bool, error) {
+	if len(data) < 12 {
+		return false, errImageCutOff
+	}
+	end := 8 + int64(binary.LittleEndian.Uint32(data[4:8]))
+	if end > int64(len(data)) {
+		return false, errImageCutOff
+	}
+	animated := false
+	for p := int64(12); p < end; {
+		if p+8 > end {
+			return false, errImageCutOff
+		}
+		size := int64(binary.LittleEndian.Uint32(data[p+4 : p+8]))
+		if string(data[p:p+4]) == "VP8X" && size > 0 && p+8 < end {
+			animated = data[p+8]&0x02 != 0
+		}
+		next := p + 8 + size + size&1
+		// A final odd-sized chunk may leave its padding byte out of the total.
+		if next > end && (size&1 == 0 || next != end+1) {
+			return false, errImageCutOff
+		}
+		p = next
+	}
+	return animated, nil
 }
 
 // mediaUserImagesMu serializes storing user images, writing the rows that
