@@ -1357,27 +1357,51 @@ type BackupWarning struct {
 }
 
 type BackupStatusEntry struct {
-	LastRunAt             *string                         `json:"lastRunAt,omitempty"`
-	LastSuccessAt         *string                         `json:"lastSuccessAt,omitempty"`
-	LastSnapshotCreatedAt *string                         `json:"lastSnapshotCreatedAt,omitempty"`
-	AvailabilityCheckedAt *string                         `json:"availabilityCheckedAt,omitempty"`
-	DeviceName            *string                         `json:"deviceName,omitempty"`
-	LinkedAt              *string                         `json:"linkedAt,omitempty"`
-	Categories            map[string]BackupCategoryStatus `json:"categories,omitempty"`
-	Schedule              string                          `json:"schedule,omitempty"`
-	LastError             string                          `json:"lastError,omitempty"`
-	Availability          string                          `json:"availability,omitempty"`
-	LastStatus            string                          `json:"lastStatus"`
-	Warnings              []BackupWarning                 `json:"warnings,omitempty"`
-	LastBackupSize        int64                           `json:"lastBackupSize"`
-	SkippedFiles          int                             `json:"skippedFiles,omitempty"`
-	Linked                bool                            `json:"linked,omitempty"`
-	Enabled               bool                            `json:"enabled"`
+	LastRunAt             *string `json:"lastRunAt,omitempty"`
+	LastSuccessAt         *string `json:"lastSuccessAt,omitempty"`
+	LastSnapshotCreatedAt *string `json:"lastSnapshotCreatedAt,omitempty"`
+	AvailabilityCheckedAt *string `json:"availabilityCheckedAt,omitempty"`
+	DeviceName            *string `json:"deviceName,omitempty"`
+	LinkedAt              *string `json:"linkedAt,omitempty"`
+	// Protection is the Online service's answer to whether this device's
+	// backups protect it, and LastAttempt the last scheduled backup the
+	// device reported as failed or skipped. Remote entry only; omitted when
+	// the device is not linked or the service does not provide them.
+	Protection     *BackupProtection               `json:"protection,omitempty"`
+	LastAttempt    *BackupAttempt                  `json:"lastAttempt,omitempty"`
+	Categories     map[string]BackupCategoryStatus `json:"categories,omitempty"`
+	Schedule       string                          `json:"schedule,omitempty"`
+	LastError      string                          `json:"lastError,omitempty"`
+	Availability   string                          `json:"availability,omitempty"`
+	LastStatus     string                          `json:"lastStatus"`
+	Warnings       []BackupWarning                 `json:"warnings,omitempty"`
+	LastBackupSize int64                           `json:"lastBackupSize"`
+	SkippedFiles   int                             `json:"skippedFiles,omitempty"`
+	Linked         bool                            `json:"linked,omitempty"`
+	Enabled        bool                            `json:"enabled"`
 	// LastRunNoChanges marks the most recent successful run as verified-
 	// unchanged: the server already held an identical snapshot, so nothing
 	// new was stored. LastSuccessAt still advances on such runs;
 	// LastSnapshotCreatedAt is when the stored content last changed.
 	LastRunNoChanges bool `json:"lastRunNoChanges,omitempty"`
+}
+
+// BackupProtection is the Online service's protection state for a device.
+// State is never, removed, failed, stale or protected; clients must treat
+// any other value as unknown.
+type BackupProtection struct {
+	LastSuccessAt  *string `json:"lastSuccessAt,omitempty"`
+	LastVerifiedAt *string `json:"lastVerifiedAt,omitempty"`
+	State          string  `json:"state"`
+	RecoveryPoints int     `json:"recoveryPoints"`
+}
+
+// BackupAttempt is a scheduled backup that failed or was skipped. Reason is
+// a short lowercase code such as quota_exceeded.
+type BackupAttempt struct {
+	At     string `json:"at"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 type BackupStatusResponse struct {

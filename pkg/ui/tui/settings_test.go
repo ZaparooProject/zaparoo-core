@@ -1948,3 +1948,38 @@ func TestRunAuthLinkFlow_CancelWhileStarting_Integration(t *testing.T) {
 		"the link that started after cancel is stopped")
 	assert.False(t, runner.ContainsText("ABCD-1234"))
 }
+
+func TestBackupStatusTextShowsServiceProtection(t *testing.T) {
+	t.Parallel()
+	verified := "2026-10-20T03:00:00Z"
+	text := backupStatusText(&models.BackupStatusEntry{
+		LastStatus: "failed",
+		Protection: &models.BackupProtection{State: "failed", RecoveryPoints: 3, LastVerifiedAt: &verified},
+		LastAttempt: &models.BackupAttempt{
+			At: "2026-10-21T03:00:00Z", Status: "failed", Reason: "quota_exceeded",
+		},
+	})
+	assert.Contains(t, text, "Protection: Last backup failed")
+	assert.Contains(t, text, "Recovery points: 3")
+	assert.Contains(t, text, "Last verified: 2026-10-20 03:00:00 UTC")
+	assert.Contains(t, text, "Last attempt: Failed (quota exceeded), 2026-10-21 03:00:00 UTC")
+}
+
+func TestBackupStatusTextUnknownProtectionState(t *testing.T) {
+	t.Parallel()
+	text := backupStatusText(&models.BackupStatusEntry{
+		LastStatus: "success",
+		Protection: &models.BackupProtection{State: "quarantined"},
+	})
+	assert.Contains(t, text, "Protection: Unknown")
+	assert.NotContains(t, text, "Last verified")
+	assert.NotContains(t, text, "Last attempt")
+}
+
+func TestBackupStatusTextOmitsProtectionWhenAbsent(t *testing.T) {
+	t.Parallel()
+	text := backupStatusText(&models.BackupStatusEntry{LastStatus: "success"})
+	assert.NotContains(t, text, "Protection")
+	assert.NotContains(t, text, "Recovery points")
+	assert.NotContains(t, text, "Last attempt")
+}

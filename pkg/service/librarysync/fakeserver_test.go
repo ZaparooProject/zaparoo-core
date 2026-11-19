@@ -51,6 +51,9 @@ type fakeOnline struct {
 	issued       map[uint32]bool
 	calls        map[string]int
 	edgeRefuse   map[string]bool
+	// badGateway answers the next n requests to a route with the 502 a CDN
+	// sends when it cannot reach the service.
+	badGateway   map[string]int
 	omitAnswer   map[string]bool
 	held         *fakeInventory
 	server       *httptest.Server
@@ -220,6 +223,7 @@ func newFakeOnline(t *testing.T) *fakeOnline {
 		issued:       make(map[uint32]bool),
 		calls:        make(map[string]int),
 		edgeRefuse:   make(map[string]bool),
+		badGateway:   make(map[string]int),
 		omitAnswer:   make(map[string]bool),
 		stateRows:    make(map[string]*fakeStateRow),
 		decks:        make(map[string]*fakeDeck),
@@ -285,6 +289,12 @@ func (f *fakeOnline) setRejected(fingerprint, code string) {
 	f.rejected[fingerprint] = code
 }
 
+func (f *fakeOnline) failWithBadGateway(route string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.badGateway[route] = n
+}
+
 func (f *fakeOnline) setLimitFirst(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -315,6 +325,11 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 		key = r.Method + " /v1/device/decks/{id}/image-uploads"
 	}
 	f.calls[key]++
+	if f.badGateway[key] > 0 {
+		f.badGateway[key]--
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	if r.Header.Get("Authorization") != "Bearer "+f.token {
 		w.WriteHeader(http.StatusUnauthorized)
 		return

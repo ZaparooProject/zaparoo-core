@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
@@ -533,7 +534,7 @@ func resolveIdentities(
 	var response resolveResponse
 	err := client.RetryRateLimited(ctx, func() error {
 		response = resolveResponse{}
-		return client.DoJSON(ctx, http.MethodPost, pathResolve, &request, &response)
+		return client.DoJSON(httpretry.Idempotent(ctx), http.MethodPost, pathResolve, &request, &response)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resolve library media: %w", err)

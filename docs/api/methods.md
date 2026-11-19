@@ -4933,6 +4933,25 @@ None.
 | linkedAt              | string  | No       | Device link time. |
 | availability          | string  | No       | Cached remote service availability: `available` when the account has the `cloud_backup` feature, `unavailable` when it does not, `unknown` before a check succeeds or after one fails. |
 | availabilityCheckedAt | string  | No       | Latest availability check time. |
+| protection            | object  | No       | Remote only. Online service's [backup protection](#backup-protection-object) for this device. Omitted when unlinked or not provided by the service. |
+| lastAttempt           | object  | No       | Remote only. Last scheduled backup this device reported as failed or skipped, as a [backup attempt](#backup-attempt-object). Omitted when there is none, or when a backup succeeded after it. |
+
+##### Backup protection object
+
+| Key            | Type   | Required | Description |
+| :------------- | :----- | :------- | :---------- |
+| state          | string | Yes      | `never`, `removed`, `failed`, `stale`, or `protected`. Treat any other value as unknown. |
+| recoveryPoints | number | Yes      | Number of stored backups that can be restored. |
+| lastSuccessAt  | string | No       | Latest successful backup time recorded by the service. |
+| lastVerifiedAt | string | No       | Latest time the service verified a backup can be restored. |
+
+##### Backup attempt object
+
+| Key    | Type   | Required | Description |
+| :----- | :----- | :------- | :---------- |
+| at     | string | Yes      | When the attempt ended, in RFC 3339 format. |
+| status | string | Yes      | `failed` or `skipped`. |
+| reason | string | Yes      | Short lowercase code, such as `quota_exceeded`, `offline`, or `busy`. |
 
 #### Example
 

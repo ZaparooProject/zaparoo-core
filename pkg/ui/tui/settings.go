@@ -1579,6 +1579,7 @@ func backupStatusText(status *models.BackupStatusEntry) string {
 	if status.LastError != "" {
 		lines = append(lines, "Last error: "+status.LastError)
 	}
+	lines = append(lines, backupProtectionLines(status)...)
 	if status.SkippedFiles > 0 {
 		lines = append(lines, fmt.Sprintf("Skipped paths: %d", status.SkippedFiles))
 	}
@@ -1593,6 +1594,62 @@ func backupStatusText(status *models.BackupStatusEntry) string {
 		lines = append(lines, fmt.Sprintf("%s: %d files, %d bytes", category, entry.Files, entry.Bytes))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// backupProtectionLines renders the Online service's view of this device's
+// backups. Nothing is shown when the service does not provide it.
+func backupProtectionLines(status *models.BackupStatusEntry) []string {
+	var lines []string
+	if p := status.Protection; p != nil {
+		lines = append(lines,
+			"Protection: "+backupProtectionStateLabel(p.State),
+			fmt.Sprintf("Recovery points: %d", p.RecoveryPoints),
+		)
+		if p.LastVerifiedAt != nil {
+			if verified, ok := formatBackupTimestamp(*p.LastVerifiedAt); ok {
+				lines = append(lines, "Last verified: "+verified)
+			}
+		}
+	}
+	if a := status.LastAttempt; a != nil {
+		attempt := "Last attempt: " + backupAttemptStatusLabel(a.Status)
+		if a.Reason != "" {
+			attempt += " (" + strings.ReplaceAll(a.Reason, "_", " ") + ")"
+		}
+		if at, ok := formatBackupTimestamp(a.At); ok {
+			attempt += ", " + at
+		}
+		lines = append(lines, attempt)
+	}
+	return lines
+}
+
+func backupAttemptStatusLabel(status string) string {
+	switch status {
+	case "failed":
+		return "Failed"
+	case "skipped":
+		return "Skipped"
+	default:
+		return "Unknown"
+	}
+}
+
+func backupProtectionStateLabel(state string) string {
+	switch state {
+	case "never":
+		return "Never backed up"
+	case "removed":
+		return "Backups removed"
+	case "failed":
+		return "Last backup failed"
+	case "stale":
+		return "Out of date"
+	case "protected":
+		return "Protected"
+	default:
+		return "Unknown"
+	}
 }
 
 func formatBackupDetails(label string, backup map[string]any) string {
