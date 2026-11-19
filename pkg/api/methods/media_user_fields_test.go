@@ -29,6 +29,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/gif"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -43,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/uploads"
@@ -424,6 +427,87 @@ func TestHandleUploads_RejectsWhatIsNotAnImage(t *testing.T) {
 			assert.True(t, isClientErr(err))
 		})
 	}
+}
+
+// animatedWebP is a 31x31 two-frame lossless WebP from img2webp.
+var animatedWebP = []byte{
+	0x52, 0x49, 0x46, 0x46, 0x84, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58,
+	0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x41, 0x4e,
+	0x49, 0x4d, 0x06, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+	0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x1f, 0x00, 0x00,
+	0x64, 0x00, 0x00, 0x02, 0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x1f, 0xc0, 0x07,
+	0x00, 0x07, 0x10, 0xfd, 0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+	0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x1f, 0x00, 0x00,
+	0x64, 0x00, 0x00, 0x00, 0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x1f, 0xc0, 0x07,
+	0x00, 0x07, 0x10, 0xd1, 0xff, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+}
+
+func testAnimatedGIF(t *testing.T) []byte {
+	t.Helper()
+	pal := color.Palette{color.Black, color.White}
+	anim := &gif.GIF{}
+	for i := range 2 {
+		frame := image.NewPaletted(image.Rect(0, 0, 32, 32), pal)
+		for x := range 32 {
+			frame.SetColorIndex(x, (x+i)%32, 1)
+		}
+		anim.Image = append(anim.Image, frame)
+		anim.Delay = append(anim.Delay, 10)
+	}
+	var buf bytes.Buffer
+	require.NoError(t, gif.EncodeAll(&buf, anim))
+	return buf.Bytes()
+}
+
+func TestCheckMediaUserImage_AnimatedImages(t *testing.T) {
+	t.Parallel()
+	animGIF := testAnimatedGIF(t)
+	stillGIF, err := gif.DecodeAll(bytes.NewReader(animGIF))
+	require.NoError(t, err)
+	require.Len(t, stillGIF.Image, 2)
+
+	// Cut inside the second frame: the first still decodes whole.
+	cutGIF := animGIF[:len(animGIF)-8]
+	_, err = gif.Decode(bytes.NewReader(cutGIF))
+	require.NoError(t, err, "the cut must leave the first frame decodable")
+	// Cut inside the second ANMF chunk: the header still reads.
+	cutWebP := animatedWebP[:len(animatedWebP)-10]
+
+	t.Run("animated gif", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, checkMediaUserImage(animGIF))
+	})
+	t.Run("animated gif with junk after the trailer", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, checkMediaUserImage(append(slices.Clone(animGIF), "junk"...)))
+	})
+	t.Run("animated webp", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, checkMediaUserImage(animatedWebP))
+	})
+	t.Run("gif cut off in its second frame", func(t *testing.T) {
+		t.Parallel()
+		err := checkMediaUserImage(cutGIF)
+		require.ErrorIs(t, err, imagefiles.ErrNotImage)
+		require.ErrorIs(t, err, errImageCutOff)
+	})
+	t.Run("gif without its trailer", func(t *testing.T) {
+		t.Parallel()
+		err := checkMediaUserImage(animGIF[:len(animGIF)-1])
+		require.ErrorIs(t, err, errImageCutOff)
+	})
+	t.Run("webp cut off in its second frame", func(t *testing.T) {
+		t.Parallel()
+		err := checkMediaUserImage(cutWebP)
+		require.ErrorIs(t, err, imagefiles.ErrNotImage)
+		require.ErrorIs(t, err, errImageCutOff)
+	})
+	t.Run("webp whose last chunk overruns its riff size", func(t *testing.T) {
+		t.Parallel()
+		data := slices.Clone(animatedWebP)
+		data[4] -= 2
+		require.ErrorIs(t, checkMediaUserImage(data), errImageCutOff)
+	})
 }
 
 func TestHandleUploads_RequireAPairedOrLocalClient(t *testing.T) {
