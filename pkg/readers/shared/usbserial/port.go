@@ -61,7 +61,12 @@ type opener struct {
 	openDevice func(node string, iface uint8) (usbDevice, error)
 	clock      clockwork.Clock
 	sleep      func(time.Duration)
+	seen       *plugTimes
 }
+
+// hostPlugTimes remembers the plug-in times of the host's adapters across
+// calls, as each call builds a new opener.
+var hostPlugTimes = newPlugTimes()
 
 func defaultOpener() opener {
 	return opener{
@@ -69,7 +74,64 @@ func defaultOpener() opener {
 		openDevice: openUSBDevice,
 		clock:      clockwork.NewRealClock(),
 		sleep:      time.Sleep,
+		seen:       hostPlugTimes,
 	}
+}
+
+// plugTimes holds when each adapter, by usbfs node, was plugged in. The time
+// is taken once, when Core first sees the adapter, because the node's time
+// does not stay put: opening the adapter, as an auto-detect probe does,
+// updates it.
+type plugTimes struct {
+	times map[string]time.Time
+	// listed marks the nodes found by the current list, so the ones that
+	// have gone can be dropped and a later adapter given the same node
+	// waits again.
+	listed map[string]struct{}
+	mu     syncutil.Mutex
+	// sweepMu keeps two lists from sharing listed.
+	sweepMu syncutil.Mutex
+}
+
+func newPlugTimes() *plugTimes {
+	return &plugTimes{times: make(map[string]time.Time)}
+}
+
+// pluggedIn returns when the adapter at node was plugged in, recording at the
+// first call for it.
+func (p *plugTimes) pluggedIn(node string, at func() time.Time) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.listed != nil {
+		p.listed[node] = struct{}{}
+	}
+	when, ok := p.times[node]
+	if !ok {
+		when = at()
+		p.times[node] = when
+	}
+	return when
+}
+
+// sweep runs list and then forgets every adapter it did not see.
+func (p *plugTimes) sweep(list func() ([]PortInfo, error)) ([]PortInfo, error) {
+	p.sweepMu.Lock()
+	defer p.sweepMu.Unlock()
+	p.mu.Lock()
+	p.listed = make(map[string]struct{})
+	p.mu.Unlock()
+	infos, err := list()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err == nil {
+		for node := range p.times {
+			if _, ok := p.listed[node]; !ok {
+				delete(p.times, node)
+			}
+		}
+	}
+	p.listed = nil
+	return infos, err
 }
 
 // Open opens the adapter at a usbserial path and applies mode. It fails with
@@ -123,19 +185,30 @@ func DeviceNode(path string) string {
 }
 
 func (o opener) list() ([]PortInfo, error) {
-	return o.sys.list(o.settled)
+	return o.seen.sweep(func() ([]PortInfo, error) {
+		return o.sys.list(o.settled)
+	})
 }
 
 // settled reports whether an adapter has been plugged in for settleTime. Its
-// usbfs node is created when it is plugged in, so the node's time is when that
-// was. Without a usable time the adapter counts as settled, as waiting could
-// then never end.
+// usbfs node is created when it is plugged in, so when Core first sees the
+// adapter, the node's time is when that was; later reads of it are not, as
+// opening the adapter updates it. Without a usable time the adapter counts as
+// settled, as waiting could then never end.
 func (o opener) settled(t *target) bool {
-	info, err := o.sys.fs.Stat(t.node())
+	node := t.node()
+	info, err := o.sys.fs.Stat(node)
 	if err != nil {
 		return true
 	}
-	age := o.clock.Since(info.ModTime())
+	plugged := o.seen.pluggedIn(node, func() time.Time {
+		now := o.clock.Now()
+		if info.ModTime().After(now) {
+			return now.Add(-settleTime)
+		}
+		return info.ModTime()
+	})
+	age := o.clock.Since(plugged)
 	return age < 0 || age >= settleTime
 }
 

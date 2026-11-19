@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
@@ -57,6 +58,7 @@ func newPortRig(t *testing.T, d *sysDevice, dev *fakeDevice) *portRig {
 		},
 		clock: rig.clock,
 		sleep: func(d time.Duration) { rig.slept = append(rig.slept, d) },
+		seen:  newPlugTimes(),
 	}
 	return rig
 }
@@ -198,6 +200,81 @@ func TestSettleNeedsAKnownPlugInTime(t *testing.T) {
 	infos, err = rig.o.list()
 	require.NoError(t, err)
 	assert.Len(t, infos, 1, "plugged in long ago")
+}
+
+// Opening an adapter updates its usbfs node's time, so an auto-detect probe
+// makes a long-plugged adapter look freshly plugged in. The open that follows
+// the probe must still go ahead.
+func TestProbeDoesNotRestartSettle(t *testing.T) {
+	t.Parallel()
+	const node = "/dev/bus/usb/001/005"
+	dev := ch34xDevice(0x31, false)
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5}, dev)
+	setNodeTime(t, rig, node, rig.clock.Now().Add(-time.Hour))
+
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+
+	// The probe opens and closes the adapter.
+	p, err := rig.o.open("usbserial:1-2", nil)
+	require.NoError(t, err)
+	require.NoError(t, p.Close())
+	setNodeTime(t, rig, node, rig.clock.Now())
+
+	rig.clock.Advance(10 * time.Millisecond)
+	p, err = rig.o.open("usbserial:1-2", nil)
+	require.NoError(t, err, "open right after a probe")
+	require.NoError(t, p.Close())
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "listed right after a probe")
+}
+
+// A new adapter that is probed on every tick still settles settleTime after it
+// first appeared.
+func TestSettleCountsFromFirstSight(t *testing.T) {
+	t.Parallel()
+	const node = "/dev/bus/usb/001/005"
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5},
+		ch34xDevice(0x31, false))
+	setNodeTime(t, rig, node, rig.clock.Now())
+
+	for range 2 {
+		infos, err := rig.o.list()
+		require.NoError(t, err)
+		assert.Empty(t, infos)
+		rig.clock.Advance(settleTime / 2)
+		setNodeTime(t, rig, node, rig.clock.Now())
+	}
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "settled although the node time keeps moving")
+}
+
+// A node number reused by a later plug-in is a new adapter and waits again.
+func TestUnpluggedAdapterIsForgotten(t *testing.T) {
+	t.Parallel()
+	const node = "/dev/bus/usb/001/005"
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5},
+		ch34xDevice(0x31, false))
+	setNodeTime(t, rig, node, rig.clock.Now().Add(-time.Hour))
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+
+	fs := rig.o.sys.fs
+	require.NoError(t, fs.RemoveAll(filepath.Join(sysfsUSBDevices, "1-2")))
+	require.NoError(t, fs.RemoveAll(filepath.Join(sysfsUSBDevices, "1-2:1.0")))
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	require.Empty(t, infos)
+
+	addSysDevice(t, fs, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5})
+	setNodeTime(t, rig, node, rig.clock.Now())
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	assert.Empty(t, infos, "replugged adapter waits again")
 }
 
 func TestOpenFailuresCloseDevice(t *testing.T) {
