@@ -80,3 +80,39 @@ func TestApplyScopedTargets(t *testing.T) {
 		})
 	}
 }
+
+// A fill-missing run revisits files the scraper has already finished, as that
+// is the point of it: a field reset since then is empty again. Other runs skip
+// them.
+func TestLoadScopedSelectionCompleted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		opts    scraper.ScrapeOptions
+		pending int
+	}{
+		{name: "normal", opts: scraper.ScrapeOptions{}, pending: 0},
+		{name: "fill missing", opts: scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"}, pending: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			scope := database.ScrapeScope{SystemID: "NES", Path: "/roms/nes/Metroid (USA).nes", MediaID: 1}
+			tc.opts.Scope = &scope
+			mdb := helpers.NewMockMediaDBI()
+			row := database.MediaFullRow{
+				System: database.System{SystemID: "NES"},
+				Media:  database.Media{DBID: 1, MediaTitleDBID: 10, Path: scope.Path},
+				Title:  database.MediaTitle{DBID: 10, Slug: "metroid", Name: "Metroid"},
+			}
+			mdb.On("GetScrapeMedia", mock.Anything, scope).Return([]database.MediaFullRow{row}, nil)
+			mdb.On("GetScopedScrapeMediaIDs", mock.Anything, scope, "test", "").
+				Return(map[int64]struct{}{1: {}}, nil).Maybe()
+
+			selection, err := scraper.LoadScopedSelection(context.Background(), mdb, tc.opts, "test")
+			require.NoError(t, err)
+			media, titles := selection.Pending()
+			require.Len(t, media, tc.pending)
+			require.Len(t, titles, tc.pending)
+		})
+	}
+}
