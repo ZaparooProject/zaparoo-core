@@ -173,7 +173,7 @@ func connectReaders(
 	autoDetector *AutoDetector,
 	opened manualReaders,
 ) error {
-	closeRemovedManualReaders(cfg, st, opened)
+	closeRemovedManualReaders(cfg, st, iq, opened)
 
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
@@ -287,9 +287,16 @@ func connectReaders(
 }
 
 // closeRemovedManualReaders closes each reader in opened whose readers.connect
-// entry is gone or disabled. Readers that are no longer registered, because
-// they were pruned or replaced, are forgotten without being touched.
-func closeRemovedManualReaders(cfg *config.Instance, st *state.State, opened manualReaders) {
+// entry is gone or disabled, and reports it on iq as a reader error, the
+// signal an unplugged reader sends, so the scan state kept for it is reset
+// the same way. Readers that are no longer registered, because they were
+// pruned or replaced, are forgotten without being touched.
+func closeRemovedManualReaders(
+	cfg *config.Instance,
+	st *state.State,
+	iq chan<- readers.Scan,
+	opened manualReaders,
+) {
 	if len(opened) == 0 {
 		return
 	}
@@ -314,6 +321,10 @@ func closeRemovedManualReaders(cfg *config.Instance, st *state.State, opened man
 			Msg("closing reader removed from readers.connect")
 		st.RemoveReader(readerID)
 		delete(opened, path)
+		select {
+		case iq <- readers.Scan{Source: tokens.SourceReader, ReaderID: readerID, ReaderError: true}:
+		case <-st.GetContext().Done():
+		}
 	}
 }
 

@@ -1282,6 +1282,17 @@ func TestConnectReaders_ClosesReaderWhenEntryGoes(t *testing.T) {
 			_, ok = st.GetReader("pn532-detected")
 			assert.True(t, ok, "a reader not opened from the config must stay open")
 			detectedReader.AssertNotCalled(t, "Close")
+
+			// The close is reported the way an unplugged reader reports it,
+			// so its scan state is reset before it can be opened again.
+			select {
+			case scan := <-iq:
+				assert.Equal(t, readers.Scan{
+					Source: tokens.SourceReader, ReaderID: "pn532-manual", ReaderError: true,
+				}, scan)
+			default:
+				t.Fatal("closing the reader must report a reader error")
+			}
 		})
 	}
 }
