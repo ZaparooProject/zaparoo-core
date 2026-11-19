@@ -21,9 +21,11 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -32,6 +34,8 @@ type MockSettingsService struct {
 	updateSettingsCalled chan struct{}
 	searchMediaCalled    chan struct{}
 	mock.Mock
+	updateSettingsParams    []*models.UpdateSettingsParams
+	updateSettingsMu        syncutil.Mutex
 	updateSettingsCallCount atomic.Int32
 	searchMediaCallCount    atomic.Int32
 }
@@ -52,6 +56,15 @@ func (m *MockSettingsService) UpdateSettingsCallCount() int {
 // UpdateSettingsCalled returns a channel that receives when UpdateSettings is called.
 func (m *MockSettingsService) UpdateSettingsCalled() <-chan struct{} {
 	return m.updateSettingsCalled
+}
+
+// UpdateSettingsParams returns a copy of the params passed to UpdateSettings
+// so far. Tests polling from another goroutine must use this instead of
+// reading Calls, which testify appends to under a lock tests can't take.
+func (m *MockSettingsService) UpdateSettingsParams() []*models.UpdateSettingsParams {
+	m.updateSettingsMu.Lock()
+	defer m.updateSettingsMu.Unlock()
+	return slices.Clone(m.updateSettingsParams)
 }
 
 // SearchMediaCallCount returns the number of times SearchMedia was called.
@@ -79,6 +92,9 @@ func (m *MockSettingsService) GetSettings(ctx context.Context) (*models.Settings
 
 // UpdateSettings mocks updating settings.
 func (m *MockSettingsService) UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error {
+	m.updateSettingsMu.Lock()
+	m.updateSettingsParams = append(m.updateSettingsParams, params)
+	m.updateSettingsMu.Unlock()
 	m.updateSettingsCallCount.Add(1)
 	select {
 	case m.updateSettingsCalled <- struct{}{}:
