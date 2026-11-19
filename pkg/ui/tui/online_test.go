@@ -685,8 +685,9 @@ func TestApplyAllOnlineFeatures_ReportsSkippedCloudBackup_Integration(t *testing
 		require.True(t, runner.WaitForText("Cloud backup wasn't turned on", uiSettleTimeout))
 		assert.Empty(t, done, "the caller takes focus back only after the modal is dismissed")
 
-		params, ok := mockSvc.Calls[0].Arguments[1].(*models.UpdateSettingsParams)
-		require.True(t, ok)
+		updates := mockSvc.UpdateSettingsParams()
+		require.NotEmpty(t, updates)
+		params := updates[0]
 		assert.Nil(t, params.BackupRemoteEnabled)
 		assert.True(t, boolIs(params.LibrarySyncEnabled, true))
 

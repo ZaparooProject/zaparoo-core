@@ -988,12 +988,8 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 	runner.SimulateEnter()
 
 	require.True(t, runner.WaitForCondition(func() bool {
-		for _, call := range mockSvc.Calls {
-			if call.Method != "UpdateSettings" {
-				continue
-			}
-			params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
-			if ok && params.BackupRemoteEnabled != nil {
+		for _, params := range mockSvc.UpdateSettingsParams() {
+			if params.BackupRemoteEnabled != nil {
 				return true
 			}
 		}
@@ -1005,13 +1001,8 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 // UpdateSettings so far.
 func autoBackupUpdates(mockSvc *MockSettingsService) []bool {
 	var values []bool
-	for i := range mockSvc.Calls {
-		call := &mockSvc.Calls[i]
-		if call.Method != "UpdateSettings" {
-			continue
-		}
-		params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
-		if ok && params.BackupRemoteAutoBackup != nil {
+	for _, params := range mockSvc.UpdateSettingsParams() {
+		if params.BackupRemoteAutoBackup != nil {
 			values = append(values, *params.BackupRemoteAutoBackup)
 		}
 	}
