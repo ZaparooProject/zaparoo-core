@@ -98,19 +98,23 @@ func newPlugTimes() *plugTimes {
 }
 
 // pluggedIn returns when the adapter at node was plugged in, recording at the
-// first call for it.
-func (p *plugTimes) pluggedIn(node string, at func() time.Time) time.Time {
+// first call for it. at reports false when the time cannot be read; nothing is
+// recorded then, and pluggedIn reports false unless a time already was. The
+// node counts as listed either way, so a time already recorded is kept.
+func (p *plugTimes) pluggedIn(node string, at func() (time.Time, bool)) (time.Time, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.listed != nil {
 		p.listed[node] = struct{}{}
 	}
-	when, ok := p.times[node]
-	if !ok {
-		when = at()
+	if when, ok := p.times[node]; ok {
+		return when, true
+	}
+	when, ok := at()
+	if ok {
 		p.times[node] = when
 	}
-	return when
+	return when, ok
 }
 
 // sweep runs list and then forgets every adapter it did not see.
@@ -197,17 +201,20 @@ func (o opener) list() ([]PortInfo, error) {
 // settled, as waiting could then never end.
 func (o opener) settled(t *target) bool {
 	node := t.node()
-	info, err := o.sys.fs.Stat(node)
-	if err != nil {
-		return true
-	}
-	plugged := o.seen.pluggedIn(node, func() time.Time {
+	plugged, ok := o.seen.pluggedIn(node, func() (time.Time, bool) {
+		info, err := o.sys.fs.Stat(node)
+		if err != nil {
+			return time.Time{}, false
+		}
 		now := o.clock.Now()
 		if info.ModTime().After(now) {
-			return now.Add(-settleTime)
+			return now.Add(-settleTime), true
 		}
-		return info.ModTime()
+		return info.ModTime(), true
 	})
+	if !ok {
+		return true
+	}
 	age := o.clock.Since(plugged)
 	return age < 0 || age >= settleTime
 }

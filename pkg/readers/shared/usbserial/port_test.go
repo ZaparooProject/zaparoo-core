@@ -252,6 +252,28 @@ func TestSettleCountsFromFirstSight(t *testing.T) {
 	assert.Len(t, infos, 1, "settled although the node time keeps moving")
 }
 
+// A list that cannot read the node's time still sees the adapter, so the time
+// recorded for it is kept rather than replaced by a probe-updated one later.
+func TestUnreadableNodeKeepsPlugTime(t *testing.T) {
+	t.Parallel()
+	const node = "/dev/bus/usb/001/005"
+	rig := newPortRig(t, &sysDevice{name: "1-2", descriptors: ch340Descriptors(), bus: 1, dev: 5},
+		ch34xDevice(0x31, false))
+	setNodeTime(t, rig, node, rig.clock.Now().Add(-time.Hour))
+	infos, err := rig.o.list()
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+
+	require.NoError(t, rig.o.sys.fs.Remove(node))
+	_, err = rig.o.list()
+	require.NoError(t, err)
+
+	setNodeTime(t, rig, node, rig.clock.Now())
+	infos, err = rig.o.list()
+	require.NoError(t, err)
+	assert.Len(t, infos, 1, "an unreadable list must not restart the wait")
+}
+
 // A node number reused by a later plug-in is a new adapter and waits again.
 func TestUnpluggedAdapterIsForgotten(t *testing.T) {
 	t.Parallel()
