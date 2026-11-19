@@ -21,8 +21,10 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -126,4 +128,104 @@ func TestScanScratch_DatabaseWithoutAFileStagesInMain(t *testing.T) {
 	assert.Empty(t, db.scanScratchPath())
 	db.dbPath = ":memory:"
 	assert.Empty(t, db.scanScratchPath())
+}
+
+// The scratch file grows to hold a whole system's staged rows. Once indexing
+// ends it has to go, rather than sit at full size, empty, until Core restarts.
+func TestScanScratch_RemovedWhenIndexingEnds(t *testing.T) {
+	t.Parallel()
+	db := openScanScratchTestDB(t)
+
+	db.SetIndexingCacheSize(true)
+	require.NoError(t, db.BeginTransaction(true))
+	for i := range 20000 {
+		name := fmt.Sprintf("Game %05d With A Reasonably Long Title For Padding", i)
+		require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+			Path:      fmt.Sprintf("/media/fat/games/NES/Collection/%s (USA).nes", name),
+			ParentDir: "/media/fat/games/NES/Collection/",
+			Slug:      fmt.Sprintf("game%05d", i), TitleName: name, SortName: name,
+			Tags: []database.ScanStagedTag{{Type: "region", Value: "us"}},
+		}))
+	}
+	require.NoError(t, db.CommitTransaction())
+	require.NoError(t, db.ClearScanStage())
+
+	full, err := os.Stat(db.scanScratchPath())
+	require.NoError(t, err)
+	require.Greater(t, full.Size(), int64(1<<20), "staging must have grown the scratch file")
+
+	db.SetIndexingCacheSize(false)
+	require.NoFileExists(t, db.scanScratchPath())
+
+	// No connection may still hold the deleted file: one that did would keep
+	// staging into it while the others used a new one.
+	sqlDB := db.sql.Load()
+	db.sqlMu.Lock()
+	conns, err := db.drainPooledConns(sqlDB)
+	db.sqlMu.Unlock()
+	require.NoError(t, err)
+	require.NotEmpty(t, conns)
+	for _, conn := range conns {
+		var attached int
+		require.NoError(t, conn.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM pragma_database_list WHERE name = ?", scanScratchSchema).Scan(&attached))
+		assert.Zero(t, attached, "a pooled connection still has the deleted scratch file attached")
+	}
+	for _, conn := range conns {
+		require.NoError(t, conn.Close())
+	}
+
+	// Connections that had it attached start the next run on a new file, and
+	// all of them see the same one: no connection may still hold the deleted
+	// file, or rows staged by one batch would be missing from the next.
+	require.NoError(t, db.ClearScanStage())
+	require.NoError(t, db.BeginTransaction(true))
+	require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+		Path: "/games/nes/a.nes", ParentDir: "/games/nes/", Slug: "a", TitleName: "A", SortName: "A",
+	}))
+	require.NoError(t, db.CommitTransaction())
+	require.FileExists(t, db.scanScratchPath())
+	for range 4 {
+		require.NoError(t, db.BeginTransaction(true))
+		assert.Equal(t, 1, stagedPaths(t, db))
+		require.NoError(t, db.CommitTransaction())
+	}
+}
+
+// TestScanScratch_OptimizationRestoresBeforeReleasingLease checks that the
+// optimization run hands back the indexing boost, and with it deletes the
+// scratch database, before it releases the media write lease. Done after, an
+// index that took the lease in between could stage rows that the old run's
+// restore then deleted along with the file, and would lose its boost.
+func TestScanScratch_OptimizationRestoresBeforeReleasingLease(t *testing.T) {
+	t.Parallel()
+	db := openScanScratchTestDB(t)
+
+	require.NoError(t, db.BeginTransaction(true))
+	require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+		Path: "/media/fat/games/NES/Game (USA).nes", ParentDir: "/media/fat/games/NES/",
+		Slug: "game", TitleName: "Game", SortName: "Game",
+	}))
+	require.NoError(t, db.CommitTransaction())
+	require.FileExists(t, db.scanScratchPath())
+
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- db.RunBackgroundOptimizationWithLease(nil, nil, lease) }()
+
+	for {
+		next, acquireErr := db.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+		if acquireErr != nil {
+			runtime.Gosched()
+			continue
+		}
+		boosted := db.indexingCacheBoost.Load()
+		_, statErr := os.Stat(db.scanScratchPath())
+		next.Release()
+		assert.False(t, boosted, "the indexing boost must be handed back before the lease")
+		assert.True(t, os.IsNotExist(statErr), "the scratch database must be gone before the lease")
+		break
+	}
+	require.NoError(t, <-done)
 }

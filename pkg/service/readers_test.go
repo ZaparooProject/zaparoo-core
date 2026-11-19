@@ -1208,6 +1208,95 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 	}
 }
 
+// TestConnectReaders_ClosesReaderWhenEntryGoes verifies that a reader opened
+// from a readers.connect entry is closed once that entry is removed or
+// disabled, and that a reader connectReaders did not open is left alone.
+// Without this a reader held the device until Core restarted, which with the
+// userspace USB serial driver kept the kernel driver from taking it back.
+func TestConnectReaders_ClosesReaderWhenEntryGoes(t *testing.T) {
+	t.Parallel()
+
+	disabled := false
+	tests := []struct {
+		name  string
+		after []config.ReadersConnect
+	}{
+		{name: "entry removed", after: nil},
+		{name: "entry disabled", after: []config.ReadersConnect{
+			{Driver: "pn532", Path: "/dev/ttyUSB0", Enabled: &disabled},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			newReader := func(id, path string) *mocks.MockReader {
+				r := mocks.NewMockReader()
+				r.On("Metadata").Return(readers.DriverMetadata{ID: "pn532", DefaultEnabled: true})
+				r.On("IDs").Return([]string{"pn532"}).Maybe()
+				r.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+				r.On("ReaderID").Return(id)
+				r.On("Connected").Return(true).Maybe()
+				r.On("Path").Return(path)
+				r.On("Info").Return("PN532").Maybe()
+				r.On("Capabilities").Return([]readers.Capability{}).Maybe()
+				return r
+			}
+			manualReader := newReader("pn532-manual", "/dev/ttyUSB0")
+			detectedReader := newReader("pn532-detected", "/dev/ttyUSB9")
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("SupportedReaders", mock.Anything).Return([]readers.Reader{manualReader})
+
+			cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+			require.NoError(t, err)
+			cfg.SetReaderConnections([]config.ReadersConnect{{Driver: "pn532", Path: "/dev/ttyUSB0"}})
+
+			st, ns := state.NewState(mockPlatform, "test-boot-uuid")
+			t.Cleanup(func() {
+				st.StopService()
+				for {
+					select {
+					case <-ns:
+					default:
+						return
+					}
+				}
+			})
+			st.SetReader(detectedReader)
+
+			iq := make(chan readers.Scan, 10)
+			opened := manualReaders{}
+			require.NoError(t, connectReaders(mockPlatform, cfg, st, iq, nil, opened))
+			_, ok := st.GetReader("pn532-manual")
+			require.True(t, ok, "reader from the config entry should be open")
+			manualReader.AssertNotCalled(t, "Close")
+
+			cfg.SetReaderConnections(tt.after)
+			require.NoError(t, connectReaders(mockPlatform, cfg, st, iq, nil, opened))
+
+			_, ok = st.GetReader("pn532-manual")
+			assert.False(t, ok, "reader should be dropped once its entry is gone")
+			manualReader.AssertCalled(t, "Close")
+			_, ok = st.GetReader("pn532-detected")
+			assert.True(t, ok, "a reader not opened from the config must stay open")
+			detectedReader.AssertNotCalled(t, "Close")
+
+			// The close is reported the way an unplugged reader reports it,
+			// so its scan state is reset before it can be opened again.
+			select {
+			case scan := <-iq:
+				assert.Equal(t, readers.Scan{
+					Source: tokens.SourceReader, ReaderID: "pn532-manual", ReaderError: true,
+				}, scan)
+			default:
+				t.Fatal("closing the reader must report a reader error")
+			}
+		})
+	}
+}
+
 // TestConnectReaders_SkipsDisabledEntries verifies that connectReaders
 // does not attempt to open readers whose Enabled field is explicitly false.
 func TestConnectReaders_SkipsDisabledEntries(t *testing.T) {
@@ -1252,7 +1341,7 @@ func TestConnectReaders_SkipsDisabledEntries(t *testing.T) {
 	})
 
 	iq := make(chan readers.Scan, 10)
-	err = connectReaders(mockPlatform, cfg, st, iq, nil)
+	err = connectReaders(mockPlatform, cfg, st, iq, nil, nil)
 	require.NoError(t, err)
 
 	// The enabled reader should have been opened with the first connection
@@ -1351,7 +1440,7 @@ func TestConnectReaders_ClosesNonMatchingReaders(t *testing.T) {
 	})
 
 	iq := make(chan readers.Scan, 10)
-	err = connectReaders(mockPlatform, cfg, st, iq, nil)
+	err = connectReaders(mockPlatform, cfg, st, iq, nil, nil)
 	require.NoError(t, err)
 
 	// The non-matching reader must be closed — not doing so leaked a goroutine per tick.

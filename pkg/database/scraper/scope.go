@@ -70,7 +70,10 @@ func LoadScopedSelection(
 			})
 		}
 	}
-	if !opts.Force || opts.RunID != "" {
+	// A fill-missing run revisits finished files on purpose, as a field
+	// reset since they were scraped is empty again; it never replaces a
+	// value, so going over a file twice is harmless.
+	if !opts.FillMissing && (!opts.Force || opts.RunID != "") {
 		runID := ""
 		if opts.Force {
 			runID = opts.RunID

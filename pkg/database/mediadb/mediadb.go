@@ -965,11 +965,50 @@ func (db *MediaDB) restorePooledConnPragmas(sqlDB *sql.DB) {
 			log.Warn().Err(acquireErr).Msg("failed to acquire pooled connection while restoring indexing pragmas")
 		}
 	}
+	if db.txConn == nil && len(conns) == sqlDB.Stats().OpenConnections {
+		db.dropScanScratch(conns)
+	}
 	for _, conn := range conns {
 		if err := db.closeWriterConn(conn); err != nil {
 			log.Warn().Err(err).Msg("failed to restore pooled connection after indexing")
 		}
 	}
+}
+
+// dropScanScratch deletes the scratch database once a run is over. A run
+// stages a whole system there, so on a large library the file grew to
+// hundreds of MiB and stayed that size, empty, until Core restarted. Shrinking
+// it in place was measured on the MiSTer at 8.5 s for 39 MB, all of it with the
+// pool held, because SQLite reads back every page it frees.
+//
+// Every pooled connection that has written keeps the file attached, and they
+// all have to see the same one, so it is only deleted when conns is the whole
+// pool and no writer is open: each is detached first, and the next run
+// creates a new file. If any detach fails the file stays, and the next run
+// reuses it.
+func (db *MediaDB) dropScanScratch(conns []*sql.Conn) {
+	path := db.scanScratchPath()
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
+	defer cancel()
+	for _, conn := range conns {
+		var attached int
+		err := conn.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM pragma_database_list WHERE name = ?", scanScratchSchema).Scan(&attached)
+		if err == nil && attached > 0 {
+			_, err = conn.ExecContext(ctx, "DETACH DATABASE "+scanScratchSchema)
+		}
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to detach scanner scratch database; keeping it")
+			return
+		}
+	}
+	db.removeScanScratch()
 }
 
 // ensureIndexingCacheBoostApplied checks that the cache_size pragma actually
@@ -5435,6 +5474,12 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	db.isOptimizing.Store(true)
 	db.backgroundOps.Add(1)
 
+	// Registered first so it runs last: the lease is held until the boost
+	// below is handed back. Released earlier, an index could take the lease
+	// and start staging, and this run's restore would then turn its boost
+	// off and delete the scratch database under it.
+	defer lease.Release()
+
 	// Optimization is bulk work on an otherwise idle device, but it ran with the
 	// default 8MB cache, 2 connections and temp_store=FILE. The indexing boost is
 	// scoped to NewNamesIndex's stack frame (configureIndexingPragmas is installed
@@ -5504,7 +5549,6 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
-		lease.Release()
 	}()
 
 	if db.sql.Load() == nil {
