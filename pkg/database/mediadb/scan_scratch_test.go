@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,4 +127,66 @@ func TestScanScratch_DatabaseWithoutAFileStagesInMain(t *testing.T) {
 	assert.Empty(t, db.scanScratchPath())
 	db.dbPath = ":memory:"
 	assert.Empty(t, db.scanScratchPath())
+}
+
+// The scratch file grows to hold a whole system's staged rows. Once indexing
+// ends it has to go, rather than sit at full size, empty, until Core restarts.
+func TestScanScratch_RemovedWhenIndexingEnds(t *testing.T) {
+	t.Parallel()
+	db := openScanScratchTestDB(t)
+
+	db.SetIndexingCacheSize(true)
+	require.NoError(t, db.BeginTransaction(true))
+	for i := range 20000 {
+		name := fmt.Sprintf("Game %05d With A Reasonably Long Title For Padding", i)
+		require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+			Path:      fmt.Sprintf("/media/fat/games/NES/Collection/%s (USA).nes", name),
+			ParentDir: "/media/fat/games/NES/Collection/",
+			Slug:      fmt.Sprintf("game%05d", i), TitleName: name, SortName: name,
+			Tags: []database.ScanStagedTag{{Type: "region", Value: "us"}},
+		}))
+	}
+	require.NoError(t, db.CommitTransaction())
+	require.NoError(t, db.ClearScanStage())
+
+	full, err := os.Stat(db.scanScratchPath())
+	require.NoError(t, err)
+	require.Greater(t, full.Size(), int64(1<<20), "staging must have grown the scratch file")
+
+	db.SetIndexingCacheSize(false)
+	require.NoFileExists(t, db.scanScratchPath())
+
+	// No connection may still hold the deleted file: one that did would keep
+	// staging into it while the others used a new one.
+	sqlDB := db.sql.Load()
+	db.sqlMu.Lock()
+	conns, err := db.drainPooledConns(sqlDB)
+	db.sqlMu.Unlock()
+	require.NoError(t, err)
+	require.NotEmpty(t, conns)
+	for _, conn := range conns {
+		var attached int
+		require.NoError(t, conn.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM pragma_database_list WHERE name = ?", scanScratchSchema).Scan(&attached))
+		assert.Zero(t, attached, "a pooled connection still has the deleted scratch file attached")
+	}
+	for _, conn := range conns {
+		require.NoError(t, conn.Close())
+	}
+
+	// Connections that had it attached start the next run on a new file, and
+	// all of them see the same one: no connection may still hold the deleted
+	// file, or rows staged by one batch would be missing from the next.
+	require.NoError(t, db.ClearScanStage())
+	require.NoError(t, db.BeginTransaction(true))
+	require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+		Path: "/games/nes/a.nes", ParentDir: "/games/nes/", Slug: "a", TitleName: "A", SortName: "A",
+	}))
+	require.NoError(t, db.CommitTransaction())
+	require.FileExists(t, db.scanScratchPath())
+	for range 4 {
+		require.NoError(t, db.BeginTransaction(true))
+		assert.Equal(t, 1, stagedPaths(t, db))
+		require.NoError(t, db.CommitTransaction())
+	}
 }

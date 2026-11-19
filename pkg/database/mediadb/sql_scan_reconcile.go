@@ -226,7 +226,9 @@ func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			if sqlErrorIsMissingScanStage(err) {
-				log.Warn().Err(err).Msg("scan staging tables missing; recreating scratch schema")
+				// Expected at the first clear of every run: the scratch file
+				// is deleted when the previous run ends.
+				log.Debug().Err(err).Msg("scan staging tables missing; recreating scratch schema")
 				if ensureErr := sqlEnsureScanStagingTables(ctx, db); ensureErr != nil {
 					return fmt.Errorf("failed to recreate scan staging tables after missing %s: %w", table, ensureErr)
 				}
