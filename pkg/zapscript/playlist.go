@@ -269,7 +269,8 @@ func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 	}
 }
 
-func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
+// readPlsFile reads the entries of a pls playlist in FileN order.
+func readPlsFile(path string) ([]playlistEntry, error) {
 	content, err := readBoundedFile(path)
 	if err != nil {
 		return nil, err
@@ -350,65 +351,19 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 		return nil, fmt.Errorf("no items found in pls file: %s", path)
 	}
 
-	playlistItems := make([]playlists.PlaylistItem, 0)
-
-	// sort items by number in fileX/titleX
 	sorted := make([]int, 0, len(items))
 	for k := range items {
 		sorted = append(sorted, k)
 	}
 	sort.Ints(sorted)
 
+	entries := make([]playlistEntry, 0, len(sorted))
 	for _, k := range sorted {
-		item := items[k]
-		if item.file == "" {
-			continue
+		if item := items[k]; item.file != "" {
+			entries = append(entries, playlistEntry{title: item.title, location: item.file, script: true})
 		}
-
-		if !filepath.IsAbs(item.file) {
-			// if it's a relative path, do a basic check to see if it
-			// exists, and expand it to an absolute path
-			exists := false
-			// just the current dir
-			testFile := filepath.Base(item.file)
-
-			// check name without advanced args if they're there
-			// TODO: use parser
-			if strings.Contains(testFile, "?") {
-				last := strings.LastIndex(testFile, "?")
-				noArgs := testFile[:last]
-				absNoArgs := filepath.Join(filepath.Dir(path), noArgs)
-				if _, err := os.Stat(absNoArgs); err == nil {
-					exists = true
-				}
-			}
-
-			absPath := filepath.Join(filepath.Dir(path), testFile)
-
-			if !exists {
-				if _, err := os.Stat(absPath); err == nil {
-					exists = true
-				}
-			}
-
-			if exists {
-				item.file = absPath
-			}
-		}
-
-		// A URL is a stream or ZapLink location, so its query string is part
-		// of it rather than launch arguments.
-		if strings.Contains(item.file, "://") {
-			item.file = literalLaunch(item.file)
-		}
-
-		playlistItems = append(playlistItems, playlists.PlaylistItem{
-			Name:      item.title,
-			ZapScript: item.file,
-		})
 	}
-
-	return playlistItems, nil
+	return entries, nil
 }
 
 // launchersInclude reports whether one of launchers belongs to systemID.
@@ -479,7 +434,7 @@ func indexedFolderItems(
 		}
 		for i := range rows {
 			// A playlist file is a playlist of its own, not a track.
-			if rows[i].SystemID == systemdefs.SystemAudio && isAudioPlaylistExt(rows[i].Path) {
+			if rows[i].SystemID == systemdefs.SystemAudio && isPlaylistFileExt(rows[i].Path) {
 				continue
 			}
 			items = append(items, playlists.PlaylistItem{
@@ -546,8 +501,9 @@ func readPlaylistFolder(
 		if matcher == nil {
 			matcher = helpers.NewLauncherMatcher(cfg, pl)
 		}
-		if isAudioPlaylistExt(fullPath) &&
-			launchersInclude(matcher.PathToLaunchers(fullPath), systemdefs.SystemAudio) {
+		// A playlist file no other launcher takes is a playlist of its own,
+		// not an item.
+		if isPlaylistFileExt(fullPath) && !hasOtherThanNativeAudio(matcher.PathToLaunchers(fullPath)) {
 			continue
 		}
 		if system != nil {
@@ -631,8 +587,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	var items []playlists.PlaylistItem
-	if isAudioPlaylistExt(path) {
-		items, err = readPlaylistFile(path)
+	if isPlaylistFileExt(path) {
+		items, err = readPlaylistFile(pl, &env, path)
 		if err != nil {
 			return nil, err
 		}
@@ -1324,7 +1280,10 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, ErrNoPlaylistActive
+		// Stopping a playlist that is not running already has the outcome
+		// asked for, so the rest of the script carries on.
+		log.Info().Str("slot", slot).Msg("playlist stop: no playlist active")
+		return platforms.CmdResult{}, nil
 	}
 
 	clearUpdate := &playlists.Playlist{Slot: slot, Clear: true}

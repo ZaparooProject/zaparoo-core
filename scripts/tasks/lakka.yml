@@ -1,0 +1,23 @@
+version: "3"
+
+tasks:
+  build-amd64:
+    desc: Build Lakka AMD64 binary
+    cmds:
+      - task: :zigcc:build-linux-amd64
+        vars:
+          PLATFORM: lakka
+
+  build-arm64:
+    desc: Build Lakka ARM64 binary
+    cmds:
+      - task: :zigcc:build-linux-arm64
+        vars:
+          PLATFORM: lakka
+
+  build-arm:
+    desc: Build Lakka ARM binary
+    cmds:
+      - task: :zigcc:build-linux-arm
+        vars:
+          PLATFORM: lakka

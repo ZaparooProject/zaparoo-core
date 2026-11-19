@@ -96,6 +96,8 @@ type API interface {
 	EmuKill() error
 	Launch(path string) error
 	Notify(msg string) error
+	GameKnown(systemName, path string) (bool, error)
+	ReloadGames() error
 }
 
 type httpAPI struct{}
@@ -114,4 +116,12 @@ func (httpAPI) Launch(path string) error {
 
 func (httpAPI) Notify(msg string) error {
 	return esapi.APINotify(msg) //nolint:wrapcheck // passthrough to the ES API client
+}
+
+func (httpAPI) GameKnown(systemName, path string) (bool, error) {
+	return esapi.APIGameKnown(systemName, path) //nolint:wrapcheck // passthrough to the ES API client
+}
+
+func (httpAPI) ReloadGames() error {
+	return esapi.APIReloadGames() //nolint:wrapcheck // passthrough to the ES API client
 }

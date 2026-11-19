@@ -144,6 +144,27 @@ type DeviceSystem struct {
 	Arch     string  `json:"arch"`
 }
 
+// DeviceEndpointsResponse is the result of device.endpoints: where else a
+// client can reach this Core. A client connected over Bluetooth LE uses it
+// to move to the network API when the two share a network.
+type DeviceEndpointsResponse struct {
+	// DeviceID is Core's stable device ID, the same one discovery
+	// publishes, so a client can match a Bluetooth and a network record of
+	// one device.
+	DeviceID string `json:"deviceId"`
+	// Name is the name the device goes by, the one network discovery
+	// publishes, so a client that found it over Bluetooth can show it.
+	Name string `json:"name"`
+	// Scheme is the WebSocket scheme of the network API.
+	Scheme string `json:"scheme"`
+	// Addresses are the device's LAN addresses the network API answers on,
+	// empty when it is not reachable from the network.
+	Addresses []string `json:"addresses"`
+	Port      int      `json:"port"`
+	// BLE reports whether the API is being served over Bluetooth LE.
+	BLE bool `json:"ble"`
+}
+
 // DeviceStatusResponse is the result of device.status. Every section is
 // always present; one that is null is either unsupported on this device or
 // has no reading yet, and Capabilities.Sections says which.

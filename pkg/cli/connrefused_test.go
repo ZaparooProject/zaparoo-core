@@ -24,11 +24,9 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // A refused connection means Core is not running, which is expected and gets
@@ -38,15 +36,7 @@ import (
 func TestIsConnectionRefused(t *testing.T) {
 	t.Parallel()
 
-	var lc net.ListenConfig
-	listener, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	require.NoError(t, listener.Close())
-
-	var dialer net.Dialer
-	_, dialErr := dialer.DialContext(t.Context(), "tcp", addr)
-	require.Error(t, dialErr, "nothing should be listening on a closed port")
+	dialErr := refusedDial(t)
 	assert.True(t, isConnectionRefused(dialErr), "a real refused dial must be recognised")
 
 	// Wrapped the way the callers wrap it, since that is how it arrives.

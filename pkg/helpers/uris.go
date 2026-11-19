@@ -74,7 +74,7 @@ func unhexByte(b byte) byte {
 }
 
 func shouldKeepCustomSegmentEscaped(r rune) bool {
-	return r == '%' || r == '/' || r == '?' || r == '#' || r < 0x20 || r == 0x7F
+	return r == '%' || r == '/' || r == '?' || r == '#' || r == ';' || r < 0x20 || r == 0x7F
 }
 
 // decodeCustomSchemeSegment decodes only percent-escaped bytes that are safe to

@@ -35,8 +35,29 @@ import (
 // token resolve an indirection safely: a ZapLink body, and the items of a
 // playlist that body opens, run inside the same bound the original command
 // had, even though each one re-enters as a token of a different source.
+//
+// A policy can also be guarded. That marks a token whose script was not
+// written on this device by its owner: card text, a remote operation, a
+// request from a caller without admin rights. A guard adds no bound by
+// itself. It says the token is also answerable to whatever the device
+// enforces at the moment each command runs, which is how a device lock
+// reaches a script that was already running, or already queued, when the
+// lock engaged. The guard travels with the bound, so everything a guarded
+// token expands into is guarded too.
 type CommandPolicy struct {
 	allowed map[string]bool
+	guarded bool
+}
+
+// WithGuard returns the policy marked as guarded.
+func (p CommandPolicy) WithGuard() CommandPolicy {
+	p.guarded = true
+	return p
+}
+
+// Guarded reports whether the policy is marked as guarded.
+func (p CommandPolicy) Guarded() bool {
+	return p.guarded
 }
 
 // NewCommandPolicy returns a policy permitting exactly names. Passing no names
@@ -69,10 +90,14 @@ func (p CommandPolicy) Unrestricted() bool {
 // Intersect returns the policy permitting only what both p and o permit, so
 // combining two bounds can narrow a token but never widen it.
 func (p CommandPolicy) Intersect(o CommandPolicy) CommandPolicy {
+	// A guard on either side stays: combining can never drop one.
+	guarded := p.guarded || o.guarded
 	if p.Unrestricted() {
+		o.guarded = guarded
 		return o
 	}
 	if o.Unrestricted() {
+		p.guarded = guarded
 		return p
 	}
 	allowed := make(map[string]bool, len(p.allowed))
@@ -81,7 +106,7 @@ func (p CommandPolicy) Intersect(o CommandPolicy) CommandPolicy {
 			allowed[name] = true
 		}
 	}
-	return CommandPolicy{allowed: allowed}
+	return CommandPolicy{allowed: allowed, guarded: guarded}
 }
 
 // Allows reports whether name may run under this policy. Command names are
@@ -113,12 +138,13 @@ func (p CommandPolicy) Names() []string {
 type commandPolicyJSON struct {
 	Names   []string `json:"names,omitempty"`
 	Bounded bool     `json:"bounded"`
+	Guarded bool     `json:"guarded,omitempty"`
 }
 
 // MarshalJSON stores the policy so a restored one bounds exactly the same
 // commands.
 func (p CommandPolicy) MarshalJSON() ([]byte, error) {
-	data, err := json.Marshal(commandPolicyJSON{Bounded: !p.Unrestricted(), Names: p.Names()})
+	data, err := json.Marshal(commandPolicyJSON{Bounded: !p.Unrestricted(), Names: p.Names(), Guarded: p.guarded})
 	if err != nil {
 		return nil, fmt.Errorf("encode command policy: %w", err)
 	}
@@ -132,7 +158,7 @@ func (p *CommandPolicy) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("decode command policy: %w", err)
 	}
 	if !stored.Bounded {
-		*p = CommandPolicy{}
+		*p = CommandPolicy{guarded: stored.Guarded}
 		return nil
 	}
 	allowed := make(map[string]bool, len(stored.Names))
@@ -142,6 +168,6 @@ func (p *CommandPolicy) UnmarshalJSON(data []byte) error {
 			allowed[normalized] = true
 		}
 	}
-	*p = CommandPolicy{allowed: allowed}
+	*p = CommandPolicy{allowed: allowed, guarded: stored.Guarded}
 	return nil
 }

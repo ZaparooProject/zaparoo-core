@@ -223,7 +223,7 @@ TitleB=Song 1`,
 			err := os.WriteFile(plsFile, []byte(tt.plsContent), 0o600)
 			require.NoError(t, err)
 
-			media, err := readPlsFile(plsFile)
+			media, err := readPlaylistFile(nil, nil, plsFile)
 			if tt.expectedErrMsg != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectedErrMsg)
@@ -1203,6 +1203,23 @@ func TestCmdPlaylistStop_BackgroundSlot(t *testing.T) {
 	queued := <-queue
 	require.NotNil(t, queued)
 	assert.True(t, queued.Clear, "clear sentinel must be set for background stop")
+}
+
+func TestCmdPlaylistStop_NothingActiveIsANoOp(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked: stopping nothing must not touch the
+	// launcher.
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged)
+	assert.Empty(t, queue)
+	mp.AssertExpectations(t)
 }
 
 func TestCmdPlaylistStop_PrimarySlotStopsBeforeClearing(t *testing.T) {

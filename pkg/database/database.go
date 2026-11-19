@@ -51,6 +51,9 @@ type Database struct {
 	// changed its flags, from any path that edits them. It is nil where
 	// nothing listens. It must not block.
 	OnMediaUserFlagsChanged func(systemID, path string, data *MediaUserData)
+	// UserImages resolves the images the user set on games by hand. It is nil
+	// where no image folder is attached, and user images are then left alone.
+	UserImages MediaUserImageStore
 	// UserDBRecovery is set when startup found the user database damaged and
 	// replaced it, so the user can be told. It is nil after a normal open.
 	UserDBRecovery *UserDBRecovery
@@ -113,6 +116,8 @@ type ScrapeJob struct {
 	Systems     []string     `json:"systems"`
 	Force       bool         `json:"force"`
 	FillMissing bool         `json:"fillMissing,omitempty"`
+	// SkipImages imports metadata only: no images, videos or manuals.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 // ScrapingOperation retains the legacy current-job fields while adding ordinary
@@ -132,6 +137,8 @@ type ScrapingOperation struct {
 	Version     int          `json:"version,omitempty"`
 	Force       bool         `json:"force"`
 	FillMissing bool         `json:"fillMissing,omitempty"`
+	// SkipImages imports metadata only: no images, videos or manuals.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 // Validate checks persisted job options before any scraper can execute them.
@@ -247,6 +254,49 @@ type MediaHistoryTopEntry struct {
 	SessionCount  int
 }
 
+// MediaPlayTotal is the play one media path has had from one profile: its
+// sessions added up, and when the last one started.
+type MediaPlayTotal struct {
+	LastPlayedAt  time.Time
+	MediaIdentity *MediaIdentity
+	SystemID      string
+	MediaPath     string
+	PlayTime      int
+	SessionCount  int
+}
+
+// TitleFacetTag is one tag a title carries, with the system the title is on.
+type TitleFacetTag struct {
+	SystemID string
+	// Slug is the title's slug, which the same game carries on every system.
+	Slug      string
+	Type      string
+	Tag       string
+	TitleDBID int64
+	TagDBID   int64
+}
+
+// WeightedTag is a tag and how much sharing it counts for.
+type WeightedTag struct {
+	TagDBID int64
+	Weight  float64
+}
+
+// TagSharingTitle is a title that shares tags with a query, and the summed
+// weight of the tags it shares.
+type TagSharingTitle struct {
+	TitleDBID int64
+	Score     float64
+}
+
+// UserTagMedia is one user tag on one present media row: a flag such as
+// favorite, or a deck membership.
+type UserTagMedia struct {
+	Tag       string
+	MediaDBID int64
+	TitleDBID int64
+}
+
 type Mapping struct {
 	Label    string `json:"label"`
 	Type     string `json:"type"`
@@ -307,6 +357,20 @@ const DeviceStateKeyMediaPreferencesRevision = "media_preferences_revision"
 // history row below the current policy version can newly resolve, so sweeps
 // skip the table walk entirely.
 const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
+
+// DeviceStateKeyKiosk is the DeviceState key holding kiosk mode's lock state
+// and settings, as versioned JSON.
+const DeviceStateKeyKiosk = "kiosk"
+
+// DeviceStateKeyKioskHostLock is the DeviceState key marking that Core has
+// set a lock of the host's own (MiSTer Main's kiosk flag) and still has to
+// release it. It is stored so the release survives a restart.
+const DeviceStateKeyKioskHostLock = "kiosk_host_lock"
+
+// DeviceStateKeyPINAttempts is the DeviceState key holding recent failed
+// profile PIN attempts, as JSON, so a restart does not hand out a fresh set
+// of guesses.
+const DeviceStateKeyPINAttempts = "pin_attempts"
 
 // DeviceStateKeyPlaytimeExtensions is the DeviceState key holding granted
 // playtime extensions: the current session's duration grant and any
@@ -1146,13 +1210,72 @@ type MediaWithFullPath struct {
 // marking the record done, so a run that only got part of what it wanted
 // keeps what it found and is retried.
 type ScrapeWrite struct {
-	Sentinel   TagInfo
-	MediaTags  []TagInfo
-	TitleTags  []TagInfo
-	TitleProps []MediaProperty
-	MediaProps []MediaProperty
+	Sentinel TagInfo
+	// VersionKeySource names the writer of VersionKeys. When set, VersionKeys
+	// replace every key that source asserted for the media row, so an empty
+	// list withdraws them.
+	VersionKeySource string
+	MediaTags        []TagInfo
+	TitleTags        []TagInfo
+	TitleProps       []MediaProperty
+	MediaProps       []MediaProperty
+	VersionKeys      []VersionKey
 	// FillMissing preserves existing fields; zero retains manual scrape semantics.
 	FillMissing bool
+	// SkipImages drops image, video and manual properties and the Sentinel,
+	// so the record keeps its metadata and a later run can still add art.
+	SkipImages bool
+}
+
+// Version key types. A key is an identity a media row has beyond its title;
+// titles of one system whose rows share a key of the same type are versions
+// of one game.
+const (
+	// VersionKeyMAMESet is a MAME romset name: a set asserts its own name and
+	// its parent's, so a clone meets its parent and its fellow clones.
+	VersionKeyMAMESet = "mame-set"
+	// VersionKeyGameDatabaseID is the game identity GameDataBase gives every
+	// release of one game.
+	VersionKeyGameDatabaseID = "gamedatabase-id"
+	// VersionKeyAltFolder is the folder a platform files a game's alternates in.
+	VersionKeyAltFolder = "alt-folder"
+)
+
+// VersionKeyMaxLen bounds a version key's stored value.
+const VersionKeyMaxLen = 128
+
+// TitleVersionRowCount is how many of a title's media rows a version count
+// may include.
+type TitleVersionRowCount struct {
+	// Rows is how many present rows pass the count's filters.
+	Rows int
+	// Foldable is how many of those might not be versions of their own: a
+	// file a container could launch in its place, or a linked alias.
+	Foldable int
+}
+
+// StoredVersionCounts is what GetStoredVersionCounts returns: the stored
+// count of each title it could answer for, and the titles whose count has to
+// be worked out live because their game holds a hidden version.
+type StoredVersionCounts struct {
+	Counts  map[int64]int
+	Recount []int64
+}
+
+// VersionKey is one identity a scraper asserts for a media row.
+type VersionKey struct {
+	Type string
+	Key  string
+}
+
+// ValidVersionKey reports whether a key is of a known type and storable.
+func ValidVersionKey(key VersionKey) bool {
+	switch key.Type {
+	case VersionKeyMAMESet, VersionKeyGameDatabaseID, VersionKeyAltFolder:
+	default:
+		return false
+	}
+	return key.Key != "" && len(key.Key) <= VersionKeyMaxLen
 }
 
 // ScrapeWriteTarget pairs a scraper write payload with the existing Media and
@@ -1183,6 +1306,33 @@ type MediaQuery struct {
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 }
 
+// ArtworkSampleQuery asks for random media that have indexed artwork. A row
+// qualifies when it matches the embedded MediaQuery filters and holds at least
+// one of ImageTypes on its media row or its title. Indexed artwork metadata
+// counts as available; no file or URL is checked.
+type ArtworkSampleQuery struct {
+	// ImageTypes holds property type tags such as "property:image-boxart".
+	ImageTypes []string
+	// ExcludeDBIDs are Media DBIDs the caller has already seen.
+	ExcludeDBIDs []int64
+	MediaQuery
+	Limit int
+	// ExcludeHidden drops user-hidden media and media in hidden folders.
+	ExcludeHidden bool
+}
+
+// ArtworkSample is one media row picked by SampleArtworkMedia. MediaID is
+// valid only until the next index or rebuild; SystemID and Path survive both.
+type ArtworkSample struct {
+	SystemID string
+	Name     string
+	Path     string
+	// ImageTypes are the requested property type tags this row has on its
+	// media row or its title, in request order.
+	ImageTypes []string
+	MediaID    int64
+}
+
 type SearchCursor struct {
 	SortValue string
 	Sort      string
@@ -1199,7 +1349,10 @@ type SearchFilters struct {
 	Sort       string                `json:"sort,omitempty"`
 	Systems    []systemdefs.System   `json:"systems,omitempty"`
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
-	Limit      int                   `json:"limit"`
+	// TitleDBIDs limits the search to the media rows of these titles, as
+	// TitleDBID does for one.
+	TitleDBIDs []int64 `json:"-"`
+	Limit      int     `json:"limit"`
 	// TitleDBID limits the search to the media rows of one title. Query,
 	// Systems and Letter are ignored when it is set.
 	TitleDBID int64 `json:"-"`
@@ -1255,7 +1408,12 @@ type ScanStagedMedia struct {
 	// LinkTarget is the canonical path of the media this row is a symlink
 	// alias of. Reconcile links the two so the row follows its target's
 	// scraped data.
-	LinkTarget    string
+	LinkTarget string
+	// Producers names the scan sources that reported this path (the
+	// filesystem walk, a launcher scanner, platform virtual media). Reconcile
+	// records them so a later scan where one of them fails protects only the
+	// rows it reported.
+	Producers     []string
 	Tags          []ScanStagedTag
 	Properties    []ScanStagedProperty
 	SlugLength    int
@@ -1269,6 +1427,12 @@ type ScanReconcileOpts struct {
 	// updates. Background indexers use it for cooperative pacing; nil preserves
 	// unpaced callers such as foreground maintenance and tests.
 	Yield func() error
+	// FailedProducers names scan sources that failed for this system. Media
+	// absent from the stage keep their missing state when any of their
+	// recorded producers failed, or when they have no recorded producers.
+	// Media whose producers all succeeded are judged normally. Ignored when
+	// IncompleteScan is set.
+	FailedProducers []string
 	// IncompleteScan means file collection for this system hit errors (an
 	// unreadable path, a failed launcher scanner), so the staged set may be a
 	// subset of what actually exists. Staged files are still upserted and
@@ -1292,6 +1456,10 @@ type ScanReconcileStats struct {
 	// purges the data copied from it and leaves the alias needing a scrape.
 	MediaLinksDeleted int64
 	TouchedTitles     int64
+	// LibraryRowsChanged counts every row the reconcile wrote outside its own
+	// scratch tables. Zero means the system's stored rows are exactly as they
+	// were, so nothing derived from them needs rebuilding.
+	LibraryRowsChanged int64
 	// SystemKnown is false when the system has no DB row and nothing was staged,
 	// meaning the reconcile was a no-op and no Systems row was created.
 	SystemKnown bool
@@ -1360,6 +1528,16 @@ type UserDBI interface {
 	) ([]MediaHistoryEntry, error)
 	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
+	// GetMediaPlayTotals adds up the play of each media path for one profile
+	// since the given time, most recently played first. An empty profileID
+	// selects play made with no profile active. Sessions shorter than
+	// minSessionSecs are left out as launches that were not play.
+	GetMediaPlayTotals(
+		ctx context.Context, profileID string, since time.Time, minSessionSecs, limit int,
+	) ([]MediaPlayTotal, error)
+	// MediaHistoryVersion changes when a play session starts or ends. It does
+	// not change as a running session's play time ticks.
+	MediaHistoryVersion(ctx context.Context) (string, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error)
 	BackfillMediaHistoryUUIDs() (int64, error)
@@ -1389,6 +1567,12 @@ type UserDBI interface {
 	ListMediaUserData() ([]MediaUserData, error)
 	ListMediaUserFlagTimes(flag MediaUserFlag) ([]MediaUserFlagTime, error)
 	GetMediaUserDataForPaths(refs []MediaUserRef) (map[MediaUserRef]MediaUserData, error)
+
+	// User-edited metadata fields. UserDB is their source of truth.
+	ListMediaUserFields() ([]MediaUserField, error)
+	GetMediaUserFieldsForTitle(systemID, slug string, paths []string) ([]MediaUserField, error)
+	SetMediaUserField(field *MediaUserField, titlePaths []string) error
+	DeleteMediaUserField(systemID, slug string, paths []string, field string) error
 
 	// Library sync bookkeeping for personal state.
 	ListLibraryStateSync() ([]LibraryStateSyncRow, error)
@@ -1446,6 +1630,8 @@ type UserDBI interface {
 	SetDeviceState(key, value string) error
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
+	GetContentRule(profileID string) (ContentRule, error)
+	ReplaceContentRule(profileID string, rule *ContentRule) error
 	ClaimRemoteCommand(command *RemoteCommand) (*RemoteCommand, bool, error)
 	TransitionRemoteCommand(commandID, fromState, toState string, executionExpiresAt *time.Time) (bool, error)
 	StoreRemoteCommandResult(
@@ -1507,6 +1693,9 @@ type MediaDBI interface {
 	ClearCorruptMarker() error
 	NoteCorruption(err error) bool
 	Recreate(keepBackup bool) error
+	// StoragePageSizeOutdated reports whether the database file was created
+	// with a page size this build no longer uses for new databases.
+	StoragePageSizeOutdated() bool
 
 	// On-disk persistence for rebuilt caches. Persist* writes the current
 	// in-memory cache atomically; LoadCached* reads it back at startup and
@@ -1667,6 +1856,7 @@ type MediaDBI interface {
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
+	SampleArtworkMedia(ctx context.Context, query *ArtworkSampleQuery) ([]ArtworkSample, error)
 	GetTotalMediaCount() (int, error)
 	HasAnyMedia() (bool, error)
 	GetMissingMediaCount() (int, error)
@@ -1758,6 +1948,57 @@ type MediaDBI interface {
 	SyncLinkedMedia(ctx context.Context, systemIDs []string, scope *ScrapeScope) error
 	// GetMediaLinkTarget returns the media a linked row is an alias of.
 	GetMediaLinkTarget(ctx context.Context, mediaDBID int64) (int64, bool, error)
+	// GetMediaLinkTargets returns, for each of the given media rows that is a
+	// linked alias, the media it is an alias of. Rows that are not aliases are
+	// absent from the result.
+	GetMediaLinkTargets(ctx context.Context, mediaDBIDs []int64) (map[int64]int64, error)
+	// RecomputeVersionGroups rebuilds which titles are versions of one game
+	// for the given systems, or every system when none are given.
+	RecomputeVersionGroups(ctx context.Context, systemIDs []string) error
+	// GetTitleVersionGroups returns the version group of each given title. A
+	// title linked to no other is its own group.
+	GetTitleVersionGroups(ctx context.Context, titleDBIDs []int64) (map[int64]int64, error)
+	// GetVersionGroupMembers returns, for each given title that shares its
+	// version group with another title, every title of that group including
+	// itself. A title that is its own group is absent from the result.
+	GetVersionGroupMembers(ctx context.Context, titleDBIDs []int64) (map[int64][]int64, error)
+	// GetStoredVersionCounts returns the version count the last regroup
+	// stored for each given title whose system has been counted. With
+	// excludeHidden, titles whose game holds a hidden version are listed in
+	// Recount instead, for the caller to count live.
+	GetStoredVersionCounts(ctx context.Context, titleDBIDs []int64, excludeHidden bool) (StoredVersionCounts, error)
+	// GetVersionKeysByTitleDBIDs returns the version keys each given title
+	// holds, stored or derived from its scraped identity.
+	GetVersionKeysByTitleDBIDs(ctx context.Context, titleDBIDs []int64) (map[int64][]VersionKey, error)
+	// CountTitleVersionRows counts, for each given title, the present media
+	// rows that pass the filters' visibility, tag and path conditions, and how
+	// many of those might fold into another row. Titles with none are absent.
+	CountTitleVersionRows(
+		ctx context.Context, titleDBIDs []int64, filters *SearchFilters,
+	) (map[int64]TitleVersionRowCount, error)
+	// GetTitleVersionRows returns the present media rows of the given titles
+	// that pass the filters' visibility, tag and path conditions, without
+	// their tags. It is the cheap read behind version counts.
+	GetTitleVersionRows(
+		ctx context.Context, titleDBIDs []int64, filters *SearchFilters,
+	) ([]SearchResultWithCursor, error)
+	// GetTitleFacetTags returns the tags of the given types each given title
+	// carries. Titles with none are absent.
+	GetTitleFacetTags(ctx context.Context, titleDBIDs []int64, tagTypes []string) ([]TitleFacetTag, error)
+	// CountTitlesByTag returns how many titles carry each given tag, counting
+	// no further than limit.
+	CountTitlesByTag(ctx context.Context, tagDBIDs []int64, limit int) (map[int64]int, error)
+	// FindTitlesSharingTags returns the titles carrying any of the given
+	// tags, best summed weight first, leaving out the excluded titles. A
+	// non-nil systemIDs keeps only titles on those systems.
+	FindTitlesSharingTags(
+		ctx context.Context, tags []WeightedTag, excludeTitleDBIDs []int64, systemIDs []string, limit int,
+	) ([]TagSharingTitle, error)
+	// GetUserTagMedia returns every user tag on a present media row.
+	GetUserTagMedia(ctx context.Context) ([]UserTagMedia, error)
+	// MediaTitleCountEstimate returns roughly how many titles the index
+	// holds. It never undercounts.
+	MediaTitleCountEstimate(ctx context.Context) (int64, error)
 	// GetMediaSourcesForScrape returns source rows for a full system or optional scrape scope.
 	// Unique is evaluated against the full system before scope filtering.
 	GetMediaSourcesForScrape(ctx context.Context, systemID string, scope *ScrapeScope) ([]MediaSource, error)
@@ -1834,6 +2075,24 @@ type MediaDBI interface {
 	GetScrapeFingerprint(ctx context.Context, scraperID, systemID string) (string, error)
 	// SetScrapeFingerprint records the state a scraper completed a system in.
 	SetScrapeFingerprint(ctx context.Context, scraperID, systemID, fingerprint string) error
+	// TouchLastGenerated records that an index completed without changing
+	// the library, moving only the timestamp.
+	TouchLastGenerated() error
+	// IndexCachesMissing names the first thing an index that changed nothing
+	// would still have to rebuild at its end, or "" when there is nothing.
+	IndexCachesMissing(ctx context.Context) string
+	// ScanMarker returns the record the scanner stored for a system when it
+	// last reconciled it, or "" when it has stored none.
+	ScanMarker(ctx context.Context, systemID string) (string, error)
+	// SetScanMarker records what the scanner reconciled a system from, inside
+	// the open indexing transaction. An empty marker forgets the record.
+	SetScanMarker(ctx context.Context, systemID, marker string) error
+	// ScanGameIDMisses returns the scanner's record of a system's disc images
+	// that carry no game ID, or "" when it has stored none.
+	ScanGameIDMisses(ctx context.Context, systemID string) (string, error)
+	// SetScanGameIDMisses stores that record inside the open indexing
+	// transaction. An empty record forgets it.
+	SetScanGameIDMisses(ctx context.Context, systemID, record string) error
 
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.

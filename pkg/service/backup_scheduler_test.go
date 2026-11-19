@@ -717,3 +717,200 @@ func TestRemoteHeartbeatResendsOnCapabilityChange(t *testing.T) {
 		t.Fatal("backup scheduler did not stop after cancellation")
 	}
 }
+
+// scheduledAttemptEnv runs scheduled backups against a test server and reads
+// back the backup attempt report each one queued.
+type scheduledAttemptEnv struct {
+	cfg      *config.Instance
+	platform *mocks.MockPlatform
+	st       *stateservice.State
+	db       *database.Database
+	rootDir  string
+}
+
+func newScheduledAttemptEnv(t *testing.T, handler http.HandlerFunc) *scheduledAttemptEnv {
+	t.Helper()
+	rootDir := t.TempDir()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
+	cfg.SetBackupRemoteEnabled(true)
+	cfg.SetBackupRemoteSchedule("daily")
+	cfg.SetPlaytimeSync(false)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("test-platform").Maybe()
+	pl.On("Settings").Return(platforms.Settings{DataDir: rootDir, ConfigDir: rootDir}).Maybe()
+	st, _ := stateservice.NewState(pl, "test-boot")
+	t.Cleanup(st.StopService)
+	return &scheduledAttemptEnv{
+		cfg: cfg, platform: pl, st: st, rootDir: rootDir,
+		db: &database.Database{UserDB: testhelpers.NewMockUserDBI()},
+	}
+}
+
+func (e *scheduledAttemptEnv) pendingAttempt(t *testing.T) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(e.rootDir, "backups", "status.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	require.NoError(t, err)
+	var status struct {
+		PendingAttempt map[string]any `json:"pendingAttempt"`
+	}
+	require.NoError(t, json.Unmarshal(data, &status))
+	return status.PendingAttempt
+}
+
+func deviceMeHandler(t *testing.T, meStatus int, backupActive bool, heartbeatStatus int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			if meStatus != http.StatusOK {
+				w.WriteHeader(meStatus)
+				return
+			}
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"id": "device-1", "name": "test", "backup_active": backupActive,
+			}))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(heartbeatStatus)
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// TestRunScheduledRemoteBackupReportsOutcomes pins which scheduled runs are
+// reported to the service, and with which status and reason.
+func TestRunScheduledRemoteBackupReportsOutcomes(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	tests := []struct {
+		handler    func(t *testing.T) http.HandlerFunc
+		name       string
+		wantStatus string
+		wantReason string
+		busy       bool
+	}{
+		{
+			name:    "busy",
+			handler: func(t *testing.T) http.HandlerFunc { return deviceMeHandler(t, 200, true, 204) },
+			busy:    true, wantStatus: backupsvc.AttemptStatusSkipped, wantReason: backupsvc.AttemptReasonBusy,
+		},
+		{
+			name:       "service unreachable",
+			handler:    func(t *testing.T) http.HandlerFunc { return deviceMeHandler(t, 503, true, 204) },
+			wantStatus: backupsvc.AttemptStatusSkipped, wantReason: backupsvc.AttemptReasonOffline,
+		},
+		{
+			name:       "not eligible",
+			handler:    func(t *testing.T) http.HandlerFunc { return deviceMeHandler(t, 200, false, 204) },
+			wantStatus: backupsvc.AttemptStatusSkipped, wantReason: backupsvc.AttemptReasonNotAvailable,
+		},
+		{
+			name:       "run failed",
+			handler:    func(t *testing.T) http.HandlerFunc { return deviceMeHandler(t, 200, true, 500) },
+			wantStatus: backupsvc.AttemptStatusFailed, wantReason: backupsvc.AttemptReasonServerError,
+		},
+		{
+			name:    "unlinked",
+			handler: func(t *testing.T) http.HandlerFunc { return deviceMeHandler(t, 401, true, 204) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newScheduledAttemptEnv(t, tt.handler(t))
+			if tt.busy {
+				lease, err := env.st.BackupCoordinator().Begin(
+					t.Context(), backupsvc.OperationLocalCreate, backupsvc.OperationWrite)
+				require.NoError(t, err)
+				defer lease.Release()
+			}
+
+			runScheduledRemoteBackup(t.Context(), env.cfg, env.platform, env.db, env.st, syncutil.NewPauser())
+
+			report := env.pendingAttempt(t)
+			if tt.wantStatus == "" {
+				assert.Nil(t, report)
+				return
+			}
+			require.NotNil(t, report)
+			assert.Equal(t, tt.wantStatus, report["status"])
+			assert.Equal(t, tt.wantReason, report["reason"])
+			at, err := time.Parse(time.RFC3339, report["at"].(string))
+			require.NoError(t, err)
+			assert.WithinDuration(t, time.Now(), at, time.Minute)
+		})
+	}
+}
+
+// TestRemoteHeartbeatSendsPendingAttemptPromptly pins that a failed or
+// skipped scheduled backup reaches the service on the next scheduler pass
+// instead of waiting out the daily heartbeat interval, and only once.
+func TestRemoteHeartbeatSendsPendingAttemptPromptly(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	heartbeats := make(chan map[string]any, 8)
+	env := newScheduledAttemptEnv(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			var body map[string]any
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			heartbeats <- body
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "device-1", "name": "test", "backup_active": false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	env.cfg.SetBackupRemoteEnabled(false)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		remoteBackupSchedulerLoop(
+			ctx, env.cfg, env.platform, env.db, env.st, nil, syncutil.NewPauser(), make(chan struct{}),
+			func(time.Duration) *time.Ticker { return time.NewTicker(5 * time.Millisecond) },
+		)
+		close(done)
+	}()
+	waitForHeartbeat := func() map[string]any {
+		t.Helper()
+		select {
+		case body := <-heartbeats:
+			return body
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for heartbeat")
+			return nil
+		}
+	}
+
+	startup := waitForHeartbeat()
+	assert.NotContains(t, startup, "last_backup_attempt")
+
+	backupsvc.NewManager(env.cfg, env.platform, env.db).
+		RecordScheduledAttempt(backupsvc.AttemptStatusFailed, backupsvc.AttemptReasonQuotaExceeded, time.Now())
+	reported := waitForHeartbeat()
+	attempt, ok := reported["last_backup_attempt"].(map[string]any)
+	require.True(t, ok, "the next pass carries the report")
+	assert.Equal(t, backupsvc.AttemptReasonQuotaExceeded, attempt["reason"])
+
+	require.Never(t, func() bool { return len(heartbeats) > 0 }, 200*time.Millisecond, 10*time.Millisecond,
+		"an accepted report is not re-sent")
+	assert.Nil(t, env.pendingAttempt(t))
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backup scheduler did not stop after cancellation")
+	}
+}

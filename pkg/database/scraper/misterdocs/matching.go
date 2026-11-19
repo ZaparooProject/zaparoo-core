@@ -132,7 +132,7 @@ func buildPendingWrites(
 			if record.ImagePath != "" {
 				foundPaths[filepath.Clean(record.ImagePath)] = struct{}{}
 			}
-			if applyArtworkRecord(idx, pending, source, record, unmapped) {
+			if applyArtworkRecord(idx, pending, source, record, unmapped, opts.SkipImages) {
 				stats.Matched++
 			} else {
 				stats.Skipped++
@@ -141,6 +141,10 @@ func buildPendingWrites(
 		for _, manualPath := range source.Manuals {
 			stats.Processed++
 			foundPaths[filepath.Clean(manualPath)] = struct{}{}
+			if opts.SkipImages {
+				stats.Skipped++
+				continue
+			}
 			title := matchManualTitle(idx, manualPath)
 			if title == nil {
 				stats.Skipped++
@@ -185,6 +189,7 @@ func buildPendingWrites(
 			MediaProps:  sortedProps(p.mediaProp),
 			TitleProps:  sortedProps(p.titleProp),
 			FillMissing: opts.FillMissing,
+			SkipImages:  opts.SkipImages,
 		}
 		// Only a scoped run reads its markers back (scraper.LoadScopedSelection).
 		// A run over whole systems restarts the system it was on, so marking
@@ -201,20 +206,21 @@ func buildPendingWrites(
 
 // applyArtworkRecord resolves one pack record to a media row and stages its
 // image and metadata. A record with no image still carries title metadata, for
-// games the pack catalogues without artwork.
+// games the pack catalogues without artwork. skipArt stages the metadata alone.
 func applyArtworkRecord(
 	idx systemIndex,
 	pending map[int64]*pendingWrite,
 	source *sourceRecords,
 	record artworkRecord,
 	unmapped *scraper.UnmappedValues,
+	skipArt bool,
 ) bool {
 	media, title, exact := matchArtwork(idx, record)
 	if media == nil || title == nil {
 		return false
 	}
 	write := getPending(pending, media.DBID, title.DBID)
-	if record.ImagePath != "" {
+	if record.ImagePath != "" && !skipArt {
 		prop := database.MediaProperty{
 			TypeTag: source.imageTypeTag(),
 			Text:    filepath.ToSlash(record.ImagePath),

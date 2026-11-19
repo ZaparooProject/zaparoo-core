@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -39,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -76,6 +78,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
@@ -398,7 +401,8 @@ func (*Platform) ManagedByPackageManager() bool {
 	return false
 }
 
-func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	// MiSTeX reuses MiSTer's launchers but not its granular arcade
@@ -408,6 +412,7 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	catalog := gamedatabase.NewPlatformScraper(gamedatabase.SetNameCache(mister.NewArcadeSetNameCache(p)))
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, arcade.ID: arcade, thumbnails.ID: thumbnails, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 }
 

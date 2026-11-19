@@ -22,6 +22,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -556,6 +557,12 @@ func (c *Instance) reloadAuth() {
 // given domain. Creates the file with 0600 permissions if it doesn't exist.
 // Preserves existing entries and reloads the in-memory auth config.
 func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
+	return c.SaveAuthEntries(map[string]CredentialEntry{domain: entry})
+}
+
+// SaveAuthEntries writes or updates several credential entries in one
+// auth.toml write, so either all of them change or none do.
+func (c *Instance) SaveAuthEntries(entries map[string]CredentialEntry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -580,8 +587,9 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 		return fmt.Errorf("failed to read auth file: %w", readErr)
 	}
 
-	// Upsert the entry
-	existing[domain] = entry
+	for domain, entry := range entries {
+		existing[domain] = entry
+	}
 
 	// Build the output: API keys first, then credential entries
 	data, err := marshalAuthFile(existing, existingKeys)
@@ -1089,14 +1097,48 @@ func (c *Instance) InputBlockList() []string {
 	return c.vals.ZapScript.Input.Block
 }
 
-// SetAuthCfgForTesting sets the global auth config for testing purposes
+// authTestMu serializes the testing helpers' read-modify-write updates of
+// authCfg so parallel tests adding their own entries do not lose each other's.
+var authTestMu syncutil.Mutex
+
+// SetAuthCfgForTesting replaces the whole global auth config. Only sequential
+// tests may use it; parallel tests use AddAuthEntryForTesting.
 func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
+	authTestMu.Lock()
+	defer authTestMu.Unlock()
 	authCfg.Store(creds)
 }
 
-// ClearAuthCfgForTesting clears the global auth config for testing purposes
+// ClearAuthCfgForTesting empties the global auth config. Only sequential tests
+// may use it; parallel tests use AddAuthEntryForTesting.
 func ClearAuthCfgForTesting() {
+	authTestMu.Lock()
+	defer authTestMu.Unlock()
 	authCfg.Store(map[string]CredentialEntry{})
+}
+
+// AddAuthEntryForTesting adds one credential to the global auth config and
+// returns a function that removes only that entry, leaving entries added by
+// other tests in place. Safe for parallel tests that each use their own URL.
+func AddAuthEntryForTesting(lookupURL string, entry CredentialEntry) (remove func()) {
+	updateAuthCfgForTesting(func(creds map[string]CredentialEntry) {
+		creds[lookupURL] = entry
+	})
+	return func() {
+		updateAuthCfgForTesting(func(creds map[string]CredentialEntry) {
+			delete(creds, lookupURL)
+		})
+	}
+}
+
+func updateAuthCfgForTesting(apply func(map[string]CredentialEntry)) {
+	authTestMu.Lock()
+	defer authTestMu.Unlock()
+	current := GetAuthCfg()
+	next := make(map[string]CredentialEntry, len(current)+1)
+	maps.Copy(next, current)
+	apply(next)
+	authCfg.Store(next)
 }
 
 // VirtualGamepadEnabled returns whether virtual gamepad emulation is enabled.

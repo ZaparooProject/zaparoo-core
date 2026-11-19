@@ -1081,3 +1081,44 @@ func TestPairFinish_PINExhaustionInvalidatesOtherInFlightSessions(t *testing.T) 
 	require.ErrorIs(t, err, errPairingSessionUnknown,
 		"B's session must be wiped when A exhausts the PIN")
 }
+
+func TestWatchPIN_SignalsStartAndClearAndStops(t *testing.T) {
+	t.Parallel()
+	h := newPairingHarness(t)
+	changed, stop := h.mgr.WatchPIN()
+
+	_, _, err := h.mgr.StartPairing("member")
+	require.NoError(t, err)
+	select {
+	case <-changed:
+	default:
+		t.Fatal("StartPairing did not signal the watcher")
+	}
+
+	h.mgr.CancelPairing()
+	select {
+	case <-changed:
+	default:
+		t.Fatal("CancelPairing did not signal the watcher")
+	}
+
+	// Signals coalesce instead of blocking the manager.
+	_, _, err = h.mgr.StartPairing("member")
+	require.NoError(t, err)
+	h.mgr.CancelPairing()
+	<-changed
+	select {
+	case <-changed:
+		t.Fatal("expected one coalesced signal")
+	default:
+	}
+
+	stop()
+	_, _, err = h.mgr.StartPairing("member")
+	require.NoError(t, err)
+	select {
+	case <-changed:
+		t.Fatal("a stopped watcher was signalled")
+	default:
+	}
+}

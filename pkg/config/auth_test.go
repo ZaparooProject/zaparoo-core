@@ -20,6 +20,8 @@
 package config
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -832,6 +834,25 @@ func TestSaveAuthEntry_PreservesExistingEntries(t *testing.T) {
 	assert.Equal(t, "token2", creds["https://zpr.au"].Bearer)
 }
 
+func TestSaveAuthEntries_WritesAllEntriesTogether(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	require.NoError(t, cfg.SaveAuthEntry("https://zpr.au", CredentialEntry{Bearer: "kept"}))
+
+	err := cfg.SaveAuthEntries(map[string]CredentialEntry{
+		"http://192.168.1.5:32400": {Bearer: "server"},
+		"https://clients.plex.tv":  {Bearer: "account"},
+	})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 3)
+	assert.Equal(t, "kept", creds["https://zpr.au"].Bearer)
+	assert.Equal(t, "server", creds["http://192.168.1.5:32400"].Bearer)
+	assert.Equal(t, "account", creds["https://clients.plex.tv"].Bearer)
+}
+
 func TestSaveAuthEntry_PreservesAPIKeys(t *testing.T) {
 	t.Parallel()
 
@@ -948,4 +969,41 @@ func TestDeleteAuthEntries_NoAuthFileIsNoOp(t *testing.T) {
 
 	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
 	require.NoError(t, err)
+}
+
+func TestAddAuthEntryForTesting_ConcurrentEntriesSurviveEachOther(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	ClearAuthCfgForTesting()
+	t.Cleanup(ClearAuthCfgForTesting)
+
+	const n = 32
+	removes := make([]func(), n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			removes[i] = AddAuthEntryForTesting(
+				fmt.Sprintf("https://host%d.example.com", i),
+				CredentialEntry{Bearer: fmt.Sprintf("token-%d", i)},
+			)
+		}()
+	}
+	wg.Wait()
+	require.Len(t, GetAuthCfg(), n)
+
+	for i := 0; i < n; i += 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			removes[i]()
+		}()
+	}
+	wg.Wait()
+
+	creds := GetAuthCfg()
+	require.Len(t, creds, n/2)
+	for i := 1; i < n; i += 2 {
+		assert.Equal(t, fmt.Sprintf("token-%d", i), creds[fmt.Sprintf("https://host%d.example.com", i)].Bearer)
+	}
 }

@@ -850,6 +850,28 @@ func TestManagerCreateListRestore(t *testing.T) {
 	}
 }
 
+// TestZaparooBackupLeavesUserImagesOut covers the images a user sets on games
+// by hand. UserDB records which image a game uses; the files themselves stay
+// on the device, so they never count against an online backup's quota.
+func TestZaparooBackupLeavesUserImagesOut(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "data")
+	image := filepath.Join(dataDir, "media", "images-user", "img-0123456789abcdef.png")
+
+	for _, def := range zaparooBackupDefinitions(filepath.Join(base, "cfg"), dataDir) {
+		rel, err := filepath.Rel(def.SourceRoot, image)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		if def.NonRecursive && strings.Contains(rel, string(filepath.Separator)) {
+			continue
+		}
+		assert.Falsef(t, backupPatternsMatch(rel, def.Include),
+			"the definition rooted at %s collects user images", def.SourceRoot)
+	}
+}
+
 func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	t.Parallel()
 	// Restore policy validates against the same definitions collection
@@ -1253,6 +1275,43 @@ func TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRef
 	require.NoError(t, env.Manager.SendCapabilityHeartbeat(context.Background()))
 	assert.Equal(t, 1, heartbeatCalls)
 	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+}
+
+// TestRemoteClientRetriesOnlyRepeatableRequestsAfterEdgeError pins which
+// requests the client sends again after a 502 from the CDN: a heartbeat says
+// the same thing however often it arrives, a backup commit creates one.
+func TestRemoteClientRetriesOnlyRepeatableRequestsAfterEdgeError(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var heartbeats, commits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			if heartbeats.Add(1) == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			commits.Add(1)
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	client, err := env.Manager.newRemoteClient()
+	require.NoError(t, err)
+
+	require.NoError(t, client.heartbeat(context.Background(), HeartbeatCapabilities(env.Manager.cfg), nil))
+	assert.Equal(t, int32(2), heartbeats.Load())
+
+	err = client.doJSON(context.Background(), http.MethodPost, "/v1/device/backups", map[string]any{}, nil)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.Status)
+	assert.Equal(t, int32(1), commits.Load())
 }
 
 func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {

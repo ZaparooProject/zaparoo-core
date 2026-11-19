@@ -23,20 +23,22 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/standalone"
 )
 
-const maxLauncherTargetSize = 4096
-
 type standaloneDef struct {
-	args             func(string) ([]string, error)
+	args             standalone.ArgsFunc
 	id               string
 	systemID         string
 	flatpakID        string
 	flatpakCommand   string
 	folder           string
+	extraFolders     []string
 	executables      []string
 	appImagePrefixes []string
 	scan             bool
+	// mameConfig reads the rompath from the user's mame.ini.
+	mameConfig bool
 }
 
 //nolint:gochecknoglobals // Static launcher data.
@@ -45,132 +47,138 @@ var nativeStandaloneDefs = []standaloneDef{
 		id: "XeniaCanary", systemID: systemdefs.SystemXbox360,
 		executables:      []string{"xenia_canary", "xenia-canary", "XeniaCanary"},
 		appImagePrefixes: []string{"xenia_canary", "xenia-canary", "XeniaCanary"},
-		folder:           "xbox360", scan: true, args: batchArgs(),
+		folder:           "xbox360", scan: true, args: standalone.Batch(),
 	},
 	{
 		id: "Ryubing", systemID: systemdefs.SystemSwitch, flatpakID: "io.github.ryubing.Ryujinx",
 		executables:      []string{"Ryujinx", "ryujinx", "Ryubing"},
 		appImagePrefixes: []string{"ryujinx", "Ryubing"},
-		folder:           "switch", scan: true, args: batchArgs("--fullscreen"),
+		folder:           "switch", scan: true, args: standalone.Batch("--fullscreen"),
 	},
 	{
 		id: "ShadPS4", systemID: systemdefs.SystemPS4, flatpakID: "net.shadps4.shadPS4",
 		flatpakCommand: "shadps4",
 		executables:    []string{"shadps4"}, appImagePrefixes: []string{"shadps4"},
-		folder: "ps4", scan: true, args: shadPS4Args,
+		folder: "ps4", scan: true, args: standalone.ShadPS4Args,
 	},
 	{
 		id: "PCSX2", systemID: systemdefs.SystemPS2, flatpakID: "net.pcsx2.PCSX2",
-		executables: []string{"pcsx2-qt", "pcsx2"}, appImagePrefixes: []string{"pcsx2-Qt", "PCSX2"},
-		folder: "ps2", scan: true, args: batchArgs("-fullscreen", "-batch"),
+		executables: []string{"pcsx2-qt", "pcsx2"}, appImagePrefixes: []string{"pcsx2-Qt", "PCSX2", "ARMSX2"},
+		folder: "ps2", scan: true, args: standalone.Batch("-fullscreen", "-batch"),
 	},
 	{
 		id: "Cemu", systemID: systemdefs.SystemWiiU, flatpakID: "info.cemu.Cemu",
 		executables: []string{"cemu", "Cemu"}, appImagePrefixes: []string{"Cemu"},
-		folder: "wiiu", scan: true, args: cemuArgs,
+		folder: "wiiu", scan: true, args: standalone.CemuArgs,
 	},
 	{
 		id: "Azahar", systemID: systemdefs.System3DS, flatpakID: "org.azahar_emu.Azahar",
 		executables: []string{"azahar"}, appImagePrefixes: []string{"Azahar"},
-		folder: "3ds", scan: true, args: batchArgs("-f"),
+		folder: "3ds", scan: true, args: standalone.Batch("-f"),
 	},
 	{
 		id: "Vita3K", systemID: systemdefs.SystemVita, executables: []string{"Vita3K"},
-		appImagePrefixes: []string{"Vita3K"}, folder: "psvita", scan: true, args: vita3KArgs,
+		appImagePrefixes: []string{"Vita3K"}, folder: "psvita", scan: true, args: standalone.Vita3KArgs,
 	},
 	{
 		id: "RPCS3", systemID: systemdefs.SystemPS3, flatpakID: "net.rpcs3.RPCS3",
 		executables: []string{"rpcs3"}, appImagePrefixes: []string{"rpcs3", "RPCS3"},
-		folder: "ps3", scan: true, args: rpcs3Args,
+		folder: "ps3", scan: true, args: standalone.RPCS3Args,
 	},
 	{
 		id: "DuckStation", systemID: systemdefs.SystemPSX, flatpakID: "org.duckstation.DuckStation",
 		executables: []string{"duckstation-qt", "duckstation"}, appImagePrefixes: []string{"DuckStation"},
-		folder: "psx", args: batchArgs("-batch", "-fullscreen"),
+		folder: "psx", scan: true, args: standalone.Batch("-batch", "-fullscreen"),
 	},
 	{
 		id: "PPSSPP", systemID: systemdefs.SystemPSP, flatpakID: "org.ppsspp.PPSSPP",
 		executables:      []string{"PPSSPPSDL", "PPSSPPQt", "ppsspp-qt", "ppsspp"},
 		appImagePrefixes: []string{"PPSSPP"},
-		folder:           "psp", args: batchArgs("--fullscreen"),
+		folder:           "psp", scan: true, args: standalone.Batch("--fullscreen"),
 	},
 	{
 		id: "DolphinGameCube", systemID: systemdefs.SystemGameCube, flatpakID: "org.DolphinEmu.dolphin-emu",
 		executables: []string{"dolphin-emu", "dolphin-emu-qt"},
-		folder:      "gamecube", scan: true, args: batchArgs("-b", "-f", "-e"),
+		folder:      "gamecube", scan: true, args: standalone.Batch("-b", "-f", "-e"),
 	},
 	{
 		id: "DolphinWii", systemID: systemdefs.SystemWii, flatpakID: "org.DolphinEmu.dolphin-emu",
 		executables: []string{"dolphin-emu", "dolphin-emu-qt"},
-		folder:      "wii", scan: true, args: batchArgs("-b", "-f", "-e"),
+		folder:      "wii", scan: true, args: standalone.Batch("-b", "-f", "-e"),
 	},
 	{
 		id: "MelonDS", systemID: systemdefs.SystemNDS, flatpakID: "net.kuribo64.melonDS",
 		executables: []string{"melonDS"}, appImagePrefixes: []string{"melonDS"},
-		folder: "nds", args: batchArgs("--fullscreen"),
+		folder: "nds", scan: true, args: standalone.Batch("--fullscreen"),
 	},
 	{
 		id: "ScummVMStandalone", systemID: systemdefs.SystemScummVM, flatpakID: "org.scummvm.ScummVM",
-		executables: []string{"scummvm"}, folder: "scummvm", args: scummVMArgs,
+		executables: []string{"scummvm"}, folder: "scummvm", args: standalone.ScummVMArgs,
 	},
 	{
 		id: "Supermodel", systemID: systemdefs.SystemModel3, flatpakID: "com.supermodel3.Supermodel",
 		executables: []string{"supermodel", "Supermodel"}, appImagePrefixes: []string{"Supermodel"},
-		folder: "model3", scan: true, args: batchArgs("-fullscreen"),
+		folder: "model3", scan: true, args: standalone.Batch("-fullscreen"),
 	},
 	{
 		id: "Xemu", systemID: systemdefs.SystemXbox, flatpakID: "app.xemu.xemu",
 		executables: []string{"xemu"}, appImagePrefixes: []string{"xemu", "Xemu"},
-		folder: "xbox", scan: true, args: batchArgs("-full-screen", "-dvd_path"),
+		folder: "xbox", scan: true, args: standalone.Batch("-full-screen", "-dvd_path"),
+	},
+	{
+		id: "GroovyMAME", systemID: systemdefs.SystemArcade,
+		executables: []string{"groovymame"}, folder: "arcade", extraFolders: []string{"mame"},
+		scan: true, mameConfig: true, args: standalone.MAMEArgs,
 	},
 	{
 		id: "MAME", systemID: systemdefs.SystemArcade, flatpakID: "org.mamedev.MAME",
-		executables: []string{"mame"}, folder: "arcade", scan: true, args: mameArgs,
+		executables: []string{"mame", "mame64"}, folder: "arcade", extraFolders: []string{"mame"},
+		scan: true, mameConfig: true, args: standalone.MAMEArgs,
 	},
 	{
 		id: "FlycastDreamcast", systemID: systemdefs.SystemDreamcast, flatpakID: "org.flycast.Flycast",
 		executables: []string{"flycast"}, appImagePrefixes: []string{"flycast"},
-		folder: "dreamcast", scan: true, args: batchArgs("-config", "window:fullscreen=yes"),
+		folder: "dreamcast", scan: true, args: standalone.Batch("-config", "window:fullscreen=yes"),
 	},
 	{
 		id: "FlycastNaomi", systemID: systemdefs.SystemNAOMI, flatpakID: "org.flycast.Flycast",
 		executables: []string{"flycast"}, appImagePrefixes: []string{"flycast"},
-		folder: "naomi", scan: true, args: batchArgs("-config", "window:fullscreen=yes"),
+		folder: "naomi", scan: true, args: standalone.Batch("-config", "window:fullscreen=yes"),
 	},
 	{
 		id: "FlycastAtomiswave", systemID: systemdefs.SystemAtomiswave, flatpakID: "org.flycast.Flycast",
 		executables: []string{"flycast"}, appImagePrefixes: []string{"flycast"},
-		folder: "atomiswave", scan: true, args: batchArgs("-config", "window:fullscreen=yes"),
+		folder: "atomiswave", scan: true, args: standalone.Batch("-config", "window:fullscreen=yes"),
 	},
 	{
 		id: "RMG", systemID: systemdefs.SystemNintendo64, flatpakID: "com.github.Rosalie241.RMG",
 		executables: []string{"RMG"}, appImagePrefixes: []string{"RMG"},
-		folder: "n64", scan: true, args: batchArgs("--fullscreen", "--quit-after-emulation"),
+		folder: "n64", scan: true, args: standalone.Batch("--fullscreen", "--quit-after-emulation"),
 	},
 	{
 		id: "mGBAGBA", systemID: systemdefs.SystemGBA, flatpakID: "io.mgba.mGBA",
-		executables: []string{"mgba-qt", "mgba"}, folder: "gba", scan: true, args: batchArgs("-f"),
+		executables: []string{"mgba-qt", "mgba"}, folder: "gba", scan: true, args: standalone.Batch("-f"),
 	},
 	{
 		id: "mGBAGB", systemID: systemdefs.SystemGameboy, flatpakID: "io.mgba.mGBA",
-		executables: []string{"mgba-qt", "mgba"}, folder: "gb", scan: true, args: batchArgs("-f"),
+		executables: []string{"mgba-qt", "mgba"}, folder: "gb", scan: true, args: standalone.Batch("-f"),
 	},
 	{
 		id: "mGBAGBC", systemID: systemdefs.SystemGameboyColor, flatpakID: "io.mgba.mGBA",
-		executables: []string{"mgba-qt", "mgba"}, folder: "gbc", scan: true, args: batchArgs("-f"),
+		executables: []string{"mgba-qt", "mgba"}, folder: "gbc", scan: true, args: standalone.Batch("-f"),
 	},
 	{
 		id: "Ruffle", systemID: systemdefs.SystemPC, flatpakID: "rs.ruffle.Ruffle",
 		executables: []string{"ruffle", "ruffle_desktop"}, appImagePrefixes: []string{"ruffle"},
-		folder: "flash", scan: true, args: batchArgs("--fullscreen"),
+		folder: "flash", scan: true, args: standalone.Batch("--fullscreen"),
 	},
 	{
 		id: "PrimeHackGameCube", systemID: systemdefs.SystemGameCube, flatpakID: "io.github.shiiion.primehack",
-		executables: []string{"primehack"}, folder: "gamecube", args: batchArgs("-b", "-f", "-e"),
+		executables: []string{"primehack"}, folder: "gamecube", args: standalone.Batch("-b", "-f", "-e"),
 	},
 	{
 		id: "PrimeHackWii", systemID: systemdefs.SystemWii, flatpakID: "io.github.shiiion.primehack",
-		executables: []string{"primehack"}, folder: "wii", args: batchArgs("-b", "-f", "-e"),
+		executables: []string{"primehack"}, folder: "wii", args: standalone.Batch("-b", "-f", "-e"),
 	},
 }
 
@@ -190,87 +198,6 @@ func flatpakRunArgsWithCommand(flatpakID, command, mediaPath string, emulatorArg
 	}
 	args = append(args, flatpakID)
 	return append(args, emulatorArgs...), nil
-}
-
-func batchArgs(prefix ...string) func(string) ([]string, error) {
-	return func(path string) ([]string, error) {
-		args := append([]string(nil), prefix...)
-		return append(args, path), nil
-	}
-}
-
-func shadPS4Args(path string) ([]string, error) {
-	target, err := readLauncherTarget(path, ".ps4")
-	if err != nil {
-		return nil, err
-	}
-	return []string{"-g", target, "--fullscreen", "true"}, nil
-}
-
-func cemuArgs(path string) ([]string, error) { return []string{"-g", path, "-f"}, nil }
-
-func mameArgs(path string) ([]string, error) {
-	extension := filepath.Ext(path)
-	if !strings.EqualFold(extension, ".zip") && !strings.EqualFold(extension, ".7z") {
-		return nil, errors.New("MAME launch requires a .zip or .7z ROM set")
-	}
-	machine := strings.TrimSuffix(filepath.Base(path), extension)
-	if machine == "" || strings.HasPrefix(machine, "-") || strings.ContainsAny(machine, "\x00\r\n") {
-		return nil, errors.New("invalid MAME machine name")
-	}
-	return []string{"-nowindow", "-rompath", filepath.Dir(path), machine}, nil
-}
-
-func vita3KArgs(path string) ([]string, error) {
-	titleID, err := readLauncherTarget(path, ".psvita")
-	if err != nil {
-		return nil, err
-	}
-	return []string{"-F", "-r", titleID}, nil
-}
-
-func rpcs3Args(path string) ([]string, error) {
-	if strings.EqualFold(filepath.Ext(path), ".ps3") {
-		target, err := readLauncherTarget(path, ".ps3")
-		if err != nil {
-			return nil, err
-		}
-		path = target
-	}
-	return []string{"--no-gui", "--fullscreen", path}, nil
-}
-
-func readLauncherTarget(path, extension string) (string, error) {
-	if !strings.EqualFold(filepath.Ext(path), extension) {
-		return "", fmt.Errorf("launcher target requires a %s file", extension)
-	}
-	//nolint:gosec // Path was resolved through the media database and launch allow-list.
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open launcher target: %w", err)
-	}
-	defer file.Close() //nolint:errcheck // Read-only file; close errors do not affect parsed data.
-	data, err := io.ReadAll(io.LimitReader(file, maxLauncherTargetSize+1))
-	if err != nil {
-		return "", fmt.Errorf("read launcher target: %w", err)
-	}
-	target := strings.TrimSpace(string(data))
-	if target == "" || len(data) > maxLauncherTargetSize || strings.HasPrefix(target, "-") ||
-		strings.ContainsAny(target, "\r\n\x00") {
-		return "", errors.New("invalid launcher target")
-	}
-	return target, nil
-}
-
-func scummVMArgs(path string) ([]string, error) {
-	if !strings.EqualFold(filepath.Ext(path), ".scummvm") {
-		return nil, errors.New("ScummVM launch requires a .scummvm target file")
-	}
-	target, err := readLauncherTarget(path, ".scummvm")
-	if err != nil {
-		return nil, fmt.Errorf("read ScummVM target: %w", err)
-	}
-	return []string{"--fullscreen", "--path=" + filepath.Dir(path), target}, nil
 }
 
 const maxStandaloneAppImages = 1024
@@ -384,10 +311,23 @@ func buildStandaloneLaunchCommandForInstallation(
 	installation standaloneInstallation,
 	path string,
 ) (*platforms.LaunchCommand, error) {
-	if err := validateMediaFile(path); err != nil {
-		return nil, err
+	if err := standalone.ValidateMediaFile(path); err != nil {
+		return nil, fmt.Errorf("launch %s: %w", def.id, err)
 	}
-	args, err := def.args(path)
+	ctx := &standalone.Context{Path: path}
+	if def.mameConfig {
+		ctx.MAMEConfig = func() ([]byte, error) {
+			command, err := mameShowConfigCommand(options, def, installation, path)
+			if err != nil {
+				return nil, err
+			}
+			if options.MAMEShowConfig == nil {
+				return runMAMEShowConfig(command)
+			}
+			return options.MAMEShowConfig(command)
+		}
+	}
+	args, err := def.args(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -405,20 +345,6 @@ func buildStandaloneLaunchCommandForInstallation(
 		env = options.LaunchEnv()
 	}
 	return &platforms.LaunchCommand{Executable: installation.executable, Args: commandArgs, Env: env}, nil
-}
-
-func validateMediaFile(path string) error {
-	if !filepath.IsAbs(path) {
-		return errors.New("media path must be absolute")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("stat media path: %w", err)
-	}
-	if info.IsDir() {
-		return errors.New("media path must be a file")
-	}
-	return nil
 }
 
 func newNativeStandaloneLauncher(
@@ -460,7 +386,10 @@ func newNativeStandaloneLauncher(
 	}
 	if def.scan {
 		if info, ok := esde.LookupByFolderName(def.folder); ok {
-			launcher.Folders = []string{def.folder}
+			launcher.Folders = standalone.LauncherFolders(&standalone.WindowsSystem{
+				SystemID: def.systemID,
+				Folders:  append([]string{def.folder}, def.extraFolders...),
+			})
 			launcher.Extensions = append([]string(nil), info.Extensions...)
 			switch def.id {
 			case "Ryubing":
@@ -475,11 +404,34 @@ func newNativeStandaloneLauncher(
 				launcher.Extensions = []string{".psvita"}
 			case "RPCS3":
 				launcher.Extensions = []string{".ps3"}
-			case "MAME":
+			case "MAME", "GroovyMAME":
 				launcher.Extensions = []string{".zip", ".7z"}
 			}
 		}
 	}
 	wrapGameMode(options, &launcher)
 	return launcher
+}
+
+// mameShowConfigCommand returns the command that prints the configuration of
+// the MAME installation, run the same way as a launch.
+func mameShowConfigCommand(
+	options *Options,
+	def *standaloneDef,
+	installation standaloneInstallation,
+	path string,
+) (*platforms.LaunchCommand, error) {
+	args := []string{"-showconfig"}
+	if installation.flatpakID != "" {
+		var err error
+		args, err = flatpakRunArgsWithCommand(installation.flatpakID, def.flatpakCommand, path, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var env []string
+	if options.LaunchEnv != nil {
+		env = options.LaunchEnv()
+	}
+	return &platforms.LaunchCommand{Executable: installation.executable, Args: args, Env: env}, nil
 }

@@ -462,6 +462,61 @@ func TestCmdDelay_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestCmdDelay_NewerScanCutsItShort(t *testing.T) {
+	t.Parallel()
+
+	for _, delay := range []string{"20000", "20s"} {
+		t.Run(delay, func(t *testing.T) {
+			t.Parallel()
+
+			scan, supersede := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() {
+				_, err := cmdDelay(nil, platforms.CmdEnv{
+					Cmd:        zapscript.Command{Name: "delay", Args: []string{delay}},
+					ServiceCtx: t.Context(),
+					ScanCtx:    scan,
+				})
+				done <- err
+			}()
+			supersede()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, ErrDelaySuperseded)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the delay did not end when its scan was superseded")
+			}
+		})
+	}
+}
+
+func TestCmdDelay_ServiceStopIsNotASupersede(t *testing.T) {
+	t.Parallel()
+
+	service, stop := context.WithCancel(t.Context())
+	scan, cancelScan := context.WithCancel(service)
+	defer cancelScan()
+	stop()
+	_, err := cmdDelay(nil, platforms.CmdEnv{
+		Cmd:        zapscript.Command{Name: "delay", Args: []string{"20000"}},
+		ServiceCtx: service,
+		ScanCtx:    scan,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrDelaySuperseded)
+}
+
+func TestCmdDelay_LiveScanWaitsItOut(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdDelay(nil, platforms.CmdEnv{
+		Cmd:        zapscript.Command{Name: "delay", Args: []string{"1"}},
+		ServiceCtx: t.Context(),
+		ScanCtx:    t.Context(),
+	})
+	require.NoError(t, err)
+}
+
 func TestCmdDelay_MediaReady(t *testing.T) {
 	t.Parallel()
 

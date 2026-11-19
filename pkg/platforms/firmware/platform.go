@@ -35,6 +35,21 @@ func NewPlatform() *Platform {
 	return &Platform{Base: linuxbase.NewBase(platformids.Firmware)}
 }
 
+var _ platforms.KioskHost = (*Platform)(nil)
+
+// KioskUnsealed implements platforms.KioskHost. The appliance boots straight
+// into the frontend from a read-only image, with no shell, desktop or host
+// menu behind it, so a locked device has nothing else to reach.
+func (*Platform) KioskUnsealed() []string {
+	return []string{}
+}
+
+// SetKioskLocked implements platforms.KioskHost. The appliance has no lock
+// of its own to keep in step.
+func (*Platform) SetKioskLocked(bool) error {
+	return nil
+}
+
 // Settings returns appliance-specific persistent paths.
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{

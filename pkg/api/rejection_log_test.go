@@ -72,7 +72,7 @@ func TestRemoteRejectionLogIsBounded(t *testing.T) {
 func TestLegacyAdmissionMiddlewareLogsRemoteRejection(t *testing.T) {
 	logs := captureLogs(t, zerolog.InfoLevel)
 	rejections := newRemoteRejectionLog(clockwork.NewFakeClock())
-	handler := legacyAdmissionMiddleware(platformids.Windows, rejections)(
+	handler := legacyAdmissionMiddleware(nil, platformids.Windows, rejections)(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}),

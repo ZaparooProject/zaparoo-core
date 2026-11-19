@@ -62,14 +62,25 @@ type RunCommandOptions struct {
 	RecordMediaStop    func(reason string) (cancel func())
 	StopSeq            func() uint64
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
+	// AdmitLaunch and AdmitMediaInstall carry the device's content policy
+	// to the launch path. See platforms.CmdEnv.
+	AdmitLaunch       func(target platforms.ResolvedLaunch, final bool) error
+	AdmitMediaInstall func() error
+	SystemPermitted   func(systemID string) bool
+	// GuardPermits is asked, for a guarded token, whether the device
+	// currently lets it run a command. Nil permits everything.
+	GuardPermits       func(command string) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
 	BackgroundMedia    func() *apimodels.ActiveMedia
 	PlaylistMemory     platforms.PlaylistMemory
-	PlaybackManager    audio.PlaybackManager
-	UI                 *uievents.Service
-	LauncherManager    *state.LauncherManager
+	// ScanCtx ends when a newer scan supersedes the one running this
+	// command. Nil when the command did not come from a scanned token.
+	ScanCtx         context.Context
+	PlaybackManager audio.PlaybackManager
+	UI              *uievents.Service
+	LauncherManager *state.LauncherManager
 }
 
 var (
@@ -93,6 +104,10 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
+	// ErrLaunchNotAdmitted is returned when the device's content policy
+	// refuses a launch or a media download. The policy's own error is
+	// wrapped alongside it and says why.
+	ErrLaunchNotAdmitted = errors.New("launch not admitted")
 	// ErrWriteNotAlone is returned when a write shares a script with other
 	// commands. A write arms the next card scanned, which only works when it
 	// is the token's whole script.
@@ -137,6 +152,7 @@ var expectedRunErrors = []error{
 	// Refusals by configuration are the setting working, not a bug.
 	ErrCommandBlocked,
 	ErrCommandNotPermitted,
+	ErrLaunchNotAdmitted,
 	ErrExecuteNotAllowed,
 	ErrExecuteTimeout,
 	ErrExecuteExitStatus,
@@ -744,11 +760,15 @@ func RunCommand(
 		Cmd:                cmd,
 		Cfg:                cfg,
 		ServiceCtx:         serviceCtx,
+		ScanCtx:            opts.ScanCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
 		RecordMediaStop:    opts.RecordMediaStop,
 		StopSeq:            opts.StopSeq,
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
+		AdmitLaunch:        opts.AdmitLaunch,
+		AdmitMediaInstall:  opts.AdmitMediaInstall,
+		SystemPermitted:    opts.SystemPermitted,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
@@ -806,6 +826,15 @@ func RunCommand(
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
 	}
 
+	// A guarded token also answers to what the device enforces right now,
+	// not only to the bound it was given on the way in. A device that
+	// locked while this script was running, or waiting to run, stops it at
+	// the next command the lock does not allow.
+	if token.AllowedCommands.Guarded() && opts.GuardPermits != nil && !opts.GuardPermits(cmd.Name) {
+		log.Warn().Str("command", cmd.Name).Msg("command is not permitted while the device is locked")
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
+	}
+
 	// A ZapLink may replace a deferred launch with a different command kind.
 	// Such commands have no resolved-target callback, but still need the
 	// preparation that the service deferred for the original launch command.
@@ -855,12 +884,12 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
-	if playlistFile, ok := errors.AsType[*audioPlaylistLaunchError](err); ok {
+	if playlistFile, ok := errors.AsType[*playlistFileLaunchError](err); ok {
 		// The playlist's first item launches from the playlist queue and
 		// takes the launch guard itself, so this command lets it go first.
 		releaseGuard()
-		log.Info().Str("path", playlistFile.path).Msg("playing audio playlist file")
-		res, err = startAudioPlaylistFile(&env, playlistFile.path)
+		log.Info().Str("path", playlistFile.path).Msg("playing playlist file")
+		res, err = startPlaylistFile(pl, &env, playlistFile.path)
 	}
 	if errors.Is(err, errMediaLaunchSkipped) {
 		// A resolved no-op is successful, including when wrapped by random
@@ -873,6 +902,8 @@ func RunCommand(
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
+		case errors.Is(err, ErrDelaySuperseded):
+			// Reported once, at info, by the script runner it ends.
 		case IsExpectedRunError(err):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:

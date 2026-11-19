@@ -148,9 +148,26 @@ func TestPrepareReusesShuffleOrderOnlyForTheSameItems(t *testing.T) {
 	changed := playlists.NewPlaylist("mix", "mix", scripts("b", "d", "c", "a"))
 	changed.Shuffled = true
 	mem.Prepare(changed, 0)
-	assert.Equal(t, []string{"**launch:b", "**launch:d", "**launch:c", "**launch:a"},
-		playlists.ItemScripts(changed.Items), "a different set of items keeps its fresh order")
-	assert.Equal(t, 3, changed.Index, "but still opens on the remembered item")
+	assert.Equal(t, []string{"**launch:a", "**launch:b", "**launch:d", "**launch:c"},
+		playlists.ItemScripts(changed.Items),
+		"a different set of items keeps its fresh order behind the remembered item")
+	assert.Equal(t, 0, changed.Index, "and opens on the remembered item")
+}
+
+func TestPrepareFreshShuffleLeadsWithTheRememberedItem(t *testing.T) {
+	t.Parallel()
+	mem, _, _ := newMemory(t)
+
+	// Played in order, so there is no shuffle order to come back to.
+	played := load(mem, "tour", 0, "a", "b", "c", "d")
+	mem.PlaylistChanged(mediaslot.Primary, playlists.Goto(*played, 2))
+
+	shuffled := playlists.NewPlaylist("tour", "tour", scripts("d", "a", "b", "c"))
+	shuffled.Shuffled = true
+	mem.Prepare(shuffled, 0)
+	assert.Equal(t, 0, shuffled.Index, "nothing shuffled ahead of the remembered item is skipped")
+	assert.Equal(t, []string{"**launch:c", "**launch:d", "**launch:a", "**launch:b"},
+		playlists.ItemScripts(shuffled.Items), "every item is kept, the rest in their new order")
 }
 
 func TestMemoryIsPerProfile(t *testing.T) {

@@ -22,8 +22,12 @@ package serialport
 
 import (
 	"fmt"
+	"os"
+	"runtime"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"go.bug.st/serial"
 )
 
@@ -39,9 +43,63 @@ type SerialPortFactory func(path string, mode *serial.Mode) (SerialPort, error)
 
 // DefaultSerialPortFactory opens a hardware serial connection.
 func DefaultSerialPortFactory(path string, mode *serial.Mode) (SerialPort, error) {
-	port, err := serial.Open(path, mode)
+	port, err := OpenPort(path, mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open serial port: %w", err)
 	}
 	return port, nil
+}
+
+// usbSerialOpen and osSerialOpen are the two backends OpenPort routes
+// between, indirected for tests.
+var (
+	usbSerialOpen = func(path string, mode *serial.Mode) (serial.Port, error) {
+		return usbserial.Open(path, mode)
+	}
+	osSerialOpen = serial.Open
+)
+
+// OpenPort opens a serial port. A usbserial path ("usbserial:1-1.2") opens a
+// CH34x or PL2303 adapter that has no kernel driver through the userspace
+// USB driver; any other path is an OS serial device.
+func OpenPort(path string, mode *serial.Mode) (serial.Port, error) {
+	if usbserial.IsPath(path) {
+		port, err := usbSerialOpen(path, mode)
+		if err != nil {
+			return nil, fmt.Errorf("open USB serial adapter: %w", err)
+		}
+		return port, nil
+	}
+	port, err := osSerialOpen(path, mode)
+	if err != nil {
+		return nil, fmt.Errorf("open serial device: %w", err)
+	}
+	return port, nil
+}
+
+// CheckExists reports whether the port at path is present. Windows COM port
+// names are not files, so they are left for the open to check.
+func CheckExists(path string) error {
+	if usbserial.IsPath(path) {
+		if err := usbserial.Exists(path); err != nil {
+			return fmt.Errorf("USB serial adapter %s: %w", path, err)
+		}
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("failed to stat device path %s: %w", path, err)
+	}
+	return nil
+}
+
+// TopologyPath returns the USB port a serial port is plugged into, such as
+// "1-2.3", or an empty string when it is not a USB device.
+func TopologyPath(path string) string {
+	if usbserial.IsPath(path) {
+		return usbserial.Topology(path)
+	}
+	return helpers.GetUSBTopologyPath(path)
 }

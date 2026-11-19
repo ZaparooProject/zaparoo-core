@@ -21,6 +21,7 @@ package autoadvance
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -39,6 +40,7 @@ const (
 	choiceStop   = "stop"
 	choiceStay   = "stay"
 	choiceHalt   = "halt"
+	choiceRetry  = "retry"
 )
 
 // send queues an automatic move from the item of from to next. The item it
@@ -202,7 +204,7 @@ func (e *Engine) nextDeadline(pls *playlists.Playlist, now time.Time) (time.Time
 		}
 	}
 	if e.cd != nil {
-		consider(e.cd.deadline, true)
+		consider(e.cd.deadline, e.cd.timed())
 	}
 	consider(e.advanceDeadline(pls))
 	consider(e.idleDeadline(pls))
@@ -235,7 +237,7 @@ func (e *Engine) fireDue(pls *playlists.Playlist, now time.Time) {
 		e.onExited(h.ended, h.endedAt)
 		return
 	}
-	if c := e.cd; c != nil {
+	if c := e.cd; c != nil && c.timed() {
 		if !now.Before(c.deadline) {
 			e.resolveCountdown(c, choiceExpire)
 		}
@@ -416,14 +418,22 @@ func (e *Engine) onIdleExpired(pls *playlists.Playlist, now time.Time) {
 // startCountdown opens a countdown that ends wait after at. It replaces any
 // countdown already open. An exit countdown whose prompt is left to a client
 // that has yet to start is held open as long as the prompt is, and gets its
-// full wait once the prompt is shown.
+// full wait once the prompt is shown. A countdown that is not timed has no
+// deadline and ignores wait.
 func (e *Engine) startCountdown(c *countdown, title string, wait time.Duration, at time.Time) {
 	e.cancelCountdown()
 	e.cdSeq++
 	c.id = e.cdSeq
-	c.wait = wait
 	c.held = false
-	c.deadline = at.Add(wait)
+	if !c.timed() {
+		wait = 0
+		c.inputCancels = false
+	}
+	c.wait = wait
+	c.deadline = time.Time{}
+	if c.timed() {
+		c.deadline = at.Add(wait)
+	}
 	if c.kind != cdExit && e.input == nil {
 		c.inputCancels = false
 	}
@@ -434,22 +444,14 @@ func (e *Engine) startCountdown(c *countdown, title string, wait time.Duration, 
 	if e.ui == nil || e.promptBlocked() {
 		return
 	}
-	choices := []uievents.Choice{
-		{Value: choicePlay, Label: "Play now"},
-		{Value: choiceStop, Label: "Stop playlist"},
-	}
-	if c.kind != cdExit {
-		choices = []uievents.Choice{
-			{Value: choiceStay, Label: "Stay on this"},
-			{Value: choiceHalt, Label: "Stop rotating"},
-		}
-	}
+	choices, notice := countdownPrompt(c, title, wait)
 	handle, err := e.ui.Open(ctx, &uievents.Request{
 		Kind:        models.UIEventKindPicker,
 		Title:       title,
 		Choices:     choices,
 		Timeout:     wait,
 		Dismissible: true,
+		HostNotice:  notice,
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("auto-advance: failed to open countdown prompt")
@@ -503,6 +505,87 @@ func (e *Engine) onUIShown(ev *event) {
 	c.inputCancels = false
 	log.Debug().Dur("wait", c.wait).Msg("auto-advance: countdown prompt shown, countdown restarted")
 	e.syncWatch(e.clock.Now())
+}
+
+// countdownPrompt returns the choices of a countdown's prompt, and the notice
+// shown in its place where the screen cannot show a picker.
+func countdownPrompt(c *countdown, title string, wait time.Duration) (choices []uievents.Choice, notice string) {
+	stop := uievents.Choice{Value: choiceStop, Label: "Stop playlist"}
+	switch c.kind {
+	case cdExit:
+		secs := int((wait + time.Second - 1) / time.Second)
+		return []uievents.Choice{{Value: choicePlay, Label: "Play now"}, stop},
+			fmt.Sprintf("%s in %ds", title, secs)
+	case cdPaused:
+		if c.nextLabel != "" {
+			choices = append(choices, uievents.Choice{Value: choicePlay, Label: "Play next: " + c.nextLabel})
+		}
+		return append(choices, stop), "Playlist paused. Scan the card again to continue"
+	case cdFailed:
+		choices = []uievents.Choice{{Value: choiceRetry, Label: "Try again"}}
+		if c.nextLabel != "" {
+			choices = append(choices, uievents.Choice{Value: choicePlay, Label: "Skip"})
+		}
+		return append(choices, stop), title
+	case cdSwitchAdvance, cdSwitchIdle:
+	}
+	return []uievents.Choice{
+		{Value: choiceStay, Label: "Stay on this"},
+		{Value: choiceHalt, Label: "Stop rotating"},
+	}, ""
+}
+
+// openPausedPrompt asks what to do with a playlist the engine just paused on
+// its current item: kind cdPaused after a quick quit, cdFailed after a launch
+// that never started.
+func (e *Engine) openPausedPrompt(kind countdownKind, pls *playlists.Playlist, at time.Time) {
+	c := &countdown{kind: kind, slot: mediaslot.Primary, plsID: pls.ID, index: pls.Index}
+	if next, ok := nextItem(pls); ok {
+		c.nextLabel = itemLabel(next.Current())
+	}
+	title := "Playlist paused"
+	if kind == cdFailed {
+		title = "Couldn't start " + itemLabel(pls.Current())
+	}
+	e.startCountdown(c, title, 0, at)
+}
+
+// stillPaused reports whether the playlist of a paused playlist's prompt is
+// still open, paused, on the item the prompt asks about.
+func (e *Engine) stillPaused(c *countdown) bool {
+	pls := e.playlistFor(c.slot)
+	return pls != nil && pls.ID == c.plsID && pls.Index == c.index && !pls.Playing
+}
+
+// resolvePaused acts on the answer to a paused playlist's prompt. The
+// playlist is paused, which drops the engine's own moves, so each answer is
+// queued the way a person's request would be.
+func (e *Engine) resolvePaused(c *countdown, choice string) {
+	if !e.stillPaused(c) {
+		return
+	}
+	pls := e.playlistFor(c.slot)
+	var upd *playlists.Playlist
+	switch choice {
+	case choicePlay:
+		next, ok := nextItem(pls)
+		if !ok {
+			return
+		}
+		upd = next
+	case choiceRetry:
+		upd = playlists.Play(*pls)
+		upd.ForceRelaunch = true
+	case choiceStop:
+		upd = &playlists.Playlist{ID: pls.ID, Slot: c.slot, Clear: true}
+	default:
+		return
+	}
+	log.Info().Str("playlist", pls.ID).Str("choice", choice).Msg("auto-advance: paused playlist answered")
+	e.touch(e.clock.Now())
+	if !e.host.Enqueue(e.ctx, upd) {
+		log.Debug().Msg("auto-advance: playlist update not queued, service is stopping")
+	}
 }
 
 // countdownTitle is what a countdown tells the user is coming next.
@@ -582,7 +665,8 @@ func (e *Engine) onUIResult(ev *event) {
 	case models.UIOutcomeSuperseded:
 		// Something else took the screen. After an exit the user is busy with
 		// that, so the move is off; a rotation carries on without a prompt.
-		if c.kind == cdExit {
+		// A paused playlist's question goes with its prompt.
+		if c.kind == cdExit || !c.timed() {
 			log.Debug().Msg("auto-advance: countdown cancelled, its prompt was replaced")
 			e.cancelCountdown()
 		}
@@ -601,6 +685,10 @@ func (e *Engine) resolveCountdown(c *countdown, choice string) {
 	// An expired prompt is left to time out on its own, so clients see it
 	// end the same way whichever side noticed first; its context is released
 	// once that result arrives.
+	if !c.timed() {
+		e.resolvePaused(c, choice)
+		return
+	}
 	pls := e.playlistFor(c.slot)
 	if pls == nil || pls.ID != c.plsID || pls.Index != c.index || !pls.Playing {
 		return

@@ -141,3 +141,35 @@ func TestCoalesceScanResultsRejectsConflictingSources(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Nil(t, got[0].Source)
 }
+
+func TestScanProducersAttribution(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	walked := filepath.Join(root, "Walked.nes")
+	shared := filepath.Join(root, "Shared.nes")
+	dropped := filepath.Join(root, "Dropped.nes")
+	added := filepath.Join(root, "Added.nes")
+
+	producers := make(scanProducers)
+	producers.add([]platforms.ScanResult{{Path: walked}, {Path: shared}, {Path: dropped}}, scanProducerFilesystem)
+	producers.add([]platforms.ScanResult{{Path: shared}}, "RetroBat")
+	producers.add([]platforms.ScanResult{{Path: shared}}, "RetroBat")
+	require.Equal(t, []string{scanProducerFilesystem, "RetroBat"}, producers.of(shared),
+		"a path reported twice records each source once")
+
+	// A pipeline keeps the producers of what it passed through, attributes
+	// what it added to itself, and forgets what it dropped.
+	producers = producers.piped([]platforms.ScanResult{
+		{Path: walked, Name: "Renamed"}, {Path: shared}, {Path: added}, {Path: added},
+	}, "Enricher")
+	require.Equal(t, []string{scanProducerFilesystem}, producers.of(walked))
+	require.Equal(t, []string{scanProducerFilesystem, "RetroBat"}, producers.of(shared))
+	require.Equal(t, []string{"Enricher"}, producers.of(added))
+	require.Nil(t, producers.of(dropped))
+
+	// Producers are keyed by the same identity coalescing uses, so a scheme
+	// path differing only in scheme case shares one set.
+	producers.add([]platforms.ScanResult{{Path: "playnite://1/One"}}, "Playnite")
+	producers.add([]platforms.ScanResult{{Path: "PLAYNITE://1/One"}}, "Other")
+	require.Equal(t, []string{"Playnite", "Other"}, producers.of("Playnite://1/One"))
+}

@@ -210,3 +210,58 @@ func TestValidateAssetMatrix_WrongVersionInName(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing archives")
 	assert.Contains(t, err.Error(), "unexpected archives")
 }
+
+// withoutNewTargets drops the archives of targets added in newTargetsSince,
+// as a release built before them carries.
+func withoutNewTargets(t *testing.T, rel *release, version string) {
+	t.Helper()
+	newNames := make(map[string]bool)
+	for _, target := range expectedTargets() {
+		if target.Since != "" {
+			newNames[archiveName(target, version)] = true
+		}
+	}
+	require.NotEmpty(t, newNames)
+	kept := make([]*asset, 0, len(rel.Assets))
+	for _, a := range rel.Assets {
+		if !newNames[a.Name] {
+			kept = append(kept, a)
+		}
+	}
+	require.Less(t, len(kept), len(rel.Assets))
+	rel.Assets = kept
+}
+
+func TestTargetRequiredAt(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, target{}.requiredAt("2.0.0"), "targets without Since are always required")
+	newTarget := target{Since: newTargetsSince}
+	for version, want := range map[string]bool{
+		"2.22.1":        false,
+		"2.22.2":        false,
+		"2.23.0-0":      true,
+		"2.23.0-beta.1": true,
+		"2.23.0":        true,
+		"3.0.0":         true,
+		"not-a-version": true,
+	} {
+		assert.Equal(t, want, newTarget.requiredAt(version), version)
+	}
+}
+
+func TestValidateAssetMatrix_ReleaseBeforeNewTargets(t *testing.T) {
+	t.Parallel()
+
+	m := newTestManifest(t, []string{"v2.22.2"}, []string{channelStable})
+	rel := m.Releases[0]
+	withoutNewTargets(t, rel, "2.22.2")
+	require.NoError(t, validateAssetMatrix(rel, "v2.22.2"))
+
+	m = newTestManifest(t, []string{"v2.23.0"}, []string{channelStable})
+	rel = m.Releases[0]
+	withoutNewTargets(t, rel, "2.23.0")
+	err := validateAssetMatrix(rel, "v2.23.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "zaparoo-lakka_arm64-2.23.0.tar.gz")
+}

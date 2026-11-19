@@ -67,6 +67,9 @@ type LaunchersDefault struct {
 	InstallDir       string `toml:"install_dir,omitempty"`
 	ServerURL        string `toml:"server_url,omitempty"`
 	RenderResolution string `toml:"render_resolution,omitempty"`
+	// Client names the player a media server launcher plays on, matched
+	// against the player names the server reports (Jellyfin and Plex).
+	Client string `toml:"client,omitempty"`
 	// Action specifies the default launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
@@ -223,6 +226,27 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 	return result
 }
 
+// SetLauncherServerURL sets server_url on every [[launchers.default]] entry
+// naming launcherID itself, adding an entry when there is none. Entries that
+// name a group are left alone; the exact entries merge over them.
+func (c *Instance) SetLauncherServerURL(launcherID, serverURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	found := false
+	for i := range c.vals.Launchers.Default {
+		if strings.EqualFold(c.vals.Launchers.Default[i].Launcher, launcherID) {
+			c.vals.Launchers.Default[i].ServerURL = serverURL
+			found = true
+		}
+	}
+	if !found {
+		c.vals.Launchers.Default = append(c.vals.Launchers.Default, LaunchersDefault{
+			Launcher:  launcherID,
+			ServerURL: serverURL,
+		})
+	}
+}
+
 // matchesAnyLauncherGroup reports whether a config entry's launcher field names
 // one of the groups a launcher belongs to. Callers pass only a named entry, so a
 // blank group in the list matches nothing.
@@ -248,6 +272,9 @@ func mergeLauncherDefault(dst, entry *LaunchersDefault) {
 	}
 	if entry.ServerURL != "" {
 		dst.ServerURL = entry.ServerURL
+	}
+	if entry.Client != "" {
+		dst.Client = entry.Client
 	}
 	if entry.Action != "" {
 		dst.Action = entry.Action

@@ -87,6 +87,14 @@ func BenchmarkGetPathFragments(b *testing.B) {
 }
 
 // buildSyntheticFilenames generates deterministic ROM-like filenames for benchmarking.
+// stageBenchPath stages one walked file the way the indexer does, with the
+// filesystem walk as its producer.
+func stageBenchPath(db database.MediaDBI, path string) error {
+	return StageMediaPath(&StageMediaPathParams{
+		DB: db, SystemID: "nes", Path: path, Producers: []string{scanProducerFilesystem},
+	})
+}
+
 func buildSyntheticFilenames(n int) []string {
 	prefixes := []string{
 		"Super", "Mega", "Ultra", "Final", "Grand", "Dark", "Crystal",
@@ -180,7 +188,7 @@ func BenchmarkMediaScanner_StageAndReconcile_FreshDB(b *testing.B) {
 					b.Fatal(err)
 				}
 				for _, fn := range filenames {
-					err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn})
+					err := stageBenchPath(db, fn)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -234,7 +242,7 @@ func BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB(b *testing.B) {
 					b.Fatal(err)
 				}
 				for _, fn := range files {
-					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
+					if err := stageBenchPath(db, fn); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -289,7 +297,7 @@ func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
 					b.Fatal(err)
 				}
 				for _, fn := range filenames {
-					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
+					if err := stageBenchPath(db, fn); err != nil {
 						b.Fatal(err)
 					}
 				}

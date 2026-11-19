@@ -681,6 +681,18 @@ func startPostIndexOptimization(
 	mediaDB.TrackBackgroundOperation()
 	go func() {
 		defer mediaDB.BackgroundOperationDone()
+		// An index that changed nothing leaves the optimization status at
+		// completed instead of queueing a pass: everything the pass rebuilds
+		// is still current.
+		if status, statusErr := mediaDB.GetOptimizationStatus(); statusErr == nil &&
+			status == mediadb.IndexingStatusCompleted {
+			log.Debug().Msg("post-index background optimization not needed")
+			lease.Release()
+			if statusCallback != nil {
+				statusCallback(false)
+			}
+			return
+		}
 		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
 			if database.IsOptimizationCanceled(err) {
 				log.Debug().Err(err).Msg("post-index background optimization canceled")
@@ -1078,6 +1090,16 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
+	// A database file keeps the page size it was created with, and the size
+	// new databases get makes bulk writes several times cheaper on slow
+	// storage. A full index is the one point where every row is about to be
+	// visited anyway, so it starts from a new file instead. User flags are
+	// re-applied from UserDB as on any rebuild; scraped data is fetched again.
+	if !rebuild && !isSelectiveIndexing && env.Database.MediaDB.StoragePageSizeOutdated() {
+		log.Info().Msg("media database uses an outdated page size, rebuilding it for this full index")
+		rebuild = true
+	}
+
 	// Ensure at least one resolved system is specified for selective indexing.
 	// Process-local lease ownership, not persisted optimization status, decides conflicts.
 	if isSelectiveIndexing && len(systems) == 0 {
@@ -1225,6 +1247,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
 
+	narrowedSystems, narrowErr := kioskNarrowSystems(&env, params.Systems)
+	if narrowErr != nil {
+		return nil, narrowErr
+	}
+	params.Systems = narrowedSystems
+	kioskSystems, kioskCapped := kioskScope(&env)
 	system := params.Systems
 	var query string
 	if params.Query != nil {
@@ -1291,7 +1319,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	visibility, err := validateSearchVisibility(
-		&env, cursorStr, !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+		&env, cursorStr, kioskCapped || !filters.IncludesHidden(tagFilters, params.IncludeHidden),
 	)
 	if err != nil {
 		return nil, err
@@ -1324,14 +1352,24 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if hasNextPage {
 			groups = groups[:maxResults]
 		}
-		searchResults, versionCounts, err = defaultTitleVersions(&env, groups)
+		searchResults, versionCounts, err = defaultTitleVersions(&env, groups, &searchFilters)
 		if err != nil {
 			return nil, fmt.Errorf("error choosing title defaults: %w", err)
 		}
 	case params.TitleID != nil:
 		// Folding container members needs the whole title, so the title's
 		// rows are read in one go and paged here.
-		searchFilters.TitleDBID = *params.TitleID
+		// A title that shares its game with titles of other names lists
+		// theirs too, so the list matches the count the title was shown with.
+		groupTitles, groupErr := versionGroupTitles(ctx, env.Database.MediaDB, *params.TitleID)
+		if groupErr != nil {
+			return nil, groupErr
+		}
+		if len(groupTitles) > 1 {
+			searchFilters.TitleDBIDs = groupTitles
+		} else {
+			searchFilters.TitleDBID = *params.TitleID
+		}
 		searchFilters.Cursor = nil
 		searchFilters.SortCursor = nil
 		searchFilters.Limit = titleVersionsLimit
@@ -1342,9 +1380,20 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if len(searchResults) >= titleVersionsLimit {
 			return nil, fmt.Errorf("title %d has more than %d versions", *params.TitleID, titleVersionsLimit-1)
 		}
-		versions, foldErr := foldContainerVersions(ctx, env.Database.MediaDB, searchResults)
+		versions, foldErr := foldVersions(ctx, env.Database.MediaDB, searchResults)
 		if foldErr != nil {
 			return nil, fmt.Errorf("error folding title versions: %w", foldErr)
+		}
+		// A title's versions are looked up by title alone, so the system
+		// scope a locked device holds its callers to is applied here.
+		if kioskSystems.Limited() {
+			open := versions[:0]
+			for i := range versions {
+				if kioskSystems.Permits(versions[i].SystemID) {
+					open = append(open, versions[i])
+				}
+			}
+			versions = open
 		}
 		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
 	case addedFlag != "":
@@ -1368,105 +1417,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
-	coverStarted := time.Now()
-	coverStatuses := make(map[int64]bool)
-	// Unknown must remain true in the response so clients do not suppress a
-	// valid image request merely because optional enrichment timed out.
-	coverStatusesKnown := false
-	if len(searchResults) > 0 {
-		coverRefs := make([]database.MediaRef, len(searchResults))
-		for i := range searchResults {
-			coverRefs[i] = database.MediaRef{
-				MediaDBID:      searchResults[i].MediaID,
-				MediaTitleDBID: searchResults[i].MediaTitleID,
-			}
-		}
-		coverCtx, cancelCoverLookup := optionalDBEnrichmentContext(ctx)
-		resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(coverCtx, coverRefs)
-		cancelCoverLookup()
-		if coverErr != nil {
-			log.Debug().Err(coverErr).Msg("could not enrich media search cover status")
-		} else {
-			coverStatuses = resolvedCoverStatuses
-			coverStatusesKnown = true
-		}
-	}
-	coverDuration := time.Since(coverStarted)
-
-	// Convert to API models
-	responseBuildStarted := time.Now()
-	var rootDirs []string
-	if env.LauncherCache != nil && env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
-	var launchableSystems map[string]launchables.VirtualSystem
-	if env.LauncherCache != nil {
-		cachedSystems := env.LauncherCache.GetLaunchableSystems()
-		launchableSystems = make(map[string]launchables.VirtualSystem, len(cachedSystems))
-		for i := range cachedSystems {
-			launchableSystems[launchables.EncodeID(cachedSystems[i].ID)] = cachedSystems[i]
-		}
-	}
-
-	categoryResolver := systemCategoryResolver(env.Config)
-	results := make([]models.SearchResultMedia, 0, len(searchResults))
-	var systemBuildDuration time.Duration
-	var zapScriptDuration time.Duration
-	var relativePathDuration time.Duration
-	for i := range searchResults {
-		result := &searchResults[i]
-		stageStarted := time.Now()
-		resultSystem := searchResultSystem(result.SystemID, launchableSystems, categoryResolver)
-		systemBuildDuration += time.Since(stageStarted)
-
-		stageStarted = time.Now()
-		zapScript := result.ZapScript()
-		zapScriptDuration += time.Since(stageStarted)
-
-		stageStarted = time.Now()
-		var relPath *string
-		if env.LauncherCache != nil {
-			rel := env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, result.Path)
-			if rel != result.Path {
-				relPath = &rel
-			}
-		}
-		relativePathDuration += time.Since(stageStarted)
-
-		hasCover := true
-		if coverStatusesKnown {
-			hasCover = coverStatuses[result.MediaID]
-		}
-		var versionCount *int
+	builder := newSearchResultBuilder(&env)
+	results := builder.build(ctx, searchResults)
+	for i := range results {
 		if versionCounts != nil {
-			versionCount = &versionCounts[i]
-		}
-		results = append(results, models.SearchResultMedia{
-			MediaID:            result.MediaID,
-			TitleID:            result.MediaTitleID,
-			VersionCount:       versionCount,
-			RelPath:            relPath,
-			HasCover:           hasCover,
-			System:             resultSystem,
-			Name:               result.Name,
-			Path:               result.Path,
-			ZapScript:          zapScript,
-			Tags:               result.Tags,
-			DisambiguatingTags: result.ZapScriptTags,
-		})
-	}
-
-	if env.Database != nil && len(results) > 0 {
-		ids := make([]int64, len(results))
-		for i := range results {
-			ids[i] = results[i].MediaID
-		}
-		if colors := mediaCoverColors(ctx, env.Database.MediaDB, ids); len(colors) > 0 {
-			for i := range results {
-				results[i].CoverColor = colors[results[i].MediaID]
-			}
+			results[i].VersionCount = &versionCounts[i]
 		}
 	}
+	coverDuration := builder.cover
+	responseBuildStarted := time.Now().Add(-builder.rows)
+	systemBuildDuration := builder.system
+	zapScriptDuration := builder.zapScript
+	relativePathDuration := builder.relativePath
 
 	// Build pagination info
 	var pagination *models.PaginationInfo

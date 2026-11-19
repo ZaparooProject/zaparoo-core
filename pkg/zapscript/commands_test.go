@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -937,6 +938,24 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			pl.AssertExpectations(t)
 		})
 	}
+}
+
+func TestRunCommandDelayCutShortIsNotLoggedAsAnError(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	scan, supersede := context.WithCancel(t.Context())
+	supersede()
+	_, err := RunCommand(
+		t.Context(), mocks.NewMockPlatform(), &config.Instance{}, playlists.PlaylistController{}, tokens.Token{},
+		zapscript.Command{Name: zapscript.ZapScriptCmdDelay, Args: []string{"20000"}},
+		1, 0, nil, &RunCommandOptions{LauncherManager: state.NewLauncherManager(), ScanCtx: scan},
+		&zapscript.ArgExprEnv{},
+	)
+	require.ErrorIs(t, err, ErrDelaySuperseded)
+	assert.Empty(t, buf.String())
 }
 
 // TestRunCommandSkippedWhenLogRedactsSensitiveCommand verifies that a command skipped

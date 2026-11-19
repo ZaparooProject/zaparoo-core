@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -143,6 +142,24 @@ func TestSyncState_LocalFavoritePushes(t *testing.T) {
 	assert.Zero(t, result.Pushed)
 	assert.Zero(t, f.online.count(postState), "an agreed state is not pushed again")
 	assert.Equal(t, 1, f.online.count(getState), "every pass pulls first")
+}
+
+// TestSyncState_PushNotRepeatedAfterEdgeError pins that a state push, which
+// the service merges against what it holds, is not sent twice when a CDN
+// error leaves its outcome unknown. The next pass pushes it again.
+func TestSyncState_PushNotRepeatedAfterEdgeError(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
+	f.online.failWithBadGateway(postState, 1)
+
+	_, err := f.svc.SyncState(f.ctx)
+	require.Error(t, err)
+	assert.Equal(t, 1, f.online.count(postState))
+	assert.Nil(t, f.online.stateRow("Game", "NES", "metroid"))
+
+	result := f.syncState(t)
+	assert.Equal(t, 1, result.Pushed)
+	assert.NotNil(t, f.online.stateRow("Game", "NES", "metroid"))
 }
 
 func TestSyncState_UnfavoriteClearsTheAccountRow(t *testing.T) {
@@ -383,9 +400,7 @@ func TestSyncState_RelinkStartsBookkeepingOver(t *testing.T) {
 	f.online.stateRows = make(map[string]*fakeStateRow)
 	f.online.token = "library-token-2"
 	f.online.mu.Unlock()
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token-2"},
-	})
+	setFixtureAuth(f.online.server.URL, "library-token-2")
 
 	result := f.syncState(t)
 	assert.Equal(t, 1, result.Pushed, "a new link pushes local state as new rows")

@@ -41,7 +41,9 @@ const (
 	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
 	SchemePopper     = "popper"
+	SchemePlaynite   = "playnite"
 	SchemeAndroid    = "android"
+	SchemeRomM       = "romm"
 )
 
 // SchemeSource is media in a folder a host application granted to Core. Its
@@ -56,6 +58,26 @@ const (
 	SchemeKodiAlbum   = "kodi-album"
 	SchemeKodiArtist  = "kodi-artist"
 	SchemeKodiShow    = "kodi-show"
+)
+
+// Jellyfin URI scheme constants for Jellyfin server library items.
+const (
+	SchemeJellyfinMovie   = "jellyfin-movie"
+	SchemeJellyfinEpisode = "jellyfin-episode"
+	SchemeJellyfinShow    = "jellyfin-show"
+	SchemeJellyfinSong    = "jellyfin-song"
+	SchemeJellyfinAlbum   = "jellyfin-album"
+	SchemeJellyfinArtist  = "jellyfin-artist"
+)
+
+// Plex URI scheme constants for Plex server library items.
+const (
+	SchemePlexMovie   = "plex-movie"
+	SchemePlexEpisode = "plex-episode"
+	SchemePlexShow    = "plex-show"
+	SchemePlexSong    = "plex-song"
+	SchemePlexAlbum   = "plex-album"
+	SchemePlexArtist  = "plex-artist"
 )
 
 // Standard URI schemes that should have URL decoding applied.
@@ -76,13 +98,27 @@ var customSchemes = []string{
 	SchemeFaugus,
 	SchemeGOG,
 	SchemePopper,
+	SchemePlaynite,
 	SchemeAndroid,
+	SchemeRomM,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,
 	SchemeKodiAlbum,
 	SchemeKodiArtist,
 	SchemeKodiShow,
+	SchemeJellyfinMovie,
+	SchemeJellyfinEpisode,
+	SchemeJellyfinShow,
+	SchemeJellyfinSong,
+	SchemeJellyfinAlbum,
+	SchemeJellyfinArtist,
+	SchemePlexMovie,
+	SchemePlexEpisode,
+	SchemePlexShow,
+	SchemePlexSong,
+	SchemePlexAlbum,
+	SchemePlexArtist,
 	SchemeSource,
 }
 

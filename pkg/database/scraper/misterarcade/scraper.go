@@ -53,9 +53,11 @@ const (
 // systems are the indexed systems whose media this catalog describes: the
 // platform states them because MiSTer classifies arcade descriptors into
 // granular hardware systems while MiSTeX indexes them all as Arcade. catalog
-// reads the platform's cached or embedded copy of the catalog. cache is an
-// optional set-name fast path and may be nil.
-func NewPlatformScraper(systems []string, catalog Catalog, cache SetNameCache) platforms.Scraper {
+// reads the platform's cached or embedded copy of the catalog. cache and
+// identities are optional fast paths for reading a descriptor and may be nil.
+func NewPlatformScraper(
+	systems []string, catalog Catalog, cache SetNameCache, identities IdentityCache,
+) platforms.Scraper {
 	supported := slices.Clone(systems)
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: supported,
@@ -96,7 +98,7 @@ func NewPlatformScraper(systems []string, catalog Catalog, cache SetNameCache) p
 				return fmt.Errorf("misterarcade: list indexed systems: %w", err)
 			}
 			impl := &scraperImpl{
-				fs: fs, db: db.MediaDB, entries: index(entries), cache: cache,
+				fs: fs, db: db.MediaDB, entries: index(entries), cache: cache, identities: identities,
 				unmapped: &scraper.UnmappedValues{}, catalogState: catalogState(entries),
 			}
 			go impl.scrapeLoop(ctx, opts, targetSystems(supported, indexed, opts.SystemIDs()), ch)
@@ -132,6 +134,8 @@ type scraperImpl struct {
 	db      database.MediaDBI
 	entries map[string]*Entry
 	cache   SetNameCache
+	// identities answers a descriptor's parent set where the platform cached it.
+	identities IdentityCache
 	// unmapped collects the catalog values this run dropped for want of a
 	// tag mapping; scrapeLoop logs the summary once the run ends.
 	unmapped *scraper.UnmappedValues
@@ -260,12 +264,22 @@ func (s *scraperImpl) scrapeSystem(
 
 	// First fill of a shared title is deterministic, independent of query order.
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].path < candidates[j].path })
-	targets, stats, err := s.buildTargets(ctx, candidates, completed, opts)
+	if slugErr := s.fillTitleSlugs(ctx, candidates, opts); slugErr != nil {
+		return matchStats{}, slugErr
+	}
+	built, err := s.buildTargets(ctx, candidates, indexMains(candidates), completed, opts)
+	targets, keyTargets, stats := built.matched, built.keysOnly, built.stats
 	if err != nil {
 		return stats, err
 	}
 	for i := range targets {
 		targets[i].Write.FillMissing = opts.FillMissing
+	}
+	// Sets the catalog does not list still say which game they are a version
+	// of. They are written apart so they do not count as matched.
+	if err := scraper.ApplyTargets(ctx, s.db, opts, scraperID, keyTargets, nil); err != nil {
+		//nolint:wrapcheck // scraper.ApplyTargets names the scraper in its errors
+		return stats, err
 	}
 
 	report := func(processed, matched int) {
@@ -316,10 +330,29 @@ func (s *scraperImpl) scrapeScope(
 		if strings.EqualFold(filepath.Ext(media[i].Path), mra.Ext) {
 			candidates = append(candidates, descriptorRow{
 				path: media[i].Path, dbid: media[i].DBID, titleDBID: media[i].MediaTitleDBID,
+				titleSlug: media[i].TitleSlug,
 			})
 		}
 	}
-	writeTargets, _, err := s.buildTargets(ctx, candidates, map[int64]struct{}{}, opts)
+	// Whether an alternate is a game with a main descriptor of its own is a
+	// fact about its whole system, not about the media in scope.
+	var systemRows []descriptorRow
+	for _, systemID := range targets {
+		rows, loadErr := s.loadDescriptors(ctx, systemID)
+		if loadErr == nil {
+			loadErr = s.fillTitleSlugs(ctx, rows, opts)
+		}
+		if loadErr != nil {
+			ch <- scraper.ScrapeUpdate{FatalErr: loadErr, Done: true}
+			return
+		}
+		systemRows = append(systemRows, rows...)
+	}
+	built, err := s.buildTargets(ctx, candidates, indexMains(systemRows), map[int64]struct{}{}, opts)
+	writeTargets := built.matched
+	if err == nil {
+		err = scraper.ApplyTargets(ctx, s.db, opts, scraperID, built.keysOnly, nil)
+	}
 	if err != nil {
 		ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 		return
@@ -357,6 +390,9 @@ func (s *scraperImpl) completedMedia(
 // descriptorRow is the part of an indexed descriptor row the scrape reads.
 type descriptorRow struct {
 	path      string
+	titleSlug string
+	// otherGame marks an alternate that is another game's than its folder's.
+	otherGame bool
 	dbid      int64
 	titleDBID int64
 }
@@ -371,7 +407,7 @@ func (s *scraperImpl) loadDescriptors(ctx context.Context, systemID string) ([]d
 			return nil
 		}
 		candidates = append(candidates, descriptorRow{
-			path: row.Path, dbid: row.DBID, titleDBID: row.MediaTitleDBID,
+			path: row.Path, dbid: row.DBID, titleDBID: row.MediaTitleDBID, titleSlug: row.TitleSlug,
 		})
 		return nil
 	})
@@ -384,6 +420,55 @@ func (s *scraperImpl) loadDescriptors(ctx context.Context, systemID string) ([]d
 	return candidates, nil
 }
 
+// builtTargets is what a set of descriptors resolved to. matched are the rows
+// the catalog describes, each with its metadata write. keysOnly are rows it
+// does not, which have no metadata but still say which game they are a version
+// of, and carry nothing but those keys.
+type builtTargets struct {
+	matched  []database.ScrapeWriteTarget
+	keysOnly []database.ScrapeWriteTarget
+	stats    matchStats
+}
+
+// fillTitleSlugs reads the title slug of every main descriptor. The media
+// walk leaves it out to stay a single-table read, and a main descriptor needs
+// it to answer to the folder its alternates are filed under.
+func (s *scraperImpl) fillTitleSlugs(
+	ctx context.Context, candidates []descriptorRow, opts scraper.ScrapeOptions,
+) error {
+	var titleDBIDs []int64
+	for i := range candidates {
+		row := &candidates[i]
+		if row.titleSlug != "" {
+			continue
+		}
+		if _, alternate := alternativesFolder(row.path); !alternate {
+			titleDBIDs = append(titleDBIDs, row.titleDBID)
+		}
+	}
+	if len(titleDBIDs) == 0 {
+		return nil
+	}
+	if err := waitForScrape(ctx, opts); err != nil {
+		return err
+	}
+	slices.Sort(titleDBIDs)
+	titles, err := s.db.GetTitlesByDBIDs(ctx, slices.Compact(titleDBIDs))
+	if err != nil {
+		return fmt.Errorf("misterarcade: load title slugs: %w", err)
+	}
+	slugByTitle := make(map[int64]string, len(titles))
+	for i := range titles {
+		slugByTitle[titles[i].DBID] = titles[i].Slug
+	}
+	for i := range candidates {
+		if candidates[i].titleSlug == "" {
+			candidates[i].titleSlug = slugByTitle[candidates[i].titleDBID]
+		}
+	}
+	return nil
+}
+
 // buildTargets resolves every indexed descriptor to the write that enriches it.
 // A descriptor with no readable set name, or one the catalog does not list,
 // counts as skipped: the catalog omits hundreds of sets, most of them
@@ -393,43 +478,69 @@ func (s *scraperImpl) loadDescriptors(ctx context.Context, systemID string) ([]d
 func (s *scraperImpl) buildTargets(
 	ctx context.Context,
 	candidates []descriptorRow,
+	mains mainIndex,
 	completed map[int64]struct{},
 	opts scraper.ScrapeOptions,
-) ([]database.ScrapeWriteTarget, matchStats, error) {
-	var targets []database.ScrapeWriteTarget
-	stats := matchStats{}
+) (built builtTargets, err error) {
+	if err := s.fillTitleSlugs(ctx, candidates, opts); err != nil {
+		return built, err
+	}
+	for i := range candidates {
+		candidates[i].otherGame = mains.otherGame(&candidates[i])
+	}
 	for i := range candidates {
 		row := &candidates[i]
 		if _, already := completed[row.dbid]; already {
 			continue
 		}
 		if err := waitForScrape(ctx, opts); err != nil {
-			return targets, stats, err
+			return built, err
 		}
-		stats.Processed++
-		entry, found := s.entries[s.setName(row.path)]
+		built.stats.Processed++
+		identity := s.identity(row.path)
+		entry, found := s.entries[identity.SetName]
+		keys := versionKeys(row, identity)
 		if !found {
-			stats.Skipped++
+			built.stats.Skipped++
+			if len(keys) > 0 {
+				built.keysOnly = append(built.keysOnly, database.ScrapeWriteTarget{
+					MediaDBID: row.dbid, MediaTitleDBID: row.titleDBID,
+					Write: &database.ScrapeWrite{VersionKeySource: scraperID, VersionKeys: keys},
+				})
+			}
 			continue
 		}
-		targets = append(targets, database.ScrapeWriteTarget{
-			MediaDBID: row.dbid, MediaTitleDBID: row.titleDBID,
-			Write: buildWrite(entry, opts.RunID, s.unmapped),
+		write := buildWrite(entry, opts.RunID, s.unmapped)
+		write.VersionKeySource = scraperID
+		write.VersionKeys = keys
+		built.matched = append(built.matched, database.ScrapeWriteTarget{
+			MediaDBID: row.dbid, MediaTitleDBID: row.titleDBID, Write: write,
 		})
-		stats.Matched++
+		built.stats.Matched++
 	}
-	return targets, stats, nil
+	return built, nil
 }
 
-// setName resolves one descriptor's set name, preferring the platform's cache
-// so a scrape does not re-read thousands of descriptors from slow storage.
-func (s *scraperImpl) setName(path string) string {
-	if s.cache != nil {
-		if cached, ok := s.cache(path); ok {
-			return strings.ToLower(strings.TrimSpace(cached))
+// identity resolves one descriptor's set name and parent, preferring the
+// platform's caches so a scrape does not re-read thousands of descriptors from
+// slow storage. A set name the cache answers without a parent is used as it
+// is: the parent stays unknown until the platform next reads that file.
+func (s *scraperImpl) identity(path string) mra.Identity {
+	if s.identities != nil {
+		if setName, parent, ok := s.identities(path); ok {
+			identity := mra.NormalizeIdentity(setName, parent)
+			// A cached name the strict reader would refuse still keys the
+			// catalog as it always has; it just names no parent.
+			identity.SetName = strings.ToLower(strings.TrimSpace(setName))
+			return identity
 		}
 	}
-	return mra.ReadSetName(s.fs, path)
+	if s.cache != nil {
+		if cached, ok := s.cache(path); ok {
+			return mra.Identity{SetName: strings.ToLower(strings.TrimSpace(cached))}
+		}
+	}
+	return mra.ReadIdentity(s.fs, path)
 }
 
 func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {

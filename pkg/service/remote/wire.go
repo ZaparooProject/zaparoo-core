@@ -93,6 +93,90 @@ func translateSearchParams(raw json.RawMessage) (json.RawMessage, error) {
 	})
 }
 
+type wireVersionsParams struct {
+	MediaID    *int64  `json:"media_id" validate:"omitempty,gt=0"`
+	MaxResults *int    `json:"max_results" validate:"omitempty,gt=0,max=100"`
+	Cursor     *string `json:"cursor"`
+	System     string  `json:"system" validate:"omitempty,min=1"`
+	Path       string  `json:"path" validate:"omitempty,min=1"`
+}
+
+func translateVersionsParams(raw json.RawMessage) (json.RawMessage, error) {
+	var params wireVersionsParams
+	if err := decodeWireParams(raw, &params); err != nil {
+		return nil, err
+	}
+	return encodeMethodParams(models.MediaVersionsParams{
+		MediaID:    params.MediaID,
+		MaxResults: params.MaxResults,
+		Cursor:     params.Cursor,
+		System:     params.System,
+		Path:       params.Path,
+	})
+}
+
+// remoteSimilarMaxResults and remoteRecommendedMaxResults are sent when the
+// operation names no size, so an oversized result has a real page size to
+// halve.
+const (
+	remoteSimilarMaxResults     = 20
+	remoteRecommendedMaxResults = 12
+)
+
+type wireSimilarParams struct {
+	MediaID     *int64    `json:"media_id" validate:"omitempty,gt=0"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzy_system"`
+	MaxResults  *int      `json:"max_results" validate:"omitempty,gt=0,max=50"`
+	System      string    `json:"system" validate:"omitempty,min=1"`
+	Path        string    `json:"path" validate:"omitempty,min=1"`
+}
+
+func translateSimilarParams(raw json.RawMessage) (json.RawMessage, error) {
+	var params wireSimilarParams
+	if err := decodeWireParams(raw, &params); err != nil {
+		return nil, err
+	}
+	maxResults := remoteSimilarMaxResults
+	if params.MaxResults != nil {
+		maxResults = *params.MaxResults
+	}
+	return encodeMethodParams(models.MediaSimilarParams{
+		MediaID:     params.MediaID,
+		Systems:     params.Systems,
+		FuzzySystem: params.FuzzySystem,
+		MaxResults:  &maxResults,
+		System:      params.System,
+		Path:        params.Path,
+	})
+}
+
+type wireRecommendedParams struct {
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzy_system"`
+	MaxResults  *int      `json:"max_results" validate:"omitempty,gt=0,max=30"`
+	MaxSections *int      `json:"max_sections" validate:"omitempty,gt=0,max=12"`
+	Layout      *string   `json:"layout" validate:"omitempty,oneof=sections queue"`
+}
+
+func translateRecommendedParams(raw json.RawMessage) (json.RawMessage, error) {
+	var params wireRecommendedParams
+	if err := decodeWireParams(raw, &params); err != nil {
+		return nil, err
+	}
+	maxResults := remoteRecommendedMaxResults
+	if params.MaxResults != nil {
+		maxResults = *params.MaxResults
+	}
+	return encodeMethodParams(models.MediaRecommendedParams{
+		Systems:     params.Systems,
+		FuzzySystem: params.FuzzySystem,
+		MaxResults:  &maxResults,
+		MaxSections: params.MaxSections,
+		Layout:      params.Layout,
+	})
+}
+
 type wireBrowseParams struct {
 	Path        *string   `json:"path"`
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
@@ -363,6 +447,22 @@ type wireSearchResults struct {
 	Total      int                `json:"total"`
 }
 
+func encodeSearchResult(result *models.SearchResultMedia) wireSearchResult {
+	return wireSearchResult{
+		RelPath:            result.RelPath,
+		System:             encodeSystem(&result.System),
+		Name:               result.Name,
+		Path:               result.Path,
+		ZapScript:          result.ZapScript,
+		Tags:               encodeTags(result.Tags),
+		DisambiguatingTags: encodeTags(result.DisambiguatingTags),
+		VersionCount:       result.VersionCount,
+		MediaID:            result.MediaID,
+		TitleID:            result.TitleID,
+		HasCover:           result.HasCover,
+	}
+}
+
 func encodeSearchResults(response any) (any, error) {
 	resp, ok := asResponse[models.SearchResults](response)
 	if !ok {
@@ -372,21 +472,124 @@ func encodeSearchResults(response any) (any, error) {
 	if resp.Results != nil {
 		out.Results = make([]wireSearchResult, 0, len(resp.Results))
 		for i := range resp.Results {
-			result := &resp.Results[i]
-			out.Results = append(out.Results, wireSearchResult{
-				RelPath:            result.RelPath,
-				System:             encodeSystem(&result.System),
-				Name:               result.Name,
-				Path:               result.Path,
-				ZapScript:          result.ZapScript,
-				Tags:               encodeTags(result.Tags),
-				DisambiguatingTags: encodeTags(result.DisambiguatingTags),
-				VersionCount:       result.VersionCount,
-				MediaID:            result.MediaID,
-				TitleID:            result.TitleID,
-				HasCover:           result.HasCover,
+			out.Results = append(out.Results, encodeSearchResult(&resp.Results[i]))
+		}
+	}
+	return out, nil
+}
+
+type wireVersion struct {
+	Reason  string   `json:"reason"`
+	Sources []string `json:"sources,omitempty"`
+	wireSearchResult
+	Current bool `json:"current,omitempty"`
+}
+
+type wireVersionsResults struct {
+	Pagination *wirePagination `json:"pagination,omitempty"`
+	Versions   []wireVersion   `json:"versions"`
+	Total      int             `json:"total"`
+}
+
+func encodeVersionsResults(response any) (any, error) {
+	resp, ok := asResponse[models.MediaVersionsResponse](response)
+	if !ok {
+		return nil, errUnexpectedResponse
+	}
+	out := wireVersionsResults{Pagination: encodePagination(resp.Pagination), Total: resp.Total}
+	if resp.Versions != nil {
+		out.Versions = make([]wireVersion, 0, len(resp.Versions))
+		for i := range resp.Versions {
+			version := &resp.Versions[i]
+			out.Versions = append(out.Versions, wireVersion{
+				wireSearchResult: encodeSearchResult(&version.SearchResultMedia),
+				Reason:           version.Reason,
+				Sources:          version.Sources,
+				Current:          version.Current,
 			})
 		}
+	}
+	return out, nil
+}
+
+type wireReason struct {
+	Code string    `json:"code"`
+	Tags []wireTag `json:"tags,omitempty"`
+}
+
+type wireSuggestedMedia struct {
+	Seed    *wireSearchResult `json:"seed,omitempty"`
+	Signal  string            `json:"signal,omitempty"`
+	Reasons []wireReason      `json:"reasons"`
+	wireSearchResult
+}
+
+func encodeSuggestedMedia(items []models.SuggestedMedia) []wireSuggestedMedia {
+	out := make([]wireSuggestedMedia, 0, len(items))
+	for i := range items {
+		reasons := make([]wireReason, 0, len(items[i].Reasons))
+		for _, reason := range items[i].Reasons {
+			reasons = append(reasons, wireReason{Code: reason.Code, Tags: encodeTags(reason.Tags)})
+		}
+		item := wireSuggestedMedia{
+			wireSearchResult: encodeSearchResult(&items[i].SearchResultMedia),
+			Signal:           items[i].Signal,
+			Reasons:          reasons,
+		}
+		if items[i].Seed != nil {
+			seed := encodeSearchResult(items[i].Seed)
+			item.Seed = &seed
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+type wireSimilarResults struct {
+	Results []wireSuggestedMedia `json:"results"`
+}
+
+func encodeSimilarResults(response any) (any, error) {
+	resp, ok := asResponse[models.MediaSimilarResponse](response)
+	if !ok {
+		return nil, errUnexpectedResponse
+	}
+	return wireSimilarResults{Results: encodeSuggestedMedia(resp.Results)}, nil
+}
+
+type wireRecommendedSection struct {
+	Seed   *wireSearchResult    `json:"seed,omitempty"`
+	Tag    *wireTag             `json:"tag,omitempty"`
+	Kind   string               `json:"kind"`
+	Signal string               `json:"signal,omitempty"`
+	Items  []wireSuggestedMedia `json:"items"`
+}
+
+type wireRecommendedResults struct {
+	Sections []wireRecommendedSection `json:"sections"`
+}
+
+func encodeRecommendedResults(response any) (any, error) {
+	resp, ok := asResponse[models.MediaRecommendedResponse](response)
+	if !ok {
+		return nil, errUnexpectedResponse
+	}
+	out := wireRecommendedResults{Sections: make([]wireRecommendedSection, 0, len(resp.Sections))}
+	for i := range resp.Sections {
+		section := &resp.Sections[i]
+		wire := wireRecommendedSection{
+			Kind:   section.Kind,
+			Signal: section.Signal,
+			Items:  encodeSuggestedMedia(section.Items),
+		}
+		if section.Seed != nil {
+			seed := encodeSearchResult(section.Seed)
+			wire.Seed = &seed
+		}
+		if section.Tag != nil {
+			wire.Tag = &wireTag{Tag: section.Tag.Tag, Type: section.Tag.Type, Label: section.Tag.Label}
+		}
+		out.Sections = append(out.Sections, wire)
 	}
 	return out, nil
 }
@@ -397,6 +600,7 @@ type wireBrowseEntry struct {
 	ZapScript          *string   `json:"zap_script,omitempty"`
 	FileCount          *int      `json:"file_count,omitempty"`
 	Group              *string   `json:"group,omitempty"`
+	VersionCount       *int      `json:"version_count,omitempty"`
 	Path               string    `json:"path"`
 	Type               string    `json:"type"`
 	Name               string    `json:"name"`
@@ -442,6 +646,7 @@ func encodeBrowseResults(response any) (any, error) {
 				SystemIDs:          entry.SystemIDs,
 				Tags:               encodeTags(entry.Tags),
 				DisambiguatingTags: encodeTags(entry.DisambiguatingTags),
+				VersionCount:       entry.VersionCount,
 				MediaID:            entry.MediaID,
 				HasCover:           entry.HasCover,
 			})

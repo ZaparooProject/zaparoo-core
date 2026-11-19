@@ -321,9 +321,9 @@ test_steamos_asset_name() {
 
 test_linux_distro_asset_name() {
     local test_distro expected output
-    for test_distro in bazzite chimeraos ubuntu fedora; do
+    for test_distro in bazzite chimeraos armada ubuntu fedora; do
         case "${test_distro}" in
-            bazzite|chimeraos) expected="${test_distro}" ;;
+            bazzite|chimeraos|armada) expected="${test_distro}" ;;
             *) expected="linux" ;;
         esac
         output="$(
@@ -393,6 +393,14 @@ test_detect_handheld_and_appliance_distros() {
         "AmberELEC is not treated as CoreELEC"
 
     make_detect_root "${root}"
+    printf 'NAME="Lakka"\nID="lakka"\n' > "${root}/etc/os-release"
+    assert_equal "lakka" "$(DETECT_ROOT="${root}" detect_linux_distro)" "Lakka os-release"
+
+    make_detect_root "${root}"
+    printf 'NAME="Armada OS"\nID=armada\n' > "${root}/etc/os-release"
+    assert_equal "armada" "$(DETECT_ROOT="${root}" detect_linux_distro)" "Armada os-release"
+
+    make_detect_root "${root}"
     printf 'NAME="Ubuntu"\nID=ubuntu\n' > "${root}/etc/os-release"
     assert_equal "ubuntu" "$(DETECT_ROOT="${root}" detect_linux_distro)" "plain distro"
 
@@ -401,9 +409,9 @@ test_detect_handheld_and_appliance_distros() {
 
 test_appliance_install_dispatch() {
     local test_distro expected_asset expected_dest output
-    for test_distro in rocknix amberelec knulli arkos muos recalbox retropie; do
+    for test_distro in rocknix amberelec lakka knulli arkos muos recalbox retropie; do
         case "${test_distro}" in
-            rocknix|amberelec) expected_dest="/storage/zaparoo/zaparoo" ;;
+            rocknix|amberelec|lakka) expected_dest="/storage/zaparoo/zaparoo" ;;
             knulli) expected_dest="/userdata/system/zaparoo" ;;
             arkos) expected_dest="/home/ark/.config/zaparoo/zaparoo" ;;
             muos) expected_dest="/mnt/mmc/MUOS/zaparoo/zaparoo" ;;
@@ -557,6 +565,15 @@ test_detect_arch_32bit_userland() {
     assert_equal "arm64" "${result}" "aarch64 loader, without getconf"
     rm -rf "${root}"
     pass "pick the arm build for a 32-bit userland on a 64-bit kernel"
+}
+
+test_detect_arch_refuses_armv6() {
+    local output
+    if output="$(uname() { echo armv6l; }; detect_arch 2>&1)"; then
+        fail "ARMv6 was accepted as ${output}"
+    fi
+    assert_contains "${output}" "Raspberry Pi Zero and Pi 1" "ARMv6 abort message"
+    pass "refuse ARMv6 devices"
 }
 
 test_semver_comparison() {
@@ -974,6 +991,7 @@ test_detect_handheld_and_appliance_distros
 test_appliance_install_dispatch
 test_generic_install_stops_and_restarts_service
 test_detect_arch_32bit_userland
+test_detect_arch_refuses_armv6
 test_semver_comparison
 test_openssl_version_requirement
 test_old_amberelec_gets_its_own_message

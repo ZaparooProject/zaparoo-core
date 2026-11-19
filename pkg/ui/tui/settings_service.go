@@ -106,8 +106,10 @@ type SettingsService interface {
 	// RestoreRemoteBackup restores a remote backup snapshot.
 	RestoreRemoteBackup(ctx context.Context, id string) error
 
-	// StartAuthLink starts the reverse device link flow.
-	StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error)
+	// StartAuthLink starts the reverse device link flow. An empty provider
+	// links Zaparoo Online; serverURL names the server for providers that
+	// need one.
+	StartAuthLink(ctx context.Context, provider, serverURL string) (*models.AuthLinkStatusResponse, error)
 
 	// GetAuthLinkStatus reports the active link flow's state.
 	GetAuthLinkStatus(ctx context.Context) (*models.AuthLinkStatusResponse, error)
@@ -146,6 +148,21 @@ type SettingsService interface {
 
 	// VerifyProfileManagement verifies one admin credential as a UI gate.
 	VerifyProfileManagement(ctx context.Context, profileID, pin string) error
+
+	// GetKiosk returns the kiosk lock's state, settings and seal status.
+	GetKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// EnableKiosk turns kiosk mode on from a preset.
+	EnableKiosk(ctx context.Context, preset string, confirmEmpty bool) (*models.KioskResponse, error)
+	// DisableKiosk turns kiosk mode off.
+	DisableKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// UnlockKiosk lifts the lock with an admin profile's PIN.
+	UnlockKiosk(ctx context.Context, profileID, pin string) (*models.KioskResponse, error)
+	// LockKiosk ends a temporary unlock.
+	LockKiosk(ctx context.Context) (*models.KioskResponse, error)
+	// GetProfileContent returns what a profile may launch while locked.
+	GetProfileContent(ctx context.Context, profileID string) (*models.ProfilesContentResponse, error)
+	// UpdateProfileContent replaces a profile's content rule.
+	UpdateProfileContent(ctx context.Context, params *models.ProfilesContentUpdateParams) error
 
 	// GetActiveProfile fetches the active profile, or nil when the device
 	// is on the shared profile.
@@ -359,8 +376,18 @@ func (s *DefaultSettingsService) RestoreRemoteBackup(ctx context.Context, id str
 }
 
 // StartAuthLink starts the reverse device link flow.
-func (s *DefaultSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
-	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLink, "")
+func (s *DefaultSettingsService) StartAuthLink(
+	ctx context.Context, provider, serverURL string,
+) (*models.AuthLinkStatusResponse, error) {
+	params := ""
+	if provider != "" || serverURL != "" {
+		data, err := json.Marshal(&models.SettingsAuthLinkParams{Provider: provider, URL: serverURL})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal device link params: %w", err)
+		}
+		params = string(data)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLink, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start device link: %w", err)
 	}

@@ -11,9 +11,9 @@ Autonomous optimization loop for zaparoo-core. Read targets, pick the highest-pr
 
 If multiple targets are behind, work on the highest priority first:
 
-1. **Slug search** — 3x over target at 500k. See `docs/prompts/optimize-slug-search.md`
-2. **Fuzzy matching** — worst case 3x over target. See `docs/prompts/optimize-fuzzy-matching.md`
-3. **Media indexing** — 1.5x over target. See `docs/prompts/optimize-indexing.md`
+1. **Fuzzy matching** — worst case 3x over target. See `docs/prompts/optimize-fuzzy-matching.md`
+2. **Media indexing** — 1.3x over target. See `docs/prompts/optimize-indexing.md`
+3. **Slug search** — within target at 500k (36ms); watch for regressions. See `docs/prompts/optimize-slug-search.md`
 4. **Memory** — 2x over target. See `docs/prompts/optimize-memory.md`
 
 Read the target-specific prompt for the area you're optimizing. It contains the exact files, functions, benchmarks, and constraints.
@@ -102,13 +102,13 @@ After measuring x86 improvement, predict MiSTer impact using the multiplier band
 
 | Band | Ratio | Applies to |
 |------|-------|------------|
-| Pure CPU | 41x | Text processing, parsing, slugification |
-| Search/match | 35x | Slug search, fuzzy matching |
-| DB reads | 138x | Cache build, query-heavy paths |
-| DB writes (in-transaction) | 240x | Batch inserts, transaction cycles |
-| DB writes (with fsync) | 1220x | Full indexing pipeline on SD card |
+| Pure CPU | 66x | Text processing, parsing, slugification |
+| Search/match | 47x | Slug search, fuzzy matching |
+| DB reads | 144x | Cache build, query-heavy paths |
+| DB writes (bulk) | 378x | Batch inserts, transaction cycles, bulk loads |
+| DB writes (single-row commit) | 1778x | One small transaction flushed to the SD card |
 
-Example: If x86 slug search improves from 8ms to 2ms, predicted MiSTer improvement is 280ms to 70ms (using 35x search band).
+Example: If x86 slug search improves from 8ms to 2ms, predicted MiSTer improvement is 376ms to 94ms (using 47x search band).
 
 Concurrent benchmarks are NOT predictable across platforms due to core count differences (MiSTer: 1 core, x86: 16 threads).
 

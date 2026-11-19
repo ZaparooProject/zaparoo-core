@@ -279,7 +279,8 @@ func (m *Memory) recordOpen(slot string, pls *playlists.Playlist) {
 // Prepare readies a playlist that was just loaded: it belongs to the active
 // profile, and it opens where that profile left it. An explicit start, counted
 // from 1, wins over the memory. Nothing is attached when the remembered item
-// cannot be told apart from another, or is gone.
+// cannot be told apart from another, or is gone. A shuffled playlist whose
+// saved order no longer applies starts its new order with the remembered item.
 func (m *Memory) Prepare(pls *playlists.Playlist, start int) {
 	if pls == nil {
 		return
@@ -306,14 +307,28 @@ func (m *Memory) Prepare(pls *playlists.Playlist, start int) {
 	if !found {
 		return
 	}
+	ordered := false
 	if pls.Shuffled && len(mem.Order) > 0 && mem.ItemsHash == playlists.ItemsHash(pls.Items) {
 		if items, ok := playlists.ApplyOrder(pls.Items, mem.Order); ok {
 			pls.Items = items
+			ordered = true
 		}
 	}
-	if idx := playlists.LocateItem(pls.Items, mem.ItemZapScript, mem.ItemIndex); idx >= 0 {
-		pls.Index = idx
+	idx := playlists.LocateItem(pls.Items, mem.ItemZapScript, mem.ItemIndex)
+	if idx < 0 {
+		return
 	}
+	if pls.Shuffled && !ordered && idx > 0 {
+		// A fresh shuffle has no place to resume from: the remembered item
+		// leads it, so none of the items shuffled ahead of it are skipped.
+		items := make([]playlists.PlaylistItem, 0, len(pls.Items))
+		items = append(items, pls.Items[idx])
+		items = append(items, pls.Items[:idx]...)
+		items = append(items, pls.Items[idx+1:]...)
+		pls.Items = items
+		idx = 0
+	}
+	pls.Index = idx
 }
 
 // OpenPlaylists returns the playlists that were open when Core last stopped

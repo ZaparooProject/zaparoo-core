@@ -213,6 +213,8 @@ type bound struct {
 	// external marks media bound after its launch returned, published by an
 	// external tracker.
 	external bool
+	// neverStarted marks media that ended before its game ever started.
+	neverStarted bool
 }
 
 type launchWindow struct {
@@ -270,6 +272,12 @@ const (
 	cdExit countdownKind = iota
 	cdSwitchAdvance
 	cdSwitchIdle
+	// cdPaused asks what to do with a playlist paused because its item was
+	// quit right after starting. It has no deadline.
+	cdPaused
+	// cdFailed asks what to do with a playlist paused because its item never
+	// started. It has no deadline.
+	cdFailed
 )
 
 type countdown struct {
@@ -280,12 +288,15 @@ type countdown struct {
 	item             *bound
 	slot             string
 	plsID            string
-	id               uint64
-	index            int
-	kind             countdownKind
+	// nextLabel names the item a paused playlist's prompt offers to play
+	// next; empty when there is none.
+	nextLabel string
+	id        uint64
+	index     int
 	// wait is the countdown's full time, which its prompt also runs for. An
 	// exit countdown gets it again from the moment its prompt is shown.
 	wait time.Duration
+	kind countdownKind
 	// inputCancels is set when a press cancels it; scans cancel the same
 	// countdowns.
 	inputCancels bool
@@ -294,6 +305,12 @@ type countdown struct {
 	// held is set while an exit countdown's prompt waits for a client to
 	// start and show it, which pushes the deadline out to the hold.
 	held bool
+}
+
+// timed reports whether the countdown runs out on its own. The prompts of a
+// paused playlist wait for an answer instead.
+func (c *countdown) timed() bool {
+	return c.kind != cdPaused && c.kind != cdFailed
 }
 
 type watch struct {
@@ -816,6 +833,7 @@ func (e *Engine) onMediaEnded(ev *event) {
 		return
 	}
 	s.bound = nil
+	b.neverStarted = ev.end.NeverStarted
 	if c := e.cd; c != nil && c.item == b {
 		e.cancelCountdown()
 	}
@@ -864,6 +882,16 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		return
 	}
 	next, ok := nextAfterCompletion(pls)
+	if b.neverStarted {
+		// A launch that failed is not someone done with the game: the
+		// playlist waits on that item, even its last one.
+		if e.host.PausePlaylistIfCurrent(mediaslot.Primary, pls) {
+			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+				Msg("auto-advance: item never started, playlist paused")
+			e.openPausedPrompt(cdFailed, pls, at)
+		}
+		return
+	}
 	if !ok {
 		e.finishPlaylist(mediaslot.Primary, pls)
 		return
@@ -872,6 +900,7 @@ func (e *Engine) onExited(b *bound, at time.Time) {
 		if e.host.PausePlaylistIfCurrent(mediaslot.Primary, pls) {
 			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
 				Msg("auto-advance: item quit right after starting, playlist paused")
+			e.openPausedPrompt(cdPaused, pls, at)
 		}
 		return
 	}
@@ -965,9 +994,14 @@ func (e *Engine) onPlaylistChanged(slot string, at time.Time) {
 		}
 	}
 	if c := e.cd; c != nil && c.slot == slot {
-		if moved != nil && moved.plsID == c.plsID && e.restartCountdown(c, at) {
+		switch {
+		case !c.timed() && e.stillPaused(c):
+			// The pause that opened the prompt, or a change that left the
+			// playlist paused on the same item: the question still stands.
+			log.Debug().Msg("auto-advance: prompt kept, playlist still paused")
+		case moved != nil && moved.plsID == c.plsID && e.restartCountdown(c, at):
 			log.Debug().Msg("auto-advance: countdown kept, its item only moved")
-		} else {
+		default:
 			log.Debug().Msg("auto-advance: countdown cancelled, playlist changed")
 			e.cancelCountdown()
 		}

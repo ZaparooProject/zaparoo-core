@@ -276,7 +276,8 @@ BW_MidiSequencer::MidiEvent BW_MidiSequencer::smf_parseEvent(FileAndMemReader &f
     if(byte == MidiEvent::T_SYSEX || byte == MidiEvent::T_SYSEX2) // Parse SysEx
     {
         uint64_t length = readVarLenEx(fr, end, ok);
-        if(!ok || (fr.tell() + length > end))
+        /* Zaparoo: a long length VLQ overflows readVarLenEx, so compare without fr.tell() + length wrapping */
+        if(!ok || fr.tell() > end || length > end - fr.tell())
         {
             m_parsingErrorsString.append("parseEvent: Can't read SysEx event - Unexpected end of track data.\n");
             evt.isValid = 0;
@@ -304,7 +305,8 @@ BW_MidiSequencer::MidiEvent BW_MidiSequencer::smf_parseEvent(FileAndMemReader &f
 
         length = readVarLenEx(fr, end, ok);
 
-        if(!ok || (fr.tell() + length > end))
+        /* Zaparoo: a long length VLQ overflows readVarLenEx, so compare without fr.tell() + length wrapping */
+        if(!ok || fr.tell() > end || length > end - fr.tell())
         {
             m_parsingErrorsString.append("parseEvent: Can't read Special event - Unexpected end of track data.\n");
             evt.isValid = 0;

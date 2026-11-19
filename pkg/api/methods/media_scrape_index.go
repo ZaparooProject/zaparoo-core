@@ -65,7 +65,7 @@ func scrapeJobsForSources(
 		}
 		var systems []string
 		for _, source := range sources {
-			if source.Files <= 0 {
+			if !source.HasFiles {
 				continue
 			}
 			// A scraper bound to launchers reads what those launchers keep,
@@ -113,7 +113,8 @@ func sortScrapeQueue(jobs []database.ScrapeJob, scrapers map[string]platforms.Sc
 }
 
 func sameScrapeJob(a, b *database.ScrapeJob) bool {
-	if a.ScraperID != b.ScraperID || a.Force != b.Force || a.FillMissing != b.FillMissing {
+	if a.ScraperID != b.ScraperID || a.Force != b.Force || a.FillMissing != b.FillMissing ||
+		a.SkipImages != b.SkipImages {
 		return false
 	}
 	// Scope is part of a job's identity. A single-file request and a
@@ -166,7 +167,7 @@ func enqueueScrapeJobs(
 	if found && op.IsResumable(status) {
 		queued = append(queued, database.ScrapeJob{
 			ScraperID: op.ScraperID, RunID: op.RunID,
-			Systems: op.Systems, Force: op.Force, FillMissing: op.FillMissing,
+			Systems: op.Systems, Force: op.Force, FillMissing: op.FillMissing, SkipImages: op.SkipImages,
 			// A scoped run that is in flight when an index finishes is folded
 			// back into the queue here. Dropping its scope would turn a
 			// single-file request into a scrape of the whole system.
@@ -189,7 +190,7 @@ func enqueueScrapeJobs(
 	op = database.ScrapingOperation{
 		Version: 1, Status: mediadb.IndexingStatusPending,
 		ScraperID: first.ScraperID, Systems: first.Systems, RunID: first.RunID, Force: first.Force,
-		FillMissing: first.FillMissing, Pending: queued[1:],
+		FillMissing: first.FillMissing, SkipImages: first.SkipImages, Pending: queued[1:],
 		// The head becomes the current operation again, scope included.
 		Scope: first.Scope,
 	}

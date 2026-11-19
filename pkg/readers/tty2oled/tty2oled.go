@@ -38,6 +38,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -55,7 +57,13 @@ type pictureNameProvider interface {
 
 // Reader represents a tty2oled display reader
 type Reader struct {
-	port                  serial.Port
+	port serial.Port
+	// openPort, listSerialPorts and listUSBSerial default to
+	// serialport.OpenPort, helpers.GetSerialDeviceList and usbserial.List
+	// when nil.
+	openPort              func(path string, mode *serial.Mode) (serial.Port, error)
+	listSerialPorts       func() ([]string, error)
+	listUSBSerial         func() ([]usbserial.PortInfo, error)
 	platform              platforms.Platform
 	healthCheckCtx        context.Context
 	operationWorkerCtx    context.Context
@@ -283,7 +291,7 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, _ rea
 	}
 
 	// Open serial port with proper configuration
-	port, err := serial.Open(r.path, &serial.Mode{
+	port, err := r.portOpener()(r.path, &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
 		Parity:   serial.NoParity,
@@ -399,14 +407,49 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+// portOpener returns the function that opens serial ports.
+func (r *Reader) portOpener() func(path string, mode *serial.Mode) (serial.Port, error) {
+	if r.openPort != nil {
+		return r.openPort
+	}
+	return serialport.OpenPort
+}
+
+// usbSerialPorts returns the paths of USB serial adapters no kernel driver
+// has, which the userspace driver serves.
+func (r *Reader) usbSerialPorts() []string {
+	list := r.listUSBSerial
+	if list == nil {
+		list = usbserial.List
+	}
+	infos, err := list()
+	if err != nil {
+		log.Debug().Err(err).Msg("tty2oled: failed to list USB serial adapters")
+		return nil
+	}
+	paths := make([]string, 0, len(infos))
+	for i := range infos {
+		paths = append(paths, infos[i].Path)
+	}
+	return paths
+}
+
 func (r *Reader) Detect(connected []string) string {
-	ports, err := helpers.GetSerialDeviceList()
+	listSerial := r.listSerialPorts
+	if listSerial == nil {
+		listSerial = helpers.GetSerialDeviceList
+	}
+	ports, err := listSerial()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get serial ports")
 		return ""
 	}
+	ports = append(ports, r.usbSerialPorts()...)
 
 	log.Trace().Int("port_count", len(ports)).Msg("tty2oled: checking serial ports")
+
+	failed := exhaustedProbes()
+	candidates := make([]string, 0, len(ports))
 
 	for _, name := range ports {
 		device := "tty2oled:" + name
@@ -437,17 +480,113 @@ func (r *Reader) Detect(connected []string) string {
 		if portInUse {
 			continue
 		}
+		if failed[name] {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
 
+	// Ports another program has open are left alone, and the rest get their
+	// settings put back once the handshake shows they are not a tty2oled.
+	guard := guardProbes(candidates)
+	found := ""
+	for _, name := range candidates {
+		if guard.Busy(name) {
+			continue
+		}
 		// try to detect tty2oled device by attempting handshake
 		log.Trace().Str("port", name).Msg("tty2oled: attempting detection")
 		if r.detectDevice(name) {
-			log.Trace().Str("device", device).Msg("tty2oled: device detected successfully")
-			return device
+			log.Trace().Str("port", name).Msg("tty2oled: device detected successfully")
+			clearFailedProbe(name)
+			found = name
+			break
 		}
 		log.Trace().Str("port", name).Msg("tty2oled: detection failed for port")
+		recordFailedProbe(name)
 	}
+	if found == "" {
+		guard.Release()
+		return ""
+	}
+	guard.Release(found)
+	return "tty2oled:" + found
+}
 
-	return ""
+// maxProbeAttempts is how many handshakes a port may leave unanswered before
+// detection stops trying it. More than one, because a display that is still
+// starting up when it is plugged in misses the first.
+const maxProbeAttempts = 3
+
+// failedProbe counts unanswered handshakes on a port, with the identity of
+// its device file so that a replug at the same path starts again.
+type failedProbe struct {
+	nodeID   string
+	attempts int
+}
+
+// Package-level because auto-detection does not keep one Reader between
+// ticks. probeNodeID and guardProbes are indirected for tests.
+var (
+	failedProbesMu syncutil.Mutex
+	failedProbes   = make(map[string]failedProbe)
+	probeNodeID    = serialport.NodeID
+	guardProbes    = serialport.GuardProbes
+)
+
+// probeStatPath is the file whose identity tracks the device at path. A
+// usbserial port has no device file of its own, so its usbfs node stands in.
+func probeStatPath(path string) string {
+	if usbserial.IsPath(path) {
+		return usbserial.DeviceNode(path)
+	}
+	return path
+}
+
+// exhaustedProbes drops entries whose device file changed or went away and
+// returns the ports that have used up their attempts.
+func exhaustedProbes() map[string]bool {
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	exhausted := make(map[string]bool, len(failedProbes))
+	for path, entry := range failedProbes {
+		nodeID, err := probeNodeID(probeStatPath(path))
+		if err != nil || nodeID != entry.nodeID {
+			delete(failedProbes, path)
+			continue
+		}
+		if entry.attempts >= maxProbeAttempts {
+			exhausted[path] = true
+		}
+	}
+	return exhausted
+}
+
+func recordFailedProbe(path string) {
+	nodeID, err := probeNodeID(probeStatPath(path))
+	if err != nil {
+		return
+	}
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	entry := failedProbes[path]
+	if entry.nodeID != nodeID {
+		entry = failedProbe{nodeID: nodeID}
+	}
+	entry.attempts++
+	failedProbes[path] = entry
+	if entry.attempts == maxProbeAttempts {
+		log.Debug().Str("port", path).Msg("tty2oled: no answer from port, leaving it out of detection until replugged")
+	}
+}
+
+func clearFailedProbe(path string) {
+	failedProbesMu.Lock()
+	defer failedProbesMu.Unlock()
+	delete(failedProbes, path)
 }
 
 func (r *Reader) Path() string {
@@ -487,7 +626,7 @@ func (*Reader) Capabilities() []readers.Capability {
 
 func (r *Reader) ReaderID() string {
 	path := r.getDevicePath()
-	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(path), path)
+	return r.identity.ID(r.Metadata().ID, serialport.TopologyPath(path), path)
 }
 
 func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {
@@ -963,7 +1102,9 @@ func (r *Reader) sendPictureDataRaw(picturePath string) error {
 }
 
 // detectDevice attempts to detect a tty2oled device by sending CMDHWINF and waiting for a response
-func (*Reader) detectDevice(portName string) bool {
+func (r *Reader) detectDevice(portName string) bool {
+	openPort := r.portOpener()
+
 	// Add overall timeout for device detection to prevent hanging autodetection
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -976,7 +1117,7 @@ func (*Reader) detectDevice(portName string) bool {
 
 	go func() {
 		// Open serial port for detection
-		port, err := serial.Open(portName, &serial.Mode{
+		port, err := openPort(portName, &serial.Mode{
 			BaudRate: 115200,
 			DataBits: 8,
 			Parity:   serial.NoParity,

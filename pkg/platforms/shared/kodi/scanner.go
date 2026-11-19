@@ -49,7 +49,7 @@ func ScanMovies(
 	for _, movie := range movies {
 		results = append(results, platforms.ScanResult{
 			Name:   movie.Label,
-			Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiMovie, strconv.Itoa(movie.ID), movie.Label),
+			Path:   createMovieVirtualPath(movie),
 			Source: kodiMetadataSource(movie.File), NoExt: true,
 		})
 	}
@@ -77,10 +77,10 @@ func ScanTV(
 		}
 
 		for _, ep := range episodes {
-			label := episodeName(show, ep)
+			label := episodeName(show, &ep)
 			results = append(results, platforms.ScanResult{
 				Name:   label,
-				Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiEpisode, strconv.Itoa(ep.ID), label),
+				Path:   createEpisodeVirtualPath(show, &ep),
 				Source: kodiMetadataSource(ep.File), NoExt: true,
 			})
 		}

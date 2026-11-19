@@ -168,8 +168,15 @@ type SettingsAuthStatusParams struct {
 
 type SettingsAuthLinkParams struct {
 	// URL overrides the auth server base URL; defaults to the official
-	// Zaparoo API.
+	// Zaparoo API. It is required for the romm and jellyfin providers. For
+	// plex it may be omitted when the account owns one server with a direct
+	// connection, shared servers aside; otherwise it must be an address Plex
+	// lists for the server.
 	URL string `json:"url,omitempty" validate:"omitempty,url"`
+	// Provider is the service the device links to: zaparoo (the default),
+	// romm, a RomM server Core then uses as a game library, or plex or
+	// jellyfin, a media server whose library Core indexes and plays.
+	Provider string `json:"provider,omitempty" validate:"omitempty,oneof=zaparoo romm plex jellyfin"`
 }
 
 type ReaderWriteCancelParams struct {
@@ -212,6 +219,7 @@ type UpdateSettingsParams struct {
 	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
 	ErrorReporting          *bool     `json:"errorReporting"`
 	Encryption              *bool     `json:"encryption"`
+	BLEEnabled              *bool     `json:"bleEnabled"`
 	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
 	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
 	LibrarySyncEnabled      *bool     `json:"librarySyncEnabled"`
@@ -487,11 +495,65 @@ type MediaHistoryTopParams struct {
 	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
+// MediaArtworkRandomParams asks for random media that have indexed artwork.
+// The library filters mean the same as in SearchParams.
+type MediaArtworkRandomParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix  *string   `json:"pathPrefix,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=50"`
+	ImageTypes  []string  `json:"imageTypes" validate:"required,min=1,max=12,dive,min=1"`
+	Tags        []string  `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	ExcludeIDs  []int64   `json:"excludeIds,omitempty" validate:"omitempty,max=500,dive,gt=0"`
+	// IncludeHidden returns user-hidden media and media in hidden folders.
+	IncludeHidden bool `json:"includeHidden,omitempty"`
+}
+
 type MediaMetaParams struct {
 	MediaID *int64 `json:"mediaId,omitempty"`
 	System  string `json:"system" validate:"omitempty,min=1"`
 	Path    string `json:"path"   validate:"omitempty,min=1"`
 }
+
+// MediaVersionsParams names one media item, by mediaId or by system and path,
+// whose other versions are wanted.
+type MediaVersionsParams struct {
+	MediaID       *int64  `json:"mediaId,omitempty"`
+	MaxResults    *int    `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor        *string `json:"cursor,omitempty"`
+	IncludeHidden *bool   `json:"includeHidden,omitempty"`
+	System        string  `json:"system,omitempty" validate:"omitempty,min=1"`
+	Path          string  `json:"path,omitempty" validate:"omitempty,min=1"`
+}
+
+// MediaSimilarParams names one media item, by mediaId or by system and path,
+// to find media like.
+type MediaSimilarParams struct {
+	MediaID     *int64    `json:"mediaId,omitempty"`
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=50"`
+	System      string    `json:"system,omitempty" validate:"omitempty,min=1"`
+	Path        string    `json:"path,omitempty" validate:"omitempty,min=1"`
+}
+
+// MediaRecommendedParams shapes the active profile's recommendations.
+// MaxResults is the most items one section holds. Layout "queue" returns one
+// ranked section of kind "queue" instead of sections, and ignores
+// MaxSections.
+type MediaRecommendedParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=30"`
+	MaxSections *int      `json:"maxSections,omitempty" validate:"omitempty,gt=0,max=12"`
+	Layout      *string   `json:"layout,omitempty" validate:"omitempty,oneof=sections queue"`
+}
+
+// Layouts of media.recommended.
+const (
+	RecommendedLayoutSections = "sections"
+	RecommendedLayoutQueue    = "queue"
+)
 
 type MediaTagsUpdateParams struct {
 	MediaID *int64   `json:"mediaId,omitempty"`
@@ -506,6 +568,57 @@ type MediaMetaUpdateParams struct {
 	System  string          `json:"system" validate:"omitempty,min=1"`
 	Path    string          `json:"path"   validate:"omitempty,min=1"`
 	Media   json.RawMessage `json:"media,omitempty"`
+}
+
+// Image sources for a media.meta.update image.
+const (
+	MediaImageKindFile   = "file"
+	MediaImageKindUpload = "upload"
+	MediaImageKindBrowse = "browse"
+)
+
+// MediaImageInput names the image a media.meta.update image field takes: a
+// file on the Core host by absolute path (path), a finished upload
+// (uploadId), or an image picked with files.browse (root and path).
+type MediaImageInput struct {
+	Kind     string `json:"kind" validate:"required,oneof=file upload browse"`
+	Path     string `json:"path,omitempty"`
+	UploadID string `json:"uploadId,omitempty"`
+	Root     string `json:"root,omitempty"`
+}
+
+// FilesBrowseParams lists the browse roots when Root is empty, and one
+// folder under a root otherwise.
+type FilesBrowseParams struct {
+	Offset  *int   `json:"offset,omitempty" validate:"omitempty,gte=0"`
+	Limit   *int   `json:"limit,omitempty" validate:"omitempty,gte=1,lte=500"`
+	Purpose string `json:"purpose" validate:"required,oneof=image"`
+	Root    string `json:"root,omitempty" validate:"omitempty,max=64"`
+	Path    string `json:"path,omitempty" validate:"omitempty,max=4096"`
+}
+
+type FilesImageParams struct {
+	MaxSize  *int32 `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
+	Root     string `json:"root" validate:"required,min=1,max=64"`
+	Path     string `json:"path" validate:"required,min=1,max=4096"`
+	Delivery string `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
+}
+
+type UploadsBeginParams struct {
+	Purpose string `json:"purpose" validate:"required,min=1,max=64"`
+	SHA256  string `json:"sha256" validate:"required,len=64,hexadecimal"`
+	Size    int64  `json:"size" validate:"required,gt=0"`
+}
+
+type UploadsChunkParams struct {
+	Offset   *int64 `json:"offset" validate:"required,gte=0"`
+	UploadID string `json:"uploadId" validate:"required,min=1,max=64"`
+	// Data is the chunk's bytes, base64 encoded.
+	Data string `json:"data" validate:"required,min=1"`
+}
+
+type UploadsIDParams struct {
+	UploadID string `json:"uploadId" validate:"required,min=1,max=64"`
 }
 
 type MediaAssetParams struct {
@@ -537,6 +650,9 @@ type MediaScrapeParams struct {
 	ScraperID string            `json:"scraperId" validate:"required,min=1"`
 	Systems   []string          `json:"systems"   validate:"omitempty,dive,min=1"`
 	Force     bool              `json:"force"`
+	// SkipImages imports metadata only, leaving out images, videos and
+	// manuals. Only scrapers reporting supportsSkipImages accept it.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 type MediaLookupCandidatesParams struct {

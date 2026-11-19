@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -35,6 +36,7 @@ import (
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/device"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/kiosk"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
@@ -96,6 +98,7 @@ type State struct {
 	pendingWrite           *PendingWrite
 	backupCoordinator      *backupcoordinator.Coordinator
 	launcherManager        *LauncherManager
+	kiosk                  atomic.Pointer[kiosk.Service]
 	readerWrites           map[string]*readerWriteState
 	softwareToken          *tokens.Token
 	readers                map[string]readers.Reader
@@ -107,25 +110,28 @@ type State struct {
 	stopIntentTTL          time.Duration
 	earlyStopWindow        time.Duration
 	activeMediaReadyGen    uint64
-	stopSeq                uint64
-	userStopSeq            uint64
-	stopsDone              uint64
-	stopsInProgress        int
-	zapScriptHolds         int
-	activeMediaPublishMu   syncutil.RWMutex
-	remoteStatusMu         syncutil.RWMutex
-	mediaRestoreMu         syncutil.RWMutex
-	mu                     syncutil.RWMutex
-	mediaLaunchMu          syncutil.RWMutex
-	activeMediaReady       bool
-	publishedSinceLaunch   bool
-	beforeExitRunning      bool
-	restartRequested       bool
-	restorePendingRestart  bool
-	runZapScript           bool
-	backgroundAutoPaused   bool
-	mediaDBRecoveryActive  bool
-	stopService            bool
+	// neverStartedGen is the generation ExitNeverStartedMedia cleared, so its
+	// end is reported as a launch that never started.
+	neverStartedGen       uint64
+	stopSeq               uint64
+	userStopSeq           uint64
+	stopsDone             uint64
+	stopsInProgress       int
+	zapScriptHolds        int
+	activeMediaPublishMu  syncutil.RWMutex
+	remoteStatusMu        syncutil.RWMutex
+	mediaRestoreMu        syncutil.RWMutex
+	mu                    syncutil.RWMutex
+	mediaLaunchMu         syncutil.RWMutex
+	activeMediaReady      bool
+	publishedSinceLaunch  bool
+	beforeExitRunning     bool
+	restartRequested      bool
+	restorePendingRestart bool
+	runZapScript          bool
+	backgroundAutoPaused  bool
+	mediaDBRecoveryActive bool
+	stopService           bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -1243,6 +1249,7 @@ func (s *State) updateActiveMediaStateAs(
 		if endReason != "" {
 			reason = endReason
 		}
+		neverStarted := !s.activeMediaReady || s.neverStartedGen == endedGen
 		observers := s.mediaObservers
 		s.activeMedia = media
 		s.activeMediaReady = false
@@ -1259,7 +1266,7 @@ func (s *State) updateActiveMediaStateAs(
 		stoppedParams.Reason = reason
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
-		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen, neverStarted)
 		// Run the hook synchronously (outside the lock) so callers observe its
 		// effects before their next step — the launch path stops native audio and
 		// then decides whether to pause background music, which must happen after
@@ -1332,7 +1339,7 @@ func (s *State) updateActiveMediaStateAs(
 			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
-		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Primary, reason, endedGen, false)
 		notifyMediaStarted(observers, media, mediaslot.Primary, gen)
 
 		// Execute OnMediaStart hook if set (new media started)
@@ -1390,7 +1397,7 @@ func (s *State) applyBackgroundMedia(
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
 		stoppedParams.Reason = clearReason
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
-		notifyMediaEnded(observers, oldMedia, mediaslot.Background, clearReason, 0)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Background, clearReason, 0, false)
 		return true
 	}
 
@@ -1424,7 +1431,7 @@ func (s *State) applyBackgroundMedia(
 			MediaPath:  media.Path,
 			Slot:       mediaslot.Background,
 		})
-		notifyMediaEnded(observers, oldMedia, mediaslot.Background, models.MediaStopReasonReplaced, 0)
+		notifyMediaEnded(observers, oldMedia, mediaslot.Background, models.MediaStopReasonReplaced, 0, false)
 		notifyMediaStarted(observers, media, mediaslot.Background, 0)
 		return true
 	}
@@ -1507,6 +1514,21 @@ func (*State) safeNotifyReader(reader readers.Reader, media *models.ActiveMedia)
 
 func (s *State) GetContext() context.Context {
 	return s.ctx
+}
+
+// SetKiosk attaches the device's kiosk lock. It is set once at startup.
+func (s *State) SetKiosk(k *kiosk.Service) {
+	s.kiosk.Store(k)
+}
+
+// Kiosk returns the device's kiosk lock. It is nil-safe at both ends: a nil
+// State, or one never given a lock, returns a nil service, whose queries
+// all report the lock as off.
+func (s *State) Kiosk() *kiosk.Service {
+	if s == nil {
+		return nil
+	}
+	return s.kiosk.Load()
 }
 
 func (s *State) LauncherManager() *LauncherManager {

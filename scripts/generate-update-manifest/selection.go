@@ -64,9 +64,10 @@ func verifySelectionMatrix(fs afero.Fs, path string) (*result, error) {
 			continue
 		}
 		version := otameta.VersionFromTag(rel.TagName)
-		required := newest[rel.TagName]
+		newestInChannel := newest[rel.TagName]
 
 		for _, t := range targets {
+			required := newestInChannel && t.requiredAt(version)
 			got, selErr := otameta.SelectAsset(rel, t.Platform, t.Arch)
 			switch {
 			case errors.Is(selErr, otameta.ErrNoAsset):

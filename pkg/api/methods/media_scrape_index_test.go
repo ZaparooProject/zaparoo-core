@@ -83,9 +83,9 @@ func TestScrapeJobsForSourcesQueuesEveryArcadeSystemIndexed(t *testing.T) {
 	// A MiSTer index contributes the Arcade walk plus each granular hardware
 	// system classification splits out of it.
 	jobs := scrapeJobsForSources(arcadeScrapers(), []mediascanner.IndexedSource{
-		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 2600},
-		{LauncherID: systemdefs.SystemCPS1, SystemID: systemdefs.SystemCPS1, Files: 173},
-		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, Files: 900},
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, HasFiles: true},
+		{LauncherID: systemdefs.SystemCPS1, SystemID: systemdefs.SystemCPS1, HasFiles: true},
+		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, HasFiles: true},
 	})
 
 	require.Len(t, jobs, 1)
@@ -107,9 +107,9 @@ func TestScrapeJobsForSourcesQueuesEverySystemForAnAllLaunchersScraper(t *testin
 	assert.False(t, scrapeSourcesAllLaunchers(arcadeScrapers()))
 
 	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
-		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 2600},
-		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, Files: 900},
-		{LauncherID: "custom", SystemID: systemdefs.SystemGenesis, Files: 0},
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, HasFiles: true},
+		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, HasFiles: true},
+		{LauncherID: "custom", SystemID: systemdefs.SystemGenesis},
 	})
 
 	require.Len(t, jobs, 2)
@@ -132,8 +132,8 @@ func TestScrapeJobsForSourcesUnavailableLauncherOnlyForAllLaunchersScrapers(t *t
 	scrapers[gdb.ID] = gdb
 
 	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
-		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 20, Unavailable: true},
-		{LauncherID: "RetroArchNES", SystemID: systemdefs.SystemNES, Files: 42000, Unavailable: true},
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, HasFiles: true, Unavailable: true},
+		{LauncherID: "RetroArchNES", SystemID: systemdefs.SystemNES, HasFiles: true, Unavailable: true},
 	})
 
 	require.Len(t, jobs, 1, "the arcade scraper reads launcher data an unavailable launcher lacks")
@@ -174,7 +174,7 @@ func jobIDs(jobs []database.ScrapeJob) []string {
 func TestScrapeJobsForSourcesRunInScraperOrderThenByID(t *testing.T) {
 	t.Parallel()
 	jobs := scrapeJobsForSources(misterScrapers(), []mediascanner.IndexedSource{
-		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 10},
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, HasFiles: true},
 	})
 	assert.Equal(t, []string{"another-device-source", "mister-arcade", "gamedatabase", "mister-docs"}, jobIDs(jobs),
 		"index jobs only fill what is missing, so the order decides which source keeps a shared field")
@@ -206,8 +206,8 @@ func TestScrapeJobsForSourcesIgnoresEmptyContributions(t *testing.T) {
 	// A launcher that matched nothing has no rows to enrich, and an
 	// unsupported system is not this scraper's to fill.
 	jobs := scrapeJobsForSources(arcadeScrapers(), []mediascanner.IndexedSource{
-		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 0},
-		{LauncherID: systemdefs.SystemCPS1, SystemID: systemdefs.SystemCPS3, Files: 10},
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade},
+		{LauncherID: systemdefs.SystemCPS1, SystemID: systemdefs.SystemCPS3, HasFiles: true},
 	})
 	assert.Empty(t, jobs)
 }

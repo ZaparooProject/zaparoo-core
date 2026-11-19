@@ -474,6 +474,7 @@ var systemHooks = map[string]func(*config.Instance, *Core, string) (string, erro
 	"Amiga":           hookAmiga,
 	"AmigaCD32":       hookAmigaCD32,
 	"CommodoreCDTV":   hookCDTV,
+	"Intellivision":   hookIntellivision,
 	"NeoGeo":          hookNeoGeo,
 }
 

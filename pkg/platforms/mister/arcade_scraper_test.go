@@ -110,3 +110,41 @@ func TestCachedSetNameOnlyAnswersForAnUnchangedFile(t *testing.T) {
 	_, ok = cachedSetName(cached, path)
 	assert.False(t, ok)
 }
+
+// An entry written before the cache kept parents has no parent answer, and
+// must not be read as "this set has no parent".
+func TestCachedIdentityNeedsARecordedParent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "game.mra")
+	require.NoError(t, os.WriteFile(path, []byte("<misterromdescription/>"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	older := map[string]arcadeClassCacheEntry{
+		path: {SetName: "alphamis", Size: info.Size(), MtimeNs: info.ModTime().UnixNano()},
+	}
+	_, _, ok := cachedIdentity(older, path)
+	assert.False(t, ok)
+	setName, ok := cachedSetName(older, path)
+	assert.True(t, ok, "the set name it does hold still answers")
+	assert.Equal(t, "alphamis", setName)
+
+	entry, ok := statCacheEntry(path, "alphamis", "aso")
+	require.True(t, ok)
+	current := map[string]arcadeClassCacheEntry{path: entry}
+	setName, parent, ok := cachedIdentity(current, path)
+	assert.True(t, ok)
+	assert.Equal(t, "alphamis", setName)
+	assert.Equal(t, "aso", parent)
+
+	// A parent set records that it has none, which is an answer too.
+	entry, ok = statCacheEntry(path, "aso", "")
+	require.True(t, ok)
+	_, parent, ok = cachedIdentity(map[string]arcadeClassCacheEntry{path: entry}, path)
+	assert.True(t, ok)
+	assert.Empty(t, parent)
+
+	_, _, ok = cachedIdentity(current, filepath.Join(dir, "other.mra"))
+	assert.False(t, ok)
+}

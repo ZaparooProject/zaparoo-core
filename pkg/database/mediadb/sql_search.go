@@ -1340,6 +1340,26 @@ func sqlSearchMediaByTitleDBIDsSorted(
 	sortOrder string,
 	limit int,
 ) ([]database.SearchResultWithCursor, error) {
+	return sqlSearchMediaRowsByTitleDBIDs(
+		ctx, db, titleDBIDs, pathPrefix, tags, letter, cursor, sortCursor, sortOrder, limit, true)
+}
+
+// sqlSearchMediaRowsByTitleDBIDs reads the present media rows of the given
+// titles. withTags attaches each row's tags and disambiguation; a caller that
+// only counts or folds rows skips that second read.
+func sqlSearchMediaRowsByTitleDBIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	pathPrefix string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	sortCursor *database.SearchCursor,
+	sortOrder string,
+	limit int,
+	withTags bool,
+) ([]database.SearchResultWithCursor, error) {
 	if len(titleDBIDs) == 0 {
 		return []database.SearchResultWithCursor{}, nil
 	}
@@ -1459,6 +1479,9 @@ func sqlSearchMediaByTitleDBIDsSorted(
 	queryElapsed := time.Since(queryStarted)
 
 	tagsStarted := time.Now()
+	if !withTags {
+		return results, nil
+	}
 	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return nil, err
 	}

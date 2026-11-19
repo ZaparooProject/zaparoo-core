@@ -48,5 +48,9 @@ func RequireValidWrite(t testing.TB, write *database.ScrapeWrite) {
 	if write == nil {
 		return
 	}
-	RequireValidTags(t, write.MediaTags, write.TitleTags, []database.TagInfo{write.Sentinel})
+	RequireValidTags(t, write.MediaTags, write.TitleTags)
+	// A write may leave its sentinel out so the row is retried.
+	if write.Sentinel.Type != "" {
+		RequireValidTags(t, []database.TagInfo{write.Sentinel})
+	}
 }

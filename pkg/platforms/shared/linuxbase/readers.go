@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 )
 
@@ -45,6 +46,7 @@ func SupportedReaders(cfg *config.Instance, p platforms.Platform) []readers.Read
 		tty2oled.NewReader(cfg, p),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		pn532.NewReader(cfg),
 		ccid.NewReader(cfg),

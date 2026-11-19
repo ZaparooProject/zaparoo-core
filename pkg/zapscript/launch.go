@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
@@ -546,6 +547,12 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, nil
 	}
 
+	if env.AdmitLaunch != nil {
+		if admitErr := env.AdmitLaunch(platforms.ResolvedLaunch{SystemID: systemID}, true); admitErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+		}
+	}
+
 	if launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher); launcherID != "" {
 		return cmdSystemWithLauncher(pl, &env, systemID, launcherID)
 	}
@@ -638,7 +645,10 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
-		allSystems := systemdefs.AllImplicitSystems()
+		allSystems, openErr := openSystems(env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
 		systemIDs := make([]string, len(allSystems))
 		for i, sys := range allSystems {
 			systemIDs[i] = sys.ID
@@ -761,7 +771,11 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
+			allSystems, openErr := openSystems(env)
+			if openErr != nil {
+				return platforms.CmdResult{}, openErr
+			}
+			systemTiers = [][]systemdefs.System{allSystems}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -823,6 +837,15 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 		return platforms.CmdResult{}, firstLookupErr
 	}
 
+	// A card that offers several systems picks among the ones the content
+	// policy leaves open. One that names only closed systems is left as it
+	// is, so the launch is refused for what the card asked for.
+	if len(systems) > 1 {
+		if open := permittedSystems(env, systems); len(open) > 0 {
+			systems = open
+		}
+	}
+
 	mediaQuery := database.MediaQuery{Tags: tagFilters}
 	systemTiers := orderedSystemTiers(systems)
 	selectGame := func() (database.SearchResult, error) {
@@ -875,6 +898,32 @@ func launchRandomGameWithRetry(
 		randomLaunchSelectionAttempts,
 		launchErr,
 	)
+}
+
+// permittedSystems drops the systems the device's content policy closes, so
+// a pick across every system is made from what could actually launch.
+func permittedSystems(env *platforms.CmdEnv, systems []systemdefs.System) []systemdefs.System {
+	if env == nil || env.SystemPermitted == nil {
+		return systems
+	}
+	permitted := make([]systemdefs.System, 0, len(systems))
+	for i := range systems {
+		if env.SystemPermitted(systems[i].ID) {
+			permitted = append(permitted, systems[i])
+		}
+	}
+	return permitted
+}
+
+// openSystems returns every system a pick across "all" may draw from. An
+// empty list would read as every system to the queries that take it, so a
+// policy that closes them all is reported as a refusal instead.
+func openSystems(env *platforms.CmdEnv) ([]systemdefs.System, error) {
+	systems := permittedSystems(env, systemdefs.AllImplicitSystems())
+	if len(systems) == 0 {
+		return nil, fmt.Errorf("%w: no system is open", ErrLaunchNotAdmitted)
+	}
+	return systems, nil
 }
 
 func orderedSystemTiers(systems []systemdefs.System) [][]systemdefs.System {
@@ -1039,15 +1088,39 @@ func getLaunchClosure(
 	explicitLauncher bool,
 ) func(launchTarget) error {
 	return func(target launchTarget) error {
-		if isAudioPlaylistTarget(pl, env, &target) {
-			return &audioPlaylistLaunchError{path: target.path}
+		explicit := explicitLauncher
+		// rommMediaID is the RomM row the game was launched from. The
+		// installed file does not take its identity, but a launcher override
+		// set on it still applies when the file has none of its own.
+		var rommMediaID int64
+		if romm.IsRomPath(target.path) {
+			// A RomM game is fetched into its system's game folder and
+			// launched from there like any local file, with the launcher
+			// chosen for its system rather than the RomM placeholder.
+			localPath, systemID, err := romm.Install(env.LauncherCtx, env.Cfg, pl, env.UI, target.path)
+			if err != nil {
+				return fmt.Errorf("failed to install romm game: %w", err)
+			}
+			rommMediaID = target.mediaID
+			target.path = localPath
+			target.systemID = systemID
+			target.mediaID = 0
+			target.resolveMediaByPath = true
+			target.guideLauncherBySystem = true
+			if !explicit || strings.EqualFold(env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), romm.LauncherID) {
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+				explicit = false
+			}
+		}
+		if isPlaylistFileTarget(pl, env, &target) {
+			return &playlistFileLaunchError{path: target.path}
 		}
 		backgroundSlot := false
 		if slot, slotErr := commandSlot(env); slotErr == nil && slot == mediaslot.Background {
 			backgroundSlot = true
 		}
 		switch {
-		case explicitLauncher:
+		case explicit:
 		case target.audioStream != nil:
 			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, platforms.NativeAudioLauncherID)
 		case backgroundSlot:
@@ -1068,6 +1141,9 @@ func getLaunchClosure(
 				_, overridden = mediaLauncherOverride(pl, env, target.mediaID, target.systemID, true)
 			} else if target.resolveMediaByPath {
 				_, overridden = mediaLauncherOverrideForPath(pl, env, target.path, true)
+			}
+			if !overridden && rommMediaID != 0 && target.systemID != "" {
+				_, overridden = mediaLauncherOverride(pl, env, rommMediaID, target.systemID, true)
 			}
 			if target.systemID != "" {
 				applySystemDefaultLauncher(pl, env, target.systemID)
@@ -1164,6 +1240,20 @@ func getLaunchClosure(
 		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
 			return errMediaLaunchSkipped
 		}
+		// The content policy is written against the path that was asked
+		// for, the way the allow list is: a MiSTer ZIP is game.zip in a
+		// rule and in the hidden flag, never the file inside it that the
+		// launch was normalized to above.
+		requested := resolved
+		requested.Path = allowListPath
+
+		// Asked before preparation, so a launch that will be refused never
+		// shows a confirmation or runs a hook first.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(requested, false); admitErr != nil {
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+			}
+		}
 		if env.PrepareMediaLaunch != nil {
 			proceed, prepareErr := env.PrepareMediaLaunch(resolved)
 			if prepareErr != nil {
@@ -1190,6 +1280,14 @@ func getLaunchClosure(
 		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
 			return errors.New("file not allowed: " + allowListPath)
 		}
+		// So may the content policy: a device can lock while a confirmation
+		// is waiting. Asked here so the outgoing media's exit hook below
+		// does not run for a launch that is going to be refused.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(requested, false); admitErr != nil {
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+			}
+		}
 
 		// The outgoing media's before_exit hook. Everything that can reject this
 		// launch without disturbing what is running has now run, so the hook
@@ -1207,6 +1305,15 @@ func getLaunchClosure(
 			}
 		}
 		defer launchAccess.Release()
+		// The last word, with the launch gate held: the exit hook and the
+		// wait for the gate can both take time, and the device may have
+		// locked or changed profile meanwhile. This is the check that uses
+		// up a one-time approval.
+		if env.AdmitLaunch != nil {
+			if admitErr := env.AdmitLaunch(requested, true); admitErr != nil {
+				return fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+			}
+		}
 		if env.Source == tokens.SourcePlaylist && normalizedSlot == mediaslot.Primary {
 			if opts == nil {
 				opts = &platforms.LaunchOptions{}
@@ -1286,6 +1393,11 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 
 	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
+		if env.AdmitMediaInstall != nil {
+			if admitErr := env.AdmitMediaInstall(); admitErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("%w: %w", ErrLaunchNotAdmitted, admitErr)
+			}
+		}
 		installPath, err := installer.InstallRemoteFile(
 			env.LauncherCtx,
 			env.Cfg, pl, env.UI,
@@ -1556,8 +1668,12 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
+		allSystems, openErr := openSystems(&env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
 		searchFilters := database.SearchFilters{
-			Systems: systemdefs.AllImplicitSystems(),
+			Systems: allSystems,
 			Query:   query,
 			Tags:    tagFilters,
 			Limit:   1,
@@ -1591,7 +1707,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systemTiers = [][]systemdefs.System{systemdefs.AllImplicitSystems()}
+		allSystems, openErr := openSystems(&env)
+		if openErr != nil {
+			return platforms.CmdResult{}, openErr
+		}
+		systemTiers = [][]systemdefs.System{allSystems}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {

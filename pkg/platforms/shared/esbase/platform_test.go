@@ -318,7 +318,8 @@ func TestBatoceraGameLaunchersUseBuiltInScanner(t *testing.T) {
 			launcher.ID == "KodiSong" ||
 			launcher.ID == "KodiAlbum" ||
 			launcher.ID == "KodiArtist" ||
-			launcher.ID == "KodiTVShow" {
+			launcher.ID == "KodiTVShow" ||
+			isRemoteServerLauncher(launcher.ID) {
 			continue
 		}
 

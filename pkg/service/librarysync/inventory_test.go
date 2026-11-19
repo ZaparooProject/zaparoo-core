@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
@@ -72,6 +73,31 @@ func nesPath(name string) string {
 // newSyncFixture indexes the given NES files, links the device to a fake
 // account and turns Library sync on. Tests using it cannot run in parallel:
 // device credentials are process-wide.
+// fixtureAuth mirrors the process-wide credential store. Fixtures run in
+// parallel, so each one changes only its own fake server's entry.
+var fixtureAuth = struct {
+	creds map[string]config.CredentialEntry
+	mu    syncutil.Mutex
+}{creds: make(map[string]config.CredentialEntry)}
+
+// setFixtureAuth links a fake server with bearer, or unlinks it when bearer
+// is empty, leaving other fixtures' credentials alone.
+func setFixtureAuth(serverURL, bearer string) {
+	fixtureAuth.mu.Lock()
+	defer fixtureAuth.mu.Unlock()
+	key := config.RemoteAuthLookupURL(serverURL)
+	if bearer == "" {
+		delete(fixtureAuth.creds, key)
+	} else {
+		fixtureAuth.creds[key] = config.CredentialEntry{Bearer: bearer}
+	}
+	creds := make(map[string]config.CredentialEntry, len(fixtureAuth.creds))
+	for k, v := range fixtureAuth.creds {
+		creds[k] = v
+	}
+	config.SetAuthCfgForTesting(creds)
+}
+
 func newSyncFixture(t *testing.T, paths ...string) *syncFixture {
 	t.Helper()
 	return newSyncFixtureWithPace(t, time.Millisecond, paths...)
@@ -95,10 +121,8 @@ func newSyncFixtureWithPace(t *testing.T, pace time.Duration, paths ...string) *
 	f.now.Store(time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC).Unix())
 	require.NoError(t, cfg.SetOnlineBaseURL(f.online.server.URL))
 	cfg.SetLibrarySync(true)
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token"},
-	})
-	t.Cleanup(config.ClearAuthCfgForTesting)
+	setFixtureAuth(f.online.server.URL, "library-token")
+	t.Cleanup(func() { setFixtureAuth(f.online.server.URL, "") })
 
 	platform := mocks.NewMockPlatform()
 	platform.On("ID").Return("test-platform")
@@ -146,6 +170,20 @@ func (f *syncFixture) heldOrdinals() []uint32 {
 	held := append([]uint32(nil), f.online.held.ordinals...)
 	sort.Slice(held, func(i, j int) bool { return held[i] < held[j] })
 	return held
+}
+
+// TestSyncInventory_ResolveRetriedAfterEdgeError pins that a resolve, a
+// lookup that changes nothing, is sent again after a CDN error instead of
+// failing the sync.
+func TestSyncInventory_ResolveRetriedAfterEdgeError(t *testing.T) {
+	f := newSyncFixture(t, nesPath("Metroid (USA).nes"))
+	f.online.failWithBadGateway(postResolve, 1)
+
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 1, result.Resolved)
+	assert.Equal(t, 2, f.online.count(postResolve))
 }
 
 func TestSyncInventory_FirstSyncUploadsEveryGame(t *testing.T) {
@@ -360,18 +398,48 @@ func TestSyncInventory_IdleStates(t *testing.T) {
 	assert.True(t, librarysync.IsIdleError(err))
 
 	f.cfg.SetLibrarySync(true)
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+	setFixtureAuth(f.online.server.URL, "")
 	_, err = f.svc.SyncInventory(f.ctx, false)
 	require.Error(t, err)
 	assert.True(t, librarysync.IsIdleError(err), "an unlinked device has nothing to sync")
 
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token"},
-	})
+	setFixtureAuth(f.online.server.URL, "library-token")
 	require.NoError(t, f.db.MediaDB.SetIndexingStatus("running"))
 	_, err = f.svc.SyncInventory(f.ctx, false)
 	require.ErrorIs(t, err, librarysync.ErrNotSettled)
 	assert.Zero(t, f.online.count(postResolve))
+}
+
+// A scrape that starts while the inventory is being walked ends the walk at
+// the next page: carrying on would contend with the scrape for the writer and
+// produce a result that is discarded anyway.
+func TestSyncInventory_StopsWhenScrapeStartsMidWalk(t *testing.T) {
+	paths := make([]string, 0, 1200)
+	for i := range 1200 {
+		paths = append(paths, nesPath(fmt.Sprintf("Game %04d (USA).nes", i)))
+	}
+	f := newSyncFixture(t, paths...)
+	var started atomic.Bool
+	f.online.resolveHook = func() {
+		if started.CompareAndSwap(false, true) {
+			assert.NoError(t, f.db.MediaDB.SetScrapingStatus("running"))
+		}
+	}
+
+	_, err := f.svc.SyncInventory(f.ctx, false)
+
+	require.ErrorIs(t, err, librarysync.ErrNotSettled)
+	stopped := f.online.count(postResolve)
+
+	require.NoError(t, f.db.MediaDB.SetScrapingStatus("completed"))
+	f.online.resolveHook = nil
+	f.online.resetCalls()
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 1200, result.ItemCount)
+	assert.Less(t, stopped, f.online.count(postResolve),
+		"the interrupted walk must have stopped before asking about every page")
 }
 
 // TestSyncInventory_BusyDatabaseDefers covers a batch transaction held open
@@ -401,9 +469,7 @@ func TestSyncInventory_RelinkChecksAccountAgain(t *testing.T) {
 	f.online.held = nil
 	f.online.mu.Unlock()
 	f.online.resetCalls()
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token-2"},
-	})
+	setFixtureAuth(f.online.server.URL, "library-token-2")
 	f.online.mu.Lock()
 	f.online.token = "library-token-2"
 	f.online.mu.Unlock()
@@ -422,9 +488,9 @@ func TestSyncInventory_EndpointChangeClearsOrdinalCache(t *testing.T) {
 
 	other := newFakeOnline(t)
 	require.NoError(t, f.cfg.SetOnlineBaseURL(other.server.URL))
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.RemoteAuthLookupURL(other.server.URL): {Bearer: "library-token"},
-	})
+	setFixtureAuth(f.online.server.URL, "")
+	setFixtureAuth(other.server.URL, "library-token")
+	t.Cleanup(func() { setFixtureAuth(other.server.URL, "") })
 
 	result, err := f.svc.SyncInventory(f.ctx, false)
 	require.NoError(t, err)
@@ -487,7 +553,7 @@ func TestDeleteInventory_UnlinkedDeviceClearsMarker(t *testing.T) {
 	_, err = f.svc.ApplySetting(f.ctx)
 	require.NoError(t, err)
 
-	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+	setFixtureAuth(f.online.server.URL, "")
 	deleted, err := f.svc.DeleteInventory(f.ctx)
 	require.NoError(t, err)
 	assert.True(t, deleted, "an unlinked device's inventory is already gone")

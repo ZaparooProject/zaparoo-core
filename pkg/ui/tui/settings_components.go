@@ -834,7 +834,7 @@ func (sl *SettingsList) showTextEditModal(
 
 	content := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(input, 1, 0, true)
-	modalWidth := max(options.FieldWidth+8, 32)
+	modalWidth := textEditModalWidth(input.GetLabel(), options.FieldWidth)
 	modalHeight := 4
 	if options.HelpText != "" {
 		content.AddItem(tview.NewTextView().SetWordWrap(true).SetText(options.HelpText), 2, 0, false)
@@ -846,6 +846,12 @@ func (sl *SettingsList) showTextEditModal(
 	SetBoxTitle(content.Box, options.Title)
 	sl.pages.AddPage(settingsTextEditModalPage, CenterWidget(modalWidth, modalHeight, content), true, true)
 	options.App.SetFocus(input)
+}
+
+// textEditModalWidth is wide enough for the input's label, its field and the
+// border, so a long label never pushes the field past the right edge.
+func textEditModalWidth(label string, fieldWidth int) int {
+	return max(tview.TaggedStringWidth(label)+fieldWidth+4, fieldWidth+8, 32)
 }
 
 // AddAction adds a simple action item (like a submenu link or button).

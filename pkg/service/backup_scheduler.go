@@ -210,14 +210,16 @@ func remoteBackupSchedulerLoop(
 		// A zero interval clears the success check while keeping the failure
 		// backoff, so a changed document cannot retry faster than a failure
 		// is allowed to.
+		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		interval := remoteHeartbeatInterval
-		if capabilities != reportedCapabilities {
+		// A failed or skipped scheduled backup is reported straight away
+		// for the same reason, under the same failure backoff.
+		if capabilities != reportedCapabilities || mgr.HasPendingAttempt() {
 			interval = 0
 		}
 		if !heartbeatState.due(now, interval) {
 			return
 		}
-		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		if err := mgr.SendHeartbeat(ctx); err != nil {
 			heartbeatState.recordFailure(now, remoteHeartbeatInitialBackoff, remoteHeartbeatMaxBackoff)
 			expected := backupsvc.IsRemoteUnlinkedError(err)
@@ -376,6 +378,7 @@ func runScheduledRemoteBackup(
 	if st != nil {
 		if _, _, active := st.BackupCoordinator().Active(); active {
 			log.Debug().Msg("skipping scheduled remote backup while backup service is busy")
+			mgr.RecordScheduledAttempt(backupsvc.AttemptStatusSkipped, backupsvc.AttemptReasonBusy, time.Now())
 			return
 		}
 		mgr.WithCoordinator(st.BackupCoordinator()).WithInbox(st.Inbox())
@@ -387,15 +390,22 @@ func runScheduledRemoteBackup(
 		} else {
 			log.Debug().Err(refreshErr).Msg("scheduled remote backup eligibility refresh stopped")
 		}
+		if !errors.Is(refreshErr, context.Canceled) && !backupsvc.IsRemoteUnlinkedError(refreshErr) {
+			mgr.RecordScheduledAttempt(backupsvc.AttemptStatusSkipped, backupsvc.AttemptReasonOffline, time.Now())
+		}
 		return
 	}
 	if availability != backupsvc.RemoteAvailabilityAvailable {
 		log.Info().Str("availability", availability).Msg("skipping scheduled remote backup")
+		mgr.RecordScheduledAttempt(backupsvc.AttemptStatusSkipped, backupsvc.AttemptReasonNotAvailable, time.Now())
 		return
 	}
 	info, err := mgr.RunRemote(ctx, backupsvc.RemoteBackupTypeScheduled)
 	if err != nil {
 		log.Warn().Err(err).Msg("scheduled remote backup failed")
+		if status, reason, ok := backupsvc.RemoteFailureAttempt(err); ok {
+			mgr.RecordScheduledAttempt(status, reason, time.Now())
+		}
 		return
 	}
 	log.Info().

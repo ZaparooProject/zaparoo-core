@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -28,7 +30,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/gamehandoff"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
@@ -40,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -130,6 +135,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
@@ -445,6 +451,14 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	trackedGame := p.lastKnownGame != nil
 	p.trackerMu.RUnlock()
 
+	// Media playing on a remote server's client has nothing running here, so
+	// signalling EmulationStation, or stopping a Kodi that happens to be
+	// running, would only disturb it.
+	if activeMedia != nil && isRemoteServerLauncher(activeMedia.LauncherID) {
+		p.setActiveMedia(nil)
+		return nil
+	}
+
 	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
 		// Use Kodi-specific stopping mechanism with reason-based behavior
 		return p.stopKodi(p.cfg, reason)
@@ -586,6 +600,17 @@ func (p *Platform) shouldKeepRunningInstance(cfg *config.Instance, newLauncher *
 	}
 
 	return false
+}
+
+// isRemoteServerLauncher reports a launcher that plays on a media server's
+// own client device rather than on this machine.
+func isRemoteServerLauncher(launcherID string) bool {
+	return slices.Contains([]string{
+		shared.LauncherJellyfinMovie, shared.LauncherJellyfinTVEpisode, shared.LauncherJellyfinTVShow,
+		shared.LauncherJellyfinSong, shared.LauncherJellyfinAlbum, shared.LauncherJellyfinArtist,
+		shared.LauncherPlexMovie, shared.LauncherPlexTVEpisode, shared.LauncherPlexTVShow,
+		shared.LauncherPlexSong, shared.LauncherPlexAlbum, shared.LauncherPlexArtist,
+	}, launcherID)
 }
 
 // isKodiLauncher checks if the given launcher ID is a Kodi launcher
@@ -836,12 +861,13 @@ func (p *Platform) LaunchMedia(
 	// A stop that came while the game was starting overtook this launch. Core
 	// then published no media for the game, so that stop found nothing to
 	// stop and the game would keep running unnoticed.
-	if launchCtx.Err() != nil && !isKodiLauncher(launcher.ID) && !p.hasActiveMedia() {
+	launchedHere := !isKodiLauncher(launcher.ID) && !isRemoteServerLauncher(launcher.ID)
+	if launchCtx.Err() != nil && launchedHere && !p.hasActiveMedia() {
 		p.stopUnpublishedGame()
 	}
 
-	// Delay for non-Kodi launches (ES API needs settling time)
-	if !isKodiLauncher(launcher.ID) {
+	// Delay for launches ES runs itself (ES API needs settling time)
+	if launchedHere {
 		if settleErr := p.settle(launchCtx, esSettleDelay); settleErr != nil {
 			log.Debug().Err(settleErr).Msg("stopped while EmulationStation settled after launch")
 		}
@@ -870,10 +896,108 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 // esAPILaunch launches path through EmulationStation's API, which returns no
 // process handle.
 func (p *Platform) esAPILaunch(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-	if err := p.api().Launch(p.esPath(path)); err != nil {
+	esPath := p.esPath(path)
+	ctx := context.Background()
+	if p.launcherManager != nil {
+		ctx = p.launcherManager.GetContext()
+	}
+	p.awaitESGame(ctx, esPath)
+	// A stop while waiting for ES to list the game cancels the launch; a
+	// lookup or reload failure still launches.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("stopped before launch: %w", err)
+	}
+	if err := p.api().Launch(esPath); err != nil {
 		return nil, fmt.Errorf("failed to launch via API: %w", err)
 	}
 	return nil, nil //nolint:nilnil // API launches don't return a process handle
+}
+
+// esReloadWait bounds how long a launch waits for EmulationStation to list a
+// game after asking it to reload its game lists, and esReloadPoll is how
+// often it asks. A reload walks every system's ROM folder.
+const (
+	esReloadWait = 60 * time.Second
+	esReloadPoll = 250 * time.Millisecond
+)
+
+// awaitESGame makes sure EmulationStation lists the game at esPath before it
+// is launched. ES ignores a launch for a file it has not loaded, such as one
+// Core has just downloaded or one copied in since ES started, so such a game
+// has ES reload its game lists first. Any doubt, such as an ES without the
+// routes to ask, leaves the launch to go ahead as before.
+func (p *Platform) awaitESGame(ctx context.Context, esPath string) {
+	system := p.esSystemName(esPath)
+	if system == "" {
+		return
+	}
+	api := p.api()
+	known, err := api.GameKnown(system, esPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", esPath).Msg("could not ask EmulationStation whether it lists the game")
+		return
+	}
+	if known {
+		return
+	}
+	log.Info().Str("path", esPath).Msg("EmulationStation does not list the game yet, reloading its game lists")
+	if reloadErr := api.ReloadGames(); reloadErr != nil {
+		log.Warn().Err(reloadErr).Msg("failed to have EmulationStation reload its game lists")
+		return
+	}
+	clock := p.clock
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+	deadline := clock.Now().Add(esReloadWait)
+	for clock.Now().Before(deadline) {
+		if p.settle(ctx, esReloadPoll) != nil {
+			return
+		}
+		known, err = api.GameKnown(system, esPath)
+		if err == nil && known {
+			return
+		}
+	}
+	log.Warn().Str("path", esPath).Msg("EmulationStation still does not list the game after reloading")
+}
+
+// esSystemName returns the EmulationStation system whose ROM folder holds
+// esPath, the deepest one when systems nest. Without a system list naming
+// it, such as Batocera's, which Core does not read, the folder under the
+// default ROM root names the system, as ES names its systems by folder. It
+// returns "" for a path outside them all.
+func (p *Platform) esSystemName(esPath string) string {
+	best, bestPath := "", ""
+	var systems map[string]ESSystem
+	if esCfg := p.getESConfig(); esCfg != nil {
+		systems = esCfg.Systems
+	}
+	for key, sys := range systems {
+		sysPath := expandPath(sys.Path, p.opts.DefaultROMRoot)
+		if sysPath == "" || !strings.HasPrefix(esPath, sysPath+string(filepath.Separator)) {
+			continue
+		}
+		name := sys.Name
+		if name == "" {
+			name = key
+		}
+		if len(sysPath) > len(bestPath) || (len(sysPath) == len(bestPath) && name < best) {
+			best, bestPath = name, sysPath
+		}
+	}
+	if best != "" || p.opts.DefaultROMRoot == "" {
+		return best
+	}
+	rel, err := filepath.Rel(p.opts.DefaultROMRoot, esPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	folder, _, nested := strings.Cut(rel, string(filepath.Separator))
+	if !nested {
+		return ""
+	}
+	return folder
 }
 
 // esPath spells path the way EmulationStation knows the game. Its launch API
@@ -941,7 +1065,7 @@ func (p *Platform) hasESSystem(esSystems map[string]ESSystem, folder string) boo
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
+	launchers := make([]platforms.Launcher, 0, 21+len(esde.SystemMap))
 	if p.opts.HasKodi == nil || p.opts.HasKodi() {
 		launchers = append(launchers,
 			kodi.NewKodiLocalLauncher(),
@@ -954,6 +1078,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			kodi.NewKodiTVShowLauncher(),
 		)
 	}
+	// Remote media servers play on their own clients, so they do not depend
+	// on Kodi being installed here.
+	launchers = append(launchers, jellyfin.Launchers()...)
+	launchers = append(launchers, plex.Launchers()...)
 
 	var esSystems map[string]ESSystem
 	if p.opts.OnlyESSystems {
@@ -1150,12 +1278,14 @@ func (p *Platform) ManagedByPackageManager() bool {
 	return p.opts.ManagedByPackageManager != nil && p.opts.ManagedByPackageManager()
 }
 
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (*Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 }

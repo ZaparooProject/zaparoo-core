@@ -40,6 +40,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/pinuppopper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/playnitelib"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
@@ -51,8 +53,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/deverr"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/pinup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/playnite"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows/windowfocus"
@@ -64,6 +69,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -87,6 +93,7 @@ type Platform struct {
 	launchBoxPipe           *LaunchBoxPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
 	popper                  *pinup.Integration
+	playnite                *playnite.Integration
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
 	windowFocusCancel       context.CancelFunc
@@ -102,6 +109,7 @@ type Platform struct {
 	launchBoxPipeLock       syncutil.Mutex
 	launchBoxActiveMu       syncutil.Mutex
 	popperMu                syncutil.Mutex
+	playniteMu              syncutil.Mutex
 }
 
 const errWindowsInvalidParameter syscall.Errno = 87
@@ -136,6 +144,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		ccid.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
@@ -183,6 +192,9 @@ func (p *Platform) StartPost(
 
 	// Initialize LaunchBox pipe server if LaunchBox is installed
 	p.initLaunchBoxPipe(cfg)
+
+	// Serve the pipe the Playnite extension connects to
+	p.initPlaynitePipe(cfg)
 
 	// Start Steam tracker for external Steam game detection. The tracker needs
 	// the same Steam root the scanner resolves from the registry, otherwise it
@@ -233,6 +245,14 @@ func (p *Platform) Stop() error {
 	p.popperMu.Unlock()
 	if popper != nil {
 		popper.Stop()
+	}
+
+	// Stop the Playnite integration and close its pipe
+	p.playniteMu.Lock()
+	playniteIntegration := p.playnite
+	p.playniteMu.Unlock()
+	if playniteIntegration != nil {
+		playniteIntegration.Stop()
 	}
 
 	// Stop LaunchBox named pipe server
@@ -512,7 +532,8 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 // Steam publishes the running AppID in the registry, which is independent of
 // whether Core managed to find the game's process, and is the only source
 // available once process tracking has failed. PinUP Popper tables are checked
-// through the integration, which knows the emulator process it adopted.
+// through the integration, which knows the emulator process it adopted, and
+// Playnite games through the extension's report of what is running.
 func (p *Platform) mediaStillRunning() bool {
 	if p.activeMedia == nil {
 		return false
@@ -527,6 +548,13 @@ func (p *Platform) mediaStillRunning() bool {
 		popper := p.popper
 		p.popperMu.Unlock()
 		return popper != nil && popper.EmulatorRunning()
+	}
+
+	if strings.HasPrefix(strings.ToLower(current.Path), shared.SchemePlaynite+"://") {
+		p.playniteMu.Lock()
+		integration := p.playnite
+		p.playniteMu.Unlock()
+		return integration != nil && integration.GameRunning()
 	}
 
 	appID, ok := steam.ExtractAppIDFromPath(current.Path)
@@ -774,7 +802,7 @@ func (p *Platform) launchBoxLauncher() platforms.Launcher {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 15
+	const staticLauncherCount = 28
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -786,6 +814,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		jellyfin.NewJellyfinMovieLauncher(),
+		jellyfin.NewJellyfinTVEpisodeLauncher(),
+		jellyfin.NewJellyfinTVShowLauncher(),
+		jellyfin.NewJellyfinSongLauncher(),
+		jellyfin.NewJellyfinAlbumLauncher(),
+		jellyfin.NewJellyfinArtistLauncher(),
+		plex.NewPlexMovieLauncher(),
+		plex.NewPlexTVLauncher(),
+		plex.NewPlexTVShowLauncher(),
+		plex.NewPlexSongLauncher(),
+		plex.NewPlexAlbumLauncher(),
+		plex.NewPlexArtistLauncher(),
 		p.steamLauncher(),
 		platforms.Launcher{
 			ID:           "Flashpoint",
@@ -874,13 +914,27 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		p.launchBoxLauncher(),
 		pinup.NewLauncher(p.popperIntegration()),
+		playnite.NewLauncher(p.playniteIntegration()),
 	)
 
 	launchers = append(launchers, p.retroBatLaunchers()...)
 
+	// A custom launcher keeps an ID an emulator launcher would also use, so
+	// installing an emulator never removes a launcher the user wrote.
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	launchers = append(launchers, p.standaloneLaunchers(cfg, customIDTaken(custom))...)
+
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
-	return helpers.CombineLaunchers(cfg, p, launchers)
+	return helpers.CombineParsedLaunchers(custom, launchers)
+}
+
+func customIDTaken(custom []platforms.Launcher) func(id string) bool {
+	ids := make(map[string]bool, len(custom))
+	for i := range custom {
+		ids[strings.ToLower(custom[i].ID)] = true
+	}
+	return func(id string) bool { return ids[strings.ToLower(id)] }
 }
 
 // newWindowsSteamLauncher builds the Steam launcher with external lifecycle
@@ -902,17 +956,24 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)
 	scrapers := map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 	integration := p.popperIntegration()
 	if integration.Available(cfg) == nil {
 		popper := pinuppopper.NewPlatformScraper(integration.Locate)
 		scrapers[popper.ID] = popper
+	}
+	playniteLibrary := p.playniteIntegration()
+	if playniteLibrary.Available(cfg) == nil {
+		library := playnitelib.NewPlatformScraper(playniteLibrary.LibraryDetails)
+		scrapers[library.ID] = library
 	}
 	return scrapers
 }

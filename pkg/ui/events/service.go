@@ -146,7 +146,11 @@ type Request struct {
 	Kind    models.UIEventKind
 	Title   string
 	Message string
-	Choices []Choice
+	// HostNotice is what a host renderer that cannot show this kind, but can
+	// show notices, puts on screen instead. A notice carries no choices, so
+	// the event does not count as shown and stays open for API clients.
+	HostNotice string
+	Choices    []Choice
 	// SelectedChoice is picker choice index. Zero selects first choice; use -1
 	// explicitly when no choice should be preselected.
 	SelectedChoice int
@@ -304,7 +308,7 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 		event := cloneEvent(&entry.event)
 		handedOff, hold = s.handOff(ctx, eventID, &event)
 		if !handedOff {
-			s.present(ctx, eventID, &event)
+			s.present(ctx, eventID, &event, request.HostNotice)
 		}
 		if timedRenderer, ok := s.renderer.(TimedRenderer); ok {
 			minimumDisplay = timedRenderer.MinimumUIDisplay(entry.event.Kind)
@@ -725,10 +729,22 @@ func (s *Service) handOff(ctx context.Context, id string, event *models.UIEvent)
 }
 
 // present shows an event through the host renderer. An event it presents
-// without error is on screen, so it counts as shown.
-func (s *Service) present(ctx context.Context, id string, event *models.UIEvent) {
+// without error is on screen, so it counts as shown. A renderer that cannot
+// show the event's kind is given hostNotice as a notice instead, when there is
+// one; that leaves the event itself unshown.
+func (s *Service) present(ctx context.Context, id string, event *models.UIEvent, hostNotice string) {
 	if s.renderer == nil {
 		return
+	}
+	asNotice := hostNotice != "" && !RendersKind(s.renderer, event.Kind) &&
+		RendersKind(s.renderer, models.UIEventKindNotice)
+	if asNotice {
+		event = &models.UIEvent{
+			ID:        event.ID,
+			Kind:      models.UIEventKindNotice,
+			Message:   hostNotice,
+			CreatedAt: event.CreatedAt,
+		}
 	}
 	closeFn, err := s.renderer.PresentUI(ctx, event)
 	if err != nil {
@@ -742,7 +758,7 @@ func (s *Service) present(ctx context.Context, id string, event *models.UIEvent)
 	if s.active != nil && s.active.event.ID == id {
 		s.active.closeRenderer = closeFn
 		s.mu.Unlock()
-		if err == nil {
+		if err == nil && !asNotice {
 			if shownErr := s.Shown(id); shownErr != nil && !errors.Is(shownErr, ErrNoActiveEvent) &&
 				!errors.Is(shownErr, ErrEventNotActive) {
 				log.Debug().Err(shownErr).Str("event_id", id).Msg("presented UI event could not be marked shown")

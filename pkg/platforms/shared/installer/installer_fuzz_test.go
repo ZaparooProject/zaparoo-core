@@ -20,6 +20,9 @@
 package installer
 
 import (
+	"context"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -63,6 +66,47 @@ func FuzzFindInstallDir(f *testing.F) {
 		}
 		if !isWithinDir(systemDir, got) {
 			t.Fatalf("install path escaped %s: url=%q path=%q", systemDir, rawURL, got)
+		}
+	})
+}
+
+// FuzzExtractZip holds extraction to its folder whatever the archive holds:
+// the zip comes from a media server, so every entry name and header is
+// untrusted.
+func FuzzExtractZip(f *testing.F) {
+	f.Add(buildZip(f, []zipEntry{{name: "Game.cue", body: "cue"}, {name: "Disc 1/Track.bin", body: "bin"}}))
+	f.Add(buildZip(f, []zipEntry{{name: "../escape", body: "x"}}))
+	f.Add(buildZip(f, []zipEntry{{name: `..\escape`, body: "x"}}))
+	f.Add(buildZip(f, []zipEntry{{name: "/abs", body: "x"}}))
+	f.Add(buildZip(f, []zipEntry{{name: "link", body: "/etc", mode: fs.ModeSymlink | 0o777}}))
+	f.Add([]byte("PK\x03\x04"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		base := t.TempDir()
+		zipPath := filepath.Join(base, "in.zip")
+		if err := os.WriteFile(zipPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(base, "out")
+		_ = extractZip(context.Background(), zipPath, dest, 1<<20)
+
+		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if p == base || p == zipPath || p == dest {
+				return nil
+			}
+			if !isWithinDir(dest, p) {
+				t.Fatalf("extraction wrote outside its folder: %s", p)
+			}
+			if d.Type()&fs.ModeSymlink != 0 {
+				t.Fatalf("extraction created a link: %s", p)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	})
 }

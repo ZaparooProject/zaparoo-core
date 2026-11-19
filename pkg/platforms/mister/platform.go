@@ -25,6 +25,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/misterdocs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -49,6 +50,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -214,6 +216,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		file.NewReader(cfg),
 		newOperatorReader(cfg, p.fs),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
@@ -865,7 +868,11 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 
 	p.clearTrackedActiveGame()
 
-	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
+	if proc == nil && intent == platforms.StopForMenu && p.idleOnMenu() {
+		// Reloading the menu would only restart it, and Main drops a launch
+		// sent while the menu core loads.
+		log.Debug().Msg("no tracked process and already on the menu, not reloading it")
+	} else if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
 		if err := p.loadMenu(intent == platforms.StopForMenu); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
@@ -879,6 +886,17 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	}
 
 	return nil
+}
+
+// idleOnMenu reports whether Main shows the menu with no launched core still
+// on its way, so there is nothing for a stop to return from.
+func (p *Platform) idleOnMenu() bool {
+	// Loading first: a core that comes up after this read is then seen by
+	// the core name read below.
+	if p.coreLoads.loading(time.Now()) {
+		return false
+	}
+	return stopCoreName() == misterconfig.MenuCore
 }
 
 // ReturnToMenu stops what is running and loads the menu core. A core still
@@ -950,6 +968,8 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
+	// A stop sent while this core loads must still reach it.
+	p.coreLoads.launched(time.Now())
 
 	// The bare Minimig core boots without AmigaVision's settings, to a black
 	// screen. With AmigaVision installed, the menu's Amiga entry is its MGL.
@@ -1016,6 +1036,7 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	if launch == nil {
 		launch = mgls.LaunchCoreAtRBF
 	}
+	p.coreLoads.launched(time.Now())
 	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
@@ -2053,7 +2074,8 @@ func (*Platform) ManagedByPackageManager() bool {
 	return hasTapto || hasAll
 }
 
-func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	docs := misterdocs.NewPlatformScraper(misterdocs.SetNameCache(NewArcadeSetNameCache(p)))
@@ -2062,7 +2084,8 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	catalog := gamedatabase.NewPlatformScraper(gamedatabase.SetNameCache(NewArcadeSetNameCache(p)))
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade, thumbnails.ID: thumbnails,
-		catalog.ID: catalog,
+		catalog.ID:    catalog,
+		rommServer.ID: rommServer,
 	}
 }
 

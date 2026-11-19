@@ -160,6 +160,34 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 	assert.NotContains(t, write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
 }
 
+func TestBuildPendingWrites_SkipImagesStagesMetadataOnly(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{
+		Artwork: []artworkRecord{{
+			Name: "Game (USA)", Key: "Game", ImagePath: filepath.Join("docs", "SNES", "Artwork", "Game.jpg"),
+		}},
+		GameInfo: map[string]gameInfoRecord{"Game": {Year: "1994", Developer: "Studio"}},
+		Synopsis: map[string]string{"Game": "An adventure"},
+		Manuals:  []string{filepath.Join("docs", "SNES", "Manuals", "Game.pdf")},
+	}}
+
+	matched := buildPendingWrites(
+		testSystemIndex(), records, scraper.ScrapeOptions{SkipImages: true}, &scraper.UnmappedValues{},
+	)
+	require.Len(t, matched.Targets, 1)
+	write := matched.Targets[0].Write
+	scrapertest.RequireValidWrite(t, write)
+	assert.True(t, write.SkipImages)
+	assert.Empty(t, write.MediaProps)
+	require.Len(t, write.TitleProps, 1, "only the description is kept")
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyDescription), write.TitleProps[0].TypeTag)
+	assert.Equal(t, []string{"1994"}, titleTagValues(write, tags.TagTypeYear))
+	assert.Equal(t, []string{"studio"}, titleTagValues(write, tags.TagTypeDeveloper))
+	assert.Equal(t, matchStats{Processed: 2, Matched: 1, Skipped: 1}, matched.Stats,
+		"the manual is counted as skipped")
+}
+
 func TestBuildPendingWrites_MarksOnlyScopedRuns(t *testing.T) {
 	t.Parallel()
 

@@ -59,6 +59,7 @@ var linkedMediaCopiesProperty = map[tags.TagValue]bool{
 	tags.TagPropertyMAMESetName:          true,
 	tags.TagPropertyGameID:               false,
 	tags.TagPropertyLauncherOverride:     false,
+	tags.TagPropertyUserFields:           false,
 }
 
 // linkedOwnPropertyFilter is a predicate on a TypeTagDBID column that is true
@@ -113,8 +114,12 @@ func sqlSystemHasMediaLinks(ctx context.Context, db sqlQueryable, systemDBIDs []
 	query := `SELECT EXISTS (SELECT 1 FROM MediaLinks)`
 	args := make([]any, 0, len(systemDBIDs))
 	if len(systemDBIDs) > 0 {
+		// CROSS JOIN pins the order to start from the links, of which there
+		// are few or none. Left to the planner it walked every media row of
+		// the named systems looking for a link, about 6 s for a whole
+		// library on a MiSTer, once per scraper per run.
 		query = `SELECT EXISTS (
-			SELECT 1 FROM MediaLinks l JOIN Media a ON a.DBID = l.MediaDBID
+			SELECT 1 FROM MediaLinks l CROSS JOIN Media a ON a.DBID = l.MediaDBID
 			WHERE a.SystemDBID IN (` + prepareVariadic("?", ",", len(systemDBIDs)) + `))`
 		for _, id := range systemDBIDs {
 			args = append(args, id)

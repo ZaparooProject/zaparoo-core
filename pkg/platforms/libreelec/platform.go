@@ -37,12 +37,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/jellyfin"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/plex"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/ccid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -53,6 +56,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -81,6 +85,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		simpleserialble.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
@@ -241,6 +246,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		jellyfin.NewJellyfinMovieLauncher(),
+		jellyfin.NewJellyfinTVEpisodeLauncher(),
+		jellyfin.NewJellyfinTVShowLauncher(),
+		jellyfin.NewJellyfinSongLauncher(),
+		jellyfin.NewJellyfinAlbumLauncher(),
+		jellyfin.NewJellyfinArtistLauncher(),
+		plex.NewPlexMovieLauncher(),
+		plex.NewPlexTVLauncher(),
+		plex.NewPlexTVShowLauncher(),
+		plex.NewPlexSongLauncher(),
+		plex.NewPlexAlbumLauncher(),
+		plex.NewPlexArtistLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
@@ -266,12 +283,14 @@ func (*Platform) ManagedByPackageManager() bool {
 	return false
 }
 
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (*Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)
 	return map[string]platforms.Scraper{
 		gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 }

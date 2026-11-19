@@ -610,3 +610,42 @@ func TestClose_PortCloseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to close serial port")
 	assert.False(t, reader.polling)
 }
+
+func TestOpen_USBSerialPath(t *testing.T) {
+	t.Parallel()
+
+	mockPort := testutils.NewMockSerialPort()
+	reader := NewReader(&config.Instance{})
+	var checked, opened []string
+	reader.checkExists = func(path string) error {
+		checked = append(checked, path)
+		return nil
+	}
+	reader.portFactory = func(path string, _ *serial.Mode) (testutils.SerialPort, error) {
+		opened = append(opened, path)
+		return mockPort, nil
+	}
+
+	device := config.ReadersConnect{Driver: "simple_serial", Path: "usbserial:1-2.3"}
+	require.NoError(t, reader.Open(device, testutils.CreateTestScanChannel(t), readers.OpenOpts{}))
+	assert.Equal(t, []string{"usbserial:1-2.3"}, checked)
+	assert.Equal(t, []string{"usbserial:1-2.3"}, opened)
+	assert.Equal(t, "usbserial:1-2.3", reader.Path())
+	assert.NotEmpty(t, reader.ReaderID())
+	require.NoError(t, reader.Close())
+}
+
+func TestOpen_USBSerialPathMissing(t *testing.T) {
+	t.Parallel()
+
+	reader := NewReader(&config.Instance{})
+	reader.checkExists = func(string) error { return assert.AnError }
+	reader.portFactory = func(string, *serial.Mode) (testutils.SerialPort, error) {
+		t.Fatal("a missing adapter must not be opened")
+		return nil, assert.AnError
+	}
+
+	device := config.ReadersConnect{Driver: "simple_serial", Path: "usbserial:1-2"}
+	err := reader.Open(device, testutils.CreateTestScanChannel(t), readers.OpenOpts{})
+	require.ErrorIs(t, err, assert.AnError)
+}

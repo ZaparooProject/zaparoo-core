@@ -180,8 +180,19 @@ type fileCollection struct {
 }
 
 type statusFile struct {
-	Local  statusEntry `json:"local"`
-	Remote statusEntry `json:"remote"`
+	// PendingAttempt is a scheduled remote backup that failed or was
+	// skipped, waiting to be sent with the next heartbeat. PendingFailure is
+	// an earlier failure, not yet sent, that a later skip replaced: the
+	// service records the last failure apart from the last attempt, so it is
+	// still sent.
+	PendingAttempt *attemptReport `json:"pendingAttempt,omitempty"`
+	PendingFailure *attemptReport `json:"pendingFailure,omitempty"`
+	// RemoteProtection and RemoteLastAttempt are the Online service's view
+	// of this device's backups, from the last device check that reached it.
+	RemoteProtection  *protectionStatus `json:"remoteProtection,omitempty"`
+	RemoteLastAttempt *attemptReport    `json:"remoteLastAttempt,omitempty"`
+	Local             statusEntry       `json:"local"`
+	Remote            statusEntry       `json:"remote"`
 }
 
 type statusEntry struct {
@@ -193,16 +204,19 @@ type statusEntry struct {
 	ScheduleEnabledSince  string                                 `json:"scheduleEnabledSince,omitempty"`
 	LastError             string                                 `json:"lastError,omitempty"`
 	LastStatus            string                                 `json:"lastStatus"`
-	Availability          string                                 `json:"availability,omitempty"`
-	DeviceName            string                                 `json:"deviceName,omitempty"`
-	LinkedAt              string                                 `json:"linkedAt,omitempty"`
-	FeaturesCheckedAt     string                                 `json:"featuresCheckedAt,omitempty"`
-	Warnings              []models.BackupWarning                 `json:"warnings,omitempty"`
-	Features              []string                               `json:"features,omitempty"`
-	LastBackupSize        int64                                  `json:"lastBackupSize"`
-	SkippedFiles          int                                    `json:"skippedFiles,omitempty"`
-	Unlinked              bool                                   `json:"unlinked,omitempty"`
-	LastRunNoChanges      bool                                   `json:"lastRunNoChanges,omitempty"`
+	// RunType is the remote backup type of a run in progress, so a run
+	// interrupted by power loss can be reported only when it was scheduled.
+	RunType           string                 `json:"runType,omitempty"`
+	Availability      string                 `json:"availability,omitempty"`
+	DeviceName        string                 `json:"deviceName,omitempty"`
+	LinkedAt          string                 `json:"linkedAt,omitempty"`
+	FeaturesCheckedAt string                 `json:"featuresCheckedAt,omitempty"`
+	Warnings          []models.BackupWarning `json:"warnings,omitempty"`
+	Features          []string               `json:"features,omitempty"`
+	LastBackupSize    int64                  `json:"lastBackupSize"`
+	SkippedFiles      int                    `json:"skippedFiles,omitempty"`
+	Unlinked          bool                   `json:"unlinked,omitempty"`
+	LastRunNoChanges  bool                   `json:"lastRunNoChanges,omitempty"`
 }
 
 func NewManager(cfg *config.Instance, pl platforms.Platform, db *database.Database) *Manager {
@@ -537,6 +551,12 @@ func (m *Manager) Status() models.BackupStatusResponse {
 	local := toStatusEntry(&stored.Local, true, "")
 	remote := toStatusEntry(&stored.Remote, m.cfg.BackupRemoteEnabled(), m.cfg.BackupRemoteSchedule())
 	remote.Linked = remoteLinked
+	if remoteLinked {
+		remote.Protection = protectionToModel(stored.RemoteProtection)
+		if !attemptSuperseded(stored.RemoteLastAttempt, stored.RemoteProtection, stored.Remote.LastSuccessAt) {
+			remote.LastAttempt = attemptToModel(stored.RemoteLastAttempt)
+		}
+	}
 	status := models.BackupStatusResponse{Local: local, Remote: remote}
 	if m.coordinator != nil {
 		kind, startedAt, active := m.coordinator.Active()
@@ -657,12 +677,21 @@ func (m *Manager) RecoverInterruptedRuns() {
 
 	st := m.readStatusLocked()
 	changed := false
+	now := time.Now()
 	for _, entry := range []*statusEntry{&st.Local, &st.Remote} {
 		if entry.LastStatus != StatusRunning {
 			continue
 		}
+		if entry == &st.Remote && entry.RunType == RemoteBackupTypeScheduled && helpers.IsClockReliable(now) {
+			st.queueAttempt(&attemptReport{
+				At:     now.UTC().Truncate(time.Second),
+				Status: AttemptStatusFailed,
+				Reason: AttemptReasonInterrupted,
+			})
+		}
 		entry.LastStatus = StatusFailed
 		entry.LastError = statusErrorInterrupted
+		entry.RunType = ""
 		changed = true
 	}
 	if !changed {

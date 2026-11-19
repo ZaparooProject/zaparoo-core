@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1172,13 +1173,13 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 		ID:       "TestAnyScannerLauncher",
 		SystemID: "", // Empty = "any" scanner that runs against all systems
 		Scanner: func(_ context.Context, _ *config.Instance, systemID string,
-			_ []platforms.ScanResult,
+			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			scannerCalls[systemID]++
-			// Return a result for this system
-			return []platforms.ScanResult{
-				{Name: "Test Item from any scanner", Path: "test://any/" + systemID + "/item"},
-			}, nil
+			// Add a result for this system to what was already collected.
+			return append(results, platforms.ScanResult{
+				Name: "Test Item from any scanner", Path: "test://any/" + systemID + "/item",
+			}), nil
 		},
 	}
 
@@ -1784,9 +1785,9 @@ func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
 
 // TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles is the regression
 // test for a failing pipeline (non-SkipFilesystemScan) scanner clobbering the
-// collected file list. The filesystem files must still be staged, and because
-// the scan is incomplete the previously indexed row absent from this run must
-// keep its missing state instead of being flagged.
+// collected file list. The filesystem files must still be staged. Media the
+// failed scanner reported on an earlier run keeps its state, while a file the
+// walk no longer finds is flagged missing (#1815).
 func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
 	for _, scanFailure := range []error{
@@ -1811,15 +1812,21 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 				Folders:    []string{customDir},
 				Extensions: []string{".iso", ".bin"},
 			}
-			// Pipeline scanner that fails outright (e.g. corrupt gamelist.xml).
+			// Scanner that adds one entry of its own, then fails outright on
+			// the second run (e.g. corrupt gamelist.xml).
+			addedPath := filepath.Join(customDir, "scanner-only.iso")
+			var failing atomic.Bool
 			failingLauncher := platforms.Launcher{
 				ID:                 "failing-enricher",
 				SystemID:           systemdefs.SystemPS2,
 				SkipFilesystemScan: errors.Is(scanFailure, platforms.ErrScannerUnavailable),
 				Scanner: func(_ context.Context, _ *config.Instance, _ string,
-					_ []platforms.ScanResult,
+					results []platforms.ScanResult,
 				) ([]platforms.ScanResult, error) {
-					return nil, scanFailure
+					if failing.Load() {
+						return nil, scanFailure
+					}
+					return append(results, platforms.ScanResult{Path: addedPath}), nil
 				},
 			}
 
@@ -1847,14 +1854,15 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 				testLauncherCacheMutex.Unlock()
 			}()
 
-			// Plant a previously indexed row that this run won't collect. With the
-			// scan incomplete it must keep IsMissing=0.
+			// Plant a walked row that the next run won't collect. Only the
+			// scanner failed, so the walk's absence still flags it missing.
 			plantedPath := filepath.Join(customDir, "planted.iso")
 			require.NoError(t, os.WriteFile(plantedPath, []byte("test"), 0o600))
 			systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
 			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 			require.NoError(t, err)
 			require.NoError(t, os.Remove(plantedPath))
+			failing.Store(true)
 
 			filesIndexed, err := NewNamesIndex(
 				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
@@ -1869,11 +1877,121 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 			for _, entry := range mediaEntries {
 				byBase[filepath.Base(entry.Path)] = entry
 			}
-			require.Len(t, byBase, 3)
+			require.Len(t, byBase, 4)
 			assert.False(t, byBase["game1.iso"].IsMissing)
 			assert.False(t, byBase["game2.bin"].IsMissing)
-			assert.False(t, byBase["planted.iso"].IsMissing,
-				"an incomplete scan must not flag absent media as missing")
+			assert.False(t, byBase["scanner-only.iso"].IsMissing,
+				"media the failed scanner reported must keep its state")
+			assert.True(t, byBase["planted.iso"].IsMissing,
+				"a failed scanner must not stop the walk flagging a deleted file")
+			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
+				assert.Contains(t, output.String(), "optional installation unavailable")
+				assert.NotContains(t, output.String(), `"level":"error"`)
+			} else {
+				assert.Contains(t, output.String(), `"level":"error"`)
+			}
+		})
+	}
+}
+
+// TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia covers a scanner
+// with no system of its own whose source is closed for this run, such as a
+// frontend that is not running. It is asked once per system, so the absence
+// must not be logged as an error each time, and the media it indexed earlier
+// must keep its state. A file the walk no longer finds is still flagged
+// missing, since only the frontend failed (#1815).
+func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
+	for _, scanFailure := range []error{
+		platforms.ErrScannerUnavailable,
+		errors.Join(platforms.ErrScannerUnavailable, os.ErrPermission),
+	} {
+		t.Run(scanFailure.Error(), func(t *testing.T) {
+			var output bytes.Buffer
+			originalLogger, originalLevel := log.Logger, zerolog.GlobalLevel()
+			log.Logger = zerolog.New(&output)
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = originalLogger; zerolog.SetGlobalLevel(originalLevel) })
+
+			available := true
+			anyLauncher := platforms.Launcher{
+				ID: "frontend",
+				Scanner: func(_ context.Context, _ *config.Instance, systemID string,
+					results []platforms.ScanResult,
+				) ([]platforms.ScanResult, error) {
+					if !available {
+						return results, scanFailure
+					}
+					if systemID != systemdefs.SystemPS2 {
+						return results, nil
+					}
+					return append(results, platforms.ScanResult{
+						Path: "frontend://1/Frontend%20Game", Name: "Frontend Game", NoExt: true,
+					}), nil
+				},
+			}
+
+			romDir := t.TempDir()
+			keptPath := filepath.Join(romDir, "kept.iso")
+			deletedPath := filepath.Join(romDir, "deleted.iso")
+			require.NoError(t, os.WriteFile(keptPath, []byte("test"), 0o600))
+			require.NoError(t, os.WriteFile(deletedPath, []byte("test"), 0o600))
+			folderLauncher := platforms.Launcher{
+				ID:         "folder-ps2",
+				SystemID:   systemdefs.SystemPS2,
+				Folders:    []string{romDir},
+				Extensions: []string{".iso"},
+			}
+
+			fsHelper := testhelpers.NewMemoryFS()
+			cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+			require.NoError(t, err)
+
+			platform := mocks.NewMockPlatform()
+			platform.On("ID").Return("test-platform")
+			platform.On("Settings").Return(platforms.Settings{})
+			platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+				[]platforms.Launcher{anyLauncher, folderLauncher})
+
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			defer cleanup()
+
+			testLauncherCacheMutex.Lock()
+			originalCache := helpers.GlobalLauncherCache
+			testCache := &helpers.LauncherCache{}
+			testCache.Initialize(platform, cfg)
+			helpers.GlobalLauncherCache = testCache
+			defer func() {
+				helpers.GlobalLauncherCache = originalCache
+				testLauncherCacheMutex.Unlock()
+			}()
+
+			systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+			filesIndexed, err := NewNamesIndex(
+				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 3, filesIndexed)
+
+			available = false
+			require.NoError(t, os.Remove(deletedPath))
+			output.Reset()
+			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+			require.NoError(t, err)
+
+			mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+			require.NoError(t, err)
+			byBase := make(map[string]database.MediaWithFullPath)
+			for _, entry := range mediaEntries {
+				byBase[filepath.Base(entry.Path)] = entry
+			}
+			require.Len(t, byBase, 3)
+			assert.False(t, byBase["Frontend%20Game"].IsMissing,
+				"media from a source that is closed for this run must not be flagged missing")
+			assert.False(t, byBase["kept.iso"].IsMissing)
+			assert.True(t, byBase["deleted.iso"].IsMissing,
+				"a closed frontend must not stop the walk flagging a deleted file")
 			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
 				assert.Contains(t, output.String(), "optional installation unavailable")
 				assert.NotContains(t, output.String(), `"level":"error"`)
@@ -2837,4 +2955,76 @@ func TestAnyScannerSourceUnavailableIsSkipped(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "skipping TestUnreachableAnyScanner 'any' scanner: service unavailable")
 	assert.NotContains(t, output, "error running TestUnreachableAnyScanner")
+}
+
+// An any-scanner sees the files already collected for the system, so a
+// remote source can leave out games the device has, and whatever it returns
+// becomes the system's file list.
+func TestAnyScannerSeesCollectedFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	root := t.TempDir()
+	nesDir := filepath.Join(root, "NES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(nesDir, "Local Game.nes"), []byte("x"), 0o600))
+
+	var seen []string
+	anyLauncher := platforms.Launcher{
+		ID: "TestRemoteSource",
+		Scanner: func(_ context.Context, _ *config.Instance, systemID string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			if systemID != systemdefs.SystemNES {
+				return results, nil
+			}
+			have := map[string]bool{}
+			for _, r := range results {
+				seen = append(seen, filepath.Base(r.Path))
+				have[filepath.Base(r.Path)] = true
+			}
+			for _, name := range []string{"Local Game.nes", "Remote Game.nes"} {
+				if !have[name] {
+					results = append(results, platforms.ScanResult{
+						Name: strings.TrimSuffix(name, ".nes"), Path: "remote://1/" + name, NoExt: true,
+					})
+				}
+			}
+			return results, nil
+		},
+	}
+	nesLauncher := platforms.Launcher{
+		ID: "NES", SystemID: systemdefs.SystemNES, Folders: []string{"NES"}, Extensions: []string{".nes"},
+	}
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{nesLauncher, anyLauncher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	nes, err := systemdefs.GetSystem(systemdefs.SystemNES)
+	require.NoError(t, err)
+	indexed, err := NewNamesIndex(context.Background(), platform, cfg,
+		[]systemdefs.System{*nes}, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Local Game.nes"}, seen, "the any-scanner receives the local files")
+	assert.Equal(t, 2, indexed, "the local game once, plus the remote-only game")
 }

@@ -702,7 +702,7 @@ func TestStagedPropertiesFromPath_SkipsIdentifyWhenPropertyExists(t *testing.T) 
 		"HasMediaPropertyForPath", mock.Anything, systemdefs.SystemPSX, path, string(tags.TagPropertyGameID),
 	).Return(true, nil).Once()
 
-	props := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path)
+	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path, nil)
 
 	require.Empty(t, props)
 	mockDB.AssertExpectations(t)
@@ -714,7 +714,7 @@ func TestStagedPropertiesFromPath_NonCandidateSkipsAllDBWork(t *testing.T) {
 	mockDB := &helpers.MockMediaDBI{}
 	path := filepath.Join("roms", systemdefs.SystemNES, "Super Mario Bros.nes")
 
-	props := stagedPropertiesFromPath(mockDB, systemdefs.SystemNES, path)
+	props, _ := stagedPropertiesFromPath(mockDB, systemdefs.SystemNES, path, nil)
 
 	require.Empty(t, props)
 	mockDB.AssertNotCalled(t, "HasMediaPropertyForPath", mock.Anything, mock.Anything, mock.Anything, mock.Anything)

@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/rommlib"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -301,15 +302,17 @@ func (*Platform) ManagedByPackageManager() bool { return true }
 
 // Scrapers offers the libretro thumbnail scraper (box art, screenshots and
 // title screens for indexed media, matched by libretro's own sanitised name;
-// it never runs automatically after indexing, since it is the only scraper
-// that downloads), the embedded game catalog and, once a host is present, an
-// app icon scraper for installed apps offered as media.
-func (p *Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
+// it never runs automatically after indexing, since it downloads from a
+// public server), the embedded game catalog, the RomM scraper and, once a
+// host is present, an app icon scraper for installed apps offered as media.
+func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	rommServer := rommlib.NewPlatformScraper(cfg)
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	folderCovers := localmedia.NewPlatformScraper()
 	catalog := gamedatabase.NewPlatformScraper(nil)
 	scrapers := map[string]platforms.Scraper{
 		thumbnails.ID: thumbnails, folderCovers.ID: folderCovers, catalog.ID: catalog,
+		rommServer.ID: rommServer,
 	}
 	if p.host != nil {
 		apps := p.appScraper()

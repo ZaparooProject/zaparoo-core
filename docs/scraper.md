@@ -8,9 +8,11 @@ Current scraper implementations:
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, screenshots, title screens, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 - `mister-arcade` imports the MiSTer arcade catalog's metadata onto indexed `.mra` rows, keyed by the MAME set name declared inside each descriptor. It is registered on MiSTer and MiSTeX, reads the catalog those platforms already cache and embed, and runs automatically after arcade indexing.
-- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept in the image folder (`[media] image_dir`, `images` under Core's data directory by default) as `libretro/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties holding a path relative to that folder, `images://libretro/<playlist>/<kind>/<name>.png`, so the folder can be moved by changing the setting. Core never copies or moves images when the setting changes: copy the folder yourself, or let a fill-missing run download what is absent. A PNG dropped into a `<kind>` folder is matched like a downloaded one. Before each download the run checks the image folder's free space and stops, reporting the reason in the scrape status, when less than 500 MB would be left. Older versions kept these files in `libretro-thumbnails/` under the data directory; Core moves that folder into the image folder once on startup when the two share a filesystem, and leaves it in place otherwise. It is the only scraper that downloads, so it never runs automatically after indexing. It is registered on every platform.
+- `libretro-thumbnails` downloads box art, screenshots and title screens from the libretro thumbnail server (`https://thumbnails.libretro.com`), the source RetroArch uses, for systems with a libretro playlist. A file matches its thumbnail by name, after libretro's rule of replacing ``&*/:`<>?\|`` with `_`: an arcade set archive by the game MAME names it (`dkong.zip` by "Donkey Kong (US set 1)", from `pkg/database/arcadenames`) and then its own name, a ScummVM launch file by ScummVM's title for its game ID (`pkg/database/scummvmnames`) and then its own name, any other file by its own name. Failing that it matches by its indexed title slug, ranked by shared region, then clean No-Intro names over dump flags, pre-release builds and TOSEC dates. Images and each playlist's name index (refreshed weekly) are kept in the image folder (`[media] image_dir`, `images` under Core's data directory by default) as `libretro/<playlist>/<kind>/`, and recorded as `image-boxart`, `image-screenshot` and `image-titleshot` media properties holding a path relative to that folder, `images://libretro/<playlist>/<kind>/<name>.png`, so the folder can be moved by changing the setting. Core never copies or moves images when the setting changes: copy the folder yourself, or let a fill-missing run download what is absent. A PNG dropped into a `<kind>` folder is matched like a downloaded one. Before each download the run checks the image folder's free space and stops, reporting the reason in the scrape status, when less than 500 MB would be left. Older versions kept these files in `libretro-thumbnails/` under the data directory; Core moves that folder into the image folder once on startup when the two share a filesystem, and leaves it in place otherwise. It downloads from a public server, so it never runs automatically after indexing. It is registered on every platform.
 - `gamedatabase` fills in game facts from an embedded copy of [PigSaint's GameDataBase](https://github.com/PigSaint/GameDataBase): genre, players, controls, save and add-on hardware, franchise, ports, compilation contents, release year, developer and publisher. It matches console titles by title slug and arcade sets by MAME set name, never by file hash, needs no network, and runs automatically after indexing. It is registered on every platform.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
+- `playnite` imports Playnite's own game metadata (release year, developers, publishers, genres, description) and cover and background images for media indexed by the Playnite launcher, on every system Playnite files games under. It is registered only on Windows when Playnite is installed or its Zaparoo extension is connected, and reads the library through that extension, so Playnite has to be running.
+- `romm` imports a RomM server's metadata (release year, developers, publishers, genres, players, rating, regions, languages, summary) and cover and screenshot images, for games indexed from that server and for the device's own copies of games the server holds. It is registered on every platform and runs automatically after indexing while a RomM server is configured.
 
 ## Code Layout
 
@@ -22,6 +24,8 @@ Current scraper implementations:
 | `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
 | `pkg/database/scraper/libretrothumbs/` | libretro thumbnail server index, name matching, and image downloader |
 | `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
+| `pkg/database/scraper/playnitelib/` | Playnite library metadata and image importer for Playnite-launched games |
+| `pkg/database/scraper/rommlib/` | RomM server metadata and artwork importer, by ROM ID and by file name |
 | `pkg/database/scraper/misterarcade/` | MiSTer arcade catalog reader, field mapping, and control-vocabulary normalisation |
 | `pkg/database/scraper/mra/` | Shared MiSTer arcade descriptor set-name reader |
 | `pkg/database/scraper/gamedatabase/` | GameDataBase tag grammar, vocabulary tables, title and set-name matching, and write mapping |
@@ -51,13 +55,14 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 ### Ordinary Jobs After Indexing
 
-A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper, Playnite and `mister-arcade` opt in. A scraper that is not tied to particular launchers sets `AutoScrapeAllLaunchers` instead, so every indexed system it supports queues it; `mister-docs` does, because it only reads packs already on the card and skips a system that has none, and `gamedatabase` does, because its data is keyed by title and set name whichever launcher found the file. The remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
 
 Index jobs run in each scraper's `AutoScrapeOrder`, lowest first, then by scraper ID. They only fill what is missing, so the order decides which source keeps a single-valued field two of them offer:
 
 | Order | Constant | Scrapers |
 |---|---|---|
-| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, the Android apps scraper: sources that describe this device's own library |
+| 100 | `scraper.AutoOrderDevice` | `mister-arcade`, `pinup-popper`, `playnite`, the Android apps scraper: sources that describe this device's own library |
+| 150 | `scraper.AutoOrderLibraryServer` | `romm`: a game library server the user runs, curated by its owner |
 | 200 | `scraper.AutoOrderCatalog` | `gamedatabase`: a general catalog matched by name |
 | 300 | `scraper.AutoOrderDocuments` | `mister-docs`: documents and artwork that also carry some game facts |
 
@@ -76,6 +81,14 @@ Indexing is only a trigger, not a durable parent workflow: use `media.scrape.can
 Index-triggered jobs only fill missing metadata. A property is missing when no row of that type exists—not when its text is empty or its artwork file has disappeared. Existing exclusive tag values remain; additive tags may gain values. Nothing is automatically replaced or deleted.
 
 These checks and inserts share the existing single/batch scrape transaction. A batch is written with multi-row statements under either policy: a fill-missing batch reads which rows already hold a value for each exclusive tag type once, inserts tag links with `INSERT OR IGNORE` and properties with `ON CONFLICT DO NOTHING`, and stores what the one-target-at-a-time policy stores for the same targets in the same order (the first target to offer a shared title's field wins it). Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+
+### Metadata-Only Runs
+
+`media.scrape` accepts `skipImages` for scrapers that set `SupportsSkipImages`: `gamelist.xml`, `mister-docs`, PinUP Popper and Playnite. Scrapers that only supply art, or only metadata, reject it, and `scrapers` reports the flag per scraper as `supportsSkipImages`. The flag is stored with the operation and its queued jobs, so a resumed or queued run keeps it.
+
+Art means `property:image-*`, `property:video` and `property:manual`. A metadata-only run builds none of them, so it does not stat art files, and the write path drops any that reach it (`ScrapeWrite.SkipImages`). Tags, descriptions and other metadata properties are written under the usual force or fill-missing policy, and art already stored is never touched: `mister-docs` skips its force cleanup of stale image and manual properties.
+
+A metadata-only write leaves out the scraper sentinel, and the run does not store an unchanged-system fingerprint. A later run without `skipImages`, manual or index-triggered, therefore still reaches those rows and adds their art. Those rows do not count towards `totalScraped`. Without a sentinel, a resumed metadata-only run without `force` writes the rows it already reached again. A forced run skips them through its run marker, except a `mister-docs` run over whole systems, which marks rows only on scoped runs.
 
 ### Unchanged Systems
 
@@ -140,6 +153,8 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 | `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise), multigame (compilation classification) |
 | `MediaTitleProperties` | Title-level shared static content | description, XML game ID, GameDataBase identity and raw compilation member IDs |
 | `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
+
+A user can edit a title's name, description and common tags and a file's images by hand (`media.meta.update`). Those values live in UserDB (`MediaUserFields`) and are copied into the same tables, with a `property:user-fields` marker on the title or file listing which fields hold one. Scraper write paths do not look at the marker: a scrape may overwrite a user value, and `database.ReapplyMediaUserFields` puts it back when the run ends, as it does after every index.
 
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
 
@@ -434,7 +449,7 @@ JSON-RPC methods:
 
 | Method | Purpose |
 |---|---|
-| `scrapers` | Lists registered scrapers with ID, name, and supported systems |
+| `scrapers` | Lists registered scrapers with ID, name, supported systems, and whether they accept `skipImages` |
 | `media.scrape` | Starts a scraper run as a background operation |
 | `media.scrape.status` | Returns latest in-memory scraper status plus current DB scraped count |
 | `media.scrape.cancel` | Cancels the active scraper run |
@@ -449,7 +464,8 @@ JSON-RPC methods:
 {
   "scraperId": "gamelist.xml",
   "systems": ["snes", "nes"],
-  "force": false
+  "force": false,
+  "skipImages": false
 }
 ```
 
@@ -482,7 +498,7 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 }
 ```
 
-`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count. Existing flat fields stay for compatibility; new UIs should use `currentSystem` for current-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run system-step progress.
+`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count, so records written by a metadata-only run are not counted. Status and notifications carry `skipImages: true` while such a run is active. Existing flat fields stay for compatibility; new UIs should use `currentSystem` for current-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run system-step progress.
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
@@ -652,8 +668,45 @@ The PinUP Popper launcher indexes tables as `popper://<GameID>/<name>` virtual p
 | `BackGlass` image | `MediaProperties: image-marquee` | The backglass is the pinball counterpart of a marquee |
 | `GameInfo` image | `MediaProperties: image-image` | Flyer or info card |
 
+## Playnite Behavior
+
+The Playnite launcher indexes games as `playnite://<game ID>/<name>` virtual paths, so the scraper needs no name matching: it asks the Zaparoo extension for the library once, with details, and resolves each media row's game ID to its Playnite game. Only the systems Playnite games are filed under are visited. Rows already carrying `scraper.playnite:scraped` are left out unless the scrape is forced; rows whose game no longer exists in Playnite are counted as skipped. Write failures are fatal, as for Popper.
+
+| Playnite field | Destination | Notes |
+|---|---|---|
+| `ReleaseDate` | `MediaTitleTags: year` | Exclusive, the year only |
+| `Developers` | `MediaTitleTags: developer` | Company-name normalized |
+| `Publishers` | `MediaTitleTags: publisher` | Company-name normalized |
+| `Genres` | `MediaTitleTags: genre` | Mapped through the shared genre name table; names with no mapping are dropped and counted |
+| `Description` | `MediaTitleProperties: description` | HTML reduced to plain text, at most 4000 characters |
+| `CoverImage` | `MediaProperties: image-boxart` | Only when Playnite holds the file locally |
+| `BackgroundImage` | `MediaProperties: image-fanart` | Only when Playnite holds the file locally |
+| `Icon`, tags, features, series, scores | not imported | |
+
 ### Frontend Ownership Boundary
 
 Popper uses one application-local `pinup.Integration` object for launch attempts, process observations and worker shutdown. Windows supplies that object through existing `Launcher.Scanner`, `Launch`, `Kill`, availability and startup/shutdown hooks. Registration does not start Popper or polling workers. This is the pattern for later frontend integrations: keep mutable state local and connect existing callbacks, rather than requiring a shared lifecycle framework.
 
 Table stop uses Popper's frontend exit command and bounded observation/retries, including its loading period. Core does not take ownership of a foreign emulator process for generic child reaping or tree killing. Popper does not provide a session-fenced stop token: an external frontend replacement can race an unconditional exit request. Local attempt guards prevent stale Core retries/publications but cannot make that frontend protocol globally atomic.
+
+## RomM Behavior
+
+The RomM launcher indexes the server's games as `romm://<ROM ID>/<name>` virtual paths. The scraper lists the server's ROMs once per system and matches each media row: a `romm://` row by its ROM ID, any other row by its file name, ignoring case, and then by its name without the extension against RomM's `fs_name_no_ext`, so the device's own copy of a game the server holds is described too. A name two ROMs on the server share matches neither. Rows already carrying `scraper.romm:scraped` are left out unless the scrape is forced. A fill-missing run skips a system whose ROM list (each ROM's ID and `updated_at`) and library revision are as its last completed run left them.
+
+A server that cannot be reached, or refuses the stored token, ends the run with a source error rather than a fatal one: indexing queues this scraper whenever a server is configured, and a server that is switched off is not a fault in Core. Database failures are fatal.
+
+| RomM field | Destination | Notes |
+|---|---|---|
+| `metadatum.first_release_date` | `MediaTitleTags: year` | Milliseconds since the epoch; the year only |
+| `metadatum.developers` | `MediaTitleTags: developer` | Company-name normalized |
+| `metadatum.publishers` | `MediaTitleTags: publisher` | Company-name normalized |
+| `metadatum.genres` | `MediaTitleTags: genre` | Mapped through the shared genre name table; names with no mapping are dropped and counted |
+| `metadatum.player_count` | `MediaTitleTags: players` | The highest number in the text, so `1-4` is `4` |
+| `metadatum.average_rating` | `MediaTitleTags: rating` | Rounded, 0-100 |
+| `regions` | `MediaTags: region` | Through the filename region table; unknown words are dropped and counted |
+| `languages` | `MediaTags: lang` | Through the filename language table; unknown words are dropped and counted |
+| `summary` | `MediaTitleProperties: description` | Whitespace collapsed, at most 4000 characters |
+| `path_cover_large`, else `path_cover_small` | `MediaProperties: image-boxart` | Downloaded |
+| first of `merged_screenshots` | `MediaProperties: image-screenshot` | Downloaded |
+
+Images are kept in the image folder as `romm/<server>/<ROM ID>/cover.<ext>` and `screenshot.<ext>`, where `<server>` is a digest of the server URL, since ROM IDs are only unique on one server, and recorded as `images://romm/...` paths. Only PNG, JPEG, WebP and GIF files are kept, judged by their content, and each is at most 16 MiB. A stored image is reused unless the scrape is forced. Before each download the run checks the image folder's free space; once less than 500 MB would be left it stops downloading images for the rest of the run, and keeps writing the text fields.

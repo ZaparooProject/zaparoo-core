@@ -22,7 +22,6 @@ package mediadb
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -95,13 +94,17 @@ func TestRollbackTransactionAfterCancelSucceeds(t *testing.T) {
 			mediaDB.SetIndexingCacheSize(boosted)
 
 			require.NoError(t, mediaDB.BeginTransaction(false))
-			writer := mediaDB.txConn
+			sqlDB := mediaDB.sql.Load()
+			open := sqlDB.Stats().OpenConnections
 			cancel()
 			// database/sql rolls the transaction back and discards its
 			// connection on its own goroutine; wait for that so the rollback
-			// below always follows it.
+			// below always follows it. The pool's count is watched, not the
+			// writer itself: sql.Conn checks that it is still open before
+			// it takes its lock, so a call that lands while the connection
+			// is being closed dereferences a connection that is gone.
 			require.Eventually(t, func() bool {
-				return errors.Is(writer.PingContext(context.Background()), sql.ErrConnDone)
+				return sqlDB.Stats().OpenConnections < open
 			}, 5*time.Second, time.Millisecond)
 
 			require.NoError(t, mediaDB.RollbackTransaction())

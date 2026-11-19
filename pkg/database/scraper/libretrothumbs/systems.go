@@ -19,7 +19,11 @@
 
 package libretrothumbs
 
-import "slices"
+import (
+	"slices"
+	"strings"
+	"sync"
+)
 
 // playlists maps Core system IDs to libretro-thumbnails playlist folders, in
 // the order they are tried. The names are the server's directory names, which
@@ -146,4 +150,43 @@ func SupportedSystems() []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// databaseOwners orders the systems that share a libretro database name, so a
+// RetroArch playlist named after it lands on the system it is mostly made of.
+// Systems not listed follow in name order.
+var databaseOwners = map[string][]string{
+	"Atari - 8-bit":        {"Atari800"},
+	"Commodore - Amiga":    {"Amiga", "Amiga500", "Amiga1200"},
+	"FBNeo - Arcade Games": {"Arcade"},
+	"MAME":                 {"Arcade"},
+	"Microsoft - MSX":      {"MSX", "MSX1"},
+	"Microsoft - MSX2":     {"MSX2", "MSX"},
+	"SNK - Neo Geo":        {"NeoGeo"},
+}
+
+var systemsByDatabase = sync.OnceValue(func() map[string][]string {
+	byName := make(map[string][]string)
+	for id, names := range playlists {
+		for _, name := range names {
+			key := strings.ToLower(name)
+			byName[key] = append(byName[key], id)
+		}
+	}
+	for _, ids := range byName {
+		slices.Sort(ids)
+	}
+	for name, owners := range databaseOwners {
+		key := strings.ToLower(name)
+		rest := slices.DeleteFunc(byName[key], func(id string) bool { return slices.Contains(owners, id) })
+		byName[key] = append(slices.Clone(owners), rest...)
+	}
+	return byName
+})
+
+// SystemsForDatabase returns the Core systems a libretro database name, such
+// as a RetroArch playlist name, belongs to, best match first. The name is
+// matched without regard to case.
+func SystemsForDatabase(name string) []string {
+	return slices.Clone(systemsByDatabase()[strings.ToLower(strings.TrimSpace(name))])
 }

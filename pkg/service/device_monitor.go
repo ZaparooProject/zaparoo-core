@@ -37,6 +37,7 @@ func newDeviceMonitor(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	publish func(models.Notification),
+	onBluetoothBusy func(busy bool),
 ) *device.Monitor {
 	defaults := device.DefaultReaders()
 	return device.NewMonitor(&device.Options{
@@ -46,6 +47,8 @@ func newDeviceMonitor(
 		Publish:  publish,
 		Readers:  platforms.ResolveDeviceReaders(pl, &defaults),
 		Prober:   hoststatus.NewProber(hoststatus.DefaultConnectivityURLs, nil),
+
+		OnBluetoothBusy: onBluetoothBusy,
 	})
 }
 

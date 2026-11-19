@@ -181,3 +181,16 @@ func TestMenuUntilShownStopsForANewLaunch(t *testing.T) {
 
 	assert.Zero(t, m.sends, "the launch supersedes the stop")
 }
+
+func TestCoreLoadStopsLoading(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	var c coreLoadStops
+	assert.False(t, c.loading(now), "nothing launched")
+	c.launched(now)
+	assert.True(t, c.loading(now.Add(time.Second)))
+	assert.False(t, c.loading(now.Add(coreLoadWindow)), "the window closed")
+	c.coreChanged("NES", now.Add(2*time.Second))
+	assert.False(t, c.loading(now.Add(3*time.Second)), "the core came up")
+}

@@ -173,7 +173,7 @@ func TestRunTokenZapScript_PanickingStopStillOpensTheStopGate(t *testing.T) {
 	mockPlatform.ExpectedCalls = kept
 	mockPlatform.On("ReturnToMenu").Run(func(mock.Arguments) { panic("the menu failed to open") }).Return(nil)
 
-	err := runTokenZapScriptRecovering(svc, tokens.Token{
+	err := runTokenZapScriptRecovering(svc.State.GetContext(), svc, tokens.Token{
 		Text: "**stop", Source: tokens.SourceAPI, ScanTime: time.Now(),
 	}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)})
 	require.ErrorIs(t, err, errLaunchPanicked)

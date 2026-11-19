@@ -74,7 +74,9 @@ type UIStateResponse struct {
 type SearchResultMedia struct {
 	RelPath *string `json:"relativePath,omitempty"`
 	// VersionCount is set by a search grouped by title: how many versions of
-	// the title matched, across the whole search rather than this page.
+	// the game matched, across the whole search rather than this page. It
+	// counts the versions filed under other titles too, such as a regional
+	// release with its own name.
 	VersionCount *int   `json:"versionCount,omitempty"`
 	System       System `json:"system"`
 	Name         string `json:"name"`
@@ -90,6 +92,79 @@ type SearchResultMedia struct {
 	// its versions. Valid until the next media index.
 	TitleID  int64 `json:"titleId,omitempty"`
 	HasCover bool  `json:"hasCover"`
+}
+
+// Version link reasons: why a media.versions row is a version of the game
+// asked about.
+const (
+	// VersionReasonTitle marks a row that shares the game's title.
+	VersionReasonTitle = "title"
+	// VersionReasonLink marks a row filed under another title that a source
+	// declared to be the same game.
+	VersionReasonLink = "link"
+)
+
+// MediaVersion is one version of a game: a search result with the reason it
+// belongs to the game.
+type MediaVersion struct {
+	Reason string `json:"reason"`
+	// Sources names the kinds of identity that tie the row's title to the
+	// game, such as "mame-set". Set only when Reason is "link".
+	Sources []string `json:"sources,omitempty"`
+	SearchResultMedia
+	// Current marks the media the request asked about.
+	Current bool `json:"current,omitempty"`
+}
+
+type MediaVersionsResponse struct {
+	Pagination *PaginationInfo `json:"pagination,omitempty"`
+	Versions   []MediaVersion  `json:"versions"`
+	// Total is the number of versions across every page, the same number
+	// versionCount reports for the game.
+	Total int `json:"total"`
+}
+
+// MediaReason is one thing a suggested item shares with the media it was
+// suggested for. Code names the kind of thing, such as "series" or "genre",
+// and Tags are the shared values.
+type MediaReason struct {
+	Code string             `json:"code"`
+	Tags []database.TagInfo `json:"tags,omitempty"`
+}
+
+// SuggestedMedia is a search result with the reasons it was suggested. Seed
+// and Signal are set on queue items only: the media the item is most like and
+// the interest shown in it, or Signal "playLater" for media the profile
+// marked to play.
+type SuggestedMedia struct {
+	Seed    *SearchResultMedia `json:"seed,omitempty"`
+	Signal  string             `json:"signal,omitempty"`
+	Reasons []MediaReason      `json:"reasons"`
+	SearchResultMedia
+}
+
+type MediaSimilarResponse struct {
+	Results []SuggestedMedia `json:"results"`
+}
+
+// RecommendedSection is one group of recommendations. Kind is "seed" for
+// media like one the profile showed interest in, "playLater" for media it
+// marked to play, "series" for more of a series it plays, and "queue" for
+// the single ranked list of the queue layout.
+type RecommendedSection struct {
+	// Seed is the media a seed section is built around.
+	Seed *SearchResultMedia `json:"seed,omitempty"`
+	// Tag is the series a series section is about.
+	Tag  *database.TagInfo `json:"tag,omitempty"`
+	Kind string            `json:"kind"`
+	// Signal is the interest shown in a seed section's seed: "played",
+	// "favorite", "liked" or "deck".
+	Signal string           `json:"signal,omitempty"`
+	Items  []SuggestedMedia `json:"items"`
+}
+
+type MediaRecommendedResponse struct {
+	Sections []RecommendedSection `json:"sections"`
 }
 
 type PaginationInfo struct {
@@ -118,9 +193,12 @@ type BrowseEntry struct {
 	ZapScript *string `json:"zapScript,omitempty"`
 	FileCount *int    `json:"fileCount,omitempty"`
 	Group     *string `json:"group,omitempty"`
-	Path      string  `json:"path"`
-	Type      string  `json:"type"`
-	Name      string  `json:"name"`
+	// VersionCount is how many versions of a media entry's game the library
+	// holds, the entry included. Omitted for directories and when unknown.
+	VersionCount *int   `json:"versionCount,omitempty"`
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	Name         string `json:"name"`
 	// CoverColor is the cover thumbnail's average colour as "#rrggbb".
 	// Omitted until a thumbnail was built.
 	CoverColor         string             `json:"coverColor,omitempty"`
@@ -222,6 +300,7 @@ type SettingsResponse struct {
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
 	Encryption                bool               `json:"encryption"`
+	BLEEnabled                bool               `json:"bleEnabled"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
@@ -480,6 +559,21 @@ type MediaHistoryTopResponse struct {
 	Entries []MediaHistoryTopEntry `json:"entries"`
 }
 
+// MediaArtworkRandomItem is one media entry with indexed artwork. MediaID is
+// valid until the next media index or rebuild; System.ID and Path survive both.
+type MediaArtworkRandomItem struct {
+	System System `json:"system"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	// ImageTypes are the requested image types this entry has, in request order.
+	ImageTypes []string `json:"imageTypes"`
+	MediaID    int64    `json:"mediaId"`
+}
+
+type MediaArtworkRandomResponse struct {
+	Items []MediaArtworkRandomItem `json:"items"`
+}
+
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
 // Binary payloads are intentionally not included; use media.image to fetch image bytes.
 type MediaMetaPropertyItem struct {
@@ -506,8 +600,11 @@ type MediaMetaTitleResponse struct {
 	Name                string                           `json:"name"`
 	Tags                []database.TagInfo               `json:"tags"`
 	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
-	SlugLength          int                              `json:"slugLength"`
-	SlugWordCount       int                              `json:"slugWordCount"`
+	// UserEdited lists the title's fields that hold a value the user set by
+	// hand: "name", "description" and "tags.<type>".
+	UserEdited    []string `json:"userEdited,omitempty"`
+	SlugLength    int      `json:"slugLength"`
+	SlugWordCount int      `json:"slugWordCount"`
 }
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
@@ -520,12 +617,15 @@ type MediaMetaMediaResponse struct {
 	Path    string  `json:"path"`
 	// ZapScript is the title command that launches this media. Omitted for
 	// a missing media row.
-	ZapScript           string                 `json:"zapScript,omitempty"`
-	ParentDir           string                 `json:"parentDir"`
-	Tags                []database.TagInfo     `json:"tags"`
-	AvailableImageTypes []string               `json:"availableImageTypes,omitempty"`
-	Title               MediaMetaTitleResponse `json:"title"`
-	IsMissing           bool                   `json:"isMissing"`
+	ZapScript           string             `json:"zapScript,omitempty"`
+	ParentDir           string             `json:"parentDir"`
+	Tags                []database.TagInfo `json:"tags"`
+	AvailableImageTypes []string           `json:"availableImageTypes,omitempty"`
+	// UserEdited lists the file's images the user set by hand, as
+	// "images.<kind>".
+	UserEdited []string               `json:"userEdited,omitempty"`
+	Title      MediaMetaTitleResponse `json:"title"`
+	IsMissing  bool                   `json:"isMissing"`
 }
 
 // MediaMetaResponse is the response envelope for the media.meta method.
@@ -540,6 +640,48 @@ type MediaMetaBatchItemResponse struct {
 
 type MediaMetaBatchResponse struct {
 	Items []MediaMetaBatchItemResponse `json:"items"`
+}
+
+// FilesRoot is one folder of the Core host a client may browse.
+type FilesRoot struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// FilesEntry is one folder or file in a files.browse listing.
+type FilesEntry struct {
+	// Modified is the entry's modification time, RFC 3339.
+	Modified string `json:"modified"`
+	Name     string `json:"name"`
+	// Path is the entry's path under its root, with forward slashes.
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
+}
+
+// FilesBrowseResponse is the roots, or one page of a folder under a root.
+type FilesBrowseResponse struct {
+	Root string `json:"root,omitempty"`
+	Path string `json:"path"`
+	// Roots is set only when the request named no root.
+	Roots   []FilesRoot  `json:"roots,omitempty"`
+	Entries []FilesEntry `json:"entries"`
+	// Total counts the folder's entries across every page.
+	Total int `json:"total"`
+	// Truncated is true for a folder too large to read whole.
+	Truncated bool `json:"truncated"`
+}
+
+// UploadResponse describes an upload session.
+type UploadResponse struct {
+	UploadID string `json:"uploadId"`
+	Purpose  string `json:"purpose"`
+	Size     int64  `json:"size"`
+	// Received is how many bytes the session holds: the offset of the next
+	// chunk.
+	Received  int64 `json:"received"`
+	ChunkSize int   `json:"chunkSize"`
+	Finished  bool  `json:"finished"`
 }
 
 // MediaAssetResponse is one bounded chunk from an indexed media asset.
@@ -600,6 +742,8 @@ type ScrapingStatusResponse struct {
 	// media plays.
 	Throttled bool `json:"throttled,omitempty"`
 	Force     bool `json:"force"`
+	// SkipImages reports a run importing metadata without art.
+	SkipImages bool `json:"skipImages,omitempty"`
 }
 
 type MediaLookupMatch struct {
@@ -631,6 +775,9 @@ type ScraperInfo struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
 	SupportedSystems []string `json:"supportedSystems"`
+	// SupportsSkipImages reports that media.scrape accepts skipImages for
+	// this scraper.
+	SupportsSkipImages bool `json:"supportsSkipImages"`
 }
 
 // ScrapersResponse is the result returned by the "scrapers" RPC method.
@@ -1164,6 +1311,14 @@ type SettingsAuthUnlinkResponse struct {
 	Domains []string `json:"domains"`
 }
 
+// Auth link providers (settings.auth.link).
+const (
+	AuthLinkProviderZaparoo  = "zaparoo"
+	AuthLinkProviderRomM     = "romm"
+	AuthLinkProviderPlex     = "plex"
+	AuthLinkProviderJellyfin = "jellyfin"
+)
+
 // Auth link session statuses (settings.auth.link).
 const (
 	AuthLinkStatusNone      = "none"
@@ -1184,6 +1339,9 @@ type AuthLinkStatusResponse struct {
 	VerificationURL         string     `json:"verificationUrl,omitempty"`
 	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
 	Error                   string     `json:"error,omitempty"`
+	// Provider is the service the flow links to: zaparoo, romm, plex or
+	// jellyfin.
+	Provider string `json:"provider,omitempty"`
 }
 
 type BackupCategoryStatus struct {
@@ -1199,27 +1357,51 @@ type BackupWarning struct {
 }
 
 type BackupStatusEntry struct {
-	LastRunAt             *string                         `json:"lastRunAt,omitempty"`
-	LastSuccessAt         *string                         `json:"lastSuccessAt,omitempty"`
-	LastSnapshotCreatedAt *string                         `json:"lastSnapshotCreatedAt,omitempty"`
-	AvailabilityCheckedAt *string                         `json:"availabilityCheckedAt,omitempty"`
-	DeviceName            *string                         `json:"deviceName,omitempty"`
-	LinkedAt              *string                         `json:"linkedAt,omitempty"`
-	Categories            map[string]BackupCategoryStatus `json:"categories,omitempty"`
-	Schedule              string                          `json:"schedule,omitempty"`
-	LastError             string                          `json:"lastError,omitempty"`
-	Availability          string                          `json:"availability,omitempty"`
-	LastStatus            string                          `json:"lastStatus"`
-	Warnings              []BackupWarning                 `json:"warnings,omitempty"`
-	LastBackupSize        int64                           `json:"lastBackupSize"`
-	SkippedFiles          int                             `json:"skippedFiles,omitempty"`
-	Linked                bool                            `json:"linked,omitempty"`
-	Enabled               bool                            `json:"enabled"`
+	LastRunAt             *string `json:"lastRunAt,omitempty"`
+	LastSuccessAt         *string `json:"lastSuccessAt,omitempty"`
+	LastSnapshotCreatedAt *string `json:"lastSnapshotCreatedAt,omitempty"`
+	AvailabilityCheckedAt *string `json:"availabilityCheckedAt,omitempty"`
+	DeviceName            *string `json:"deviceName,omitempty"`
+	LinkedAt              *string `json:"linkedAt,omitempty"`
+	// Protection is the Online service's answer to whether this device's
+	// backups protect it, and LastAttempt the last scheduled backup the
+	// device reported as failed or skipped. Remote entry only; omitted when
+	// the device is not linked or the service does not provide them.
+	Protection     *BackupProtection               `json:"protection,omitempty"`
+	LastAttempt    *BackupAttempt                  `json:"lastAttempt,omitempty"`
+	Categories     map[string]BackupCategoryStatus `json:"categories,omitempty"`
+	Schedule       string                          `json:"schedule,omitempty"`
+	LastError      string                          `json:"lastError,omitempty"`
+	Availability   string                          `json:"availability,omitempty"`
+	LastStatus     string                          `json:"lastStatus"`
+	Warnings       []BackupWarning                 `json:"warnings,omitempty"`
+	LastBackupSize int64                           `json:"lastBackupSize"`
+	SkippedFiles   int                             `json:"skippedFiles,omitempty"`
+	Linked         bool                            `json:"linked,omitempty"`
+	Enabled        bool                            `json:"enabled"`
 	// LastRunNoChanges marks the most recent successful run as verified-
 	// unchanged: the server already held an identical snapshot, so nothing
 	// new was stored. LastSuccessAt still advances on such runs;
 	// LastSnapshotCreatedAt is when the stored content last changed.
 	LastRunNoChanges bool `json:"lastRunNoChanges,omitempty"`
+}
+
+// BackupProtection is the Online service's protection state for a device.
+// State is never, removed, failed, stale or protected; clients must treat
+// any other value as unknown.
+type BackupProtection struct {
+	LastSuccessAt  *string `json:"lastSuccessAt,omitempty"`
+	LastVerifiedAt *string `json:"lastVerifiedAt,omitempty"`
+	State          string  `json:"state"`
+	RecoveryPoints int     `json:"recoveryPoints"`
+}
+
+// BackupAttempt is a scheduled backup that failed or was skipped. Reason is
+// a short lowercase code such as quota_exceeded.
+type BackupAttempt struct {
+	At     string `json:"at"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 type BackupStatusResponse struct {

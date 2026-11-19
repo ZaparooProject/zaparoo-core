@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
@@ -288,6 +289,12 @@ func (s *Service) buildInventory(
 		if err := s.pauser.Wait(ctx); err != nil {
 			return nil, result, fmt.Errorf("library inventory walk: %w", err)
 		}
+		// An index or scrape that starts during the walk makes its result
+		// unusable, and the walk's cache writes would queue behind the same
+		// writer for as long as it carried on.
+		if !mediaDBSettled(mediaDB) {
+			return nil, result, ErrNotSettled
+		}
 		page, err := mediaDB.LibraryMediaPage(ctx, after, inventoryPageSize)
 		if err != nil {
 			return nil, result, fmt.Errorf("read library media page: %w", err)
@@ -527,7 +534,7 @@ func resolveIdentities(
 	var response resolveResponse
 	err := client.RetryRateLimited(ctx, func() error {
 		response = resolveResponse{}
-		return client.DoJSON(ctx, http.MethodPost, pathResolve, &request, &response)
+		return client.DoJSON(httpretry.Idempotent(ctx), http.MethodPost, pathResolve, &request, &response)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resolve library media: %w", err)

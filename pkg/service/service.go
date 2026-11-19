@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -48,6 +49,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
@@ -535,7 +537,13 @@ func startServiceWithOptions(
 	)
 	notifBroker.Start()
 
-	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish)
+	// The Bluetooth manager only touches the adapter while the BLE
+	// transport is enabled. It is built here so the device monitor can
+	// pause its advertising while the user scans for or pairs a
+	// controller, and started below so the API can register for it.
+	bleManager := bluetooth.NewManager(cfg)
+
+	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish, bleManager.SetAdvertisingPaused)
 	st.SetDeviceMonitor(deviceMonitor)
 
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
@@ -680,6 +688,7 @@ func startServiceWithOptions(
 			System: systemID, Path: path, Tags: data.UserTags(),
 		})
 	}
+	db.UserImages = methods.NewUserImages(pl)
 	mediaUserReconcile := newMediaUserReconciler(db)
 	db.MediaUserData = mediaUserReconcile
 
@@ -700,6 +709,10 @@ func startServiceWithOptions(
 	if restoreErr := profilesSvc.RestoreOnBoot(); restoreErr != nil {
 		log.Error().Err(restoreErr).Msg("error restoring active profile")
 	}
+
+	// The kiosk lock is loaded once the active profile is known, and before
+	// anything that serves requests or reads cards is started.
+	kioskLock := setupKiosk(st, db, pl, profilesSvc)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
@@ -879,7 +892,7 @@ func startServiceWithOptions(
 	go func() {
 		defer close(launcherCacheDone)
 		launcherCacheStarted := time.Now()
-		launcherCache.Initialize(pl, cfg, nativeAudioLauncher)
+		launcherCache.Initialize(pl, cfg, nativeAudioLauncher, romm.NewLauncher(pl))
 		log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 	}()
 
@@ -897,6 +910,8 @@ func startServiceWithOptions(
 
 	discoveryService := discovery.New(cfg)
 
+	bleManager.Start()
+
 	// Set up the idle scheduler before API startup so the in-flight
 	// counter is wired through the very first request.
 	idleSched := idle.New()
@@ -905,7 +920,7 @@ func startServiceWithOptions(
 	apiReady := make(chan error, 1)
 	apiDone := make(chan error, 1)
 	go func() {
-		listenerOptions := api.ListenerOptions{}
+		listenerOptions := api.ListenerOptions{Bluetooth: bleManager}
 		if opts != nil {
 			listenerOptions.Listener = opts.Listener
 			listenerOptions.APIKeys = opts.APIKeys
@@ -926,6 +941,7 @@ func startServiceWithOptions(
 	apiReadyStarted := time.Now()
 	if apiErr := <-apiReady; apiErr != nil {
 		discoveryService.Stop()
+		bleManager.Stop()
 		// Launcher probing uses the platform; let it finish before stopping it.
 		<-launcherCacheDone
 		if stopErr := pl.Stop(); stopErr != nil {
@@ -1115,6 +1131,22 @@ func startServiceWithOptions(
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut, publisherFanOutDone := startPublishers(st, cfg, publisherNotifications)
 
+	kioskHost := newKioskHostSync(kioskLock, pl, clockwork.NewRealClock(), db)
+	kioskMediaStarted, _ := notifBroker.Subscribe(8, models.NotificationStarted)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		kioskHost.run(st.GetContext(), kioskMediaStarted)
+	}()
+	kioskIdle := newKioskIdleReset(kioskLock, pl, clockwork.NewRealClock(),
+		func() bool { return st.ActiveMedia() != nil },
+		func() { kioskIdleStop(svc) })
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		kioskIdle.run(st.GetContext())
+	}()
+
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
@@ -1215,6 +1247,7 @@ func startServiceWithOptions(
 			terminalErr = fmt.Errorf("API service stopped: %w", apiErr)
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
+		bleManager.Stop()
 		limitsManager.Stop()
 		svc.AutoAdvance.Stop()
 		dataSwap.Stop()
@@ -1299,6 +1332,8 @@ func startServiceWithOptions(
 			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
 		) error {
+			// A remote operation is card text to a locked device.
+			svc.State.Kiosk().GuardToken(&token)
 			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
 		},
 	}, backgroundWG)

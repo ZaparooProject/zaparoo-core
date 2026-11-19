@@ -152,9 +152,17 @@ jobs:
             arch: arm64
           - platform: arkos
             arch: arm64
+          - platform: armada
+            arch: arm64
           - platform: knulli
             arch: arm
           - platform: knulli
+            arch: arm64
+          - platform: lakka
+            arch: amd64
+          - platform: lakka
+            arch: arm
+          - platform: lakka
             arch: arm64
           - platform: muos
             arch: arm64
@@ -217,7 +225,7 @@ jobs:
         with:
           use: true
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

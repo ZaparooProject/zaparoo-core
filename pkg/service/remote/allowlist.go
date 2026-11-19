@@ -79,6 +79,19 @@ var operationAllowlist = map[string]opSpec{
 		method: models.MethodMediaSearch, role: permissions.RoleRemote,
 		translate: translateSearchParams, encode: encodeSearchResults, shrink: shrinkPage, limit: queryLimit,
 	},
+	"media.versions": {
+		method: models.MethodMediaVersions, role: permissions.RoleRemote,
+		translate: translateVersionsParams, encode: encodeVersionsResults, shrink: shrinkPage, limit: queryLimit,
+	},
+	"media.similar": {
+		method: models.MethodMediaSimilar, role: permissions.RoleRemote,
+		translate: translateSimilarParams, encode: encodeSimilarResults, shrink: shrinkPage, limit: queryLimit,
+	},
+	"media.recommended": {
+		method: models.MethodMediaRecommended, role: permissions.RoleRemote,
+		translate: translateRecommendedParams, encode: encodeRecommendedResults,
+		shrink: shrinkPage, limit: queryLimit,
+	},
 	"media.browse": {
 		method: models.MethodMediaBrowse, role: permissions.RoleRemote,
 		translate: translateBrowseParams, encode: encodeBrowseResults, shrink: shrinkPage, limit: queryLimit,

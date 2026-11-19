@@ -68,6 +68,15 @@ func PropertyTypeTag(value TagValue) string {
 	return string(TagTypeProperty) + ":" + string(value)
 }
 
+// IsArtPropertyTypeTag reports whether a property TypeTag points at a media
+// file shown alongside a game: an image, a video or a manual. Descriptions and
+// identifiers are not art.
+func IsArtPropertyTypeTag(typeTag string) bool {
+	return strings.HasPrefix(typeTag, PropertyTypeTag("image-")) ||
+		typeTag == PropertyTypeTag(TagPropertyVideo) ||
+		typeTag == PropertyTypeTag(TagPropertyManual)
+}
+
 // Dynamic scraper tag-type prefixes. IsScannerOwnedType matches on these, so
 // they are named rather than reconstructed from empty-ID type calls.
 const (
@@ -1310,6 +1319,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyGameID,
 		TagPropertyLauncherOverride,
 		TagPropertyMAMESetName,
+		TagPropertyUserFields,
 	},
 
 	// Types with a format rule and no list. Listed so seeding creates them.

@@ -111,6 +111,23 @@ func TestHeartbeatUsesConfiguredEndpoint(t *testing.T) {
 	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
 }
 
+func TestHeartbeatRetriedAfterEdgeError(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.httpClient = newHTTPClient()
+
+	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
+	assert.Equal(t, int32(2), calls.Load())
+}
+
 // TestHeartbeatReportsLibrarySync pins that this heartbeat carries the
 // library_sync entry with the user's setting, so a remote control heartbeat
 // never drops it from the document.

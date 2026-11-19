@@ -201,9 +201,9 @@ func TestLibrarySyncLoop_BackoffRunsFromTheEndOfThePass(t *testing.T) {
 		"the first pass should finish")
 	firstEnd := runner.lastEnd.Load()
 
-	time.Sleep(300 * time.Millisecond)
-	assert.Equal(t, int32(1), runner.passes.Load(), "a failed pass waits out its backoff from when it ended")
-
+	// When the second pass starts is read from the runner's own clock, not
+	// by sleeping and counting passes: on a slow machine the sleep overran
+	// the backoff and found the second pass already running.
 	require.Eventually(t, func() bool { return runner.passes.Load() >= 2 }, 3*time.Second, 5*time.Millisecond,
 		"the backoff should elapse and another pass should run")
 	assert.Greater(t, runner.lastStart.Load(), firstEnd+400_000,

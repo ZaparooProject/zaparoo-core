@@ -22,9 +22,13 @@ package pn532
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
+	// Tests must not open the host's serial ports or read its process list.
+	guardProbes = func([]string) *serialport.ProbeGuard { return &serialport.ProbeGuard{} }
+	listProbePorts = func() []serialport.USBPort { return nil }
 	goleak.VerifyTestMain(m)
 }

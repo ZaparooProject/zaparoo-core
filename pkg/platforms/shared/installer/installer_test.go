@@ -35,6 +35,7 @@ import (
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,6 +45,8 @@ func setupMockPlatformWithTempDir(t *testing.T, tempDir string) *mocks.MockPlatf
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("mock-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: tempDir})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 	return mockPlatform
 }
 

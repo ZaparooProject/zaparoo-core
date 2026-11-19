@@ -24,7 +24,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -41,13 +40,16 @@ import (
 	"github.com/ZaparooProject/go-pn532/transport/uart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/usbserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -58,34 +60,54 @@ const (
 	writeRetryCount       = 3
 )
 
-// failedProbeEntry records a failed probe with the device file's ModTime.
-// When the device file is recreated (unplug/replug or swap), the ModTime
-// changes, letting us detect that the physical device changed even if the
-// path (e.g. /dev/ttyUSB0) is reused.
+// failedProbeEntry records a failed probe with the identity of the device
+// file at the time. When the device file is recreated (unplug/replug or
+// swap) the identity changes, letting us detect that the physical device
+// changed even if the path (e.g. /dev/ttyUSB0) is reused.
 type failedProbeEntry struct {
-	deviceModTime time.Time
+	nodeID string
 }
 
 // Package-level state for tracking serial ports that failed PN532 probing.
-// Entries persist until the device file changes (ModTime differs) or
+// Entries persist until the device file changes (identity differs) or
 // disappears, indicating a physical device change at that path.
 // TODO: consider moving this state into AutoDetector or Reader instances
 // to follow the project's dependency-injection patterns.
 var (
 	probeStateMu     syncutil.RWMutex
 	failedProbePaths = make(map[string]failedProbeEntry)
+	// unprobedPaths holds guarded ports detection passed over, by path.
+	unprobedPaths = make(map[string]unprobedEntry)
+)
+
+// unprobedRetry is how long a port detection passed over is kept out of
+// detection before it is guarded and offered again. It matches how long
+// go-pn532 serves a found reader from its cache without probing anything.
+const unprobedRetry = 30 * time.Second
+
+// unprobedEntry is a port detection passed over, with the device file's
+// identity at the time and when to offer it again.
+type unprobedEntry struct {
+	retryAt time.Time
+	nodeID  string
+}
+
+// probeNodeID, listProbePorts and guardProbes are indirected for tests.
+var (
+	probeNodeID    = serialport.NodeID
+	probeClock     = clockwork.NewRealClock()
+	listProbePorts = serialport.USBPorts
+	guardProbes    = serialport.GuardProbes
 )
 
 // refreshFailedProbes removes entries where the device file has changed
-// (ModTime differs) or disappeared. This detects device swaps even when
+// (identity differs) or disappeared. This detects device swaps even when
 // the same /dev/ttyUSB* path is reused by a different physical device.
 // Must be called with probeStateMu held for writing.
 func refreshFailedProbes() {
 	for path, entry := range failedProbePaths {
-		info, err := os.Stat(path)
-		if err != nil {
-			delete(failedProbePaths, path)
-		} else if !info.ModTime().Equal(entry.deviceModTime) {
+		nodeID, err := probeNodeID(probeStatPath(path))
+		if err != nil || nodeID != entry.nodeID {
 			delete(failedProbePaths, path)
 		}
 	}
@@ -93,9 +115,9 @@ func refreshFailedProbes() {
 
 // recordFailedProbes marks ports whose probe got no PN532 answer, so later
 // ticks skip them until the device file changes. A port detection reported
-// anyway or one already connected is left alone. The device file's ModTime is
-// stored so a device swap at the same path (the file is recreated with a new
-// ModTime on replug) is noticed.
+// anyway or one already connected is left alone. The device file's identity is
+// stored so a device swap at the same path (the file is recreated on replug)
+// is noticed.
 func recordFailedProbes(
 	probes []detection.ProbeResult,
 	devices []detection.DeviceInfo,
@@ -115,13 +137,23 @@ func recordFailedProbes(
 		if _, alreadyFailed := failedProbePaths[probe.Path]; alreadyFailed {
 			continue
 		}
-		info, err := os.Stat(probe.Path)
+		nodeID, err := probeNodeID(probeStatPath(probe.Path))
 		if err != nil {
 			continue
 		}
-		failedProbePaths[probe.Path] = failedProbeEntry{deviceModTime: info.ModTime()}
+		failedProbePaths[probe.Path] = failedProbeEntry{nodeID: nodeID}
 		log.Debug().Str("path", probe.Path).Msg("PN532: marking port as failed probe")
 	}
+}
+
+// probeStatPath is the file whose identity tracks the device at path. A
+// usbserial port has no device file of its own, so its usbfs node stands in:
+// the node is recreated whenever the adapter is plugged in again.
+func probeStatPath(path string) string {
+	if usbserial.IsPath(path) {
+		return usbserial.DeviceNode(path)
+	}
+	return path
 }
 
 // ClearFailedProbe removes the failed probe entry for a single path.
@@ -202,6 +234,9 @@ type SessionFactory func(device PN532Device, sessionConfig *polling.Config) Poll
 func DefaultTransportFactory(deviceInfo detection.DeviceInfo) (pn532.Transport, error) {
 	switch deviceInfo.Transport {
 	case "uart":
+		if usbserial.IsPath(deviceInfo.Path) {
+			return newUSBSerialTransport(deviceInfo.Path)
+		}
 		transport, err := uart.New(deviceInfo.Path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UART transport: %w", err)
@@ -222,6 +257,28 @@ func DefaultTransportFactory(deviceInfo detection.DeviceInfo) (pn532.Transport, 
 	default:
 		return nil, fmt.Errorf("unsupported transport type: %s", deviceInfo.Transport)
 	}
+}
+
+// openUSBSerialPort opens a usbserial port, indirected so tests can drive the
+// UART transport without an adapter.
+var openUSBSerialPort = serialport.OpenPort
+
+// newUSBSerialTransport builds a UART transport over a CH34x or PL2303
+// adapter served by the userspace USB serial driver. Reconnects reopen the
+// adapter the same way.
+func newUSBSerialTransport(path string) (*uart.Transport, error) {
+	reopen := func(name string, mode *serial.Mode) (serial.Port, error) {
+		return openUSBSerialPort(name, mode)
+	}
+	port, err := reopen(path, &serial.Mode{BaudRate: 115200})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create UART transport: %w", err)
+	}
+	transport, err := uart.NewFromPort(port, path, reopen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create UART transport: %w", err)
+	}
+	return transport, nil
 }
 
 // DefaultDeviceFactory creates a real pn532.Device.
@@ -721,6 +778,13 @@ func (*Reader) Detect(connected []string) string {
 	}
 	probeStateMu.Unlock()
 
+	// Ports another program has open are left alone, and the rest get their
+	// settings put back once probing shows they are not a PN532.
+	guarded, deferred := guardablePorts(listProbePorts(), ignorePaths)
+	guard := guardProbes(guarded)
+	ignorePaths = append(ignorePaths, guard.BusyPaths()...)
+	ignorePaths = append(ignorePaths, deferred...)
+
 	// TODO: The error branches for detection.DetectAll are not unit-tested
 	// because it depends on hardware enumeration which is not injectable.
 	// Consider extracting a DeviceDetector interface to allow mock-based testing.
@@ -746,6 +810,21 @@ func (*Reader) Detect(connected []string) string {
 	probesMu.Lock()
 	probed := slices.Clone(probes)
 	probesMu.Unlock()
+	if usbDevices, usbProbes := detectUSBSerial(ctx, ignorePaths); len(usbProbes) > 0 {
+		probed = append(probed, usbProbes...)
+		if len(usbDevices) > 0 {
+			devices = append(devices, usbDevices...)
+			if isExpectedDetectionMiss(err) {
+				err = nil
+			}
+		}
+	}
+	foundPaths := make([]string, 0, len(devices))
+	for _, device := range devices {
+		foundPaths = append(foundPaths, device.Path)
+	}
+	guard.Release(foundPaths...)
+	recordUnprobedPorts(guarded, guard, probed)
 	logDetectionSummary(probed, ignorePaths, devices, err)
 	// Recorded before the error check: DetectAll reports ErrNoDevicesFound
 	// whenever every probe went unanswered, which is exactly when the
@@ -802,6 +881,81 @@ func (*Reader) Detect(connected []string) string {
 	// All detected devices are already in use
 	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
+}
+
+// listUSBSerial and probeUSBSerial are the usbserial enumeration and PN532
+// probe, indirected so tests can drive Detect without hardware.
+var (
+	listUSBSerial  = usbserial.List
+	probeUSBSerial = probeUSBSerialPort
+)
+
+// usbSerialProbeTimeout bounds the PN532 probe of one usbserial adapter.
+const usbSerialProbeTimeout = 500 * time.Millisecond
+
+// detectUSBSerial probes the CH34x and PL2303 adapters that have no kernel
+// driver, which go-pn532's detection cannot see because they have no serial
+// device node. Adapters on the VID:PID blocklist or in ignorePaths are left
+// alone, the same as detection does for OS serial ports.
+func detectUSBSerial(
+	ctx context.Context,
+	ignorePaths []string,
+) ([]detection.DeviceInfo, []detection.ProbeResult) {
+	ports, err := listUSBSerial()
+	if err != nil {
+		log.Debug().Err(err).Msg("PN532: listing USB serial adapters failed")
+		return nil, nil
+	}
+	blocklist := createVIDPIDBlocklist()
+	var devices []detection.DeviceInfo
+	var probes []detection.ProbeResult
+	for i := range ports {
+		info := &ports[i]
+		if slices.Contains(ignorePaths, info.Path) {
+			continue
+		}
+		if detection.IsBlocked(info.VIDPID(), blocklist) {
+			log.Trace().Str("path", info.Path).Str("vidpid", info.VIDPID()).
+				Msg("PN532: skipping blocklisted USB serial adapter")
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, usbSerialProbeTimeout)
+		found := probeUSBSerial(probeCtx, info.Path)
+		cancel()
+		probes = append(probes, detection.ProbeResult{
+			Transport: detection.TransportUART,
+			Path:      info.Path,
+			Found:     found,
+		})
+		if found {
+			devices = append(devices, detection.DeviceInfo{
+				Transport: detection.TransportUART,
+				Path:      info.Path,
+				Name:      info.Name,
+			})
+		}
+	}
+	return devices, probes
+}
+
+// probeUSBSerialPort reports whether a PN532 answers a firmware version
+// request on the usbserial adapter at path.
+func probeUSBSerialPort(ctx context.Context, path string) bool {
+	transport, err := newUSBSerialTransport(path)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("PN532: opening USB serial adapter failed")
+		return false
+	}
+	defer func() { _ = transport.Close() }()
+	device, err := pn532.New(transport)
+	if err != nil {
+		return false
+	}
+	_, err = device.GetFirmwareVersion(ctx)
+	return err == nil
 }
 
 // Detection summary state. This is package level because SupportedReaders
@@ -886,6 +1040,59 @@ func defaultDetectionTransports() []string {
 	return []string{detection.TransportUART}
 }
 
+// guardablePorts splits the ports detection could reach into those to guard
+// and probe now, and those deferred because detection passed over them a
+// moment ago. Ignored ports and ports on the VID:PID blocklist are neither:
+// detection does not open them, so nor should a guard.
+func guardablePorts(ports []serialport.USBPort, ignorePaths []string) (guarded, deferred []string) {
+	blocklist := createVIDPIDBlocklist()
+	now := probeClock.Now()
+	probeStateMu.Lock()
+	defer probeStateMu.Unlock()
+	for path, entry := range unprobedPaths {
+		nodeID, err := probeNodeID(path)
+		if err != nil || nodeID != entry.nodeID || !now.Before(entry.retryAt) {
+			delete(unprobedPaths, path)
+		}
+	}
+	guarded = make([]string, 0, len(ports))
+	for _, port := range ports {
+		if slices.Contains(ignorePaths, port.Path) {
+			continue
+		}
+		if port.VIDPID != "" && detection.IsBlocked(port.VIDPID, blocklist) {
+			continue
+		}
+		if _, unprobed := unprobedPaths[port.Path]; unprobed {
+			deferred = append(deferred, port.Path)
+			continue
+		}
+		guarded = append(guarded, port.Path)
+	}
+	return guarded, deferred
+}
+
+// recordUnprobedPorts defers guarded ports that detection did not probe, as
+// happens while it serves a found reader from its cache. Guarding opens the
+// port, so without this such a port would be opened on every tick. A deferred
+// port is kept out of detection altogether until it is guarded again, so it
+// is never probed without its settings saved or while another program has it.
+func recordUnprobedPorts(guarded []string, guard *serialport.ProbeGuard, probes []detection.ProbeResult) {
+	retryAt := probeClock.Now().Add(unprobedRetry)
+	probeStateMu.Lock()
+	defer probeStateMu.Unlock()
+	for _, path := range guarded {
+		if guard.Busy(path) || slices.ContainsFunc(probes, func(p detection.ProbeResult) bool {
+			return p.Path == path
+		}) {
+			continue
+		}
+		if nodeID, err := probeNodeID(path); err == nil {
+			unprobedPaths[path] = unprobedEntry{nodeID: nodeID, retryAt: retryAt}
+		}
+	}
+}
+
 func newDetectionOptions(ignorePaths []string) detection.Options {
 	opts := detection.DefaultOptions()
 	opts.Timeout = quickDetectionTimeout
@@ -911,7 +1118,7 @@ func (r *Reader) ReaderID() string {
 func (r *Reader) readerIDLocked() string {
 	return r.identity.ID(
 		r.Metadata().ID,
-		helpers.GetUSBTopologyPath(r.deviceInfo.Path),
+		serialport.TopologyPath(r.deviceInfo.Path),
 		r.deviceInfo.ConnectionString(),
 	)
 }

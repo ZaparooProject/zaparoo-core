@@ -22,11 +22,14 @@ package esapi
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // EmulationStation names games by the MD5 of their path.
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
@@ -137,6 +140,52 @@ func APILaunch(path string) error {
 	_, err := APIRequest("/launch", path, 0)
 	if err != nil {
 		return fmt.Errorf("failed to launch game at path %s: %w", path, err)
+	}
+	return nil
+}
+
+// GameID is how EmulationStation's API names the game at path: the MD5 of
+// the path as ES lists it.
+func GameID(path string) string {
+	sum := md5.Sum([]byte(path)) //nolint:gosec // an identifier ES chose, not a security check
+	return hex.EncodeToString(sum[:])
+}
+
+// APIGameKnown reports whether EmulationStation lists the game at path in
+// systemName. ES launches only games it lists, and a file added since it
+// last loaded its game lists is not among them. An ES without the systems
+// routes answers ErrRouteUnsupported.
+func APIGameKnown(systemName, path string) (bool, error) {
+	return gameKnown(apiURL, systemName, path)
+}
+
+func gameKnown(baseURL, systemName, path string) (bool, error) {
+	system := "/systems/" + url.PathEscape(systemName)
+	_, err := sendAPIRequest(baseURL, system+"/games/"+GameID(path), "", 2*time.Second)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, ErrRouteUnsupported) {
+		return false, fmt.Errorf("failed to look up game %s: %w", path, err)
+	}
+	// An unknown game, a system ES hides because it had no games, and a
+	// missing route all answer 404. The systems list tells a missing route
+	// apart from the others.
+	if _, listErr := sendAPIRequest(baseURL, "/systems", "", 2*time.Second); listErr != nil {
+		return false, fmt.Errorf("failed to list systems: %w", listErr)
+	}
+	return false, nil
+}
+
+// APIReloadGames asks EmulationStation to reload its game lists. It answers
+// at once; the reload runs after.
+func APIReloadGames() error {
+	return reloadGames(apiURL)
+}
+
+func reloadGames(baseURL string) error {
+	if _, err := sendAPIRequest(baseURL, "/reloadgames", "", 5*time.Second); err != nil {
+		return fmt.Errorf("failed to reload games: %w", err)
 	}
 	return nil
 }

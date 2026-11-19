@@ -224,6 +224,13 @@ func deleteScrapeTagsByExclusiveType(
 				args = append(args, id)
 			}
 			args = append(args, typeDBID)
+			if scope.tagTable == "MediaTags" {
+				if err := sqlClearScanMarkersForScannerLinks(
+					ctx, tx, prepareVariadic("?", ",", len(chunk)), args...,
+				); err != nil {
+					return err
+				}
+			}
 			query := scope.exclusiveDelete(prepareVariadic("?", ",", len(chunk)))
 			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 				return fmt.Errorf("failed to delete %s rows for type: %w", scope.tagTable, err)

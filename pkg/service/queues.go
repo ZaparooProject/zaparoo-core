@@ -226,8 +226,13 @@ func executeTokenZapScript(
 		}
 		cmd := cmds[i]
 
+		// A locked kiosk defers too. Whether a launch is allowed is only
+		// known once its target is resolved, and the before_media_start hook
+		// and the stop of whatever is playing must not happen for a launch
+		// the lock then refuses.
 		deferLaunch := (suppressTapRelaunch(svc, &originToken, inHookContext) ||
-			originToken.LaunchGuardGeneration != 0) && zapscript.HasResolvedLaunchTarget(cmd.Name)
+			originToken.LaunchGuardGeneration != 0 || svc.State.Kiosk().Locked()) &&
+			zapscript.HasResolvedLaunchTarget(cmd.Name)
 		beforeMediaStart := func() error {
 			beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
 			if !shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
@@ -254,6 +259,11 @@ func executeTokenZapScript(
 		}
 		if !deferLaunch {
 			if hookErr := beforeMediaStart(); hookErr != nil {
+				if errors.Is(hookErr, zapscript.ErrDelaySuperseded) && !inHookContext {
+					log.Info().Int("command", i+1).Int("of", len(cmds)).
+						Msg("a newer scan cut the hook's delay short, the rest of the script is skipped")
+					return nil
+				}
 				return hookErr
 			}
 		}
@@ -425,6 +435,14 @@ func executeTokenZapScript(
 				RecordMediaStop:    svc.State.RecordMediaStop,
 				StopSeq:            svc.State.UserStopSeq,
 				SkipMediaLaunch:    skipLaunch,
+				AdmitLaunch: func(target platforms.ResolvedLaunch, final bool) error {
+					return admitKioskLaunch(runCtx, svc, target, final)
+				},
+				AdmitMediaInstall: func() error {
+					return admitKioskMediaInstall(svc, &token)
+				},
+				SystemPermitted:    kioskSystemPermitted(svc),
+				GuardPermits:       svc.State.Kiosk().CommandPermitted,
 				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
@@ -435,10 +453,18 @@ func executeTokenZapScript(
 				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
 				BackgroundMedia:  svc.State.BackgroundMedia,
 				PlaylistMemory:   playlistMemoryFor(svc),
+				ScanCtx:          scanContextFrom(runCtx),
 			},
 			&cmdEnv,
 		)
 		releaseStopGate()
+		// A hook's own delay cut short ends the run the hook belongs to, so
+		// it is passed up rather than swallowed here.
+		if errors.Is(err, zapscript.ErrDelaySuperseded) && !inHookContext {
+			log.Info().Int("command", i+1).Int("of", len(cmds)).
+				Msg("a newer scan cut the delay short, the rest of the script is skipped")
+			return nil
+		}
 		if err != nil {
 			return &runfailure.CommandError{Name: cmd.Name, Err: err}
 		}
@@ -1406,6 +1432,7 @@ func handleQueuedToken(
 	}
 
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
+	guardScannedToken(svc, &t, hasMapping)
 	scriptText := t.Text
 	if hasMapping {
 		// The token's own text was bounded above, but the override that
@@ -1524,16 +1551,26 @@ func handleQueuedToken(
 	}
 
 	// launch tokens in a separate thread
+	runCtx := svc.State.GetContext()
+	var scanCtx context.Context
+	if t.Source != tokens.SourcePlaylist && parseErr == nil && scriptSupersedesEarlierScans(&script) {
+		scanCtx = svc.scans.supersede(runCtx)
+	} else {
+		scanCtx = svc.scans.current(runCtx)
+	}
+
 	if svc.BackgroundWG != nil {
 		svc.BackgroundWG.Add(1)
 	}
-	go launchQueuedToken(svc, t, &he, player, successSound && t.Source == tokens.SourceAPI)
+	go launchQueuedToken(withScanContext(runCtx, scanCtx), svc, t, &he, player,
+		successSound && t.Source == tokens.SourceAPI)
 }
 
 // launchQueuedToken executes a token's ZapScript and records the outcome. The
 // completion is delivered as soon as execution finishes so a waiting caller
 // is not held behind sound playback or the history write.
 func launchQueuedToken(
+	runCtx context.Context,
 	svc *ServiceContext,
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
 	he *database.HistoryEntry,
@@ -1557,7 +1594,7 @@ func launchQueuedToken(
 		Queue:      svc.PlaylistQueue,
 	}
 
-	err := runTokenZapScriptRecovering(svc, t, plsc)
+	err := runTokenZapScriptRecovering(runCtx, svc, t, plsc)
 
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior
@@ -1674,6 +1711,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // into an error, so the token is still completed and recorded in history and
 // the worker keeps serving the queue.
 func runTokenZapScriptRecovering(
+	runCtx context.Context,
 	svc *ServiceContext,
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
 	plsc playlists.PlaylistController,
@@ -1686,7 +1724,7 @@ func runTokenZapScriptRecovering(
 				err = fmt.Errorf("%w: %v", errLaunchPanicked, r)
 			}
 		}()
-		err = runTokenZapScript(svc, t, plsc, nil, false)
+		err = runTokenZapScriptWithContext(runCtx, svc, t, plsc, nil, false)
 	}()
 	return err
 }

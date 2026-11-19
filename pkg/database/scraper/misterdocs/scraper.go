@@ -58,6 +58,7 @@ func NewPlatformScraper(setNames SetNameCache) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{},
 		SupportsFillMissing: true,
+		SupportsSkipImages:  true,
 		AutoScrapeOrder:     scraper.AutoOrderDocuments,
 		// It only reads packs already on the card and skips a system that has
 		// none, so every indexed system queues a fill-missing run.
@@ -353,7 +354,9 @@ func (s *scraperImpl) scrapeStep(
 		report(0, totalRecords, 0, 0)
 	}
 
-	cleanup := opts.Force && sourceError == nil && len(sources.cleanupRoots) > 0
+	// Cleanup removes images and manuals a pack no longer has, which a
+	// metadata-only run must leave alone.
+	cleanup := opts.Force && !opts.SkipImages && sourceError == nil && len(sources.cleanupRoots) > 0
 	keys := newMatchKeys(records)
 	scanStart := time.Now()
 	var load systemLoad
@@ -421,7 +424,9 @@ func (s *scraperImpl) scrapeStep(
 		stats.Skipped++
 	}
 	writeDuration := time.Since(writeStart)
-	if fingerprinted && stepError == nil {
+	// A metadata-only run leaves the system unremembered, so the next
+	// index-triggered run still looks for the art it skipped.
+	if fingerprinted && stepError == nil && !opts.SkipImages {
 		if rememberErr := scraper.RememberSystem(
 			ctx, s.db, scraperID, targetID, fingerprintVersion, sourceState,
 		); rememberErr != nil {

@@ -173,8 +173,10 @@ func (m *MockSettingsService) RestoreRemoteBackup(ctx context.Context, id string
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
-func (m *MockSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
-	args := m.Called(ctx)
+func (m *MockSettingsService) StartAuthLink(
+	ctx context.Context, provider, serverURL string,
+) (*models.AuthLinkStatusResponse, error) {
+	args := m.Called(ctx, provider, serverURL)
 	link, ok := args.Get(0).(*models.AuthLinkStatusResponse)
 	if !ok {
 		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
@@ -418,6 +420,62 @@ func (m *MockSettingsService) SetupSearchMediaError(err error) {
 func (m *MockSettingsService) VerifyProfileManagement(ctx context.Context, profileID, pin string) error {
 	args := m.Called(ctx, profileID, pin)
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func kioskResult(args mock.Arguments) (*models.KioskResponse, error) {
+	state, ok := args.Get(0).(*models.KioskResponse)
+	if !ok {
+		state = nil
+	}
+	return state, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetKiosk mocks fetching the kiosk lock state.
+func (m *MockSettingsService) GetKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// EnableKiosk mocks turning kiosk mode on.
+func (m *MockSettingsService) EnableKiosk(
+	ctx context.Context, preset string, confirmEmpty bool,
+) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx, preset, confirmEmpty))
+}
+
+// DisableKiosk mocks turning kiosk mode off.
+func (m *MockSettingsService) DisableKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// UnlockKiosk mocks a PIN unlock.
+func (m *MockSettingsService) UnlockKiosk(
+	ctx context.Context, profileID, pin string,
+) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx, profileID, pin))
+}
+
+// LockKiosk mocks ending a temporary unlock.
+func (m *MockSettingsService) LockKiosk(ctx context.Context) (*models.KioskResponse, error) {
+	return kioskResult(m.Called(ctx))
+}
+
+// GetProfileContent mocks fetching a profile's content rule.
+func (m *MockSettingsService) GetProfileContent(
+	ctx context.Context, profileID string,
+) (*models.ProfilesContentResponse, error) {
+	args := m.Called(ctx, profileID)
+	content, ok := args.Get(0).(*models.ProfilesContentResponse)
+	if !ok {
+		content = nil
+	}
+	return content, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// UpdateProfileContent mocks replacing a profile's content rule.
+func (m *MockSettingsService) UpdateProfileContent(
+	ctx context.Context, params *models.ProfilesContentUpdateParams,
+) error {
+	return m.Called(ctx, params).Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
 // GetProfiles mocks fetching profiles.

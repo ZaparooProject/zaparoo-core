@@ -33,7 +33,7 @@ import (
 
 // episodeName and songName match the names the scanners index the same
 // media under.
-func episodeName(show TVShow, episode Episode) string {
+func episodeName(show TVShow, episode *Episode) string {
 	return show.Label + " - " + episode.Label
 }
 
@@ -58,10 +58,9 @@ func CollectTVShow(ctx context.Context, client KodiClient, path string) ([]platf
 	})
 	items := make([]platforms.CollectionItem, 0, len(episodes))
 	for _, episode := range episodes {
-		name := episodeName(show, episode)
 		items = append(items, platforms.CollectionItem{
-			Name: name,
-			Path: virtualpath.CreateVirtualPath(shared.SchemeKodiEpisode, strconv.Itoa(episode.ID), name),
+			Name: episodeName(show, &episode),
+			Path: createEpisodeVirtualPath(show, &episode),
 		})
 	}
 	return items, nil

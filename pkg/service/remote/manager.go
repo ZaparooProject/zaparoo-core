@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -152,12 +153,16 @@ type manager struct {
 	resultMu     syncutil.Mutex
 }
 
+func newHTTPClient() *http.Client {
+	return &http.Client{Transport: useragent.Transport(httpretry.Transport(nil))}
+}
+
 // Start launches the remote operations polling loop in a background goroutine
 // registered on wg. It returns immediately.
 func Start(ctx context.Context, deps *Deps, wg *sync.WaitGroup) {
 	m := &manager{
 		deps:          *deps,
-		httpClient:    &http.Client{Transport: useragent.Transport(nil)},
+		httpClient:    newHTTPClient(),
 		executionSlot: make(chan struct{}, 1),
 	}
 	wg.Add(1)
@@ -397,7 +402,7 @@ func (m *manager) sendCapabilityHeartbeat(ctx context.Context) error {
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,
 	}
-	if err := m.doJSON(ctx, http.MethodPost, "/v1/device/heartbeat", body, nil); err != nil {
+	if err := m.doJSON(httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/heartbeat", body, nil); err != nil {
 		return fmt.Errorf("send remote operations capability heartbeat: %w", err)
 	}
 	return nil
@@ -591,5 +596,6 @@ func (m *manager) requestEnv(ctx context.Context, role permissions.Role, params 
 		PlaybackManager: m.deps.PlaybackManager, UI: m.deps.UI, TokenQueue: nil,
 		ConfirmQueue: m.deps.ConfirmQueue, IndexPauser: m.deps.IndexPauser, ScrapePauser: m.deps.ScrapePauser,
 		BackupPauser: m.deps.BackupPauser, Params: params, ClientRole: string(role), IsLocal: false,
+		Kiosk: m.deps.State.Kiosk(),
 	}
 }

@@ -20,15 +20,18 @@
 package userdb
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 const (
@@ -87,6 +90,7 @@ func (db *UserDB) AddMapping(m *database.Mapping) error {
 
 	m.Added = time.Now().Unix()
 
+	defer db.mappings.invalidate()
 	return sqlAddMapping(db.ctx, db.sql.Load(), *m)
 }
 
@@ -95,6 +99,7 @@ func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
 }
 
 func (db *UserDB) DeleteMapping(id int64) error {
+	defer db.mappings.invalidate()
 	return sqlDeleteMapping(db.ctx, db.sql.Load(), id)
 }
 
@@ -122,6 +127,7 @@ func (db *UserDB) UpdateMapping(id int64, m *database.Mapping) error {
 		}
 	}
 
+	defer db.mappings.invalidate()
 	return sqlUpdateMapping(db.ctx, db.sql.Load(), id, *m)
 }
 
@@ -129,8 +135,69 @@ func (db *UserDB) GetAllMappings() ([]database.Mapping, error) {
 	return sqlGetAllMappings(db.ctx, db.sql.Load())
 }
 
+// GetEnabledMappings is read several times for every token scan, so the
+// result is kept in memory until a mapping changes or the database handle is
+// replaced.
 func (db *UserDB) GetEnabledMappings() ([]database.Mapping, error) {
-	return sqlGetEnabledMappings(db.ctx, db.sql.Load())
+	handle := db.sql.Load()
+	if list, ok := db.mappings.get(handle); ok {
+		return list, nil
+	}
+	generation := db.mappings.generation()
+	list, err := sqlGetEnabledMappings(db.ctx, handle)
+	if err != nil {
+		return list, err
+	}
+	db.mappings.put(handle, generation, list)
+	return list, nil
+}
+
+// enabledMappingsCache holds the enabled mappings read through one database
+// handle. A restore or recovery swaps the handle, which makes the entry stale
+// without anyone having to invalidate it.
+type enabledMappingsCache struct {
+	handle *sql.DB
+	list   []database.Mapping
+	gen    uint64
+	valid  bool
+	mu     syncutil.Mutex
+}
+
+func (c *enabledMappingsCache) get(handle *sql.DB) ([]database.Mapping, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.valid || handle == nil || c.handle != handle {
+		return nil, false
+	}
+	return slices.Clone(c.list), true
+}
+
+func (c *enabledMappingsCache) generation() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+// put stores list unless a mapping changed after generation was read, so a
+// read that raced a write cannot pin the rows from before it.
+func (c *enabledMappingsCache) put(handle *sql.DB, generation uint64, list []database.Mapping) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != generation {
+		return
+	}
+	c.handle = handle
+	c.list = slices.Clone(list)
+	c.valid = true
+}
+
+func (c *enabledMappingsCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	c.valid = false
+	c.list = nil
+	c.handle = nil
 }
 
 func isCfgRegex(s string) bool {

@@ -50,10 +50,17 @@ var arcadeClassCacheMaxBytes int64 = 8 << 20
 // file. Size and MtimeNs pin the entry to the file contents it was parsed
 // from; SetName is empty when the file parsed but had no setname, or failed
 // to parse — either way there is no point re-reading an unchanged file.
+//
+// Parent is the set this one is a clone of. ParentRead tells an entry that
+// recorded it from one written before the cache kept parents: those hold no
+// answer either way, and stay that way until the file changes, because
+// re-reading every descriptor to fill them in is not worth an SD card's time.
 type arcadeClassCacheEntry struct {
-	SetName string
-	Size    int64
-	MtimeNs int64
+	SetName    string
+	Parent     string
+	Size       int64
+	MtimeNs    int64
+	ParentRead bool
 }
 
 // persistedArcadeClassCache is the on-disk shape of the classification cache.

@@ -45,6 +45,7 @@ func TestNewTestConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
 	assert.Equal(t, 0, cfg.APIPort())
+	assert.False(t, cfg.BLEEnabled(), "a test config must not open the real Bluetooth adapter")
 
 	// Verify the config file exists on the in-memory filesystem
 	configPath := filepath.Join(configDir, config.CfgFile)

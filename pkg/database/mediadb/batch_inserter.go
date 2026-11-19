@@ -48,10 +48,16 @@ type BatchInserter struct {
 	batchSize    int
 	columnCount  int
 	currentCount int
-	orIgnore     bool
+	// added counts every row handed to Add over the inserter's life.
+	added    int
+	orIgnore bool
 }
 
 const maxCachedBatchStatements = 8
+
+// maxBatchInsertVariables stays under SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER of 32766 with a safety margin.
+const maxBatchInsertVariables = 32000
 
 // NewBatchInserter creates a batch inserter for the given table
 func NewBatchInserter(
@@ -85,6 +91,14 @@ func NewBatchInserterWithOptions(
 	if batchSize <= 0 {
 		return nil, fmt.Errorf("batch size must be positive, got %d", batchSize)
 	}
+	// A full batch is one statement with batchSize x columns parameters. Wide
+	// tables at the default batch size ask for more than SQLite binds, and
+	// every such flush then failed to prepare before falling back to
+	// uncached chunk statements. Keeping the batch within the limit makes a
+	// full flush one cached statement.
+	if maxRows := maxBatchInsertVariables / len(columns); maxRows > 0 && batchSize > maxRows {
+		batchSize = maxRows
+	}
 
 	return &BatchInserter{
 		ctx:          ctx,
@@ -109,6 +123,7 @@ func (b *BatchInserter) SetDependencies(deps ...*BatchInserter) {
 // Add appends a row to the current batch and auto-flushes when the batch size is reached.
 // Dependency ordering ensures parent tables are flushed before children, preventing FK violations.
 func (b *BatchInserter) Add(values ...any) error {
+	b.added++
 	if len(values) != b.columnCount {
 		return fmt.Errorf(
 			"expected %d values for columns %v, got %d",
@@ -277,9 +292,7 @@ func (b *BatchInserter) touchCachedStatementRowCount(rowCount int) {
 
 // flushChunked splits the batch into smaller chunks when SQLite variable limit is exceeded
 func (b *BatchInserter) flushChunked() error {
-	// SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32766
-	// Use 32000 to provide a safety margin
-	const maxSQLiteVars = 32000
+	const maxSQLiteVars = maxBatchInsertVariables
 
 	// Calculate maximum rows per chunk based on column count
 	maxRowsPerChunk := maxSQLiteVars / b.columnCount

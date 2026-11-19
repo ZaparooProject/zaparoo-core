@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
@@ -50,8 +51,15 @@ type fakeAPI struct {
 	err      error
 	game     *esapi.RunningGameResponse
 	launched []string
+	knownErr error
 	notified []string
-	emuKills int
+	// unlisted makes ES not list any game until it reloads, then list it
+	// from the listAfter-th lookup after the reload.
+	unlisted  bool
+	listAfter int
+	lookups   int
+	reloads   int
+	emuKills  int
 }
 
 func (f *fakeAPI) RunningGame() (esapi.RunningGameResponse, bool, error) {
@@ -79,10 +87,38 @@ func (f *fakeAPI) Notify(msg string) error {
 	return nil
 }
 
+func (f *fakeAPI) GameKnown(_, _ string) (bool, error) {
+	if f.knownErr != nil {
+		return false, f.knownErr
+	}
+	if !f.unlisted {
+		return true, nil
+	}
+	if f.reloads == 0 {
+		return false, nil
+	}
+	f.lookups++
+	return f.listAfter > 0 && f.lookups >= f.listAfter, nil
+}
+
+func (f *fakeAPI) ReloadGames() error {
+	f.reloads++
+	return nil
+}
+
 func runningPlatform(t *testing.T, opts *Options) (*Platform, *[]*models.ActiveMedia) {
 	t.Helper()
+	return runningPlatformWith(t, opts,
+		models.NewActiveMedia("NES", "Nintendo Entertainment System", "/roms/nes/a.nes", "A", ""))
+}
+
+// runningPlatformWith is runningPlatform with media as the active media,
+// read and written through the same state.
+func runningPlatformWith(
+	t *testing.T, opts *Options, media *models.ActiveMedia,
+) (*Platform, *[]*models.ActiveMedia) {
+	t.Helper()
 	p := New(opts)
-	media := models.NewActiveMedia("NES", "Nintendo Entertainment System", "/roms/nes/a.nes", "A", "")
 	var published []*models.ActiveMedia
 	p.activeMedia = func() *models.ActiveMedia { return media }
 	p.setActiveMedia = func(m *models.ActiveMedia) {
@@ -166,6 +202,48 @@ func TestStopActiveLauncher_ExitGameRunsFirst(t *testing.T) {
 
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
 	assert.Equal(t, []string{"exit"}, order, "a game that exited needs no kill")
+}
+
+func TestStopActiveLauncher_RemoteServerMediaLeavesESAlone(t *testing.T) {
+	t.Parallel()
+
+	exits, kills := 0, 0
+	opts := Options{
+		ID:  "batocera",
+		API: &fakeAPI{},
+		ExitGame: func(context.Context) error {
+			exits++
+			return nil
+		},
+		KillGame: func() error {
+			kills++
+			return nil
+		},
+	}
+	p, published := runningPlatformWith(t, &opts, models.NewActiveMedia(
+		"Movie", "Movies", "jellyfin-movie://abc/Alien", "Alien", shared.LauncherJellyfinMovie))
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Zero(t, exits, "nothing runs in EmulationStation")
+	assert.Zero(t, kills)
+	require.NotEmpty(t, *published)
+	assert.Nil(t, p.activeMedia())
+}
+
+func TestStopActiveLauncher_RemoteServerMediaLeavesRunningKodiAlone(t *testing.T) {
+	t.Parallel()
+
+	opts := Options{ID: "batocera", API: &fakeAPI{}}
+	p, published := runningPlatformWith(t, &opts, models.NewActiveMedia(
+		"Movie", "Movies", "plex-movie://1/Alien", "Alien", shared.LauncherPlexMovie))
+	p.trackerMu.Lock()
+	p.kodiActive = true
+	p.trackerMu.Unlock()
+
+	// Kodi is not reachable here, so reaching its stop path would fail.
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	require.NotEmpty(t, *published)
+	assert.Nil(t, p.activeMedia())
 }
 
 func TestStopActiveLauncher_FailsWhenTheGameSurvives(t *testing.T) {
@@ -562,4 +640,158 @@ func TestLaunchers_HasKodi(t *testing.T) {
 	assert.True(t, hasKodiLauncher(&Options{ID: "batocera", API: &fakeAPI{}}))
 	assert.False(t, hasKodiLauncher(&Options{ID: "knulli", API: &fakeAPI{}, HasKodi: func() bool { return false }}))
 	assert.True(t, hasKodiLauncher(&Options{ID: "knulli", API: &fakeAPI{}, HasKodi: func() bool { return true }}))
+}
+
+// esReloadPlatform is a platform whose ES lists the NES system at roms/nes.
+func esReloadPlatform(t *testing.T, api *fakeAPI) (p *Platform, game string) {
+	t.Helper()
+	roms := t.TempDir()
+	esDir := t.TempDir()
+	writeESSystemList(t, esDir, map[string]string{"nes": filepath.Join(roms, "nes")})
+	opts := Options{ID: "batocera", API: api, DefaultROMRoot: roms, ESConfigDirs: []string{esDir}}
+	return New(&opts), filepath.Join(roms, "nes", "new.nes")
+}
+
+func TestESAPILaunch_ListedGameSkipsReload(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{}
+	p, game := esReloadPlatform(t, api)
+	_, err := p.esAPILaunch(nil, game, nil)
+	require.NoError(t, err)
+	assert.Zero(t, api.reloads)
+	assert.Equal(t, []string{game}, api.launched)
+}
+
+// ES ignores a launch for a game it has not loaded, such as one Core has
+// just downloaded, so the launch has it reload and waits for the game.
+func TestESAPILaunch_UnlistedGameReloadsFirst(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true, listAfter: 3}
+	p, game := esReloadPlatform(t, api)
+	fakeClock := clockwork.NewFakeClock()
+	p.clock = fakeClock
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.esAPILaunch(nil, game, nil)
+		done <- err
+	}()
+	advanceUntilDone(t, fakeClock, done)
+	assert.Equal(t, 1, api.reloads)
+	assert.Equal(t, 3, api.lookups)
+	assert.Equal(t, []string{game}, api.launched)
+}
+
+func TestESAPILaunch_ReloadTimesOutThenLaunches(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true}
+	p, game := esReloadPlatform(t, api)
+	fakeClock := clockwork.NewFakeClock()
+	p.clock = fakeClock
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.esAPILaunch(nil, game, nil)
+		done <- err
+	}()
+	advanceUntilDone(t, fakeClock, done)
+	assert.Equal(t, 1, api.reloads)
+	assert.Equal(t, int(esReloadWait/esReloadPoll), api.lookups)
+	assert.Equal(t, []string{game}, api.launched)
+}
+
+// A stop while the launch waits for ES to list the game cancels the launch.
+func TestESAPILaunch_StoppedWhileAwaitingReload(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true}
+	p, game := esReloadPlatform(t, api)
+	p.clock = clockwork.NewFakeClock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.launcherManager = cancelledLaunches{ctx: ctx}
+
+	_, err := p.esAPILaunch(nil, game, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, api.reloads)
+	assert.Empty(t, api.launched, "a stopped launch must not start the game")
+}
+
+// An ES that cannot answer whether it lists a game launches as before.
+func TestESAPILaunch_LookupErrorLaunchesWithoutReload(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true, knownErr: esapi.ErrRouteUnsupported}
+	p, game := esReloadPlatform(t, api)
+	_, err := p.esAPILaunch(nil, game, nil)
+	require.NoError(t, err)
+	assert.Zero(t, api.reloads)
+	assert.Equal(t, []string{game}, api.launched)
+}
+
+// A game outside every ES system has no system to ask about.
+func TestESAPILaunch_GameOutsideSystemsSkipsReload(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeAPI{unlisted: true}
+	p, _ := esReloadPlatform(t, api)
+	game := filepath.Join(t.TempDir(), "elsewhere.nes")
+	_, err := p.esAPILaunch(nil, game, nil)
+	require.NoError(t, err)
+	assert.Zero(t, api.reloads)
+	assert.Equal(t, []string{game}, api.launched)
+}
+
+func TestESSystemName_PrefersDeepestAndListName(t *testing.T) {
+	t.Parallel()
+
+	roms := t.TempDir()
+	p := New(&Options{ID: "batocera", DefaultROMRoot: roms})
+	p.esConfigCache = &ESSystemConfig{Systems: map[string]ESSystem{
+		"all":  {Name: "all", Path: roms},
+		"snes": {Name: "", Path: filepath.Join(roms, "snes")},
+		"gb":   {Name: "gameboy", Path: filepath.Join(roms, "gb")},
+	}}
+	assert.Equal(t, "snes", p.esSystemName(filepath.Join(roms, "snes", "a.sfc")))
+	assert.Equal(t, "gameboy", p.esSystemName(filepath.Join(roms, "gb", "a.gb")))
+	assert.Equal(t, "all", p.esSystemName(filepath.Join(roms, "a.zip")))
+	assert.Empty(t, p.esSystemName(filepath.Join(t.TempDir(), "a.zip")))
+}
+
+// Batocera's system list is not one Core reads, and its systems are named
+// by their folders under the ROM root.
+func TestESSystemName_FolderWithoutSystemList(t *testing.T) {
+	t.Parallel()
+
+	roms := t.TempDir()
+	p := New(&Options{ID: "batocera", DefaultROMRoot: roms})
+	assert.Equal(t, "nes", p.esSystemName(filepath.Join(roms, "nes", "a.nes")))
+	assert.Equal(t, "psx", p.esSystemName(filepath.Join(roms, "psx", "Disc Game", "a.cue")))
+	assert.Empty(t, p.esSystemName(filepath.Join(roms, "a.nes")), "a game at the root has no system")
+	assert.Empty(t, p.esSystemName(filepath.Join(filepath.Dir(roms), "other", "a.nes")))
+}
+
+// advanceUntilDone steps the fake clock while a launch waits on it.
+func advanceUntilDone(t *testing.T, clock *clockwork.FakeClock, done <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			return
+		default:
+		}
+		waitCtx, waitCancel := context.WithTimeout(ctx, 20*time.Millisecond)
+		blocked := clock.BlockUntilContext(waitCtx, 1) == nil
+		waitCancel()
+		require.NoError(t, ctx.Err(), "launch never finished")
+		if blocked {
+			clock.Advance(esReloadPoll)
+		}
+	}
 }

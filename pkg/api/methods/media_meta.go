@@ -312,6 +312,7 @@ func buildMediaMetaResponse(
 
 	properties := mapMediaProperties(mediaProps)
 	launcherOverride := mediaLauncherOverride(properties)
+	titleProperties := mapMediaProperties(titleProps)
 
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:                row.Path,
@@ -323,7 +324,9 @@ func buildMediaMetaResponse(
 		Properties:          properties,
 		LauncherOverride:    launcherOverride,
 		AvailableImageTypes: availableImageTypes(slices.Concat(mediaProps, directoryProps)),
+		UserEdited:          takeUserEditedFields(properties),
 		Title: models.MediaMetaTitleResponse{
+			UserEdited:          takeUserEditedFields(titleProperties),
 			Slug:                row.Title.Slug,
 			SecondarySlug:       secondarySlug,
 			Name:                row.Title.Name,
@@ -335,7 +338,7 @@ func buildMediaMetaResponse(
 				Name: row.System.Name,
 			},
 			Tags:       titleTags,
-			Properties: mapMediaProperties(titleProps),
+			Properties: titleProperties,
 		},
 	}}
 }

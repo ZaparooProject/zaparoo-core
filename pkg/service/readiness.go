@@ -113,7 +113,7 @@ func clearIfNeverStarted(svc *ServiceContext, launcher *platforms.Launcher, medi
 			return
 		}
 	}
-	if svc.State.ExitActiveMedia(gen) {
+	if svc.State.ExitNeverStartedMedia(gen) {
 		log.Info().Str("media", media.Name).Msg("launched game never started, clearing it")
 	}
 }

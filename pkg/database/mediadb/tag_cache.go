@@ -24,6 +24,8 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -40,6 +42,43 @@ type tagKey struct{ typ, tag string }
 type tagCache struct {
 	bySystem map[string][]database.TagInfo
 	allTags  []database.TagInfo
+}
+
+// mergedSystemTags keeps the last multi-system result for one tagCache. A
+// client that lists tags for the whole library asks for the same system set
+// every time, and merging tens of thousands of rows per request costs about a
+// second on a MiSTer. A tagCache is never modified after it is built, so the
+// entry stays correct for as long as that cache is the current one.
+type mergedSystemTags struct {
+	cache *tagCache
+	key   string
+	tags  []database.TagInfo
+}
+
+type mergedSystemTagsMemo struct {
+	last atomic.Pointer[mergedSystemTags]
+}
+
+func (m *mergedSystemTagsMemo) tagsForSystems(c *tagCache, systems []systemdefs.System) []database.TagInfo {
+	if len(systems) < 2 {
+		return c.tagsForSystems(systems)
+	}
+	key := mergedSystemTagsKey(systems)
+	if merged := m.last.Load(); merged != nil && merged.cache == c && merged.key == key {
+		return slices.Clone(merged.tags)
+	}
+	result := c.tagsForSystems(systems)
+	m.last.Store(&mergedSystemTags{cache: c, key: key, tags: slices.Clone(result)})
+	return result
+}
+
+func mergedSystemTagsKey(systems []systemdefs.System) string {
+	var key strings.Builder
+	for i := range systems {
+		_, _ = key.WriteString(systems[i].ID)
+		_ = key.WriteByte(0)
+	}
+	return key.String()
 }
 
 // tagsForSystems collects and deduplicates tags across the requested systems,

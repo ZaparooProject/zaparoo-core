@@ -669,6 +669,40 @@ func TestClient_GetEpisodes_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, 1, int(tvshowid))
 }
 
+func TestClient_GetEpisodes_SortsBySeasonAndEpisode(t *testing.T) {
+	t.Parallel()
+
+	episode := func(id, season, number int) map[string]any {
+		return map[string]any{"episodeid": id, "tvshowid": 1, "season": season, "episode": number}
+	}
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result": map[string]any{
+				"episodes": []any{
+					episode(10, 1, 1),
+					episode(30, 2, 1),
+					episode(12, 1, 3),
+					episode(11, 1, 2),
+				},
+			},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	episodes, err := client.GetEpisodes(context.Background(), 1)
+	require.NoError(t, err)
+	ids := make([]int, 0, len(episodes))
+	for _, e := range episodes {
+		ids = append(ids, e.ID)
+	}
+	assert.Equal(t, []int{10, 11, 12, 30}, ids)
+}
+
 func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 	t.Parallel()
 
@@ -1410,24 +1444,10 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		}))
 		defer server.Close()
 
-		// Mock auth config by temporarily setting it
-		// This simulates having auth configured for the server URL
-		originalAuthCfg := config.GetAuthCfg()
-		defer func() {
-			// Restore original config after test
-			if originalAuthCfg == nil {
-				config.ClearAuthCfgForTesting()
-			}
-		}()
-
-		// Set up test auth config
-		testAuthCfg := map[string]config.CredentialEntry{
-			server.URL: {
-				Username: "testuser",
-				Password: "testpass",
-			},
-		}
-		config.SetAuthCfgForTesting(testAuthCfg)
+		t.Cleanup(config.AddAuthEntryForTesting(server.URL, config.CredentialEntry{
+			Username: "testuser",
+			Password: "testpass",
+		}))
 
 		// Create client
 		client := kodi.NewClient(nil)
@@ -1449,7 +1469,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 	})
 
 	t.Run("bearer auth configured", func(t *testing.T) {
-		// No t.Parallel() - modifies global auth config
+		t.Parallel()
 
 		var receivedHeaders http.Header
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1465,20 +1485,9 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		}))
 		defer server.Close()
 
-		// Mock auth config with bearer token
-		originalAuthCfg := config.GetAuthCfg()
-		defer func() {
-			if originalAuthCfg == nil {
-				config.ClearAuthCfgForTesting()
-			}
-		}()
-
-		testAuthCfg := map[string]config.CredentialEntry{
-			server.URL: {
-				Bearer: "test-bearer-token-12345",
-			},
-		}
-		config.SetAuthCfgForTesting(testAuthCfg)
+		t.Cleanup(config.AddAuthEntryForTesting(server.URL, config.CredentialEntry{
+			Bearer: "test-bearer-token-12345",
+		}))
 
 		// Create client
 		client := kodi.NewClient(nil)

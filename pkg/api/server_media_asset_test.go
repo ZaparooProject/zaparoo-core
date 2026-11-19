@@ -20,6 +20,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net"
@@ -68,11 +69,16 @@ func startMediaAssetWSServer(
 	m.HandleDisconnect(func(session *melody.Session) {
 		closeWSDispatcher(session)
 	})
-	m.HandleMessage(handleWSMessage(
-		NewMethodMap(), pl, cfg, st, nil, nil,
-		&database.Database{MediaDB: mediaDB}, nil, nil, nil, nil, nil,
-		nil, nil, gateway, nil, nil,
-	))
+	methodMap := NewMethodMap()
+	handler := func(binary bool) func(*melody.Session, []byte) {
+		return handleWSMessage(
+			methodMap, pl, cfg, st, nil, nil,
+			&database.Database{MediaDB: mediaDB}, nil, nil, nil, nil, nil,
+			nil, nil, gateway, nil, nil, binary,
+		)
+	}
+	m.HandleMessage(handler(false))
+	m.HandleMessageBinary(handler(true))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
@@ -216,4 +222,68 @@ func TestMediaAssetEncryptedWebSocket(t *testing.T) {
 	require.NoError(t, err)
 	assertMediaAssetWireResponse(t, wire, manual)
 	mediaDB.AssertExpectations(t)
+}
+
+// A client that sends its first frame as a binary message gets the binary
+// envelope for the whole connection: bare ciphertext, no base64, no JSON.
+func TestMediaAssetBinaryEnvelopeWebSocket(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manual := bytes.Repeat([]byte("%PDF-1.7 binary envelope "), 400)
+	manualPath := filepath.Join(root, "manual.pdf")
+	require.NoError(t, os.WriteFile(manualPath, manual, 0o600))
+	mediaDB := helpers.NewMockMediaDBI()
+	expectMediaAssetWSRequest(mediaDB, manualPath)
+	request := []byte(
+		`{"jsonrpc":"2.0","method":"media.asset","params":{"mediaId":1,"assetType":"manual"},"id":1}`,
+	)
+	first := newTestEncryptionFirstFrameForRequest(t, request)
+	conn := dialWS(t, startMediaAssetWSServer(t, root, mediaDB, true, first.gateway))
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, first.binary(t)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	messageType, wire, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType, "a binary session is answered in binary")
+	plaintext := first.secrets.decryptBinary(t, wire, 0)
+	assertMediaAssetWireResponse(t, plaintext, manual)
+	require.Less(t, len(wire), len(plaintext)+32, "the frame is the ciphertext alone")
+
+	// The next request and its reply stay binary and keep the counters.
+	expectMediaAssetWSRequest(mediaDB, manualPath)
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, first.secrets.encryptSubsequentBinary(t, request, 1),
+	))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	messageType, wire, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	assertMediaAssetWireResponse(t, first.secrets.decryptBinary(t, wire, 1), manual)
+
+	// A session cannot change format: a text frame now ends the connection.
+	require.NoError(t, conn.WriteMessage(
+		websocket.TextMessage, first.secrets.encryptSubsequent(t, request, 2),
+	))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err)
+}
+
+// A binary message that is not a valid first frame is refused; it is never
+// treated as a plaintext request, even where plaintext is allowed.
+func TestBinaryMessageIsNeverPlaintext(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrame(t)
+	conn := dialWS(t, startMediaAssetWSServer(t, t.TempDir(), helpers.NewMockMediaDBI(), false, first.gateway))
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`),
+	))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err)
 }

@@ -58,6 +58,10 @@ type MediaEnd struct {
 	// Gen is the generation the ended media was published under. It is zero
 	// for the background slot.
 	Gen uint64
+	// NeverStarted is set when primary media ended before it was ready, or
+	// was cleared because its launcher found the game never running: a
+	// launch that failed rather than a game someone quit.
+	NeverStarted bool
 }
 
 // MediaObserver is told about every change of active media. Callbacks run on
@@ -151,6 +155,20 @@ func (s *State) ExitActiveMedia(gen uint64) bool {
 	})
 }
 
+// ExitNeverStartedMedia is ExitActiveMedia for media whose launcher found the
+// game never running, which observers are told was a launch that never
+// started.
+func (s *State) ExitNeverStartedMedia(gen uint64) bool {
+	// The condition runs with s.mu held, so it can mark the generation.
+	return s.updateActiveMediaState(nil, func(*models.ActiveMedia) bool {
+		if s.activeMediaReadyGen != gen {
+			return false
+		}
+		s.neverStartedGen = gen
+		return true
+	})
+}
+
 // ActiveMediaGenerationIs reports whether the primary media currently active
 // was published under gen.
 func (s *State) ActiveMediaGenerationIs(gen uint64) bool {
@@ -185,12 +203,12 @@ func notifyMediaStarted(observers []MediaObserver, media *models.ActiveMedia, sl
 }
 
 func notifyMediaEnded(
-	observers []MediaObserver, media *models.ActiveMedia, slot, reason string, gen uint64,
+	observers []MediaObserver, media *models.ActiveMedia, slot, reason string, gen uint64, neverStarted bool,
 ) {
 	if len(observers) == 0 {
 		return
 	}
-	event := MediaEnd{Media: *media, Slot: slot, Reason: reason, Gen: gen}
+	event := MediaEnd{Media: *media, Slot: slot, Reason: reason, Gen: gen, NeverStarted: neverStarted}
 	for _, observer := range observers {
 		observer.MediaEnded(event)
 	}

@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/httpretry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -88,6 +89,9 @@ const (
 	// stuck behind a stale negative result.
 	remoteAvailabilityTTL      = 1 * time.Hour
 	remoteAvailabilityRetryTTL = 5 * time.Minute
+	// remoteProtectionRefreshTimeout bounds the device check after a
+	// successful backup; the backup has already succeeded either way.
+	remoteProtectionRefreshTimeout = 15 * time.Second
 
 	// Rate-limited (429) responses are waited out and retried instead of
 	// failing the whole operation. The wait honors the server's Retry-After
@@ -309,8 +313,12 @@ type remoteDeviceMeResponse struct {
 	ID       string    `json:"id"`
 	// Features lists the account features the Online service reports for
 	// this device. Names are opaque to Core; older servers omit the field.
-	Features     []string `json:"features"`
-	BackupActive bool     `json:"backup_active"`
+	Features []string `json:"features"`
+	// BackupProtection and LastBackupAttempt are the service's view of this
+	// device's backups. Older servers omit them.
+	BackupProtection  *protectionStatus `json:"backup_protection"`
+	LastBackupAttempt *attemptReport    `json:"last_backup_attempt"`
+	BackupActive      bool              `json:"backup_active"`
 }
 
 // allowsCloudBackup reports whether the account may upload remote backups:
@@ -427,7 +435,7 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 
 	started := time.Now().UTC()
 	if statusErr := m.writeRemoteStatus(&statusEntry{
-		LastRunAt: formatTime(started), LastStatus: StatusRunning,
+		LastRunAt: formatTime(started), LastStatus: StatusRunning, RunType: backupType,
 	}); statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to persist running remote backup status")
 	}
@@ -482,6 +490,15 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 		SkippedFiles:          len(info.Warnings) + info.SkippedFiles,
 	}); statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to persist successful remote backup status")
+	}
+	// The service now holds a newer snapshot than any queued failure, so the
+	// report is moot, and its protection answer has changed: refresh it so a
+	// cleared failure does not keep showing.
+	m.clearPendingAttempt(nil)
+	refreshCtx, cancel := context.WithTimeout(ctx, remoteProtectionRefreshTimeout)
+	defer cancel()
+	if _, refreshErr := m.RefreshRemoteAvailability(refreshCtx); refreshErr != nil {
+		log.Debug().Err(refreshErr).Msg("failed to refresh remote backup protection after backup")
 	}
 	return info, nil
 }
@@ -785,7 +802,9 @@ func locateRemotePacks(
 		req := remoteLocateRequest{Hashes: hashes[start:end]}
 		if err := client.retryRateLimited(ctx, func() error {
 			resp = remoteLocateResponse{}
-			return client.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/locate", &req, &resp)
+			return client.doJSON(
+				httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/backup-objects/locate", &req, &resp,
+			)
 		}); err != nil {
 			return nil, err
 		}
@@ -991,7 +1010,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if waitErr := m.pauser.Wait(ctx); waitErr != nil {
 		return RemoteRunInfo{}, fmt.Errorf("creating remote backup snapshot: %w", waitErr)
 	}
-	heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
+	heartbeatErr := m.heartbeatWithAttempt(ctx, client)
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
 	}
@@ -1245,7 +1264,7 @@ func (m *Manager) newAuthenticatedRemoteClient(
 		// Timeouts are applied per request (scaled to transfer size for
 		// uploads/downloads), not on the client, so a large pack on a slow
 		// uplink is not killed at the base timeout.
-		httpClient:     &http.Client{Transport: useragent.Transport(nil)},
+		httpClient:     &http.Client{Transport: useragent.Transport(httpretry.Transport(nil))},
 		onUnauthorized: unauthorizedCallback,
 		baseURL:        baseURL,
 		bearer:         bearer,
@@ -1429,7 +1448,7 @@ func (m *Manager) SendCapabilityHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
+	return m.heartbeatWithAttempt(ctx, client)
 }
 
 // SendHeartbeat reports liveness (Core version + capabilities) when the
@@ -1440,7 +1459,7 @@ func (m *Manager) SendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg)); heartbeatErr != nil {
+	if heartbeatErr := m.heartbeatWithAttempt(ctx, client); heartbeatErr != nil {
 		return heartbeatErr
 	}
 	_, err = m.updateRemoteAvailability(ctx, client)
@@ -1530,6 +1549,17 @@ func (m *Manager) RefreshRemoteAvailabilityIfStaleAsync() {
 	}()
 }
 
+// deviceCheckSeq numbers device checks in the order they start, and
+// deviceCheckApplied holds, per status file, the newest one whose result was
+// stored, guarded by statusMu. A slow check that started before a newer one
+// finished would otherwise restore what the service said before, such as a
+// failure a backup has since cleared. Package-level like the status file
+// lock, since managers are constructed per request.
+var (
+	deviceCheckSeq     atomic.Uint64
+	deviceCheckApplied = map[string]uint64{}
+)
+
 func (m *Manager) updateRemoteAvailability(
 	ctx context.Context, client *remoteClient,
 ) (string, error) {
@@ -1542,10 +1572,11 @@ func (m *Manager) updateRemoteAvailability(
 func (m *Manager) updateRemoteDeviceAvailability(
 	ctx context.Context, client *remoteClient,
 ) (availability, deviceID string, err error) {
+	seq := deviceCheckSeq.Add(1)
 	me, err := client.deviceMe(ctx)
 	if err != nil {
 		if !errors.Is(err, errRemoteUnlinked) {
-			m.setRemoteAvailability(client, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
+			m.setRemoteAvailability(client, seq, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
 		}
 		return RemoteAvailabilityUnknown, "", err
 	}
@@ -1553,7 +1584,7 @@ func (m *Manager) updateRemoteDeviceAvailability(
 	if me.allowsCloudBackup() {
 		availability = RemoteAvailabilityAvailable
 	}
-	m.setRemoteAvailability(client, availability, time.Now().UTC(), me)
+	m.setRemoteAvailability(client, seq, availability, time.Now().UTC(), me)
 	return availability, me.ID, nil
 }
 
@@ -1564,9 +1595,10 @@ func (m *Manager) updateRemoteDeviceAvailability(
 // leaves the last reported features in place. A result for a credential
 // that was replaced while the check ran belongs to the earlier link and is
 // dropped: linking writes the new credential before clearing the status
-// under statusMu, so the comparison here cannot miss a relink.
+// under statusMu, so the comparison here cannot miss a relink. So is the
+// result of a check that started before one already stored.
 func (m *Manager) setRemoteAvailability(
-	client *remoteClient, availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
+	client *remoteClient, seq uint64, availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
 ) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
@@ -1575,6 +1607,12 @@ func (m *Manager) setRemoteAvailability(
 		log.Debug().Msg("ignoring remote availability result for superseded credential")
 		return
 	}
+	statusPath := m.statusPath()
+	if seq < deviceCheckApplied[statusPath] {
+		log.Debug().Msg("ignoring remote availability result older than a stored one")
+		return
+	}
+	deviceCheckApplied[statusPath] = seq
 	st := m.readStatusLocked()
 	st.Remote.Availability = availability
 	st.Remote.AvailabilityCheckedAt = formatTime(checkedAt)
@@ -1585,6 +1623,8 @@ func (m *Manager) setRemoteAvailability(
 			st.Remote.LinkedAt = formatTime(me.LinkedAt)
 		}
 		st.Remote.Features = normalizeFeatures(me.reportedFeatures())
+		st.RemoteProtection = me.BackupProtection
+		st.RemoteLastAttempt = me.LastBackupAttempt
 		st.Remote.FeaturesCheckedAt = formatTime(checkedAt)
 	}
 	if err := m.writeStatusLocked(&st); err != nil {
@@ -1622,6 +1662,10 @@ func (m *Manager) MarkRemoteUnlinked() {
 	st.Remote.LinkedAt = ""
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
+	st.PendingAttempt = nil
+	st.PendingFailure = nil
+	st.RemoteProtection = nil
+	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to persist remote backup revocation")
 	}
@@ -1645,6 +1689,10 @@ func (m *Manager) MarkRemoteLinked() {
 	st.Remote.LinkedAt = ""
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
+	st.PendingAttempt = nil
+	st.PendingFailure = nil
+	st.RemoteProtection = nil
+	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to clear remote backup unlinked marker")
 	}
@@ -1780,12 +1828,17 @@ func LibrarySyncCapability(cfg *config.Instance) map[string]any {
 	return map[string]any{"version": 1, "enabled": cfg.LibrarySyncEnabled()}
 }
 
-func (c *remoteClient) heartbeat(ctx context.Context, capabilities map[string]any) error {
+func (c *remoteClient) heartbeat(
+	ctx context.Context, capabilities map[string]any, attempt *attemptReport,
+) error {
 	body := map[string]any{
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,
 	}
-	return c.doJSON(ctx, http.MethodPost, "/v1/device/heartbeat", body, nil)
+	if attempt != nil {
+		body["last_backup_attempt"] = attempt
+	}
+	return c.doJSON(httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/heartbeat", body, nil)
 }
 
 func (c *remoteClient) deviceMe(ctx context.Context) (*remoteDeviceMeResponse, error) {
@@ -1807,7 +1860,7 @@ func (c *remoteClient) checkMissing(ctx context.Context, hashes []string) ([]str
 		req := remoteCheckRequest{Hashes: hashes[start:end]}
 		if err := c.retryRateLimited(ctx, func() error {
 			resp = remoteCheckResponse{}
-			return c.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/check", &req, &resp)
+			return c.doJSON(httpretry.Idempotent(ctx), http.MethodPost, "/v1/device/backup-objects/check", &req, &resp)
 		}); err != nil {
 			return nil, err
 		}

@@ -89,7 +89,7 @@ func startWSServer(
 		if clientIP != nil {
 			sourceIP = clientIP.String()
 		}
-		pt, _, ok := decryptIncomingFrame(s, msg, gateway, encryptionEnabled, isLocal, sourceIP)
+		pt, _, ok := decryptIncomingFrame(s, msg, gateway, encryptionEnabled, isLocal, sourceIP, false)
 		if !ok {
 			return
 		}
@@ -156,7 +156,7 @@ func TestWSInjectsPlaybackManager(t *testing.T) {
 	m := newWebSocketSession()
 	m.HandleMessage(handleWSMessage(
 		methodMap, platform, cfg, st, make(chan tokens.Token, 1), make(chan chan error, 1), db,
-		nil, nil, nil, playbackManager, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, playbackManager, nil, nil, nil, nil, nil, nil, false,
 	))
 
 	mux := http.NewServeMux()
@@ -208,7 +208,7 @@ func TestWSNoContentResultIsNull(t *testing.T) {
 	m := newWebSocketSession()
 	m.HandleMessage(handleWSMessage(
 		methodMap, platform, cfg, st, make(chan tokens.Token, 1), make(chan chan error, 1), db,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, false,
 	))
 
 	mux := http.NewServeMux()
@@ -417,7 +417,7 @@ func TestDecryptIncomingFrame_PlaintextFrameSettlesAuthState(t *testing.T) {
 	// is written and leave the test blocked on ReadMessage instead of failing.
 	m.HandleMessage(func(s *melody.Session, msg []byte) {
 		before <- getWebSocketAuthState(s)
-		_, _, ok := decryptIncomingFrame(s, msg, nil, false, true, "127.0.0.1")
+		_, _, ok := decryptIncomingFrame(s, msg, nil, false, true, "127.0.0.1", false)
 		accepted <- ok
 		after <- getWebSocketAuthState(s)
 		_ = s.Write([]byte("ack"))

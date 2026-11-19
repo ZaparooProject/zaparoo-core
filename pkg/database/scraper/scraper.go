@@ -50,6 +50,9 @@ const (
 	// library: its arcade catalog, its front end's database, its installed
 	// apps.
 	AutoOrderDevice = 100
+	// AutoOrderLibraryServer is for a server the user keeps their own game
+	// library on, whose metadata they have already curated.
+	AutoOrderLibraryServer = 150
 	// AutoOrderCatalog is for a general catalog of games matched by name.
 	AutoOrderCatalog = 200
 	// AutoOrderDocuments is for a source of documents and artwork that also
@@ -77,6 +80,11 @@ type ScrapeOptions struct {
 	// FillMissing revisits records but never replaces existing metadata.
 	// It is mutually exclusive with Force and requires scraper support.
 	FillMissing bool
+
+	// SkipImages imports metadata only, leaving out images, videos and
+	// manuals. Records are not marked done, so a later run can add the art.
+	// It requires scraper support.
+	SkipImages bool
 }
 
 // ScrapeUpdate is one progress event emitted on the channel returned by Scrape.
