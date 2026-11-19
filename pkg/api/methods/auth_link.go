@@ -102,6 +102,8 @@ type authLinkDeps struct {
 	backupCoordinator *backupsvc.Coordinator
 	ns                chan<- models.Notification
 	fetchWK           wellKnownFetcher
+	// launchers is refreshed when a link changes what a launcher needs.
+	launchers *helpers.LauncherCache
 }
 
 // authLinkTerminalError marks poll failures that end the flow (as opposed to
