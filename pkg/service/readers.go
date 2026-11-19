@@ -52,6 +52,12 @@ type toConnectDevice struct {
 	device           config.ReadersConnect
 }
 
+// manualReaders holds the readers connectReaders opened from a
+// readers.connect entry, keyed by the entry's path, so that removing or
+// disabling the entry closes the reader instead of leaving it holding the
+// device until Core restarts.
+type manualReaders map[string]readers.Reader
+
 const maxPendingHoldRemovals = 32
 
 type holdTokenKey struct {
@@ -165,7 +171,10 @@ func connectReaders(
 	st *state.State,
 	iq chan<- readers.Scan,
 	autoDetector *AutoDetector,
+	opened manualReaders,
 ) error {
+	closeRemovedManualReaders(cfg, st, opened)
+
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
 	toConnectStrs := func() []string {
@@ -258,6 +267,9 @@ func connectReaders(
 					continue
 				}
 				st.SetReader(r)
+				if opened != nil {
+					opened[device.device.Path] = r
+				}
 				log.Info().Msgf("opened reader: %s", device.connectionString)
 				connected = true
 			}
@@ -272,6 +284,37 @@ func connectReaders(
 	}
 
 	return nil
+}
+
+// closeRemovedManualReaders closes each reader in opened whose readers.connect
+// entry is gone or disabled. Readers that are no longer registered, because
+// they were pruned or replaced, are forgotten without being touched.
+func closeRemovedManualReaders(cfg *config.Instance, st *state.State, opened manualReaders) {
+	if len(opened) == 0 {
+		return
+	}
+	wanted := make(map[string]struct{})
+	for _, device := range cfg.Readers().Connect {
+		if device.IsEnabled() {
+			wanted[device.Path] = struct{}{}
+		}
+	}
+	for path, r := range opened {
+		readerID := r.ReaderID()
+		if current, ok := st.GetReader(readerID); !ok || current != r {
+			delete(opened, path)
+			continue
+		}
+		if _, ok := wanted[path]; ok {
+			continue
+		}
+		log.Info().
+			Str("readerID", readerID).
+			Str("path", path).
+			Msg("closing reader removed from readers.connect")
+		st.RemoveReader(readerID)
+		delete(opened, path)
+	}
 }
 
 // resolveAutoDetector keeps the detector in step with readers.auto_detect,
@@ -605,6 +648,7 @@ func readerManager(
 		log.Info().Msgf("reader manager started, auto-detect=%v", svc.Config.AutoDetect())
 		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0
+		opened := manualReaders{}
 		lastReaderCount := 0
 		for {
 			select {
@@ -659,7 +703,9 @@ func readerManager(
 					}
 				}
 
-				connectErr := connectReaders(svc.Platform, svc.Config, svc.State, scanQueue, autoDetector)
+				connectErr := connectReaders(
+					svc.Platform, svc.Config, svc.State, scanQueue, autoDetector, opened,
+				)
 				if connectErr != nil {
 					log.Warn().Msgf("error connecting rs: %s", connectErr)
 				}
