@@ -20,6 +20,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -43,6 +45,27 @@ func TestBackupDefaults(t *testing.T) {
 	require.NoError(t, cfg.Load())
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.Equal(t, DefaultBackupRemoteSchedule, cfg.BackupRemoteSchedule())
+}
+
+func TestBackupRemoteAutoBackup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.True(t, cfg.BackupRemoteAutoBackup(), "unset means on")
+
+	cfg.SetBackupRemoteAutoBackup(false)
+	require.NoError(t, cfg.Save())
+	reloaded, err := NewConfig(dir, BaseDefaults)
+	require.NoError(t, err)
+	assert.False(t, reloaded.BackupRemoteAutoBackup(), "off survives a reload")
+
+	reloaded.SetBackupRemoteAutoBackup(true)
+	assert.True(t, reloaded.BackupRemoteAutoBackup())
+	require.NoError(t, reloaded.Save())
+	raw, err := os.ReadFile(filepath.Join(dir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "auto_backup", "on is stored as unset")
 }
 
 func TestBackupScope(t *testing.T) {

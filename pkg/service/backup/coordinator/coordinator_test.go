@@ -223,3 +223,14 @@ func TestCancelRestoreStillStopsADetachedLease(t *testing.T) {
 	require.True(t, c.CancelRestore())
 	require.Error(t, lease.Context().Err())
 }
+
+func TestCoordinatorRemoteDeltaUnsupportedState(t *testing.T) {
+	t.Parallel()
+	c := New()
+
+	assert.False(t, c.RemoteDeltaUnsupported())
+	c.SetRemoteDeltaUnsupported(true)
+	assert.True(t, c.RemoteDeltaUnsupported())
+	c.SetRemoteDeltaUnsupported(false)
+	assert.False(t, c.RemoteDeltaUnsupported())
+}

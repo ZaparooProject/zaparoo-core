@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
@@ -74,6 +75,14 @@ const (
 	// remoteBackupStaleNoticeInterval paces re-posting the (category-
 	// deduplicated) stale notice while the condition persists.
 	remoteBackupStaleNoticeInterval = 24 * time.Hour
+	// remoteAutoBackupSettle is how long Auto-Backup waits after a game
+	// stops before backing up. Measured on MiSTer, a core's save file is
+	// closed under a second after the game is reported stopped; the margin
+	// covers slower emulators and lets quick game switches end in one backup.
+	remoteAutoBackupSettle = 10 * time.Second
+	// remoteAutoBackupRetry is how soon an Auto-Backup run that found another
+	// run queued, running or paused tries again.
+	remoteAutoBackupRetry = 1 * time.Minute
 )
 
 type staleNoticeState struct {
@@ -147,13 +156,62 @@ func startRemoteBackupScheduler(
 	idleSched *idle.Scheduler,
 	pauser *syncutil.Pauser,
 	playSyncRequests <-chan struct{},
+	mediaStopped <-chan struct{},
 	wg *sync.WaitGroup,
 ) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		remoteBackupSchedulerLoop(ctx, cfg, pl, db, st, idleSched, pauser, playSyncRequests, time.NewTicker)
+		remoteBackupSchedulerLoop(
+			ctx, cfg, pl, db, st, idleSched, pauser, playSyncRequests,
+			autoBackupTiming{settle: remoteAutoBackupSettle, retry: remoteAutoBackupRetry},
+			mediaStopped, time.NewTicker,
+		)
 	}()
+}
+
+// watchMediaStoppedForBackup tells the remote backup scheduler each time a
+// game on the primary slot stops, for Auto-Backup. Requests coalesce: the scheduler only needs
+// to know that play ended, not how many times.
+func watchMediaStoppedForBackup(ctx context.Context, b *broker.Broker, requests chan<- struct{}) {
+	notifChan, subID := b.Subscribe(8, models.NotificationStopped)
+	defer b.Unsubscribe(subID)
+	forwardMediaStopped(ctx, notifChan, requests)
+}
+
+func forwardMediaStopped(ctx context.Context, notifChan <-chan models.Notification, requests chan<- struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case notif, ok := <-notifChan:
+			if !ok {
+				return
+			}
+			if !notificationIsPrimarySlot(notif) {
+				continue
+			}
+			select {
+			case requests <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// autoBackupTiming sets how long Auto-Backup waits after a game stops, and
+// how soon it retries when another run is in the way.
+type autoBackupTiming struct {
+	settle time.Duration
+	retry  time.Duration
+}
+
+// autoBackupActive reports whether a stopped game should queue a cloud
+// backup. A manual schedule means the user wants no automatic runs, so it
+// pauses Auto-Backup without changing the setting.
+func autoBackupActive(cfg *config.Instance) bool {
+	return cfg.BackupRemoteEnabled() && cfg.BackupRemoteAutoBackup() &&
+		cfg.BackupRemoteSchedule() != config.BackupRemoteScheduleManual
 }
 
 func remoteBackupSchedulerLoop(
@@ -165,6 +223,8 @@ func remoteBackupSchedulerLoop(
 	idleSched *idle.Scheduler,
 	pauser *syncutil.Pauser,
 	playSyncRequests <-chan struct{},
+	autoBackup autoBackupTiming,
+	mediaStopped <-chan struct{},
 	newTicker func(time.Duration) *time.Ticker,
 ) {
 	// A run interrupted by power loss or a hard shutdown left "running" in
@@ -179,14 +239,7 @@ func remoteBackupSchedulerLoop(
 	recoveryMgr.RecoverInterruptedRuns()
 
 	var scheduled atomic.Bool
-	trySchedule := func() {
-		// While a pause-tier core (CD-based) is running, don't start at all:
-		// a run would immediately block on the pauser while holding the
-		// backup coordinator lease. The next tick retries; throttled states
-		// still run and make slow progress.
-		if scheduled.Load() || pauser.IsPaused() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
-			return
-		}
+	queueRun := func(auto bool) {
 		scheduled.Store(true)
 		idleSched.Schedule(
 			ctx,
@@ -195,9 +248,43 @@ func remoteBackupSchedulerLoop(
 			remoteBackupIdleMaxWait,
 			func(taskCtx context.Context) {
 				defer scheduled.Store(false)
-				runScheduledRemoteBackup(taskCtx, cfg, pl, db, st, pauser)
+				runRemoteBackup(taskCtx, cfg, pl, db, st, pauser, auto)
 			},
 		)
+	}
+	trySchedule := func() {
+		// While a pause-tier core (CD-based) is running, don't start at all:
+		// a run would immediately block on the pauser while holding the
+		// backup coordinator lease. The next tick retries; throttled states
+		// still run and make slow progress.
+		if scheduled.Load() || pauser.IsPaused() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
+			return
+		}
+		queueRun(false)
+	}
+
+	// A stopped game arms the Auto-Backup timer; each further stop restarts
+	// it, so the backup runs once play has been over for the settle delay.
+	// A run already queued or running may have read the save files before
+	// the game wrote them, so the timer waits for it to finish instead of
+	// counting it.
+	autoBackupTimer := time.NewTimer(autoBackup.settle)
+	autoBackupTimer.Stop()
+	defer autoBackupTimer.Stop()
+	armAutoBackup := func() {
+		if autoBackupActive(cfg) {
+			autoBackupTimer.Reset(autoBackup.settle)
+		}
+	}
+	tryAutoBackup := func() {
+		if !autoBackupActive(cfg) {
+			return
+		}
+		if scheduled.Load() || pauser.IsPaused() {
+			autoBackupTimer.Reset(autoBackup.retry)
+			return
+		}
+		queueRun(true)
 	}
 
 	heartbeatState := intervalState{backoff: remoteHeartbeatInitialBackoff}
@@ -239,7 +326,7 @@ func remoteBackupSchedulerLoop(
 	staleState := staleNoticeState{}
 	tryStaleNotice := func() {
 		now := time.Now()
-		active := cfg.BackupRemoteEnabled() && cfg.BackupRemoteSchedule() != "manual"
+		active := cfg.BackupRemoteEnabled() && cfg.BackupRemoteSchedule() != config.BackupRemoteScheduleManual
 		mgr := backupsvc.NewManager(cfg, pl, db).
 			WithCoordinator(st.BackupCoordinator()).WithInbox(st.Inbox())
 		if staleState.shouldNotify(now, mgr.TrackScheduleStale(now, active, remoteBackupStaleAfter)) {
@@ -322,6 +409,10 @@ func remoteBackupSchedulerLoop(
 		case <-playSyncRequests:
 			playSyncPending = true
 			tryPlaySync()
+		case <-mediaStopped:
+			armAutoBackup()
+		case <-autoBackupTimer.C:
+			tryAutoBackup()
 		case <-ctx.Done():
 			return
 		}
@@ -351,15 +442,36 @@ func scheduledRemoteBackupDue(
 		return false
 	}
 	schedule := cfg.BackupRemoteSchedule()
-	if schedule == "manual" {
+	if schedule == config.BackupRemoteScheduleManual {
 		return false
 	}
 	status := backupsvc.NewManager(cfg, pl, db).Status()
-	if status.Remote.Availability != backupsvc.RemoteAvailabilityAvailable &&
-		!backupsvc.RemoteAvailabilityNeedsRefresh(now, &status.Remote) {
+	if !remoteAvailabilityAllowsRun(now, &status.Remote) {
 		return false
 	}
 	return remoteBackupDue(now, &status.Remote, schedule)
+}
+
+// autoRemoteBackupDue is scheduledRemoteBackupDue for an Auto-Backup run: the
+// schedule's interval does not apply, everything else does.
+func autoRemoteBackupDue(
+	now time.Time,
+	cfg *config.Instance,
+	pl platforms.Platform,
+	db *database.Database,
+) bool {
+	if !autoBackupActive(cfg) || !helpers.IsClockReliable(now) {
+		return false
+	}
+	status := backupsvc.NewManager(cfg, pl, db).Status()
+	return remoteAvailabilityAllowsRun(now, &status.Remote)
+}
+
+// remoteAvailabilityAllowsRun reports whether the last eligibility check
+// allows a run, or is old enough that a run should refresh it.
+func remoteAvailabilityAllowsRun(now time.Time, remote *models.BackupStatusEntry) bool {
+	return remote.Availability == backupsvc.RemoteAvailabilityAvailable ||
+		backupsvc.RemoteAvailabilityNeedsRefresh(now, remote)
 }
 
 func runScheduledRemoteBackup(
@@ -370,10 +482,34 @@ func runScheduledRemoteBackup(
 	st *state.State,
 	pauser *syncutil.Pauser,
 ) {
-	if pauser.IsPaused() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
+	runRemoteBackup(ctx, cfg, pl, db, st, pauser, false)
+}
+
+// runRemoteBackup runs one automatic cloud backup. auto marks an Auto-Backup
+// run, queued by a stopped game, which skips the schedule's interval check.
+func runRemoteBackup(
+	ctx context.Context,
+	cfg *config.Instance,
+	pl platforms.Platform,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+	auto bool,
+) {
+	if pauser.IsPaused() {
 		return
 	}
-	log.Info().Str("schedule", cfg.BackupRemoteSchedule()).Msg("running scheduled remote backup")
+	due := scheduledRemoteBackupDue
+	trigger := "schedule"
+	if auto {
+		due = autoRemoteBackupDue
+		trigger = "auto backup"
+	}
+	if !due(time.Now(), cfg, pl, db) {
+		return
+	}
+	log.Info().Str("schedule", cfg.BackupRemoteSchedule()).Str("trigger", trigger).
+		Msg("running scheduled remote backup")
 	mgr := backupsvc.NewManager(cfg, pl, db).WithPauser(pauser)
 	if st != nil {
 		if _, _, active := st.BackupCoordinator().Active(); active {
@@ -476,9 +612,9 @@ func reliableStatusTime(raw *string) (time.Time, bool) {
 
 func remoteBackupScheduleInterval(schedule string) (time.Duration, bool) {
 	switch schedule {
-	case "daily":
+	case config.BackupRemoteScheduleDaily:
 		return 24 * time.Hour, true
-	case "weekly":
+	case config.BackupRemoteScheduleWeekly:
 		return 7 * 24 * time.Hour, true
 	default:
 		return 0, false

@@ -568,6 +568,31 @@ func renderBackupSettingsMenu(
 	pages.AddAndSwitchToPage(PageSettingsBackup, frame, true)
 }
 
+// addAutoBackupToggle adds the Auto Backup toggle. The caller disables it
+// while the schedule is manual; the stored value is kept either way.
+func addAutoBackupToggle(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	menu *SettingsList,
+	status *models.BackupStatusResponse,
+	description string,
+	refocus func(),
+) {
+	autoBackup := status.Remote.AutoBackup == nil || *status.Remote.AutoBackup
+	menu.AddToggle("Auto Backup", description, &autoBackup, func(value bool) {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteAutoBackup: &value})
+		if err != nil {
+			autoBackup = !value
+			menu.Redraw()
+			log.Warn().Err(err).Msg("error updating auto backup setting")
+			ShowErrorModal(pages, app, "Failed to save auto backup setting", refocus)
+		}
+	})
+}
+
 // addCloudBackupItems adds the Cloud section items available while a
 // Zaparoo Online account is linked.
 func addCloudBackupItems(
@@ -604,6 +629,7 @@ func addCloudBackupItems(
 		}
 	}
 	savedScheduleIndex := scheduleIndex
+	autoBackupIndex := -1
 	menu.AddCycle(
 		"Schedule",
 		"How often automatic cloud backup runs",
@@ -623,8 +649,12 @@ func addCloudBackupItems(
 				return
 			}
 			savedScheduleIndex = index
+			menu.SetItemDisabled(autoBackupIndex, value == config.BackupRemoteScheduleManual)
 		},
 	)
+	autoBackupIndex = menu.GetItemCount()
+	addAutoBackupToggle(svc, pages, app, menu, status, autoBackupDescription, func() { app.SetFocus(menu.List) })
+	menu.SetLastItemDisabled(status.Remote.Schedule == config.BackupRemoteScheduleManual)
 	cloudUploadDescription := "Upload a backup of this device to the cloud"
 	if status.Remote.Availability == "unavailable" {
 		cloudUploadDescription = "Warp is required to create cloud backups"

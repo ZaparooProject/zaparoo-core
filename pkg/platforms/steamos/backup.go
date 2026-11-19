@@ -14,6 +14,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/winebackup"
 )
 
 const (
@@ -28,41 +29,9 @@ var (
 		{Contains: "statesaves/"},
 		{Contains: "savestates/"},
 	}
-	windowsUserSavePatterns = []platforms.BackupPattern{
-		{Glob: "*/Documents/**"},
-		{Glob: "*/Saved Games/**"},
-		{Glob: "*/AppData/Roaming/**"},
-		{Glob: "*/AppData/LocalLow/**"},
-		{Glob: "*/AppData/Local/**"},
-	}
-	windowsSaveExclusions = []platforms.BackupPattern{
-		{Glob: "*/Application Data/**"},
-		{Glob: "*/Cookies/**"},
-		{Glob: "*/Local Settings/**"},
-		{Glob: "*/My Documents/**"},
-		{Glob: "*/NetHood/**"},
-		{Glob: "*/PrintHood/**"},
-		{Glob: "*/Recent/**"},
-		{Glob: "*/SendTo/**"},
-		{Glob: "*/Start Menu/**"},
-		{Glob: "*/Templates/**"},
-		{Glob: "*/AppData/Local/Battle.net/**"},
-		{Glob: "*/AppData/Local/Temp/**"},
-		{Glob: "*/AppData/Local/D3DSCache/**"},
-		{Glob: "*/AppData/Local/NVIDIA/**"},
-		{Glob: "*/AppData/Local/AMD/**"},
-		{Glob: "*.dxvk.bin"},
-		{Glob: "*.dxvk.lut"},
-		{Glob: "CachedData.db"},
-		{Contains: "internet cache/"},
-		{Contains: "cache/"},
-		{Contains: "caches/"},
-		{Contains: "crashdumps/"},
-		{Contains: "crashes/"},
-		{Contains: "logs/"},
-		{Contains: "telemetry/"},
-	}
-	emuDeckConfigIncludes = []platforms.BackupPattern{
+	windowsUserSavePatterns = winebackup.UserSavePatterns
+	windowsSaveExclusions   = winebackup.SaveExclusions
+	emuDeckConfigIncludes   = []platforms.BackupPattern{
 		{Glob: "settings.*"},
 		{Glob: ".RPCS3MigrationCompleted"},
 		{Glob: ".cloned"},

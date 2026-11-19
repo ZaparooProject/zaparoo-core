@@ -800,15 +800,17 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 
 	debugLogging := true
 	backupRemoteEnabled := true
+	backupRemoteAutoBackup := false
 	playtimeSyncEnabled := true
 	librarySyncEnabled := true
 	remoteControlEnabled := true
 	params := models.UpdateSettingsParams{
-		DebugLogging:         &debugLogging,
-		BackupRemoteEnabled:  &backupRemoteEnabled,
-		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
-		LibrarySyncEnabled:   &librarySyncEnabled,
-		RemoteControlEnabled: &remoteControlEnabled,
+		DebugLogging:           &debugLogging,
+		BackupRemoteEnabled:    &backupRemoteEnabled,
+		BackupRemoteAutoBackup: &backupRemoteAutoBackup,
+		PlaytimeSyncEnabled:    &playtimeSyncEnabled,
+		LibrarySyncEnabled:     &librarySyncEnabled,
+		RemoteControlEnabled:   &remoteControlEnabled,
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -828,6 +830,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	assert.Contains(t, err.Error(), "online settings require a local or admin client")
 	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
 	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.True(t, cfg.BackupRemoteAutoBackup())
 	assert.False(t, cfg.PlaytimeSyncEnabled(), "consent setting must not change on rejected request")
 	assert.False(t, cfg.LibrarySyncEnabled())
 	assert.False(t, cfg.RemoteControlEnabled())
@@ -846,6 +849,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	_, err = HandleSettingsUpdate(env)
 	require.NoError(t, err)
 	assert.True(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.BackupRemoteAutoBackup())
 	assert.True(t, cfg.PlaytimeSyncEnabled())
 	assert.True(t, cfg.LibrarySyncEnabled())
 	assert.True(t, cfg.RemoteControlEnabled())

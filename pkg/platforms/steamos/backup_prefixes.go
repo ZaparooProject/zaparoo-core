@@ -21,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/vdfbinary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	sharedsteam "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/winebackup"
 	"github.com/andygrunwald/vdf"
 )
 
@@ -78,12 +79,12 @@ func broadNonSteamPoliciesAt(home, configuredSteamRoot string) []platforms.Backu
 		definition(
 			filepath.Join(home, "Faugus"), "Faugus", backupCategorySaves,
 			append(
-				prefixWindowsPatterns(filepath.Join("*", "drive_c", "users"), windowsUserSavePatterns),
-				prefixWindowsPatterns(filepath.Join("*", "pfx", "drive_c", "users"), windowsUserSavePatterns)...,
+				winebackup.PrefixPatterns(filepath.Join("*", "drive_c", "users"), windowsUserSavePatterns),
+				winebackup.PrefixPatterns(filepath.Join("*", "pfx", "drive_c", "users"), windowsUserSavePatterns)...,
 			),
 			append(
-				prefixWindowsPatterns(filepath.Join("*", "drive_c", "users"), windowsSaveExclusions),
-				prefixWindowsPatterns(filepath.Join("*", "pfx", "drive_c", "users"), windowsSaveExclusions)...,
+				winebackup.PrefixPatterns(filepath.Join("*", "drive_c", "users"), windowsSaveExclusions),
+				winebackup.PrefixPatterns(filepath.Join("*", "pfx", "drive_c", "users"), windowsSaveExclusions)...,
 			),
 		),
 	)
@@ -342,8 +343,8 @@ func broadBottlePolicies(root bottleRoot) []platforms.BackupDefinition {
 		),
 		definition(
 			root.source, root.restore, backupCategorySaves,
-			prefixWindowsPatterns(filepath.Join("*", "drive_c", "users"), windowsUserSavePatterns),
-			prefixWindowsPatterns(filepath.Join("*", "drive_c", "users"), windowsSaveExclusions),
+			winebackup.PrefixPatterns(filepath.Join("*", "drive_c", "users"), windowsUserSavePatterns),
+			winebackup.PrefixPatterns(filepath.Join("*", "drive_c", "users"), windowsSaveExclusions),
 		),
 	}
 }
@@ -502,33 +503,15 @@ func normalizeWinePrefix(candidate string) string {
 }
 
 func steamPrefixSavePatterns() []platforms.BackupPattern {
-	return prefixWindowsPatterns(
+	return winebackup.PrefixPatterns(
 		filepath.Join("[234]?????????", "pfx", "drive_c", "users"), windowsUserSavePatterns,
 	)
 }
 
 func steamPrefixSaveExclusions() []platforms.BackupPattern {
-	return prefixWindowsPatterns(
+	return winebackup.PrefixPatterns(
 		filepath.Join("[234]?????????", "pfx", "drive_c", "users"), windowsSaveExclusions,
 	)
-}
-
-func prefixWindowsPatterns(prefix string, patterns []platforms.BackupPattern) []platforms.BackupPattern {
-	result := make([]platforms.BackupPattern, 0, len(patterns))
-	for _, pattern := range patterns {
-		if pattern.Glob != "" {
-			if !strings.ContainsAny(pattern.Glob, `/\\`) {
-				result = append(result, pattern)
-				continue
-			}
-			result = append(result, platforms.BackupPattern{
-				Glob: filepath.Join(prefix, pattern.Glob),
-			})
-			continue
-		}
-		result = append(result, pattern)
-	}
-	return result
 }
 
 func readLimitedBackupFile(path string, limit int64) ([]byte, error) {

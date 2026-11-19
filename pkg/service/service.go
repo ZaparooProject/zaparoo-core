@@ -1111,8 +1111,15 @@ func startServiceWithOptions(
 		defer backgroundWG.Done()
 		watchMediaHistoryBackfill(st.GetContext(), notifBroker, cfg, db, indexPauser, requestPlaySync)
 	}()
+	backupMediaStopped := make(chan struct{}, 1)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		watchMediaStoppedForBackup(st.GetContext(), notifBroker, backupMediaStopped)
+	}()
 	startRemoteBackupScheduler(
-		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
+		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backupMediaStopped,
+		backgroundWG,
 	)
 	startLibrarySyncScheduler(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, notifBroker, backgroundWG,

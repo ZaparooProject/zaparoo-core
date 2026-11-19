@@ -305,7 +305,7 @@ func TestBuildOnlineSettingsMenu_FitsCRTWithoutScrolling_Integration(t *testing.
 	for _, text := range []string{
 		"Status: Linked", "Warp: Active", "Unlink account", "Status: Waiting for commands", "Activity",
 		"All online features", "Remote control", "Play history sync", "Library sync", "Cloud backup",
-		"Schedule: < daily >", "Manage backups", "Custom server: custom.example.com.",
+		"Schedule: < daily >", "Auto Backup", "Manage backups", "Custom server: custom.example.com.",
 	} {
 		assert.True(t, runner.ContainsText(text), "missing %q", text)
 	}
@@ -614,8 +614,8 @@ func TestBuildOnlineSettingsMenu_ManageBackupsNavigatesToBackupPage_Integration(
 	startOnlinePage(t, runner, mockSvc)
 
 	// Left column: Status, Warp, All online features, Unlink account,
-	// Schedule, then Manage backups.
-	for range 5 {
+	// Schedule, Auto Backup, then Manage backups.
+	for range 6 {
 		runner.SimulateArrowDown()
 	}
 	runner.SimulateEnter()

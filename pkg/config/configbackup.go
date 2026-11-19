@@ -30,7 +30,17 @@ const (
 	// DefaultOnlineBaseURL is the official Zaparoo Online API host, used
 	// when [service] online_base_url is not set.
 	DefaultOnlineBaseURL        = "https://api.zaparoo.com"
-	DefaultBackupRemoteSchedule = "daily"
+	DefaultBackupRemoteSchedule = BackupRemoteScheduleDaily
+)
+
+// Cloud backup schedules.
+const (
+	// BackupRemoteScheduleDaily backs up once a day.
+	BackupRemoteScheduleDaily = "daily"
+	// BackupRemoteScheduleWeekly backs up once a week.
+	BackupRemoteScheduleWeekly = "weekly"
+	// BackupRemoteScheduleManual only backs up when the user asks.
+	BackupRemoteScheduleManual = "manual"
 )
 
 // OfficialAuthHosts are the hosts of the official hosted API
@@ -63,8 +73,11 @@ type Backup struct {
 }
 
 type BackupRemote struct {
-	Schedule string `toml:"schedule,omitempty"`
-	Enabled  bool   `toml:"enabled,omitempty"`
+	// AutoBackup backs up shortly after each game stops. Unset means on, so
+	// only a user turning it off is written to config.toml.
+	AutoBackup *bool  `toml:"auto_backup,omitempty"`
+	Schedule   string `toml:"schedule,omitempty"`
+	Enabled    bool   `toml:"enabled,omitempty"`
 }
 
 func (c *Instance) BackupLocalDir() string {
@@ -122,6 +135,30 @@ func (c *Instance) SetBackupRemoteSchedule(schedule string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Backup.Remote.Schedule = schedule
+}
+
+// BackupRemoteAutoBackup reports the Auto-Backup setting: back up shortly
+// after each game stops. It is on unless the user turned it off. It only
+// takes effect while cloud backup is on and the schedule is not manual.
+func (c *Instance) BackupRemoteAutoBackup() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Backup.Remote.AutoBackup == nil {
+		return true
+	}
+	return *c.vals.Backup.Remote.AutoBackup
+}
+
+// SetBackupRemoteAutoBackup stores the Auto-Backup setting. Turning it on
+// clears the stored value, so config.toml only records a user turning it off.
+func (c *Instance) SetBackupRemoteAutoBackup(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if enabled {
+		c.vals.Backup.Remote.AutoBackup = nil
+		return
+	}
+	c.vals.Backup.Remote.AutoBackup = &enabled
 }
 
 func validateRemoteBaseURL(rawURL, setting string) error {
