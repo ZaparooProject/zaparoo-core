@@ -272,6 +272,7 @@ type BrowseIndexResults struct {
 
 type SettingsResponse struct {
 	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
+	BackupRemoteAutoBackup    *bool              `json:"backupRemoteAutoBackup,omitempty"`
 	PlaytimeSyncEnabled       *bool              `json:"playtimeSyncEnabled,omitempty"`
 	LibrarySyncEnabled        *bool              `json:"librarySyncEnabled,omitempty"`
 	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
@@ -1363,6 +1364,9 @@ type BackupStatusEntry struct {
 	AvailabilityCheckedAt *string `json:"availabilityCheckedAt,omitempty"`
 	DeviceName            *string `json:"deviceName,omitempty"`
 	LinkedAt              *string `json:"linkedAt,omitempty"`
+	// AutoBackup is the Auto Backup setting: back up after each game stops.
+	// Remote entry only.
+	AutoBackup *bool `json:"autoBackup,omitempty"`
 	// Protection is the Online service's answer to whether this device's
 	// backups protect it, and LastAttempt the last scheduled backup the
 	// device reported as failed or skipped. Remote entry only; omitted when

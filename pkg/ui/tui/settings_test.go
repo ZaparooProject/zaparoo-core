@@ -22,6 +22,7 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1000,6 +1001,91 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 	}, uiSettleTimeout), "toggle should write BackupRemoteEnabled")
 }
 
+// autoBackupUpdates returns the Auto Backup values written through
+// UpdateSettings so far.
+func autoBackupUpdates(mockSvc *MockSettingsService) []bool {
+	var values []bool
+	for i := range mockSvc.Calls {
+		call := &mockSvc.Calls[i]
+		if call.Method != "UpdateSettings" {
+			continue
+		}
+		params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
+		if ok && params.BackupRemoteAutoBackup != nil {
+			values = append(values, *params.BackupRemoteAutoBackup)
+		}
+	}
+	return values
+}
+
+func TestBuildBackupSettingsMenu_AutoBackupToggleWrites_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Auto Backup", uiSettleTimeout))
+
+	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
+	// then Auto Backup, which is on when the status leaves it unset.
+	for range 4 {
+		runner.SimulateArrowDown()
+	}
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForCondition(func() bool {
+		return slices.Equal(autoBackupUpdates(mockSvc), []bool{false})
+	}, uiSettleTimeout), "toggling Auto Backup should turn it off")
+}
+
+func TestBuildBackupSettingsMenu_AutoBackupDisabledOnManual_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Schedule: < daily >", uiSettleTimeout))
+
+	// Cycle the schedule from daily through weekly to manual.
+	for range 3 {
+		runner.SimulateArrowDown()
+	}
+	runner.SimulateArrowRight()
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Schedule: < manual >", uiSettleTimeout))
+
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.Never(t, func() bool { return len(autoBackupUpdates(mockSvc)) > 0 },
+		200*time.Millisecond, 10*time.Millisecond, "Auto Backup cannot change while the schedule is manual")
+
+	// Back to daily: the toggle works again.
+	runner.SimulateArrowUp()
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Schedule: < daily >", uiSettleTimeout))
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForCondition(func() bool {
+		return slices.Equal(autoBackupUpdates(mockSvc), []bool{false})
+	}, uiSettleTimeout), "Auto Backup is enabled again off the manual schedule")
+}
+
 func TestBuildBackupSettingsMenu_ScheduleRevertsOnFailure_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -1070,11 +1156,10 @@ func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(
 	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("View backups"), "restore must remain available")
 	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
-	// Back up now. Four downs land on the cloud upload action.
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
+	// Auto Backup, Back up now. Five downs land on the cloud upload action.
+	for range 5 {
+		runner.SimulateArrowDown()
+	}
 	require.True(t, runner.WaitForText("Warp is required", uiSettleTimeout))
 	// The cached "unavailable" value is only a hint: pressing the action
 	// must still attempt the upload, whose fresh server-side check is
@@ -1157,11 +1242,10 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 
 	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
-	// Back up now. Four downs land on the cloud upload action.
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
+	// Auto Backup, Back up now. Five downs land on the cloud upload action.
+	for range 5 {
+		runner.SimulateArrowDown()
+	}
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("This device is already backed up.", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Cloud backup"))

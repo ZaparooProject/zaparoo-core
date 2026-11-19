@@ -292,6 +292,7 @@ func TestRemoteBackupScheduler_PlaySyncRequestBypassesSuccessInterval(t *testing
 	go func() {
 		remoteBackupSchedulerLoop(
 			ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), playSyncRequests,
+			autoBackupTiming{settle: time.Hour, retry: time.Hour}, make(chan struct{}),
 			func(time.Duration) *time.Ticker { return time.NewTicker(time.Hour) },
 		)
 		close(done)
@@ -398,6 +399,7 @@ func TestRemoteBackupScheduler_PlaySyncExpectedInactivityResumes(t *testing.T) {
 			go func() {
 				remoteBackupSchedulerLoop(
 					ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), playSyncRequests,
+					autoBackupTiming{settle: time.Hour, retry: time.Hour}, make(chan struct{}),
 					func(time.Duration) *time.Ticker {
 						close(ready)
 						return time.NewTicker(time.Hour)
@@ -495,6 +497,7 @@ func TestRemoteBackupScheduler_PlaySyncRemoteUnlinkedWaitsForCredentialChange(t 
 	go func() {
 		remoteBackupSchedulerLoop(
 			ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), playSyncRequests,
+			autoBackupTiming{settle: time.Hour, retry: time.Hour}, make(chan struct{}),
 			func(time.Duration) *time.Ticker {
 				close(ready)
 				return time.NewTicker(time.Hour)
@@ -675,6 +678,7 @@ func TestRemoteHeartbeatResendsOnCapabilityChange(t *testing.T) {
 	go func() {
 		remoteBackupSchedulerLoop(
 			ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), make(chan struct{}),
+			autoBackupTiming{settle: time.Hour, retry: time.Hour}, make(chan struct{}),
 			func(time.Duration) *time.Ticker { return time.NewTicker(5 * time.Millisecond) },
 		)
 		close(done)
@@ -878,6 +882,7 @@ func TestRemoteHeartbeatSendsPendingAttemptPromptly(t *testing.T) {
 	go func() {
 		remoteBackupSchedulerLoop(
 			ctx, env.cfg, env.platform, env.db, env.st, nil, syncutil.NewPauser(), make(chan struct{}),
+			autoBackupTiming{settle: time.Hour, retry: time.Hour}, make(chan struct{}),
 			func(time.Duration) *time.Ticker { return time.NewTicker(5 * time.Millisecond) },
 		)
 		close(done)

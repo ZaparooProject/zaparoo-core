@@ -551,6 +551,8 @@ func (m *Manager) Status() models.BackupStatusResponse {
 	local := toStatusEntry(&stored.Local, true, "")
 	remote := toStatusEntry(&stored.Remote, m.cfg.BackupRemoteEnabled(), m.cfg.BackupRemoteSchedule())
 	remote.Linked = remoteLinked
+	autoBackup := m.cfg.BackupRemoteAutoBackup()
+	remote.AutoBackup = &autoBackup
 	if remoteLinked {
 		remote.Protection = protectionToModel(stored.RemoteProtection)
 		if !attemptSuperseded(stored.RemoteLastAttempt, stored.RemoteProtection, stored.Remote.LastSuccessAt) {

@@ -4095,6 +4095,7 @@ None.
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
 | librarySyncEnabled        | boolean                                   | No       | Whether the user explicitly enabled Library sync. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
+| backupRemoteAutoBackup    | boolean                                   | No       | Auto Backup: back up shortly after each game stops. Unset in config means on. Has no effect while the schedule is `manual`. Only returned to localhost and authenticated admin clients. |
 | remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
 | mediaImageDir             | string                                    | No       | Absolute path of the image folder (`[media] image_dir`), where scraped images (`libretro/`) and the generated thumbnail cache (`thumbs/`) are stored. Defaults to `images` under Core's data directory. Only returned to localhost and authenticated admin clients. |
 | onlineBaseUrl             | string                                    | No       | Base URL of the Zaparoo Online service every online feature uses: account linking, cloud backup, play history sync, Library sync and remote control (read-only, set as `online_base_url` under `[service]` in the config file). Only returned to localhost and authenticated admin clients. |
@@ -4202,6 +4203,7 @@ An object containing any of the following optional keys:
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
 | librarySyncEnabled        | boolean                                   | No       | Explicitly enable or disable Library sync, which uploads the list of games this device holds and keeps favorites, play-later, likes, dislikes and decks in step with the linked Zaparoo Online account. Disabling removes this device's game list from the account; local favorites and decks are kept. The linked account is told within a minute. Requires localhost or an authenticated admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
+| backupRemoteAutoBackup    | boolean                                   | No       | Turn Auto Backup on or off. Has no effect while the schedule is `manual`; the value is kept. Requires localhost or an authenticated admin client. |
 | remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
 #### Result
@@ -4928,6 +4930,7 @@ None.
 | warnings              | [BackupWarning](#backup-warning-object)[] | No | Files skipped by latest run. |
 | skippedFiles          | number  | No       | Number of skipped files. |
 | schedule              | string  | No       | Remote schedule: `daily`, `weekly`, or `manual`. |
+| autoBackup            | boolean | No       | Auto Backup setting. Remote entry only. |
 | linked                | boolean | No       | Whether device has usable remote credentials. |
 | deviceName            | string  | No       | Linked remote device name. |
 | linkedAt              | string  | No       | Device link time. |

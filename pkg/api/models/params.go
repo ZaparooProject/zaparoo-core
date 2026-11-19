@@ -226,6 +226,7 @@ type UpdateSettingsParams struct {
 	RemoteControlEnabled    *bool     `json:"remoteControlEnabled"`
 	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
+	BackupRemoteAutoBackup  *bool     `json:"backupRemoteAutoBackup"`
 	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	AudioMidiSoundFont      *string   `json:"audioMidiSoundFont" validate:"omitempty,max=4096"`
 	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`

@@ -131,6 +131,8 @@ const (
 
 const onlineLinkFirstDesc = "Link your Zaparoo Online account first"
 
+const autoBackupDescription = "Backs up your saves every time you finish playing"
+
 // warpUnknownBackupSkipped tells the user why turning every feature on left
 // cloud backup off.
 const warpUnknownBackupSkipped = "Cloud backup wasn't turned on because your\n" +
@@ -401,6 +403,7 @@ func renderOnlineSettingsMenu(
 	if !linked {
 		scheduleDesc = onlineLinkFirstDesc
 	}
+	autoBackupIndex := -1
 	left.AddCycle("Schedule", scheduleDesc, scheduleOptions, &scheduleIndex, func(value string, index int) {
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -412,7 +415,15 @@ func renderOnlineSettingsMenu(
 			return
 		}
 		savedScheduleIndex = index
+		left.SetItemDisabled(autoBackupIndex, value == config.BackupRemoteScheduleManual)
 	}).SetLastItemDisabled(!linked)
+	autoBackupIndex = left.GetItemCount()
+	autoBackupDesc := autoBackupDescription
+	if !linked {
+		autoBackupDesc = onlineLinkFirstDesc
+	}
+	addAutoBackupToggle(svc, pages, app, left, status, autoBackupDesc, refocus)
+	left.SetLastItemDisabled(!linked || status.Remote.Schedule == config.BackupRemoteScheduleManual)
 	left.AddNavAction("Manage backups", "Back up now, view and restore local and cloud backups", func() {
 		buildBackupSettingsMenu(svc, pages, app, rebuild)
 	})

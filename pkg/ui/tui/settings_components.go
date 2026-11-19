@@ -611,8 +611,13 @@ func (sl *SettingsList) addRow(mainText, description string, action func()) {
 // stays selectable so its description can say why, but it cannot be
 // changed or activated.
 func (sl *SettingsList) SetLastItemDisabled(disabled bool) *SettingsList {
-	index := len(sl.items) - 1
-	if index < 0 {
+	return sl.SetItemDisabled(len(sl.items)-1, disabled)
+}
+
+// SetItemDisabled marks the item at index as disabled or enabled again, for
+// items whose availability depends on another setting in the list.
+func (sl *SettingsList) SetItemDisabled(index int, disabled bool) *SettingsList {
+	if index < 0 || index >= len(sl.items) {
 		return sl
 	}
 	sl.items[index].disabled = disabled
