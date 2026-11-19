@@ -205,15 +205,18 @@ func TestRoundTripCanceledDuringDelay(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	waiting := make(chan struct{})
-	base := &scripted{outcomes: []outcome{{code: http.StatusBadGateway, hook: func() { close(waiting) }}, ok200}}
+	base := &scripted{outcomes: []outcome{{code: http.StatusBadGateway}, ok200}}
 	rt := &transport{base: base, delay: time.Hour}
-
-	go func() {
-		<-waiting
+	req := newRequest(ctx, t, http.MethodPut, "payload")
+	getBody := req.GetBody
+	// The body is rewound after the first attempt and before the wait, so
+	// canceling here cancels during the wait.
+	req.GetBody = func() (io.ReadCloser, error) {
 		cancel()
-	}()
-	resp, err := rt.RoundTrip(newRequest(ctx, t, http.MethodGet, ""))
+		return getBody()
+	}
+
+	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
@@ -231,7 +234,7 @@ func TestTransportThroughClient(t *testing.T) {
 		}
 		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(strings.Repeat("x", drainLimit*2)))
+			_, _ = w.Write([]byte(strings.Repeat("x", 128<<10)))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -242,6 +245,37 @@ func TestTransportThroughClient(t *testing.T) {
 	req, err := http.NewRequestWithContext(
 		Idempotent(context.Background()), http.MethodPost, server.URL, strings.NewReader("payload"),
 	)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestRetryNotHeldByStalledBody(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("partial"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-release
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	client := &http.Client{Transport: &transport{base: server.Client().Transport, delay: time.Millisecond}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, http.NoBody)
 	require.NoError(t, err)
 	resp, err := client.Do(req)
 	require.NoError(t, err)

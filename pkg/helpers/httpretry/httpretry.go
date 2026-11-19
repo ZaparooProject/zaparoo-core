@@ -38,10 +38,6 @@ import (
 // caller does not notice.
 const DefaultDelay = 1500 * time.Millisecond
 
-// drainLimit bounds how much of a failed response is read so its connection
-// can be reused.
-const drainLimit = 64 << 10
-
 type idempotentKey struct{}
 
 // Idempotent marks a request as safe to send twice although its method is
@@ -95,7 +91,8 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	event := log.Info().Str("method", req.Method).Str("path", req.URL.Path)
 	if resp != nil {
 		event = event.Int("status", resp.StatusCode)
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
+		// Closed unread: a failed response whose body stalls must not hold
+		// up the retry, at the cost of reusing its connection.
 		_ = resp.Body.Close()
 	} else {
 		event = event.Err(err)

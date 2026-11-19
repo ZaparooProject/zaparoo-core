@@ -137,8 +137,8 @@ func RemoteFailureAttempt(err error) (status, reason string, ok bool) {
 
 // RecordScheduledAttempt queues a report of a scheduled remote backup that
 // failed or was skipped, replacing any earlier one: the service keeps only
-// the newest. Nothing is queued against an unreliable clock, whose
-// timestamp the service would refuse.
+// the newest, apart from the last failure. Nothing is queued against an
+// unreliable clock, whose timestamp the service would refuse.
 func (m *Manager) RecordScheduledAttempt(status, reason string, at time.Time) {
 	if status != AttemptStatusFailed && status != AttemptStatusSkipped {
 		log.Warn().Str("status", status).Msg("ignoring unknown backup attempt status")
@@ -154,38 +154,62 @@ func (m *Manager) RecordScheduledAttempt(status, reason string, at time.Time) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
 	st := m.readStatusLocked()
-	st.PendingAttempt = &attemptReport{At: at.UTC().Truncate(time.Second), Status: status, Reason: reason}
+	st.queueAttempt(&attemptReport{At: at.UTC().Truncate(time.Second), Status: status, Reason: reason})
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to persist backup attempt report")
 	}
 }
 
+// queueAttempt makes report the pending one. A failure it replaces before
+// the service heard of it is kept when report is a skip, since the service
+// would otherwise never learn of it; a newer failure makes it moot.
+func (st *statusFile) queueAttempt(report *attemptReport) {
+	if report.Status == AttemptStatusFailed {
+		st.PendingFailure = nil
+	} else if st.PendingAttempt != nil && st.PendingAttempt.Status == AttemptStatusFailed {
+		st.PendingFailure = st.PendingAttempt
+	}
+	st.PendingAttempt = report
+}
+
 // HasPendingAttempt reports whether a backup attempt report is waiting to be
 // sent with the next heartbeat.
 func (m *Manager) HasPendingAttempt() bool {
-	return m.readStatus().PendingAttempt != nil
+	st := m.readStatus()
+	return st.PendingAttempt != nil || st.PendingFailure != nil
 }
 
-// clearPendingAttempt removes the pending report. With a non-nil sent, the
-// report is removed only if it is still the one that was sent, so a newer
-// report queued while a heartbeat was in flight is kept.
+// clearPendingAttempt removes a pending report. With a nil sent, every
+// pending report is removed. Otherwise only the one still equal to sent is,
+// so a newer report queued while a heartbeat was in flight is kept.
 func (m *Manager) clearPendingAttempt(sent *attemptReport) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
 	st := m.readStatusLocked()
-	if st.PendingAttempt == nil || (sent != nil && !st.PendingAttempt.equal(sent)) {
+	changed := false
+	for _, pending := range []**attemptReport{&st.PendingFailure, &st.PendingAttempt} {
+		if *pending != nil && (sent == nil || (*pending).equal(sent)) {
+			*pending = nil
+			changed = true
+		}
+	}
+	if !changed {
 		return
 	}
-	st.PendingAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to clear backup attempt report")
 	}
 }
 
-// pendingAttemptForSend returns the report to attach to a heartbeat, or nil.
-// A report the service would refuse for its date is dropped here.
+// pendingAttemptForSend returns the report to attach to a heartbeat, or nil:
+// a kept failure first, then the newest attempt, one per heartbeat. A report
+// the service would refuse for its date is dropped here.
 func (m *Manager) pendingAttemptForSend(now time.Time) *attemptReport {
-	report := m.readStatus().PendingAttempt
+	st := m.readStatus()
+	report := st.PendingFailure
+	if report == nil {
+		report = st.PendingAttempt
+	}
 	if report == nil {
 		return nil
 	}
@@ -235,11 +259,20 @@ func protectionToModel(p *protectionStatus) *models.BackupProtection {
 	return out
 }
 
-// attemptSuperseded reports whether a snapshot committed after the attempt
+// attemptSuperseded reports whether a backup that succeeded after the attempt
 // makes it history: the service keeps the attempt, but it no longer says
-// anything about whether the device is protected.
-func attemptSuperseded(a *attemptReport, p *protectionStatus) bool {
-	return a != nil && p != nil && p.LastSuccessAt != nil && p.LastSuccessAt.After(a.At)
+// anything about whether the device is protected. localSuccess is this
+// device's own last successful remote run, which counts even when the
+// service could not be asked again since.
+func attemptSuperseded(a *attemptReport, p *protectionStatus, localSuccess string) bool {
+	if a == nil {
+		return false
+	}
+	if p != nil && p.LastSuccessAt != nil && p.LastSuccessAt.After(a.At) {
+		return true
+	}
+	succeeded, ok := parseReliableTime(localSuccess)
+	return ok && succeeded.After(a.At)
 }
 
 func attemptToModel(a *attemptReport) *models.BackupAttempt {

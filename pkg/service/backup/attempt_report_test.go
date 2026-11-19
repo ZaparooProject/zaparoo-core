@@ -376,3 +376,103 @@ func TestRunRemoteSuccessClearsReportAndRefreshesProtection(t *testing.T) {
 	require.NotNil(t, remote.Protection)
 	assert.Equal(t, "protected", remote.Protection.State)
 }
+
+func TestSkipKeepsUnsentFailure(t *testing.T) {
+	rec := &heartbeatRecorder{}
+	m := newAttemptTestManager(t, rec)
+	now := time.Now()
+	m.RecordScheduledAttempt(AttemptStatusFailed, AttemptReasonQuotaExceeded, now.Add(-2*time.Hour))
+	m.RecordScheduledAttempt(AttemptStatusSkipped, AttemptReasonOffline, now.Add(-time.Hour))
+
+	// The failure goes first, then the skip that came after it.
+	require.NoError(t, m.SendCapabilityHeartbeat(context.Background()))
+	assert.True(t, m.HasPendingAttempt())
+	require.NoError(t, m.SendCapabilityHeartbeat(context.Background()))
+	assert.False(t, m.HasPendingAttempt())
+	require.Len(t, rec.reports, 2)
+	assert.Equal(t, AttemptReasonQuotaExceeded, rec.reports[0]["reason"])
+	assert.Equal(t, AttemptReasonOffline, rec.reports[1]["reason"])
+}
+
+func TestNewerFailureReplacesKeptFailure(t *testing.T) {
+	m := newAttemptTestManager(t, &heartbeatRecorder{})
+	now := time.Now()
+	m.RecordScheduledAttempt(AttemptStatusFailed, AttemptReasonQuotaExceeded, now.Add(-3*time.Hour))
+	m.RecordScheduledAttempt(AttemptStatusSkipped, AttemptReasonOffline, now.Add(-2*time.Hour))
+	require.NotNil(t, m.readStatus().PendingFailure)
+
+	m.RecordScheduledAttempt(AttemptStatusFailed, AttemptReasonServerError, now.Add(-time.Hour))
+	st := m.readStatus()
+	assert.Nil(t, st.PendingFailure)
+	require.NotNil(t, st.PendingAttempt)
+	assert.Equal(t, AttemptReasonServerError, st.PendingAttempt.Reason)
+
+	// A skip after a skip keeps nothing extra.
+	m.clearPendingAttempt(nil)
+	m.RecordScheduledAttempt(AttemptStatusSkipped, AttemptReasonBusy, now.Add(-30*time.Minute))
+	m.RecordScheduledAttempt(AttemptStatusSkipped, AttemptReasonOffline, now)
+	assert.Nil(t, m.readStatus().PendingFailure)
+}
+
+func TestLocalSuccessSupersedesReportedAttempt(t *testing.T) {
+	success := time.Date(2026, 10, 20, 3, 0, 0, 0, time.UTC)
+	attemptAt := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
+	rec := &heartbeatRecorder{me: remoteDeviceMeResponse{
+		ID: "d", BackupActive: true,
+		BackupProtection: &protectionStatus{State: "failed", LastSuccessAt: &success},
+		LastBackupAttempt: &attemptReport{
+			At: attemptAt, Status: AttemptStatusFailed, Reason: AttemptReasonServerError,
+		},
+	}}
+	m := newAttemptTestManager(t, rec)
+	_, err := m.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, m.Status().Remote.LastAttempt)
+
+	// A backup that succeeded after the attempt, with no device check since.
+	remote := m.readStatus().Remote
+	remote.LastSuccessAt = formatTime(attemptAt.Add(time.Hour))
+	require.NoError(t, m.writeRemoteStatus(&remote))
+	assert.Nil(t, m.Status().Remote.LastAttempt)
+}
+
+func TestStaleDeviceCheckDoesNotOverwriteNewer(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/device/me" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		state := "protected"
+		if calls.Add(1) == 1 {
+			// The first check answers last, with what was true before.
+			close(started)
+			<-release
+			state = "failed"
+		}
+		writeJSON(t, w, remoteDeviceMeResponse{
+			ID: "d", BackupActive: true, BackupProtection: &protectionStatus{State: state},
+		})
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	slow := make(chan error, 1)
+	go func() {
+		_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+		slow <- err
+	}()
+	<-started
+	_, err := env.Manager.RefreshRemoteAvailability(context.Background())
+	require.NoError(t, err)
+	close(release)
+	require.NoError(t, <-slow)
+
+	remote := env.Manager.Status().Remote
+	require.NotNil(t, remote.Protection)
+	assert.Equal(t, "protected", remote.Protection.State)
+}

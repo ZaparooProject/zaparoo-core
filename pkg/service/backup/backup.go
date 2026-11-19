@@ -181,8 +181,12 @@ type fileCollection struct {
 
 type statusFile struct {
 	// PendingAttempt is a scheduled remote backup that failed or was
-	// skipped, waiting to be sent with the next heartbeat.
+	// skipped, waiting to be sent with the next heartbeat. PendingFailure is
+	// an earlier failure, not yet sent, that a later skip replaced: the
+	// service records the last failure apart from the last attempt, so it is
+	// still sent.
 	PendingAttempt *attemptReport `json:"pendingAttempt,omitempty"`
+	PendingFailure *attemptReport `json:"pendingFailure,omitempty"`
 	// RemoteProtection and RemoteLastAttempt are the Online service's view
 	// of this device's backups, from the last device check that reached it.
 	RemoteProtection  *protectionStatus `json:"remoteProtection,omitempty"`
@@ -549,7 +553,7 @@ func (m *Manager) Status() models.BackupStatusResponse {
 	remote.Linked = remoteLinked
 	if remoteLinked {
 		remote.Protection = protectionToModel(stored.RemoteProtection)
-		if !attemptSuperseded(stored.RemoteLastAttempt, stored.RemoteProtection) {
+		if !attemptSuperseded(stored.RemoteLastAttempt, stored.RemoteProtection, stored.Remote.LastSuccessAt) {
 			remote.LastAttempt = attemptToModel(stored.RemoteLastAttempt)
 		}
 	}
@@ -679,11 +683,11 @@ func (m *Manager) RecoverInterruptedRuns() {
 			continue
 		}
 		if entry == &st.Remote && entry.RunType == RemoteBackupTypeScheduled && helpers.IsClockReliable(now) {
-			st.PendingAttempt = &attemptReport{
+			st.queueAttempt(&attemptReport{
 				At:     now.UTC().Truncate(time.Second),
 				Status: AttemptStatusFailed,
 				Reason: AttemptReasonInterrupted,
-			}
+			})
 		}
 		entry.LastStatus = StatusFailed
 		entry.LastError = statusErrorInterrupted

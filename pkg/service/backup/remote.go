@@ -1522,13 +1522,25 @@ func (m *Manager) RefreshRemoteAvailabilityIfStaleAsync() {
 	}()
 }
 
+// deviceCheckSeq numbers device checks in the order they start, and
+// deviceCheckApplied holds, per status file, the newest one whose result was
+// stored, guarded by statusMu. A slow check that started before a newer one
+// finished would otherwise restore what the service said before, such as a
+// failure a backup has since cleared. Package-level like the status file
+// lock, since managers are constructed per request.
+var (
+	deviceCheckSeq     atomic.Uint64
+	deviceCheckApplied = map[string]uint64{}
+)
+
 func (m *Manager) updateRemoteAvailability(
 	ctx context.Context, client *remoteClient,
 ) (string, error) {
+	seq := deviceCheckSeq.Add(1)
 	me, err := client.deviceMe(ctx)
 	if err != nil {
 		if !errors.Is(err, errRemoteUnlinked) {
-			m.setRemoteAvailability(client, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
+			m.setRemoteAvailability(client, seq, RemoteAvailabilityUnknown, time.Now().UTC(), nil)
 		}
 		return RemoteAvailabilityUnknown, err
 	}
@@ -1536,7 +1548,7 @@ func (m *Manager) updateRemoteAvailability(
 	if me.allowsCloudBackup() {
 		availability = RemoteAvailabilityAvailable
 	}
-	m.setRemoteAvailability(client, availability, time.Now().UTC(), me)
+	m.setRemoteAvailability(client, seq, availability, time.Now().UTC(), me)
 	return availability, nil
 }
 
@@ -1547,9 +1559,10 @@ func (m *Manager) updateRemoteAvailability(
 // leaves the last reported features in place. A result for a credential
 // that was replaced while the check ran belongs to the earlier link and is
 // dropped: linking writes the new credential before clearing the status
-// under statusMu, so the comparison here cannot miss a relink.
+// under statusMu, so the comparison here cannot miss a relink. So is the
+// result of a check that started before one already stored.
 func (m *Manager) setRemoteAvailability(
-	client *remoteClient, availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
+	client *remoteClient, seq uint64, availability string, checkedAt time.Time, me *remoteDeviceMeResponse,
 ) {
 	statusMu.Lock()
 	defer statusMu.Unlock()
@@ -1558,6 +1571,12 @@ func (m *Manager) setRemoteAvailability(
 		log.Debug().Msg("ignoring remote availability result for superseded credential")
 		return
 	}
+	statusPath := m.statusPath()
+	if seq < deviceCheckApplied[statusPath] {
+		log.Debug().Msg("ignoring remote availability result older than a stored one")
+		return
+	}
+	deviceCheckApplied[statusPath] = seq
 	st := m.readStatusLocked()
 	st.Remote.Availability = availability
 	st.Remote.AvailabilityCheckedAt = formatTime(checkedAt)
@@ -1607,6 +1626,7 @@ func (m *Manager) MarkRemoteUnlinked() {
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
 	st.PendingAttempt = nil
+	st.PendingFailure = nil
 	st.RemoteProtection = nil
 	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
@@ -1632,6 +1652,7 @@ func (m *Manager) MarkRemoteLinked() {
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
 	st.PendingAttempt = nil
+	st.PendingFailure = nil
 	st.RemoteProtection = nil
 	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
