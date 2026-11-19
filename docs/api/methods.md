@@ -2827,7 +2827,7 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 ##### Media image source object
 
-An image must be a JPEG, PNG, GIF or WebP of at most 10 MiB. Core copies it into its own folder.
+An image must be a JPEG, PNG, GIF or WebP of at most 10 MiB and 16,777,216 pixels (4096×4096) that decodes in full. Core copies it into its own folder.
 
 | Key      | Type   | Required | Description |
 | :------- | :----- | :------- | :---------- |

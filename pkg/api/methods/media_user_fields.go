@@ -410,23 +410,37 @@ func storeMediaUserImage(env *requests.RequestEnv, edit *mediaFieldEdit, commit 
 	return commit(name)
 }
 
-// checkMediaUserImage accepts data that is a supported image whose header
-// decodes, not only bytes that start like one.
+// checkMediaUserImage accepts data that is a supported image which decodes in
+// full, not only bytes that start like one or a whole header: a cut-off file
+// would be stored and then never display. The frame its header declares is
+// checked against mediaImageMaxPixels before the decoder allocates it.
 func checkMediaUserImage(data []byte) error {
 	contentType, err := imagefiles.ContentType(data)
 	if err != nil {
 		return fmt.Errorf("check image type: %w", err)
 	}
-	decodeConfig := map[string]func(io.Reader) (image.Config, error){
-		"image/jpeg": jpeg.DecodeConfig,
-		"image/png":  png.DecodeConfig,
-		"image/gif":  gif.DecodeConfig,
-		"image/webp": webp.DecodeConfig,
+	type codec struct {
+		config func(io.Reader) (image.Config, error)
+		decode func(io.Reader) (image.Image, error)
+	}
+	c, ok := map[string]codec{
+		"image/jpeg": {jpeg.DecodeConfig, jpeg.Decode},
+		"image/png":  {png.DecodeConfig, png.Decode},
+		"image/gif":  {gif.DecodeConfig, gif.Decode},
+		"image/webp": {webp.DecodeConfig, webp.Decode},
 	}[contentType]
-	if decodeConfig == nil {
+	if !ok {
 		return imagefiles.ErrNotImage
 	}
-	if _, err := decodeConfig(bytes.NewReader(data)); err != nil {
+	cfg, err := c.config(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > mediaImageMaxPixels {
+		return fmt.Errorf("%w: %dx%d is past the %d pixel limit",
+			imagefiles.ErrNotImage, cfg.Width, cfg.Height, mediaImageMaxPixels)
+	}
+	if _, err := c.decode(bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("%w: %w", imagefiles.ErrNotImage, err)
 	}
 	return nil

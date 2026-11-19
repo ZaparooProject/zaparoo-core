@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -27,6 +28,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -243,13 +246,13 @@ func TestHandleMediaMetaUpdate_UnusableImageWritesNothing(t *testing.T) {
 		"file that is not an image": fmt.Sprintf(`{"kind": "file", "path": %q}`, notImage),
 		"unknown upload":            `{"kind": "upload", "uploadId": "missing"}`,
 	}
-	for name, image := range cases {
+	for name, imageParam := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e := newUserFieldsTestEnv(t)
 			// The description sorts before the image, so it would be written
 			// first if the image were only checked in its turn.
-			err := e.updateErr(t, fmt.Sprintf(`{"description": "kept out", "images": {"boxart": %s}}`, image))
+			err := e.updateErr(t, fmt.Sprintf(`{"description": "kept out", "images": {"boxart": %s}}`, imageParam))
 			assert.True(t, isClientErr(err))
 
 			fields, listErr := e.env.Database.UserDB.ListMediaUserFields()
@@ -390,6 +393,13 @@ func TestHandleUploads_RejectsWhatIsNotAnImage(t *testing.T) {
 		// Starts like a PNG, so a type sniff alone accepts it.
 		"png signature only": append([]byte("\x89PNG\r\n\x1a\n"), []byte("not the rest of a png")...),
 	}
+	// Its header is whole, so reading only the header accepts it.
+	whole := testPNG(t, 64)
+	cases["truncated png"] = whole[:len(whole)/2]
+	// A frame past the pixel limit, whatever the file's size.
+	var big bytes.Buffer
+	require.NoError(t, png.Encode(&big, image.NewGray(image.Rect(0, 0, 4097, 4097))))
+	cases["frame past the pixel limit"] = big.Bytes()
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -597,11 +607,11 @@ func TestHandleMediaMetaUpdate_ResetScrapesTheFileAgain(t *testing.T) {
 
 	// A reset stays written when a later write in the same request fails, so
 	// the file is still scraped again.
-	image := filepath.Join(t.TempDir(), "cover.png")
-	require.NoError(t, os.WriteFile(image, testPNG(t, 32), 0o600))
+	cover := filepath.Join(t.TempDir(), "cover.png")
+	require.NoError(t, os.WriteFile(cover, testPNG(t, 32), 0o600))
 	e.env.Database.UserDB = &failingFieldsUserDB{UserDBI: userDB, fail: true}
 	err = e.updateErr(t, fmt.Sprintf(
-		`{"description": null, "images": {"boxart": {"kind": "file", "path": %q}}}`, image,
+		`{"description": null, "images": {"boxart": {"kind": "file", "path": %q}}}`, cover,
 	))
 	assert.False(t, isClientErr(err), "a failed write is the device's fault: %v", err)
 	opts = receiveScrapeOptions(t, gotOptions)
