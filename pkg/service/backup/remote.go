@@ -88,6 +88,9 @@ const (
 	// stuck behind a stale negative result.
 	remoteAvailabilityTTL      = 1 * time.Hour
 	remoteAvailabilityRetryTTL = 5 * time.Minute
+	// remoteProtectionRefreshTimeout bounds the device check after a
+	// successful backup; the backup has already succeeded either way.
+	remoteProtectionRefreshTimeout = 15 * time.Second
 
 	// Rate-limited (429) responses are waited out and retried instead of
 	// failing the whole operation. The wait honors the server's Retry-After
@@ -306,8 +309,12 @@ type remoteDeviceMeResponse struct {
 	ID       string    `json:"id"`
 	// Features lists the account features the Online service reports for
 	// this device. Names are opaque to Core; older servers omit the field.
-	Features     []string `json:"features"`
-	BackupActive bool     `json:"backup_active"`
+	Features []string `json:"features"`
+	// BackupProtection and LastBackupAttempt are the service's view of this
+	// device's backups. Older servers omit them.
+	BackupProtection  *protectionStatus `json:"backup_protection"`
+	LastBackupAttempt *attemptReport    `json:"last_backup_attempt"`
+	BackupActive      bool              `json:"backup_active"`
 }
 
 // allowsCloudBackup reports whether the account may upload remote backups:
@@ -424,7 +431,7 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 
 	started := time.Now().UTC()
 	if statusErr := m.writeRemoteStatus(&statusEntry{
-		LastRunAt: formatTime(started), LastStatus: StatusRunning,
+		LastRunAt: formatTime(started), LastStatus: StatusRunning, RunType: backupType,
 	}); statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to persist running remote backup status")
 	}
@@ -479,6 +486,15 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 		SkippedFiles:          len(info.Warnings) + info.SkippedFiles,
 	}); statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to persist successful remote backup status")
+	}
+	// The service now holds a newer snapshot than any queued failure, so the
+	// report is moot, and its protection answer has changed: refresh it so a
+	// cleared failure does not keep showing.
+	m.clearPendingAttempt(nil)
+	refreshCtx, cancel := context.WithTimeout(ctx, remoteProtectionRefreshTimeout)
+	defer cancel()
+	if _, refreshErr := m.RefreshRemoteAvailability(refreshCtx); refreshErr != nil {
+		log.Debug().Err(refreshErr).Msg("failed to refresh remote backup protection after backup")
 	}
 	return info, nil
 }
@@ -988,7 +1004,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if waitErr := m.pauser.Wait(ctx); waitErr != nil {
 		return RemoteRunInfo{}, fmt.Errorf("creating remote backup snapshot: %w", waitErr)
 	}
-	heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
+	heartbeatErr := m.heartbeatWithAttempt(ctx, client)
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
 	}
@@ -1402,7 +1418,7 @@ func (m *Manager) SendCapabilityHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
+	return m.heartbeatWithAttempt(ctx, client)
 }
 
 // SendHeartbeat reports liveness (Core version + capabilities) when the
@@ -1413,7 +1429,7 @@ func (m *Manager) SendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg)); heartbeatErr != nil {
+	if heartbeatErr := m.heartbeatWithAttempt(ctx, client); heartbeatErr != nil {
 		return heartbeatErr
 	}
 	_, err = m.updateRemoteAvailability(ctx, client)
@@ -1549,6 +1565,8 @@ func (m *Manager) setRemoteAvailability(
 			st.Remote.LinkedAt = formatTime(me.LinkedAt)
 		}
 		st.Remote.Features = normalizeFeatures(me.reportedFeatures())
+		st.RemoteProtection = me.BackupProtection
+		st.RemoteLastAttempt = me.LastBackupAttempt
 		st.Remote.FeaturesCheckedAt = formatTime(checkedAt)
 	}
 	if err := m.writeStatusLocked(&st); err != nil {
@@ -1585,6 +1603,9 @@ func (m *Manager) MarkRemoteUnlinked() {
 	st.Remote.LinkedAt = ""
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
+	st.PendingAttempt = nil
+	st.RemoteProtection = nil
+	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to persist remote backup revocation")
 	}
@@ -1607,6 +1628,9 @@ func (m *Manager) MarkRemoteLinked() {
 	st.Remote.LinkedAt = ""
 	st.Remote.Features = nil
 	st.Remote.FeaturesCheckedAt = ""
+	st.PendingAttempt = nil
+	st.RemoteProtection = nil
+	st.RemoteLastAttempt = nil
 	if err := m.writeStatusLocked(&st); err != nil {
 		log.Warn().Err(err).Msg("failed to clear remote backup unlinked marker")
 	}
@@ -1742,10 +1766,15 @@ func LibrarySyncCapability(cfg *config.Instance) map[string]any {
 	return map[string]any{"version": 1, "enabled": cfg.LibrarySyncEnabled()}
 }
 
-func (c *remoteClient) heartbeat(ctx context.Context, capabilities map[string]any) error {
+func (c *remoteClient) heartbeat(
+	ctx context.Context, capabilities map[string]any, attempt *attemptReport,
+) error {
 	body := map[string]any{
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,
+	}
+	if attempt != nil {
+		body["last_backup_attempt"] = attempt
 	}
 	return c.doJSON(ctx, http.MethodPost, "/v1/device/heartbeat", body, nil)
 }
