@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -189,4 +190,42 @@ func TestScanScratch_RemovedWhenIndexingEnds(t *testing.T) {
 		assert.Equal(t, 1, stagedPaths(t, db))
 		require.NoError(t, db.CommitTransaction())
 	}
+}
+
+// TestScanScratch_OptimizationRestoresBeforeReleasingLease checks that the
+// optimization run hands back the indexing boost, and with it deletes the
+// scratch database, before it releases the media write lease. Done after, an
+// index that took the lease in between could stage rows that the old run's
+// restore then deleted along with the file, and would lose its boost.
+func TestScanScratch_OptimizationRestoresBeforeReleasingLease(t *testing.T) {
+	t.Parallel()
+	db := openScanScratchTestDB(t)
+
+	require.NoError(t, db.BeginTransaction(true))
+	require.NoError(t, db.StageScannedMedia(&database.ScanStagedMedia{
+		Path: "/media/fat/games/NES/Game (USA).nes", ParentDir: "/media/fat/games/NES/",
+		Slug: "game", TitleName: "Game", SortName: "Game",
+	}))
+	require.NoError(t, db.CommitTransaction())
+	require.FileExists(t, db.scanScratchPath())
+
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- db.RunBackgroundOptimizationWithLease(nil, nil, lease) }()
+
+	for {
+		next, acquireErr := db.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+		if acquireErr != nil {
+			runtime.Gosched()
+			continue
+		}
+		boosted := db.indexingCacheBoost.Load()
+		_, statErr := os.Stat(db.scanScratchPath())
+		next.Release()
+		assert.False(t, boosted, "the indexing boost must be handed back before the lease")
+		assert.True(t, os.IsNotExist(statErr), "the scratch database must be gone before the lease")
+		break
+	}
+	require.NoError(t, <-done)
 }

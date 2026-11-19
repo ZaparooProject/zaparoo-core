@@ -5474,6 +5474,12 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	db.isOptimizing.Store(true)
 	db.backgroundOps.Add(1)
 
+	// Registered first so it runs last: the lease is held until the boost
+	// below is handed back. Released earlier, an index could take the lease
+	// and start staging, and this run's restore would then turn its boost
+	// off and delete the scratch database under it.
+	defer lease.Release()
+
 	// Optimization is bulk work on an otherwise idle device, but it ran with the
 	// default 8MB cache, 2 connections and temp_store=FILE. The indexing boost is
 	// scoped to NewNamesIndex's stack frame (configureIndexingPragmas is installed
@@ -5543,7 +5549,6 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
-		lease.Release()
 	}()
 
 	if db.sql.Load() == nil {
