@@ -20,7 +20,7 @@ require (
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20261103071945-eb7a6cfa5657
-	github.com/creativeprojects/go-selfupdate v1.7.0
+	github.com/creativeprojects/go-selfupdate v1.7.1
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -98,7 +98,7 @@ require (
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
-	github.com/google/go-github/v86 v86.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
