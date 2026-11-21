@@ -412,6 +412,25 @@ jobs:
           name: unsigned-windows-bundle
           path: _signing_bundle/
           retention-days: 30
+      # SignPath looks the bundle up in the run's artifact list, which can lag
+      # the finalized upload. Submitting before it is listed fails with "no
+      # published artifact", and SignPath refuses a re-run, so the whole tag
+      # build would have to start over.
+      - name: Wait for signing bundle to be listed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ steps.upload-bundle.outputs.artifact-id }}
+        run: |
+          for _ in $(seq 1 40); do
+            if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+              --jq '.artifacts[].id' | grep -qx "${ARTIFACT_ID}"; then
+              echo "Artifact ${ARTIFACT_ID} is listed"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Artifact ${ARTIFACT_ID} was not listed on run ${GITHUB_RUN_ID} after 2 minutes"
+          exit 1
       - name: Sign all Windows binaries
         uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
         with:
