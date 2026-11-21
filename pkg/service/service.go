@@ -48,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -1315,6 +1316,9 @@ func startServiceWithOptions(
 		return nil, fmt.Errorf("service stopped during startup: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
+	if pl.ID() == ids.Mister {
+		backgroundWG.Go(func() { importScreenshotArtwork(st.GetContext(), pl, db.MediaDB) })
+	}
 
 	// A separate MethodMap instance from the one api.StartWithReady builds
 	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
