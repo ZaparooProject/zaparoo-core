@@ -378,15 +378,49 @@ func launchSinden(
 	}
 }
 
-func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-	s, err := cores.GetCore("GameNWatch")
+// gameAndWatchLauncherID is agg23's Game & Watch core, which plays .gnw files
+// from its own RBF rather than the GameNWatch system's stock core.
+const (
+	gameAndWatchLauncherID = "GameAndWatch"
+	gameAndWatchRBF        = "_Console/GameAndWatch"
+)
+
+// launchAggGnw registers the core's own RBF. Without it, availability and RBF
+// resolution fall back to the GameNWatch system core (_Console/GnW).
+func launchAggGnw() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	cores.GlobalRBFCache.RegisterAltCore(gameAndWatchLauncherID, gameAndWatchRBF)
+	return launchAggGnwPath
+}
+
+func launchAggGnwPath(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	sn, err := gameAndWatchCore()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get GameNWatch system: %w", err)
+		return nil, err
 	}
 	path = checkInZip(path)
 
+	err = mgls.LaunchGame(cfg, sn, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to launch game: %w", err)
+	}
+
+	err = activegame.SetActiveGame(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set active game: %w", err)
+	}
+	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+}
+
+// gameAndWatchCore is the GameNWatch system pointed at agg23's core and its
+// .gnw slot.
+func gameAndWatchCore() (*cores.Core, error) {
+	s, err := cores.GetCore(systemdefs.SystemGameNWatch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get GameNWatch system: %w", err)
+	}
 	sn := *s
-	sn.RBF = "_Console/GameAndWatch"
+	sn.LauncherID = gameAndWatchLauncherID
+	sn.RBF = gameAndWatchRBF
 	sn.Slots = []cores.Slot{
 		{
 			Exts: []string{".gnw"},
@@ -397,17 +431,7 @@ func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions)
 			},
 		},
 	}
-
-	err = mgls.LaunchGame(cfg, &sn, path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to launch game: %w", err)
-	}
-
-	err = activegame.SetActiveGame(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	return &sn, nil
 }
 
 func validSetName(name string) bool {
@@ -1538,11 +1562,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGameNWatch),
 		},
 		{
-			ID:         "GameAndWatch",
+			ID:         gameAndWatchLauncherID,
 			SystemID:   systemdefs.SystemGameNWatch,
 			Folders:    []string{"Game and Watch"},
 			Extensions: []string{".gnw"},
-			Launch:     launchAggGnw,
+			Launch:     launchAggGnw(),
 		},
 		{
 			ID:       "DB9GameNWatch",
