@@ -107,6 +107,7 @@ func newScraper(
 	return platforms.Scraper{
 		ID:                     ScraperID,
 		Name:                   scraperName,
+		SupportedSystemIDs:     []string{},
 		SupportsFillMissing:    true,
 		AutoScrapeAllLaunchers: romm.ServerURL(cfg) != "",
 		AutoScrapeOrder:        scraper.AutoOrderLibraryServer,

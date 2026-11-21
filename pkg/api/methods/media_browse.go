@@ -806,7 +806,7 @@ func browseSystemRootContents(
 		return nil, err
 	}
 	if cursor != nil {
-		virtualEntries = nil
+		virtualEntries = []models.BrowseEntry{}
 	}
 	if len(sources) == 0 {
 		return models.BrowseResults{Entries: virtualEntries}, nil
