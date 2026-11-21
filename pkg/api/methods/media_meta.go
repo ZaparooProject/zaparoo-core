@@ -310,6 +310,13 @@ func buildMediaMetaResponse(
 		titleTags = []database.TagInfo{}
 	}
 
+	versionArtwork, titleArtwork := mediaArtworkOverrides(env, row)
+	if len(versionArtwork) != 0 {
+		mediaProps = slices.Concat(mediaProps, versionArtwork)
+	}
+	if len(titleArtwork) != 0 {
+		titleProps = slices.Concat(titleProps, titleArtwork)
+	}
 	properties := mapMediaProperties(mediaProps)
 	launcherOverride := mediaLauncherOverride(properties)
 	titleProperties := mapMediaProperties(titleProps)
