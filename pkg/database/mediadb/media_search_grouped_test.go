@@ -343,3 +343,88 @@ func TestSearchMedia_FullTitleFindsItself(t *testing.T) {
 		}
 	}
 }
+
+// TestTitleGroupKeysQueryOverhead_MatchesQueryArgs pins the chunk budget to
+// the arguments titleGroupKeysQuery actually binds for every sort, cursor,
+// letter, path and tag shape.
+func TestTitleGroupKeysQueryOverhead_MatchesQueryArgs(t *testing.T) {
+	t.Parallel()
+
+	cursor := &database.SearchCursor{SortValue: "m", LastID: 7}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "us"}}
+	ids := []int64{1, 2, 3}
+	for _, sortOrder := range []string{"", "name-asc", "name-desc"} {
+		for _, sortCursor := range []*database.SearchCursor{nil, cursor} {
+			for _, pathPrefix := range []string{"", "/roms/NES"} {
+				for _, tagFilters := range [][]zapscript.TagFilter{nil, tags} {
+					filters := &database.SearchFilters{
+						Sort: sortOrder, SortCursor: sortCursor, PathPrefix: pathPrefix,
+						Tags: tagFilters, Letter: new("A"), Limit: 10,
+					}
+					name := fmt.Sprintf("sort=%q cursor=%v path=%q tags=%d",
+						sortOrder, sortCursor != nil, pathPrefix, len(tagFilters))
+					_, args, err := titleGroupKeysQuery(&titleGroupScope{titleDBIDs: ids}, filters)
+					require.NoError(t, err, name)
+					assert.Equal(t, len(args), titleGroupKeysQueryOverhead(filters)+len(ids), name)
+				}
+			}
+		}
+	}
+}
+
+// MiSTer 2.22.1 (Sentry ZAPAROO-CORE-3N): a name-sorted grouped search the
+// slug cache matched to more titles than fit in one statement failed with
+// "grouped search needs 1000 query parameters", because the chunk budget left
+// out the sort floor and the third sort cursor argument.
+func TestSearchMediaTitleGroups_ManyCachedCandidatesStayUnderParamLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	const titles = sqliteMaxParams + 200
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	for i := range titles {
+		name := fmt.Sprintf("Bulk Game %04d", i)
+		title, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(nes.GetMediaType(), name),
+			Name:       name,
+		})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           "/roms/NES/" + name + ".nes",
+			ParentDir:      "/roms/NES/",
+			SortName:       name,
+		})
+		require.NoError(t, insertErr)
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	require.True(t, mediaDB.slugSearchCache.Load().CanServeSystems([]string{"NES"}))
+
+	for _, sortOrder := range []string{"", "name-asc", "name-desc"} {
+		first, searchErr := mediaDB.SearchMediaTitleGroups(ctx, &database.SearchFilters{
+			Query: "bulk", Systems: []systemdefs.System{*nes}, Sort: sortOrder, Limit: 50,
+		})
+		require.NoError(t, searchErr, "sort=%q", sortOrder)
+		require.Len(t, first, 50, "sort=%q", sortOrder)
+
+		last := first[len(first)-1]
+		next, searchErr := mediaDB.SearchMediaTitleGroups(ctx, &database.SearchFilters{
+			Query: "bulk", Systems: []systemdefs.System{*nes}, Sort: sortOrder, Limit: 50,
+			SortCursor: &database.SearchCursor{Sort: sortOrder, SortValue: last.SortValue, LastID: last.TitleDBID},
+		})
+		require.NoError(t, searchErr, "sort=%q with cursor", sortOrder)
+		require.Len(t, next, 50, "sort=%q with cursor", sortOrder)
+		assert.NotContains(t, groupTitleIDs(next), first[0].TitleDBID, "sort=%q", sortOrder)
+	}
+}
