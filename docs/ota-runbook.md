@@ -226,9 +226,14 @@ Linux, SteamOS, Bazzite, Armada, ChimeraOS, ReplayOS, RetroPie, Recalbox,
 Lakka, Zaparoo Firmware, MiSTeX, LibreELEC, ROCKNIX, AmberELEC, Knulli, ArkOS,
 muOS, MiSTer and Batocera installs that pass platform preflight.
 
-- Windows must be able to create/remove an install-directory probe and open the
-  target for rename. Protected installer-owned locations remain on the Windows
-  installer path; Core reports `eligibility: unsupported` and never elevates.
+- Every install must be able to create/remove a probe in the install
+  directory, since the candidate and backup binaries are written beside the
+  target. A read-only location such as a Nix store path reports
+  `eligibility: unsupported`, or `managed` for a build marked
+  `config.PackageManaged`, and `update.apply` refuses it before downloading.
+- Windows must also be able to open the target for rename. Protected
+  installer-owned locations remain on the Windows installer path; Core reports
+  `eligibility: unsupported` and never elevates.
 - Managed MiSTer/Batocera installations remain on their package-manager path.
   Batocera payload files are installed only for unmanaged archive installs.
 - macOS is excluded. Its supported update path must operate on a signed app

@@ -34,16 +34,19 @@ var ErrPlatformUnsupported = errors.New("this platform cannot install updates in
 
 // preflightPlatform refuses an install this build cannot complete.
 //
-// Windows will not let a running executable be overwritten, so the swap moves
-// the outgoing binary to a sibling name and gives the incoming one the name it
-// vacated. The install needs permission both to create siblings in the install
-// directory and to rename the target itself. A target-specific ACL can deny the
-// latter even when the directory probe succeeds.
+// Every install writes its candidate and backup binaries next to the one it
+// replaces, so the install directory has to accept new files on every
+// platform. A distribution or Nix package lives somewhere read-only, and
+// learning that at the swap would come after the download and the database
+// snapshot.
 //
-// The checks are probes rather than permission calculations because on Windows
-// the effective permissions are the only true answer, and they run here rather
-// than at the swap so a user learns their install has to go through the
-// installer before a release has been downloaded and their database snapshotted.
+// Windows will not let a running executable be overwritten, so the swap there
+// moves the outgoing binary to a sibling name and gives the incoming one the
+// name it vacated. That also needs permission to rename the target itself,
+// which a target-specific ACL can deny even when the directory probe succeeds.
+//
+// The checks are probes rather than permission calculations because effective
+// permissions are the only true answer, particularly on Windows.
 func preflightPlatform(fs afero.Fs, goos, targetPath string) error {
 	checkTarget := func(string) error { return nil }
 	if _, ok := fs.(*afero.OsFs); ok {
@@ -58,19 +61,28 @@ func preflightPlatformWith(
 	targetPath string,
 	checkTargetRename func(string) error,
 ) error {
-	// Everywhere else replaces the running binary with a single rename, which
-	// needs nothing the install did not already need.
-	if goos != "windows" || targetPath == "" {
+	if targetPath == "" {
 		return nil
 	}
 	dir := filepath.Dir(targetPath)
 	if err := checkInstallDirWritable(fs, dir); err != nil {
 		log.Warn().Err(err).Str("dir", dir).
 			Msg("cannot update in place because the install directory is not writable")
+		if goos != "windows" {
+			return fmt.Errorf(
+				"%w: Zaparoo cannot write to %s, so update it the same way it was installed",
+				ErrPlatformUnsupported, dir,
+			)
+		}
 		return fmt.Errorf(
 			"%w: Zaparoo cannot write to %s, so install this release with the Windows installer instead",
 			ErrPlatformUnsupported, dir,
 		)
+	}
+	// Off Windows the swap is a single rename, which the directory probe has
+	// already covered.
+	if goos != "windows" {
+		return nil
 	}
 	if err := checkTargetRename(targetPath); err != nil {
 		log.Warn().Err(err).Str("target", targetPath).
