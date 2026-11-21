@@ -29,6 +29,20 @@ import (
 
 var AppVersion = "DEVELOPMENT"
 
+// PackageManaged marks a build that a system package manager installs and
+// updates, such as a Linux distribution's. Packagers set it at build time:
+//
+//	-ldflags "-X github.com/ZaparooProject/zaparoo-core/v2/pkg/config.PackageManaged=true"
+//
+// Such a build reports itself as managed, so it does not offer to replace its
+// own binary, which belongs to the package manager and may be read-only.
+var PackageManaged = ""
+
+// IsPackageManaged returns true if the build was marked with PackageManaged.
+func IsPackageManaged() bool {
+	return PackageManaged == "true"
+}
+
 // IsDevelopmentVersion returns true if AppVersion indicates a non-release build.
 // This includes the literal "DEVELOPMENT" default and "<hash>-dev" builds.
 func IsDevelopmentVersion() bool {
