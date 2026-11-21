@@ -33,13 +33,15 @@ import (
 )
 
 func TestManagedByPackageManager(t *testing.T) {
-	platform := &Platform{}
-	assert.False(t, platform.ManagedByPackageManager())
-
 	original := config.PackageManaged
-	config.PackageManaged = "true"
 	t.Cleanup(func() { config.PackageManaged = original })
 
+	platform := &Platform{}
+
+	config.PackageManaged = ""
+	assert.False(t, platform.ManagedByPackageManager())
+
+	config.PackageManaged = "true"
 	assert.True(t, platform.ManagedByPackageManager())
 }
 

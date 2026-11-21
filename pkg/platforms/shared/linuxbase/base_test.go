@@ -539,13 +539,15 @@ func TestNoOpMethods(t *testing.T) {
 }
 
 func TestManagedByPackageManager(t *testing.T) {
-	base := NewBase("test")
-	assert.False(t, base.ManagedByPackageManager())
-
 	original := config.PackageManaged
-	config.PackageManaged = "true"
 	t.Cleanup(func() { config.PackageManaged = original })
 
+	base := NewBase("test")
+
+	config.PackageManaged = ""
+	assert.False(t, base.ManagedByPackageManager())
+
+	config.PackageManaged = "true"
 	assert.True(t, base.ManagedByPackageManager())
 }
 
