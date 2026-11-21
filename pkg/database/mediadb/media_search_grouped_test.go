@@ -372,6 +372,22 @@ func TestTitleGroupKeysQueryOverhead_MatchesQueryArgs(t *testing.T) {
 	}
 }
 
+// Filters whose own arguments already exceed the limit must not shrink the
+// chunk budget below zero; the real query then reports the parameter error.
+func TestTitleGroupKeysQueryOverhead_OversizedFiltersReportLimit(t *testing.T) {
+	t.Parallel()
+
+	tags := make([]zapscript.TagFilter, sqliteMaxParams)
+	for i := range tags {
+		tags[i] = zapscript.TagFilter{Type: "region", Value: fmt.Sprintf("r%d", i)}
+	}
+	filters := &database.SearchFilters{Tags: tags, Limit: 10}
+
+	assert.Equal(t, sqliteMaxParams, titleGroupKeysQueryOverhead(filters))
+	_, _, err := titleGroupKeysQuery(&titleGroupScope{}, filters)
+	require.ErrorContains(t, err, "grouped search needs")
+}
+
 // MiSTer 2.22.1 (Sentry ZAPAROO-CORE-3N): a name-sorted grouped search the
 // slug cache matched to more titles than fit in one statement failed with
 // "grouped search needs 1000 query parameters", because the chunk budget left

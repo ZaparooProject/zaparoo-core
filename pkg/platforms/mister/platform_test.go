@@ -688,6 +688,20 @@ func TestGameAndWatchCore_ResolvesOwnRBF(t *testing.T) {
 	assert.Equal(t, gameAndWatchRBFInfo.Path, rbfInfo.Path)
 }
 
+// agg23's core only has a .gnw slot, so other media is refused while the MGL
+// is built, before anything is written to the SD card or command interface.
+func TestLaunchAggGnw_RefusesNonGnwMedia(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{nesRBFInfo, gameAndWatchRBFInfo})
+	launch := launchAggGnw()
+
+	rom := filepath.Join(string(filepath.Separator), "media", "fat", "games", "Game and Watch", "Octopus.nes")
+	proc, err := launch(nil, rom, nil)
+	require.Error(t, err)
+	assert.Nil(t, proc)
+	assert.Contains(t, err.Error(), "failed to launch game")
+	assert.Contains(t, err.Error(), "failed to get MGL definition")
+}
+
 // TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad verifies resolution
 // picks the expected RBF and hands it to the launch step, which is the fake
 // injected here rather than the real off-device hardware write.

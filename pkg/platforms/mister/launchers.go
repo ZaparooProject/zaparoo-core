@@ -392,25 +392,6 @@ func launchAggGnw() func(*config.Instance, string, *platforms.LaunchOptions) (*o
 	return launchAggGnwPath
 }
 
-func launchAggGnwPath(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-	sn, err := gameAndWatchCore()
-	if err != nil {
-		return nil, err
-	}
-	path = checkInZip(path)
-
-	err = mgls.LaunchGame(cfg, sn, path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to launch game: %w", err)
-	}
-
-	err = activegame.SetActiveGame(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
-}
-
 // gameAndWatchCore is the GameNWatch system pointed at agg23's core and its
 // .gnw slot.
 func gameAndWatchCore() (*cores.Core, error) {
@@ -432,6 +413,25 @@ func gameAndWatchCore() (*cores.Core, error) {
 		},
 	}
 	return &sn, nil
+}
+
+func launchAggGnwPath(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	sn, err := gameAndWatchCore()
+	if err != nil {
+		return nil, err
+	}
+	path = checkInZip(path)
+
+	err = mgls.LaunchGame(cfg, sn, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to launch game: %w", err)
+	}
+
+	err = activegame.SetActiveGame(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set active game: %w", err)
+	}
+	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 }
 
 func validSetName(name string) bool {
