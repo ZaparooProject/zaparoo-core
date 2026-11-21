@@ -251,7 +251,7 @@ func cachedTitleGroupScopes(
 	candidates := searchMediaTypeGroupsInCache(cache, groups)
 	scopes := make([]titleGroupScope, 0, len(fallback)+1)
 	if len(candidates) > 0 {
-		perQuery := max(sqliteMaxParams-titleDBIDQueryParamCount(0, filters), 1)
+		perQuery := max(sqliteMaxParams-titleGroupKeysQueryOverhead(filters), 1)
 		for start := 0; start < len(candidates); start += perQuery {
 			scopes = append(scopes, titleGroupScope{
 				titleDBIDs: candidates[start:min(start+perQuery, len(candidates))],
@@ -259,6 +259,19 @@ func cachedTitleGroupScopes(
 		}
 	}
 	return append(scopes, fallback...)
+}
+
+// titleGroupKeysQueryOverhead counts the parameters titleGroupKeysQuery binds
+// besides a scope's title DBIDs. It builds the query for an empty scope, so it
+// cannot drift from the sort, cursor, letter, path and tag arguments the real
+// query adds. Filters that alone exceed the limit report the limit, leaving
+// the real query to return its parameter error.
+func titleGroupKeysQueryOverhead(filters *database.SearchFilters) int {
+	_, args, err := titleGroupKeysQuery(&titleGroupScope{}, filters)
+	if err != nil {
+		return sqliteMaxParams
+	}
+	return len(args)
 }
 
 func titleGroupSortExpr(sortOrder string) string {

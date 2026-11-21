@@ -636,6 +636,72 @@ func TestSetCoreAvailability_EmptyCacheFailsOpen(t *testing.T) {
 	assert.NoError(t, launchers[0].Availability(nil))
 }
 
+var (
+	gameAndWatchRBFInfo = cores.RBFInfo{
+		Path: "/media/fat/_Console/GameAndWatch_20230630.rbf", Filename: "GameAndWatch_20230630.rbf",
+		ShortName: "GameAndWatch", MglName: "_Console/GameAndWatch",
+	}
+	nesRBFInfo = cores.RBFInfo{
+		Path: "/media/fat/_Console/NES_20260311.rbf", Filename: "NES_20260311.rbf",
+		ShortName: "NES", MglName: "_Console/NES",
+	}
+	gnwRBFInfo = cores.RBFInfo{
+		Path: "/media/fat/_Console/GnW_20251208.rbf", Filename: "GnW_20251208.rbf",
+		ShortName: "GnW", MglName: "_Console/GnW",
+	}
+)
+
+func gameAndWatchAvailability(t *testing.T) error {
+	t.Helper()
+	launchAggGnw()
+	launchers := []platforms.Launcher{{ID: gameAndWatchLauncherID, SystemID: systemdefs.SystemGameNWatch}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	return launchers[0].Availability(nil) //nolint:wrapcheck // the test asserts on the raw reason
+}
+
+// TestGameAndWatchAvailability_OwnCoreInstalled is the regression for .gnw
+// launches refused with "core not installed: _Console/GnW" on devices that
+// have agg23's core: the launcher must check the core it actually loads.
+func TestGameAndWatchAvailability_OwnCoreInstalled(t *testing.T) {
+	// A stock core keeps the cache from looking unpopulated, which would
+	// fail open and pass without the fix.
+	withRBFCache(t, []cores.RBFInfo{nesRBFInfo, gameAndWatchRBFInfo})
+	assert.NoError(t, gameAndWatchAvailability(t))
+}
+
+func TestGameAndWatchAvailability_OnlyStockCoreInstalled(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{gnwRBFInfo})
+	err := gameAndWatchAvailability(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "core not installed: _Console/GameAndWatch")
+}
+
+func TestGameAndWatchCore_ResolvesOwnRBF(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{gnwRBFInfo, gameAndWatchRBFInfo})
+	launchAggGnw()
+
+	core, err := gameAndWatchCore()
+	require.NoError(t, err)
+	rbfInfo, err := cache.Resolve(nil, core)
+	require.NoError(t, err)
+	assert.Equal(t, gameAndWatchRBFInfo.Path, rbfInfo.Path)
+}
+
+// agg23's core only has a .gnw slot, so other media is refused while the MGL
+// is built, before anything is written to the SD card or command interface.
+func TestLaunchAggGnw_RefusesNonGnwMedia(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{nesRBFInfo, gameAndWatchRBFInfo})
+	launch := launchAggGnw()
+
+	rom := filepath.Join(string(filepath.Separator), "media", "fat", "games", "Game and Watch", "Octopus.nes")
+	proc, err := launch(nil, rom, nil)
+	require.Error(t, err)
+	assert.Nil(t, proc)
+	assert.Contains(t, err.Error(), "failed to launch game")
+	assert.Contains(t, err.Error(), "failed to get MGL definition")
+}
+
 // TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad verifies resolution
 // picks the expected RBF and hands it to the launch step, which is the fake
 // injected here rather than the real off-device hardware write.
