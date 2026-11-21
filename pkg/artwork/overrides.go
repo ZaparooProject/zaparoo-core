@@ -162,7 +162,8 @@ func Properties(
 	if readErr := readAssignments(dir, exact); readErr != nil {
 		return nil, nil, readErr
 	}
-	if _, statErr := os.Stat(filepath.Join(systemDir(dataDir, system), scopeTitle)); errors.Is(statErr, os.ErrNotExist) {
+	titleDir := filepath.Join(systemDir(dataDir, system), scopeTitle)
+	if _, statErr := os.Stat(titleDir); errors.Is(statErr, os.ErrNotExist) {
 		return assignmentProperties(exact), nil, nil
 	}
 	slugs, err := groupSlugs(ctx, db, row)
