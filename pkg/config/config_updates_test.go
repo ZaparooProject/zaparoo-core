@@ -125,6 +125,28 @@ func TestUpdates_LegacyKeysAreIgnored(t *testing.T) {
 	assert.Equal(t, UpdateChannelStable, cfg.UpdateChannel())
 }
 
+func TestIsPackageManaged(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected bool
+	}{
+		{"unset", "", false},
+		{"marked", "true", true},
+		{"other value", "yes", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := PackageManaged
+			PackageManaged = tt.value
+			t.Cleanup(func() { PackageManaged = original })
+
+			assert.Equal(t, tt.expected, IsPackageManaged())
+		})
+	}
+}
+
 func TestIsDevelopmentVersion(t *testing.T) {
 	tests := []struct {
 		name     string

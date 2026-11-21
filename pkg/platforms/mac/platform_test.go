@@ -32,6 +32,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestManagedByPackageManager(t *testing.T) {
+	platform := &Platform{}
+	assert.False(t, platform.ManagedByPackageManager())
+
+	original := config.PackageManaged
+	config.PackageManaged = "true"
+	t.Cleanup(func() { config.PackageManaged = original })
+
+	assert.True(t, platform.ManagedByPackageManager())
+}
+
 func TestLaunchersIncludesWebBrowser(t *testing.T) {
 	t.Parallel()
 
