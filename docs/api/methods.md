@@ -2143,7 +2143,7 @@ The same object as [media.image](#mediaimage), with `typeTag` `token:cover` for 
 
 Errors:
 
-- `no active audio track`: nothing is playing through native audio in the slot, and the media has no `zaparoo.json` image.
+- `no image for the active media`: nothing is playing through native audio in the slot, and the media has no `zaparoo.json` image.
 - `no cover art`: the track has no embedded picture and no image beside it, or the `zaparoo.json` image can no longer be read, for example because the drive was removed.
 - `cover art is too large`: the art is larger than the platform's image limit, or a `zaparoo.json` image is larger than 4096×4096 pixels.
 - `cover art is not a PNG or JPEG image`: the `zaparoo.json` image is in another format or is damaged.

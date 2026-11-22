@@ -50,9 +50,9 @@ const (
 )
 
 var (
-	errNoActiveAudioTrack = errors.New("no active audio track")
-	errNoCoverArt         = errors.New("no cover art")
-	errCoverArtTooLarge   = errors.New("cover art is too large")
+	errNoActiveImage    = errors.New("no image for the active media")
+	errNoCoverArt       = errors.New("no cover art")
+	errCoverArtTooLarge = errors.New("cover art is too large")
 	// errUnsupportedCoverArt is a declared cover that is not a PNG or JPEG.
 	errUnsupportedCoverArt = errors.New("cover art is not a PNG or JPEG image")
 )
@@ -103,12 +103,12 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 
 	trackPath, ok := activeAudioTrackPath(&env, slot)
 	if !ok {
-		return nil, models.ClientErrf("%w", errNoActiveAudioTrack)
+		return nil, models.ClientErrf("%w", errNoActiveImage)
 	}
 
 	trackInfo, err := os.Stat(trackPath)
 	if err != nil {
-		return nil, models.ClientErrf("%w", errNoActiveAudioTrack)
+		return nil, models.ClientErrf("%w", errNoActiveImage)
 	}
 	trackKey := fileThumbSourceKey(trackPath, trackInfo)
 

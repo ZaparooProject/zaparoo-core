@@ -220,5 +220,5 @@ func TestHandleMediaActiveImage_BackgroundSlotIgnoresDriveCover(t *testing.T) {
 	env, _ := coverEnv(t, "cover.png", testPNG(t, 8), `{"slot":"background"}`)
 
 	_, err := HandleMediaActiveImage(env)
-	requireClientError(t, err, "no active audio track")
+	requireClientError(t, err, "no image for the active media")
 }
