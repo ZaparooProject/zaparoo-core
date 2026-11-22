@@ -23,11 +23,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 func HandleMediaLookupCandidates(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler signature

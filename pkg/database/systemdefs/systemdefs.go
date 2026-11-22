@@ -26,7 +26,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 )
 
 // ErrUnknownSystem is returned when a system ID cannot be resolved. When this

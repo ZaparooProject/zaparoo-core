@@ -45,13 +45,13 @@ When launching by title (e.g. `launch.title` with arg `NES/Super Mario Bros`):
 
 Two-phase pipeline that converts titles into a canonical form. Indexing and resolution run the same normalization.
 
-`pkg/database/slugs/slugify.go` → `Slugify(mediaType, input)`
+`slugify.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs) → `Slugify(mediaType, input)`
 
 ### Phase 1: Media-specific parsing
 
 Format-specific normalization runs before the universal pass.
 
-**Games** (`pkg/database/slugs/media_parsing_game.go`):
+**Games** (`media_parsing_game.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs)):
 
 Width normalization first (fullwidth → ASCII), then:
 
@@ -65,7 +65,7 @@ Width normalization first (fullwidth → ASCII), then:
 8. Normalize ordinals: "2nd" → "2", "3rd" → "3"
 9. Convert roman numerals: "VII" → "7", "II" → "2" (preserves "X" in "Mega Man X")
 
-**TV Shows** (`pkg/database/slugs/media_parsing_tv.go`):
+**TV Shows** (`media_parsing_tv.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs)):
 
 Width normalization first, then:
 
@@ -79,7 +79,7 @@ Width normalization first, then:
 8. Split titles and strip articles
 9. Strip trailing articles
 
-**Movies** (`pkg/database/slugs/media_parsing_movie.go`):
+**Movies** (`media_parsing_movie.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs)):
 
 1. Width normalization
 2. Strip scene tags (preserves edition qualifiers like "Extended", "Director's Cut")
@@ -89,7 +89,7 @@ Width normalization first, then:
 6. Split titles and strip articles
 7. Strip trailing articles
 
-**Music** (`pkg/database/slugs/media_parsing_music.go`):
+**Music** (`media_parsing_music.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs)):
 
 1. Width normalization
 2. Strip scene tags: format (FLAC, MP3), quality (V0, 320), source (CD, Vinyl, WEB)
@@ -104,7 +104,7 @@ Width normalization first, then:
 
 ### Phase 2: Universal normalization
 
-`pkg/database/slugs/slugify.go` → `normalizeInternal()`
+`slugify.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs) → `normalizeInternal()`
 
 Applied after media-specific parsing:
 
@@ -135,7 +135,7 @@ Final:
 
 ### Multi-script support
 
-`pkg/database/slugs/scripts.go`
+`scripts.go` in [go-slugs](https://github.com/ZaparooProject/go-slugs)
 
 Non-Latin scripts (CJK, Cyrillic, Arabic, etc.) are kept intact while Latin text gets full normalization. Mixed titles just concatenate both parts:
 

@@ -22,7 +22,7 @@ package mediadb
 import (
 	"unicode/utf8"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 )
 
 // SlugMetadata contains pre-filter columns computed from a slug.
