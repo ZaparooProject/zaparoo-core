@@ -813,10 +813,23 @@ type ActiveMedia struct {
 	Description string `json:"mediaDescription,omitempty"`
 	// ImagePath is the cover the launching token declared for this media,
 	// served by media.active.image. It is a local path and never sent.
-	ImagePath        string   `json:"-"`
+	ImagePath string `json:"-"`
+	// LaunchedName is the name the media launched with when the launching
+	// token's metadata replaced Name. A title command must use it: the
+	// token's label names no indexed title. It is never sent.
+	LaunchedName     string   `json:"-"`
 	Slot             string   `json:"slot,omitempty"`
 	LauncherControls []string `json:"launcherControls,omitempty"`
 	MediaID          int64    `json:"mediaId,omitempty"`
+}
+
+// TitleName is the name a title command for this media resolves: the name
+// it launched with, not a label the launching token gave it.
+func (a *ActiveMedia) TitleName() string {
+	if a.LaunchedName != "" {
+		return a.LaunchedName
+	}
+	return a.Name
 }
 
 // TrackInfo is the tag metadata of an audio track. Fields the track does not

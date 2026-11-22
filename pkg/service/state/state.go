@@ -1365,7 +1365,8 @@ func applyTokenMetadata(media *models.ActiveMedia, token *tokens.Token) {
 		!helpers.PathHasPrefix(media.Path, token.PathRoot) {
 		return
 	}
-	if meta.Name != "" {
+	if meta.Name != "" && meta.Name != media.Name {
+		media.LaunchedName = media.Name
 		media.Name = meta.Name
 	}
 	media.Description = meta.Description

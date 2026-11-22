@@ -63,6 +63,7 @@ func TestTokenMetadataLabelsMediaOnTheDrive(t *testing.T) {
 	media := st.ActiveMedia()
 	require.NotNil(t, media)
 	assert.Equal(t, "Drive Game", media.Name)
+	assert.Equal(t, "game", media.TitleName(), "a title command must use the launched name")
 	assert.Equal(t, "A game on a stick.", media.Description)
 	assert.Equal(t, filepath.Join(root, "cover.png"), media.ImagePath)
 }
@@ -80,6 +81,7 @@ func TestTokenMetadataKeepsLaunchedNameWhenNoneDeclared(t *testing.T) {
 	media := st.ActiveMedia()
 	require.NotNil(t, media)
 	assert.Equal(t, "game", media.Name)
+	assert.Empty(t, media.LaunchedName)
 	assert.Equal(t, "Only a description.", media.Description)
 	assert.Empty(t, media.ImagePath)
 }
@@ -162,5 +164,6 @@ func TestTokenMetadataSurvivesRepublishAfterRemoval(t *testing.T) {
 	media := st.ActiveMedia()
 	require.NotNil(t, media)
 	assert.Equal(t, "Drive Game", media.Name)
+	assert.Equal(t, "game", media.TitleName())
 	assert.Equal(t, "A game on a stick.", media.Description)
 }

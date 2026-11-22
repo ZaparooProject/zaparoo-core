@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -136,6 +137,10 @@ func Classify(err error) (category, message string) {
 		errors.Is(err, zapscript.ErrHTTPNotAllowed),
 		errors.Is(err, zapscript.ErrRemoteSource):
 		return models.ErrorCategoryBlocked, "ZapScript execution was blocked"
+	case errors.Is(err, helpers.ErrNoLauncher):
+		return models.ErrorCategoryExecutionFailed, "no launcher can open this file"
+	case errors.Is(err, platforms.ErrLauncherUnavailable):
+		return models.ErrorCategoryExecutionFailed, "the launcher is unavailable"
 	case errors.Is(err, playtime.ErrLimitReached):
 		return models.ErrorCategoryPlaytimeLimit, "playtime limit reached"
 	default:

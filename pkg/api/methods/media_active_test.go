@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -419,6 +420,48 @@ func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
 	assert.Equal(t, "@NES/Game", resp.Active[0].ZapScript)
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+// A drive's zaparoo.json name labels the media but names no indexed title, so
+// the title command keeps the name the game launched with.
+func TestActiveMediaZapScriptIgnoresTokenLabel(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	root := filepath.Join(t.TempDir(), "usb")
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+	appState.SetActiveCard(tokens.Token{
+		Type:     "externaldrive",
+		Text:     "N64/game.z64",
+		ScanTime: time.Now(),
+		PathRoot: root,
+		Metadata: &tokens.Metadata{Name: "Mario on a Stick"},
+	})
+	appState.SetActiveMedia(models.NewActiveMedia(
+		"Nintendo64", "Nintendo 64", filepath.Join(root, "N64", "game.z64"), "Super Mario 64", "test-launcher"))
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: &phelpers.LauncherCache{},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	active, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, "Mario on a Stick", active.Name)
+	assert.Equal(t, "@Nintendo64/Super Mario 64", active.ZapScript)
+
+	entry := ActiveMediaEntry(&env, mediaslot.Primary)
+	require.NotNil(t, entry)
+	assert.Equal(t, "@Nintendo64/Super Mario 64", entry.ZapScript)
 }
 
 func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {

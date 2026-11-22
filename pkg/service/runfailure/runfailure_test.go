@@ -28,6 +28,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -99,6 +100,16 @@ func TestClassify(t *testing.T) {
 		{
 			name: "unknown system", err: systemdefs.ErrUnknownSystem,
 			category: models.ErrorCategoryInvalidScript, message: "unknown system",
+		},
+		{
+			name: "no launcher for the file",
+			err: fmt.Errorf("launch media: error finding launcher: %w for: /media/usb/game.z64",
+				helpers.ErrNoLauncher),
+			category: models.ErrorCategoryExecutionFailed, message: "no launcher can open this file",
+		},
+		{
+			name: "launcher unavailable", err: platforms.ErrLauncherUnavailable,
+			category: models.ErrorCategoryExecutionFailed, message: "the launcher is unavailable",
 		},
 		{
 			name: "rotation time under a second", category: models.ErrorCategoryInvalidScript,

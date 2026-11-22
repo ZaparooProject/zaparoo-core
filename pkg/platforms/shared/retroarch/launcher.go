@@ -72,6 +72,9 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		}
 		corePath := filepath.Join(opts.CoresDir, core)
 		if err := validateLaunch(&opts, corePath); err != nil {
+			// validateLaunch also backs the availability check, which runs
+			// for every launcher, so only a refused launch logs the paths.
+			log.Warn().Err(err).Strs("exec", opts.Exec).Str("core", corePath).Msg("retroarch launch refused")
 			return nil, err
 		}
 		spec := buildCommandWithCore(&opts, core, mediaPath)
@@ -189,7 +192,6 @@ func validateLaunch(opts *Options, corePath string) error {
 	if filepath.IsAbs(executable) {
 		info, err := fs.Stat(executable)
 		if errors.Is(err, iofs.ErrNotExist) {
-			log.Warn().Err(err).Str("path", executable).Msg("retroarch executable not found")
 			//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
 			return platforms.NewLaunchRepairErrorWithReason(
 				platforms.LaunchRepairLauncherNotInstalled,
@@ -213,7 +215,6 @@ func validateLaunch(opts *Options, corePath string) error {
 
 	info, err := fs.Stat(corePath)
 	if errors.Is(err, iofs.ErrNotExist) {
-		log.Warn().Err(err).Str("path", corePath).Msg("retroarch core not found")
 		//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
 		return platforms.NewLaunchRepairErrorWithReason(
 			platforms.LaunchRepairLauncherComponentMissing,
