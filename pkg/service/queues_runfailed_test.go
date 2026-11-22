@@ -207,7 +207,7 @@ func TestHandleQueuedToken_APITokenFailurePlaysOnlyFailSoundAndNotifies(t *testi
 	assert.Equal(t, "**nonexistent.cmd", failed.Script)
 	assert.Equal(t, "nonexistent.cmd", failed.Command)
 	assert.Equal(t, models.ErrorCategoryInvalidScript, failed.Category)
-	assert.Equal(t, "ZapScript is invalid", failed.Message)
+	assert.Equal(t, "unknown command", failed.Message)
 	assert.Empty(t, failed.PlaylistID)
 	assert.Nil(t, failed.PlaylistIndex)
 }

@@ -237,12 +237,12 @@ func newNativeStandaloneLauncher(def *standaloneDef) platforms.Launcher {
 		Availability: func(*config.Instance) error {
 			if def.flatpakID != "" {
 				if !launchers.IsFlatpakInstalled(def.flatpakID) {
-					return fmt.Errorf("emulator not installed: %s", def.flatpakID)
+					return platforms.NewEmulatorNotInstalledError(def.id)
 				}
 				return nil
 			}
 			if _, err := resolveStandaloneExecutable(def.executable); err != nil {
-				return fmt.Errorf("emulator not installed: %s: %w", def.executable, err)
+				return platforms.NewEmulatorNotInstalledError(def.id)
 			}
 			return nil
 		},

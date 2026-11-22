@@ -457,6 +457,59 @@ func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	assert.Equal(t, []string{"save_state"}, resp.LauncherControls)
 }
 
+func TestHandleActiveMedia_DescriptionFromTokenNeverSendsCoverPath(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	activeMedia := models.NewActiveMedia("NES", "NES", "/media/usb/game.nes", "Game", "test-launcher")
+	activeMedia.Description = "Falling blocks."
+	activeMedia.ImagePath = "/media/usb/cover.png"
+	st.SetActiveMedia(activeMedia)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+		Return(database.System{}, errors.New("not found")).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]database.Media{}, nil).Maybe()
+
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{}, nil).Maybe()
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		State:    st,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, "Falling blocks.", resp.Description)
+
+	listed, err := HandleMedia(env)
+	require.NoError(t, err)
+	mediaResp, ok := listed.(models.MediaResponse)
+	require.True(t, ok)
+	require.Len(t, mediaResp.Active, 1)
+	assert.Equal(t, "Falling blocks.", mediaResp.Active[0].Description)
+
+	encoded, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"mediaDescription":"Falling blocks."`)
+	assert.NotContains(t, string(encoded), "cover.png", "the cover path stays inside Core")
+}
+
 func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
 	t.Parallel()
 

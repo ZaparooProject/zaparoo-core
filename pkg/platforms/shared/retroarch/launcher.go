@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/jonboulle/clockwork"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -186,8 +188,16 @@ func validateLaunch(opts *Options, corePath string) error {
 	executable := opts.Exec[0]
 	if filepath.IsAbs(executable) {
 		info, err := fs.Stat(executable)
-		if err != nil {
-			return fmt.Errorf("retroarch is not installed at %s: %w", executable, err)
+		if errors.Is(err, iofs.ErrNotExist) {
+			log.Warn().Err(err).Str("path", executable).Msg("retroarch executable not found")
+			//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+			return platforms.NewLaunchRepairErrorWithReason(
+				platforms.LaunchRepairLauncherNotInstalled,
+				map[string]string{platforms.LaunchRepairParamLauncher: "RetroArch"},
+				"RetroArch is not installed",
+			)
+		} else if err != nil {
+			return fmt.Errorf("failed to stat retroarch executable %s: %w", executable, err)
 		}
 		// Windows has no execute permission bit.
 		if info.IsDir() || (!opts.Windows && info.Mode().Perm()&0o111 == 0) {
@@ -202,8 +212,16 @@ func validateLaunch(opts *Options, corePath string) error {
 	}
 
 	info, err := fs.Stat(corePath)
-	if err != nil {
-		return fmt.Errorf("retroarch core is not installed at %s: %w", corePath, err)
+	if errors.Is(err, iofs.ErrNotExist) {
+		log.Warn().Err(err).Str("path", corePath).Msg("retroarch core not found")
+		//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+		return platforms.NewLaunchRepairErrorWithReason(
+			platforms.LaunchRepairLauncherComponentMissing,
+			map[string]string{platforms.LaunchRepairParamLauncher: "RetroArch"},
+			"the RetroArch core for this system is not installed",
+		)
+	} else if err != nil {
+		return fmt.Errorf("failed to stat retroarch core %s: %w", corePath, err)
 	}
 	if info.IsDir() {
 		return fmt.Errorf("retroarch core path is not a file: %s", corePath)

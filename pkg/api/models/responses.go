@@ -801,16 +801,22 @@ type ActiveMedia struct {
 	DurationMs *int64    `json:"durationMs,omitempty"`
 	// Track is what the tags of an audio track played in-process say about
 	// it, omitted when it has none or they have not been read yet.
-	Track            *TrackInfo         `json:"track,omitempty"`
-	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
-	LauncherID       string             `json:"launcherId"`
-	SystemID         string             `json:"systemId"`
-	SystemName       string             `json:"systemName"`
-	Path             string             `json:"mediaPath"`
-	Name             string             `json:"mediaName"`
-	Slot             string             `json:"slot,omitempty"`
-	LauncherControls []string           `json:"launcherControls,omitempty"`
-	MediaID          int64              `json:"mediaId,omitempty"`
+	Track         *TrackInfo         `json:"track,omitempty"`
+	PlaybackState MediaPlaybackState `json:"playbackState,omitempty"`
+	LauncherID    string             `json:"launcherId"`
+	SystemID      string             `json:"systemId"`
+	SystemName    string             `json:"systemName"`
+	Path          string             `json:"mediaPath"`
+	Name          string             `json:"mediaName"`
+	// Description is the media's description from the token that launched
+	// it, such as an external drive's zaparoo.json.
+	Description string `json:"mediaDescription,omitempty"`
+	// ImagePath is the cover the launching token declared for this media,
+	// served by media.active.image. It is a local path and never sent.
+	ImagePath        string   `json:"-"`
+	Slot             string   `json:"slot,omitempty"`
+	LauncherControls []string `json:"launcherControls,omitempty"`
+	MediaID          int64    `json:"mediaId,omitempty"`
 }
 
 // TrackInfo is the tag metadata of an audio track. Fields the track does not

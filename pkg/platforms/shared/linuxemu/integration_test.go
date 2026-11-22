@@ -840,3 +840,46 @@ func TestStandaloneHandheldEmulatorsScanTheirFolders(t *testing.T) {
 		assert.True(t, found, "%s standalone def is missing", id)
 	}
 }
+
+func requireEmulatorNotInstalled(t *testing.T, err error, launcher string) {
+	t.Helper()
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+	assert.Equal(t, "the emulator for this system is not installed", repair.Error())
+	assert.Equal(t, launcher, repair.Params()[platforms.LaunchRepairParamLauncher])
+}
+
+func TestStandaloneMissingEmulatorIsALaunchRepair(t *testing.T) {
+	t.Parallel()
+
+	options := NewOptions(t.TempDir(), sharedretroarch.Options{})
+	options.IsFlatpakInstalled = func(string) bool { return false }
+	def := standaloneDef{id: "Test", flatpakID: "example.App", args: standalone.Batch()}
+
+	_, err := buildStandaloneLaunchCommand(&options, &def, filepath.Join(t.TempDir(), "game.rom"))
+	requireEmulatorNotInstalled(t, err, "Test")
+
+	launcher := newNativeStandaloneLauncher(&options, &def, standaloneInstallation{
+		executable: "flatpak", flatpakID: "example.App",
+	})
+	requireEmulatorNotInstalled(t, launcher.Availability(nil), "Test")
+}
+
+func TestEmuDeckMissingEmulatorIsALaunchRepair(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	paths := DefaultEmuDeckPaths(home)
+	romPath := filepath.Join(t.TempDir(), "game.iso")
+	require.NoError(t, os.WriteFile(romPath, []byte("rom"), 0o600))
+	options := NewOptions(home, sharedretroarch.Options{})
+	options.IsFlatpakInstalled = func(string) bool { return false }
+
+	launcher := standaloneEmuDeckLauncher(&options, &paths, emulatorConfig{
+		wrapper: "missing.sh", flatpakID: "example.Missing", wrapperArgs: standalone.Batch(),
+	})
+	requireEmulatorNotInstalled(t, launcher.Availability(nil), "EmuDeck")
+	_, err := launcher.BuildLaunchCommand(nil, romPath, nil)
+	requireEmulatorNotInstalled(t, err, "EmuDeck")
+}
