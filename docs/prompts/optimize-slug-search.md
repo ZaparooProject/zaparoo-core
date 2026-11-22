@@ -22,7 +22,7 @@ The system filter (`systemDBIDs`) provides early exit for non-matching systems, 
 | `pkg/database/mediadb/slug_search_cache.go` | Cache struct, `Search()`, `buildSlugSearchCache()`, entry accessors |
 | `pkg/database/mediadb/slug_search_cache_test.go` | All search benchmarks and tests |
 | `pkg/database/mediadb/slug_metadata.go` | `GenerateSlugWithMetadata()` — builds metadata during indexing |
-| `pkg/database/slugs/slugify.go` | How slugs are generated (determines what's in the cache) |
+| `slugify.go` in go-slugs | How slugs are generated (determines what's in the cache) |
 
 ## What to Optimize
 

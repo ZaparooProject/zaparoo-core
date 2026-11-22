@@ -22,7 +22,7 @@ package database
 import (
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 )
 
 // LibraryMediaRow is one present media row with the fields its identity
