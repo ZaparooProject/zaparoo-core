@@ -186,3 +186,13 @@ func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	assert.Equal(t, "Genesis", lateMetadata.ID)
 	assert.Equal(t, int32(1), reads.Load())
 }
+
+func TestGetSystemMetadata_NDSCategory(t *testing.T) {
+	resetSystemMetadataCache(t)
+
+	metadata, err := GetSystemMetadata("NDS")
+	require.NoError(t, err)
+	assert.Equal(t, "Handheld", metadata.Category)
+	assert.Equal(t, "Nintendo DS", metadata.Name)
+	assert.Equal(t, "Nintendo", metadata.Manufacturer)
+}
