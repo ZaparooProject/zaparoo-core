@@ -1784,7 +1784,10 @@ func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 				"LaunchMedia",
 				cfg,
 				wantPath,
-				(*platforms.Launcher)(nil),
+				// The direct path is outside every launcher folder, so its
+				// system is guessed and its launcher chosen; the path is
+				// what this test is about.
+				mock.Anything,
 				(*database.Database)(nil),
 				(*platforms.LaunchOptions)(nil),
 			).Return(nil).Once()
