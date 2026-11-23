@@ -29,6 +29,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -97,8 +98,8 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 		cache = mediaThumbCachePointer.Load()
 	}
 
-	if coverPath := activeMediaCoverPath(&env, slot); coverPath != "" {
-		return serveActiveMediaCover(&env, coverPath, maxSize, cache, localPath)
+	if cover := activeMediaCover(&env, slot); cover.path != "" {
+		return serveActiveMediaCover(&env, cover, maxSize, cache, localPath)
 	}
 
 	trackPath, ok := activeAudioTrackPath(&env, slot)
@@ -193,17 +194,24 @@ func deliverActiveImage(
 	return inlineMediaImageResponse(binary, contentType, img.sourcePath, img.typeTag), nil
 }
 
-// activeMediaCoverPath returns the cover the launching token declared for
-// the primary media, or "" when it declared none.
-func activeMediaCoverPath(env *requests.RequestEnv, slot string) string {
+// activeCover is a cover the launching token declared: its path and the
+// root of the drive it is on.
+type activeCover struct {
+	root string
+	path string
+}
+
+// activeMediaCover returns the cover the launching token declared for the
+// primary media, with an empty path when it declared none.
+func activeMediaCover(env *requests.RequestEnv, slot string) activeCover {
 	if slot != mediaslot.Primary || env.State == nil {
-		return ""
+		return activeCover{}
 	}
 	media := env.State.ActiveMedia()
-	if media == nil {
-		return ""
+	if media == nil || media.ImageRoot == "" {
+		return activeCover{}
 	}
-	return media.ImagePath
+	return activeCover{root: media.ImageRoot, path: media.ImagePath}
 }
 
 // activeCoverSourceKey names a declared cover in the thumbnail cache. It
@@ -215,24 +223,35 @@ func activeCoverSourceKey(coverKey string) string {
 // serveActiveMediaCover delivers the cover a token declared for the active
 // media. The file was checked when the token was read; it is checked again
 // here because the drive holding it can change, and only a PNG or JPEG
-// within the size and dimension limits is served.
+// within the size and dimension limits is served. It is reached through the
+// drive's root, so nothing swapped in after the token was read can lead off
+// the drive.
 func serveActiveMediaCover(
-	env *requests.RequestEnv, coverPath string, maxSize int, cache *mediaThumbCache, localPath bool,
+	env *requests.RequestEnv, cover activeCover, maxSize int, cache *mediaThumbCache, localPath bool,
 ) (any, error) {
-	info, err := os.Lstat(coverPath)
+	rel, err := filepath.Rel(cover.root, cover.path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	root, err := os.OpenRoot(cover.root)
+	if err != nil {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(rel)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, models.ClientErrf("%w", errNoCoverArt)
 	}
-	sourceKey := activeCoverSourceKey(fileThumbSourceKey(coverPath, info))
+	sourceKey := activeCoverSourceKey(fileThumbSourceKey(cover.path, info))
 	if cache != nil {
 		if response, _, found := cachedMediaImageResponse(
-			cache, sourceKey, activeImageTypeCover, maxSize, coverPath, localPath,
+			cache, sourceKey, activeImageTypeCover, maxSize, cover.path, localPath,
 		); found {
 			return response, nil
 		}
 	}
 
-	data, err := readActiveCover(coverPath, info, MediaImageMaxBytes(env.Platform))
+	data, err := readActiveCover(root, rel, info, MediaImageMaxBytes(env.Platform))
 	if err != nil {
 		return nil, err
 	}
@@ -244,22 +263,22 @@ func serveActiveMediaCover(
 		data:        data,
 		contentType: contentType,
 		sourceKey:   sourceKey,
-		sourcePath:  coverPath,
+		sourcePath:  cover.path,
 		typeTag:     activeImageTypeCover,
 	}, maxSize, cache, localPath)
 }
 
-// readActiveCover reads coverPath, refusing it when the file opened is not
-// the one info describes, as when it was swapped for a link after the check.
-func readActiveCover(coverPath string, info os.FileInfo, maxBytes int64) ([]byte, error) {
-	//nolint:gosec // the path was validated against the token's root when read
-	file, err := os.Open(coverPath)
+// readActiveCover reads rel under root, refusing it when the file opened is
+// not the one info describes, as when it was swapped after the check. The
+// open does not wait, so a named pipe swapped in cannot hold the request.
+func readActiveCover(root *os.Root, rel string, info os.FileInfo, maxBytes int64) ([]byte, error) {
+	file, err := root.OpenFile(rel, coverOpenFlags, 0)
 	if err != nil {
 		return nil, models.ClientErrf("%w", errNoCoverArt)
 	}
 	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return nil, models.ClientErrf("%w", errNoCoverArt)
 	}
 	data, err := readOpenedMediaFile(file, opened, maxBytes)

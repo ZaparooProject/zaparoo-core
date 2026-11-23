@@ -1371,6 +1371,9 @@ func applyTokenMetadata(media *models.ActiveMedia, token *tokens.Token) {
 	}
 	media.Description = meta.Description
 	media.ImagePath = meta.ImagePath
+	if meta.ImagePath != "" {
+		media.ImageRoot = token.PathRoot
+	}
 }
 
 // SetBackgroundMedia sets the background-slot media. Clearing it with nil is

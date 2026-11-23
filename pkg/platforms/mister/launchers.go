@@ -772,7 +772,7 @@ func launchAltCoreWithDefinition(
 		// A different media protocol cannot safely fall back to the primary RBF.
 		if definition.Slots != nil {
 			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, definition.LauncherID, definition.ID); !ok {
-				corePath := misterExpectedCorePath(definition.LauncherID, definition.ID)
+				corePath := misterExpectedCorePath(cfg, definition.LauncherID, definition.ID)
 				log.Warn().Str("launcher", definition.LauncherID).Str("rbf", corePath).
 					Msg("alternate core not installed")
 				return nil, errMissingCore(corePath)

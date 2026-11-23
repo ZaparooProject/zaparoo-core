@@ -53,7 +53,8 @@ func coverEnv(t *testing.T, cover string, data []byte, params string) (env reque
 	drainNotifications(t, ns)
 
 	root := t.TempDir()
-	coverPath = filepath.Join(root, cover)
+	coverPath = filepath.Join(root, filepath.FromSlash(cover))
+	require.NoError(t, os.MkdirAll(filepath.Dir(coverPath), 0o750))
 	require.NoError(t, os.WriteFile(coverPath, data, 0o600))
 	game := filepath.Join(root, "game.sfc")
 	require.NoError(t, os.WriteFile(game, []byte("rom"), 0o600))
@@ -203,15 +204,39 @@ func TestHandleMediaActiveImage_DriveCoverSwappedForLink(t *testing.T) {
 	requireClientError(t, err, "no cover art")
 }
 
+// A folder on the cover's path swapped for a link off the drive after the
+// token was read must not lead the read outside the drive.
+func TestHandleMediaActiveImage_DriveCoverFolderSwappedForLink(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows privileges")
+	}
+	env, coverPath := coverEnv(t, "art/cover.png", testPNG(t, 8), ``)
+	root := filepath.Dir(filepath.Dir(coverPath))
+	_, err := HandleMediaActiveImage(env)
+	require.NoError(t, err, "a cover in a folder on the drive is served")
+
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "cover.png"), testPNG(t, 8), 0o600))
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "art")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "art")))
+
+	_, err = HandleMediaActiveImage(env)
+	requireClientError(t, err, "no cover art")
+}
+
 func TestHandleMediaActiveImage_DriveCoverTooManyBytes(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "cover.png")
+	dir := t.TempDir()
 	data := testPNG(t, 16)
-	require.NoError(t, os.WriteFile(path, data, 0o600))
-	info, err := os.Lstat(path)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.png"), data, 0o600))
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	info, err := root.Lstat("cover.png")
 	require.NoError(t, err)
 
-	_, err = readActiveCover(path, info, int64(len(data)-1))
+	_, err = readActiveCover(root, "cover.png", info, int64(len(data)-1))
 	requireClientError(t, err, "cover art is too large")
 }
 

@@ -66,6 +66,25 @@ func TestTokenMetadataLabelsMediaOnTheDrive(t *testing.T) {
 	assert.Equal(t, "game", media.TitleName(), "a title command must use the launched name")
 	assert.Equal(t, "A game on a stick.", media.Description)
 	assert.Equal(t, filepath.Join(root, "cover.png"), media.ImagePath)
+	assert.Equal(t, root, media.ImageRoot, "the cover is opened through the drive root")
+}
+
+// Two games on one drive share its label, but launching the second still
+// replaces the first.
+func TestTokenMetadataSecondGameOnTheDriveReplacesTheFirst(t *testing.T) {
+	t.Parallel()
+	st := newMetadataState(t)
+	root := filepath.Join(t.TempDir(), "usb")
+	st.SetActiveCard(driveToken(root))
+	st.SetActiveMedia(models.NewActiveMedia("SNES", "Super Nintendo", filepath.Join(root, "a.sfc"), "Alpha", "SNES"))
+
+	second := filepath.Join(root, "b.sfc")
+	st.SetActiveMedia(models.NewActiveMedia("SNES", "Super Nintendo", second, "Bravo", "SNES"))
+
+	media := st.ActiveMedia()
+	require.NotNil(t, media)
+	assert.Equal(t, second, media.Path)
+	assert.Equal(t, "Bravo", media.TitleName())
 }
 
 func TestTokenMetadataKeepsLaunchedNameWhenNoneDeclared(t *testing.T) {

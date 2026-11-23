@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1432,6 +1433,46 @@ launcher = "Native"
 	launch := getLaunchClosure(mockPlatform, &env, false)
 	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
 	assert.Equal(t, launcher.ID, env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	mockPlatform.AssertExpectations(t)
+}
+
+// A system default applied for a pick that found no launcher must not carry
+// into the next pick a random launch retries with.
+func TestLaunchClosureDropsDefaultAfterNoLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "GameboyColor"
+launcher = "GBC"
+
+[[systems.default]]
+system = "SNES"
+launcher = "SNES"
+`))
+	gbc := platforms.Launcher{ID: "GBC", SystemID: systemdefs.SystemGameboyColor}
+	snes := platforms.Launcher{ID: "SNES", SystemID: systemdefs.SystemSNES}
+	gbcPath := filepath.Join("games", "game.gbc")
+	snesPath := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{gbc, snes})
+	mockPlatform.On("LaunchMedia", cfg, gbcPath, mock.Anything, mock.Anything, mock.Anything).
+		Return(fmt.Errorf("launch: %w", pathhelpers.ErrNoLauncher)).Once()
+	mockPlatform.On("LaunchMedia", cfg, snesPath,
+		mock.MatchedBy(func(selected *platforms.Launcher) bool {
+			return selected != nil && selected.ID == snes.ID
+		}), mock.Anything, mock.Anything).Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, false)
+	require.ErrorIs(t, launch(launchTarget{path: gbcPath, systemID: systemdefs.SystemGameboyColor}),
+		pathhelpers.ErrNoLauncher)
+	assert.Empty(t, env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	require.NoError(t, launch(launchTarget{path: snesPath, systemID: systemdefs.SystemSNES}))
 	mockPlatform.AssertExpectations(t)
 }
 

@@ -1161,7 +1161,16 @@ func getLaunchClosure(
 	env *platforms.CmdEnv,
 	explicitLauncher bool,
 ) func(launchTarget) error {
-	return func(target launchTarget) error {
+	return func(target launchTarget) (launchErr error) {
+		// A launcher chosen for this target, such as its system's default,
+		// must not carry into the next pick when a random launch retries
+		// after finding no launcher.
+		advArgs := env.Cmd.AdvArgs
+		defer func() {
+			if errors.Is(launchErr, helpers.ErrNoLauncher) {
+				env.Cmd.AdvArgs = advArgs
+			}
+		}()
 		explicit := explicitLauncher
 		// rommMediaID is the RomM row the game was launched from. The
 		// installed file does not take its identity, but a launcher override

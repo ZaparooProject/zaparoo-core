@@ -814,6 +814,9 @@ type ActiveMedia struct {
 	// ImagePath is the cover the launching token declared for this media,
 	// served by media.active.image. It is a local path and never sent.
 	ImagePath string `json:"-"`
+	// ImageRoot is the root of the drive ImagePath is on. The cover is opened
+	// through it, so a folder swapped for a link cannot lead off the drive.
+	ImageRoot string `json:"-"`
 	// LaunchedName is the name the media launched with when the launching
 	// token's metadata replaced Name. A title command must use it: the
 	// token's label names no indexed title. It is never sent.
@@ -899,8 +902,10 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 
 	// Compare names by slugifying them to handle minor formatting differences
 	// (e.g., "Game Name" vs "game-name", "S01E02" vs "1x02" are considered equal)
-	slugA := slugs.Slugify(mediaTypeA, a.Name)
-	slugB := slugs.Slugify(mediaTypeB, with.Name)
+	// The launched title is compared, not a label the launching token gave
+	// it: two games from one drive share the drive's label.
+	slugA := slugs.Slugify(mediaTypeA, a.TitleName())
+	slugB := slugs.Slugify(mediaTypeB, with.TitleName())
 
 	// If names match (after slugification), consider them equal regardless of path
 	// This handles cases where launcher uses virtual paths (kodi-episode://123)
