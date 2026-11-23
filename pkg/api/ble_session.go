@@ -851,12 +851,15 @@ func (s *bleSession) shutdownWith(reason string, disconnect bool) {
 		if timer != nil {
 			timer.Stop()
 		}
+		// Added before the session leaves the transport's map: once it is
+		// gone, stop no longer waits on this shutdown, and an Add racing its
+		// wg.Wait would be a WaitGroup misuse.
+		s.t.wg.Add(1)
 		s.t.forget(s)
 		notificationClientDisconnected(s.t.core.st)
 		if disconnect {
 			s.t.refuse(s.peer)
 		}
-		s.t.wg.Add(1)
 		go func() {
 			defer s.t.wg.Done()
 			if disconnect {
