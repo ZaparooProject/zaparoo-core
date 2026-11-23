@@ -1557,7 +1557,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		mediaID, zapScript := activeMediaEnrichment(&env, system.ID, activeMedia.Path, activeMedia.Name)
+		mediaID, zapScript := activeMediaEnrichment(&env, system.ID, activeMedia.Path, activeMedia.TitleName())
 
 		primaryEntry := models.ActiveMedia{
 			MediaID:          mediaID,
@@ -1567,6 +1567,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			SystemID:         system.ID,
 			SystemName:       system.Name,
 			Name:             activeMedia.Name,
+			Description:      activeMedia.Description,
 			Path:             activeMedia.Path,
 			Slot:             mediaslot.Primary,
 			LauncherControls: activeMedia.LauncherControls,
@@ -1816,7 +1817,7 @@ func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMedia
 		// path is what plays it again.
 		zapScript = backgroundTrackZapScript(media.Path)
 	} else {
-		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.Name)
+		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.TitleName())
 	}
 
 	entry := models.ActiveMedia{
@@ -1826,6 +1827,7 @@ func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMedia
 		SystemID:         media.SystemID,
 		SystemName:       media.SystemName,
 		Name:             media.Name,
+		Description:      media.Description,
 		Path:             media.Path,
 		Slot:             slot,
 		LauncherControls: media.LauncherControls,

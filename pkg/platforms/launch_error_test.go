@@ -305,3 +305,16 @@ func TestLaunchRepairErrorSurvivesWrapping(t *testing.T) {
 	require.ErrorIs(t, err, cause, "the cause stays reachable for logging")
 	assert.NotContains(t, repair.Error(), "/storage")
 }
+
+func TestNewEmulatorNotInstalledError(t *testing.T) {
+	t.Parallel()
+
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, platforms.NewEmulatorNotInstalledError("PCSX2"), &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+	assert.Equal(t, "the emulator for this system is not installed", repair.Error())
+	assert.Equal(t, map[string]string{platforms.LaunchRepairParamLauncher: "PCSX2"}, repair.Params())
+
+	require.ErrorAs(t, platforms.NewEmulatorNotInstalledError(""), &repair)
+	assert.Nil(t, repair.Params(), "an unnamed emulator sends no launcher parameter")
+}

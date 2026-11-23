@@ -238,5 +238,5 @@ func TestUnstableLauncherUnavailableWithoutNightly(t *testing.T) {
 
 	err := launchers[0].Availability(nil)
 	require.Error(t, err, "an uninstalled nightly must not report available")
-	assert.Contains(t, err.Error(), "SNES_unstable_<date>_<hash>")
+	assert.Equal(t, "the MiSTer core SNES_unstable is not installed", err.Error())
 }

@@ -148,11 +148,11 @@ func TestLaunchRefusals(t *testing.T) {
 				t.Helper()
 				require.NoError(t, tp.fs.Remove(filepath.Join(testConfigsDir, "nes", "emulators.cfg")))
 			},
-			wantErr: "no emulator is installed",
+			wantErr: "the emulator for this system is not installed",
 		},
 		{
 			name: "missing rom", system: "nes", kind: requestSystem,
-			path: filepath.Join(testRomsDir, "nes", "gone.nes"), wantErr: "media not found",
+			path: filepath.Join(testRomsDir, "nes", "gone.nes"), wantErr: "file not found",
 		},
 		{
 			name: "quote in path", system: "nes", kind: requestSystem,

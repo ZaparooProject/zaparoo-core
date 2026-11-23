@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -1030,7 +1031,9 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	}
 	rbfInfo, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcher.ID, systemID)
 	if !ok {
-		return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcher.ID, systemID))
+		corePath := misterExpectedCorePath(cfg, launcher.ID, systemID)
+		log.Warn().Str("launcher", launcher.ID).Str("rbf", corePath).Msg("core not installed")
+		return errMissingCore(corePath)
 	}
 	launch := p.launchCoreAtRBF
 	if launch == nil {
@@ -1633,9 +1636,62 @@ func misterCoreBacked(launcherID, systemID string) bool {
 	return ok && system.RBF != ""
 }
 
+// errMissingCore is the client-facing error for a launch whose MiSTer core
+// is not on the SD card. corePath is the expected core relative to the SD
+// root, such as "_Console/SNES". Only its base name is reported, in the
+// message and the plugin parameter, so the user knows what to install
+// without the message carrying a path. The date and hash placeholders of a
+// registered pattern are dropped, so "SNES_<date>_<hash>_DB9" is reported as
+// "SNES_DB9". A name outside the core naming charset gets the generic message.
+func errMissingCore(corePath string) error {
+	message := "the MiSTer core for this system is not installed"
+	params := map[string]string{platforms.LaunchRepairParamLauncher: "MiSTer"}
+	name := corePlaceholders.Replace(pathpkg.Base(corePath))
+	if corePath != "" && !pathpkg.IsAbs(corePath) && validCoreName(name) {
+		message = "the MiSTer core " + name + " is not installed"
+		params[platforms.LaunchRepairParamPlugin] = name
+	}
+	//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+	return platforms.NewLaunchRepairErrorWithReason(
+		platforms.LaunchRepairLauncherComponentMissing, params, message,
+	)
+}
+
+// corePlaceholders drops the placeholders a registered core pattern stands
+// in for its build date and hash with.
+var corePlaceholders = strings.NewReplacer("_<date>", "", "_<hash>", "")
+
+// validCoreName reports whether name is a short core name made of the
+// characters core file names use.
+func validCoreName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("_-.", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // misterExpectedCorePath names the RBF a core-backed launcher looks for,
-// used to explain an unavailable launcher.
-func misterExpectedCorePath(launcherID, systemID string) string {
+// used to explain an unavailable launcher. It follows the resolver: a
+// configured load_path comes first, then the launcher's registered paths,
+// then the system's core.
+func misterExpectedCorePath(cfg *config.Instance, launcherID, systemID string) string {
+	key := launcherID
+	if key == "" {
+		key = systemID
+	}
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			return lp
+		}
+	}
 	if paths := cores.GlobalRBFCache.AltCorePaths(launcherID); len(paths) > 0 {
 		return paths[0]
 	}
@@ -1698,7 +1754,7 @@ func setCoreAvailability(launchers []platforms.Launcher) {
 			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, launcherID, systemID); ok {
 				return nil
 			}
-			return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcherID, systemID))
+			return errMissingCore(misterExpectedCorePath(cfg, launcherID, systemID))
 		}
 	}
 }
