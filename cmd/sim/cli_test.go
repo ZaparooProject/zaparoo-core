@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -179,6 +180,11 @@ func TestCLIForeground(t *testing.T) {
 	c.ok("fixtures", "gen", "--systems", "snes,nes", "--per-system", "5")
 	assert.Contains(t, c.ok("--json", "fixtures", "gen", "--systems", "snes", "--per-system", "5"), `"files"`)
 	startForeground(t, c.root, "--readers", "sim0", "--fakes", "libretro,romm,logs,online")
+	// Ready means the API answers; Core opens the reader shortly after.
+	require.Eventually(t, func() bool {
+		out, err := c.run("readers")
+		return err == nil && strings.Contains(out, "sim0 (") && strings.Contains(out, "): open")
+	}, 30*time.Second, 50*time.Millisecond)
 
 	c.fails("already running", "serve", "--foreground")
 	c.fails("stop the sim first", "fixtures", "bigdb")
@@ -203,8 +209,9 @@ func TestCLIForeground(t *testing.T) {
 	c.fails("unknown subcommand", "readers", "bogus")
 
 	// Library and API.
-	assert.Contains(t, c.ok("fixtures", "index", "--systems", "SNES,NES"), "indexed")
-	assert.Contains(t, c.ok("--json", "fixtures", "index"), "totalMedia")
+	// Indexing starts a scrape, which refuses a second index until it ends,
+	// so index once.
+	assert.Contains(t, c.ok("--json", "fixtures", "index", "--systems", "SNES,NES"), "totalMedia")
 	assert.Contains(t, c.ok("api", "version"), "version")
 	assert.Contains(t, c.ok("api", "media.search", `{"query":"","maxResults":1}`), "results")
 	c.fails("not valid JSON", "api", "version", "{")
