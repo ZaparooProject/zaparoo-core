@@ -25,8 +25,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/browseprefix"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -214,7 +215,7 @@ func TestGetTitleFromFilename(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Pass false for stripLeadingNumbers - we removed unconditional stripping
-			got := tags.ParseTitleFromFilename(tt.filename, false)
+			got := filetitle.Parse(tt.filename, false, slugs.MediaTypeGame)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -322,7 +323,7 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "http://server.com/My%20Game.zip",
 				FileName: "My Game.zip", // Includes extension from HTTP URL
-				Title:    "My Game",     // Extension stripped by ParseTitleFromFilename
+				Title:    "My Game",     // Extension stripped by filetitle.Parse
 				Slug:     "mygame",      // Extension not included in slug
 				Ext:      ".zip",        // HTTP/HTTPS URLs have extension extracted for tags
 			},
@@ -335,7 +336,7 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "https://cdn.example.com/games/Super%20Mario.sfc",
 				FileName: "Super Mario.sfc", // Includes extension from HTTP URL
-				Title:    "Super Mario",     // Extension stripped by ParseTitleFromFilename
+				Title:    "Super Mario",     // Extension stripped by filetitle.Parse
 				Slug:     "supermario",      // Extension not included in slug
 				Ext:      ".sfc",            // HTTP/HTTPS URLs have extension extracted for tags
 			},
@@ -348,7 +349,7 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "kodi-episode://222/S01E01%20-%20The%20Beginning%20%28Part%201%29",
 				FileName: "S01E01 - The Beginning (Part 1)",
-				Title:    "- The Beginning", // S01E01 stripped by ParseTitleFromFilename (scene release parsing)
+				Title:    "- The Beginning", // S01E01 stripped by filetitle.Parse (scene release parsing)
 				Slug:     "thebeginning",    // "The" article stripped, S01E01 removed
 				Ext:      "",
 			},

@@ -152,14 +152,15 @@ You can search by either portion. Script-specific rules handle diacritics differ
 Filenames are parsed during indexing to pull out clean titles and metadata tags.
 
 `pkg/database/mediascanner/indexing_pipeline.go` → `GetPathFragments()`
-`pkg/database/tags/filename_parser.go`
+`filetitle` and `browseprefix` in [go-slugs](https://github.com/ZaparooProject/go-slugs) (titles)
+`pkg/database/tags/filename_parser.go` (tags)
 
 ### Title extraction
 
-`tags.ParseTitleFromFilename(filename, stripLeadingNumbers)` — 8-step pipeline:
+`filetitle.Parse(filename, stripLeadingNumbers, mediaType)` — 8-step pipeline:
 
 1. **Remove extension** — strips `.zip`, `.nes`, `.mkv` etc. (2-4 char extensions only)
-2. **Strip release group** — `-YIFY`, `-SPARKS` at end (uppercase, 3+ chars)
+2. **Strip release group** — `-YIFY`, `-SPARKS` at end (uppercase, 3+ chars; movies, TV and video only)
 3. **Normalize separators** — if filename has no spaces and 2+ dots/underscores/dashes, convert all to spaces. Detects scene releases and ROM naming conventions.
 4. **Strip scene artifacts** — only after a year if found. Removes resolution, source, codec, audio, HDR, status tags. Protects titles like "Cam (2018)" where "Cam" is the actual title.
 5. **Strip episode markers** — `S01E02`, `s1e2` removed from display title (kept for tag extraction)

@@ -17,7 +17,7 @@ The indexing pipeline (`NewNamesIndex()` in `pkg/database/mediascanner/mediascan
 
 Per file, inside `AddMediaPath()` at `pkg/database/mediascanner/indexing_pipeline.go:88-290`:
 
-1. **GetPathFragments()** (indexing_pipeline.go:787-866) — Path normalization, `tags.ParseTitleFromFilename()`, `slugs.Slugify()`, `tags.ParseFilenameToCanonicalTags()` (~20 compiled regexes)
+1. **GetPathFragments()** (indexing_pipeline.go:787-866) — Path normalization, `filetitle.Parse()` (go-slugs), `slugs.Slugify()`, `tags.ParseFilenameToCanonicalTags()` (~20 compiled regexes)
 2. **System lookup/insert** — Map lookup in `ss.SystemIDs`, DB insert if missing
 3. **Title lookup/insert** — Map lookup via `database.TitleKey()`, `mediadb.GenerateSlugWithMetadata()` for fuzzy prefilter, DB insert with metadata
 4. **Media + tag insertion** — Media record insert, extension tag, filename tag parsing via `ParseFilenameToCanonicalTags()`, MediaTag associations

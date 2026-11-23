@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -1758,7 +1759,7 @@ func buildBrowseResponse(
 	}
 
 	for i := range files {
-		files[i].Name = mediatags.StripStructuralSetMarkers(files[i].Name)
+		files[i].Name = filetitle.StripStructuralSetMarkers(files[i].Name)
 		entry := buildMediaEntry(&files[i], env)
 		entries = append(entries, entry)
 	}
@@ -2055,7 +2056,7 @@ func browseDirDisplayName(parentPath, name string) string {
 
 func browseMediaDisplayName(path, sortName, titleName string) string {
 	if sortName != "" {
-		return mediatags.StripStructuralSetMarkers(sortName)
+		return filetitle.StripStructuralSetMarkers(sortName)
 	}
 
 	base := filepath.Base(path)
