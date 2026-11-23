@@ -200,6 +200,9 @@ func describeDiff(committed, fresh *credits.Bundle) string {
 	return strings.Join(changes, ", ")
 }
 
+// devCommands are development tools under cmd/ that no release ships.
+var devCommands = map[string]bool{"sim": true}
+
 // releaseTargets lists every platform a release is built for, with the
 // commands built for it. Windows and macOS each have one command; every
 // other command is a Linux build. MiSTer builds also embed the arcade
@@ -211,7 +214,7 @@ func releaseTargets(root string) ([]target, error) {
 	}
 	var linux []string
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "windows" || entry.Name() == "mac" {
+		if !entry.IsDir() || entry.Name() == "windows" || entry.Name() == "mac" || devCommands[entry.Name()] {
 			continue
 		}
 		linux = append(linux, "./cmd/"+entry.Name())

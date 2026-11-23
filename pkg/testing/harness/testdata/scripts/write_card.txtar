@@ -1,0 +1,18 @@
+# readers.write waits for a card; write-complete presents one. A failed write
+# reports an error to the caller.
+
+sim-start
+api -bg readers.write {"text":"**launch.random:snes"}
+write-complete 04cc33
+api-wait
+status
+stdout '"uid": "04cc33"'
+stdout '"text": "\*\*launch.random:snes"'
+stdout '"writes": \['
+
+remove
+write-fail error
+api -bg readers.write {"text":"**launch.random:nes"}
+write-complete
+! api-wait
+stderr 'error writing to reader'

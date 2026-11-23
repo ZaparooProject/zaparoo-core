@@ -22,6 +22,7 @@ package audio
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -87,6 +88,24 @@ func (d *sharedDevice) publishSourcesLocked() {
 
 // globalDevice is the process-wide audio output device shared by all players.
 var globalDevice = newSharedDevice()
+
+// UseSilentOutput sends all playback to miniaudio's null backend, which runs
+// the same decode, mix and device callback path without opening a sound card.
+// It is for the desktop simulation harness, which must not make sound on the
+// host. Call it before anything plays.
+func UseSilentOutput() {
+	globalDevice.devMu.Lock()
+	defer globalDevice.devMu.Unlock()
+	globalDevice.initContext = func(
+		_ []malgo.Backend, cfg malgo.ContextConfig, logProc malgo.LogProc,
+	) (*malgo.AllocatedContext, error) {
+		ctx, err := malgo.InitContext([]malgo.Backend{malgo.BackendNull}, cfg, logProc)
+		if err != nil {
+			return nil, fmt.Errorf("init null audio backend: %w", err)
+		}
+		return ctx, nil
+	}
+}
 
 // register adds src and opens the device if not already open.
 // Safe to call concurrently.
@@ -249,7 +268,9 @@ func (d *sharedDevice) open() {
 	// priority is a no-op under SCHED_OTHER, which has no priority levels.
 	// miniaudio falls back to a normal thread if realtime is not permitted.
 	ctxConfig := malgo.ContextConfig{ThreadPriority: malgo.ThreadPriorityRealtime}
+	d.devMu.Lock()
 	initContext := d.initContext
+	d.devMu.Unlock()
 	if initContext == nil {
 		initContext = malgo.InitContext
 	}

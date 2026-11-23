@@ -68,7 +68,7 @@ func isDesktopPlatform(platformID string) bool {
 	switch platformID {
 	case platformids.Linux, platformids.Windows, platformids.Mac,
 		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite,
-		platformids.Armada:
+		platformids.Armada, platformids.Sim:
 		return true
 	default:
 		return false

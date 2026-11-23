@@ -72,7 +72,7 @@ var kindProperty = map[string]tags.TagValue{
 // NewPlatformScraper returns the libretro thumbnail scraper. It downloads, so
 // it only runs when asked and is never an automatic post-index scraper.
 func NewPlatformScraper() platforms.Scraper {
-	return newScraper(DefaultBaseURL, Dir, helpers.FreeDiskSpace)
+	return newScraper("", Dir, helpers.FreeDiskSpace)
 }
 
 // Dir is the folder downloads are stored in: the libretro folder of the
@@ -85,6 +85,8 @@ func Dir(cfg *config.Instance, pl platforms.Platform) string {
 	return filepath.Join(cfg.ImageDir(dataDir), config.ImageLibretroDir)
 }
 
+// newScraper builds the scraper. An empty baseURL downloads from the server
+// the config names at scrape time.
 func newScraper(
 	baseURL string,
 	dir func(*config.Instance, platforms.Platform) string,
@@ -109,7 +111,11 @@ func newScraper(
 			if fs == nil {
 				fs = afero.NewOsFs()
 			}
-			c := newClient(fs, dir(cfg, pl), baseURL)
+			base := baseURL
+			if base == "" {
+				base = cfg.ScraperLibretroThumbnailsBaseURL()
+			}
+			c := newClient(fs, dir(cfg, pl), base)
 			c.freeSpace = freeSpace
 			r := &run{db: db.MediaDB, client: c, opts: opts}
 			go r.loop(ctx, ch)

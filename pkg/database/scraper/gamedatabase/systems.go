@@ -113,3 +113,14 @@ func SupportedSystems() []string {
 	slices.Sort(ids)
 	return ids
 }
+
+// SystemBundles returns the primary bundles that describe systemID's games,
+// or nil for a system the data does not cover. Secondary bundles, read only
+// for titles the primary ones miss, are not included.
+func SystemBundles(systemID string) []string {
+	src, ok := sourceFor(systemID)
+	if !ok {
+		return nil
+	}
+	return slices.Clone(src.primary)
+}

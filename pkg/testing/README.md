@@ -1,249 +1,82 @@
-# Testing Helpers & Examples
+# pkg/testing
 
-This directory provides comprehensive testing utilities for Zaparoo Core, enabling hardware-independent testing with zero dependencies on physical readers, databases, or filesystems.
+Shared test infrastructure for Zaparoo Core. Which layer to use, commands and worked examples: [`TESTING.md`](../../TESTING.md). Simulator reference: [`docs/sim.md`](../../docs/sim.md).
 
-## Quick Reference
+## Packages
 
-### Mock Components
+| Package | What it is |
+| --- | --- |
+| `mocks` | testify mocks and fakes for interfaces: platform, reader, audio player, API client, command executor, Kodi client, melody WebSocket, BLE |
+| `helpers` | Test utilities: in-memory and mock databases, matchers, afero filesystem, test configs, WebSocket/HTTP API helpers, ES API and Kodi test servers, socket paths |
+| `fixtures` | Sample data: tokens, media, playlists, history, mappings, systems, Kodi, Steam shortcuts |
+| `sqlmock` | go-sqlmock with regex query matching (import as `testsqlmock`) |
+| `scantest` | Fills a MediaDB through the production scan pipeline; separate from `helpers` to avoid an import cycle with `mediascanner` |
+| `simfixtures` | Writes a deterministic ES-DE-style ROM tree (`Generate`) and fills a large MediaDB for benchmarks (`BigDB`) |
+| `harness` | Boots a full Core service on the sim platform inside `go test` (`New`, `Start`); runs testscript scenarios (`ScriptSetup`, `ScriptCommands`). Linux only |
+| `harness/testdata/scripts` | testscript scenarios (`*.txtar`) run by `TestScripts` |
+| `fakes/fakeset` | Starts the offline fakes by name (`libretro`, `romm`, `logs`, `online`) and points a config at them; `Unreachable` is the address used when no fake runs |
+| `fakes/libretro` | Offline libretro thumbnail server |
+| `fakes/romm` | Offline RomM server: platforms, ROMs, artwork, downloads, device linking |
+| `fakes/logupload` | Offline log paste service for "upload log" |
+| `fakes/online` | Contract fake of the Zaparoo Online device API |
+| `fakes/fakectl` | Request log and control-call signature shared by the fakes |
+| `fakes/internal/fakehttp`, `fakes/internal/library` | Internal plumbing for the fakes (faults, listeners, control routes; reading an ES-DE ROM tree) |
+| `examples` | Working example tests for each pattern |
 
-#### Platform Mocking
-- `mocks.NewMockPlatform()` - Mock platform for cross-platform testing
-- `platform.SetupBasicMock()` - Standard mock configuration
+Guides: [`TIME_TESTING.md`](TIME_TESTING.md) (clockwork), [`FUZZ_TESTING.md`](FUZZ_TESTING.md), [`PROPERTY_TESTING.md`](PROPERTY_TESTING.md) (rapid).
 
-#### Reader Mocking
-- `mocks.NewMockReader()` - Mock card reader for testing token scanning
-- `reader.On("ReadTokens", ...)` - Set up token reading expectations
+## mocks
 
-#### WebSocket Testing
-- `helpers.NewWebSocketTestServer(t, handler)` - Test WebSocket server
-- `server.CreateWebSocketClient()` - WebSocket test client
+- `NewMockPlatform()`, then `SetupBasicMock()`: ID `mock-platform`, no readers, launchers or scrapers, and `Settings` from `BasicMockSettings()`, which is a temporary directory shared by the whole test process. Register your own `On("Settings")` before `SetupBasicMock` for per-test directories.
+- `MockPlatform` records actions: `GetLaunchedMedia()`, `GetLaunchedSystems()`, `GetKeyboardPresses()`, `GetGamepadPresses()`, `ClearHistory()`.
+- `NewMockReader()`, `SetupBasicMock()`; `SimulateTokenScan(ch, token, source)` and `SimulateError(ch, err, source)` send on the `chan<- readers.Scan` a reader gets from `Open`.
+- `NewMockPlayer()` (audio; `SetupNoOpMock()`), `NewMockAPIClient()` (`Setup*Response` / `Setup*Error`), `NewMockKodiClient()`, `NewMockMelody()`, `NewMockMelodySession()`.
+- `CreateTestJSONRPCMessage`, `CreateTestJSONRPCResponse`, `CreateTestJSONRPCError` build raw JSON-RPC frames.
+- BLE: `NewFakeAdapter(roles...)`, `NewFakePeripheral()`, `NewFakeCentral()`, `NewFakeDevice(addr)`, `NewFakeCharacteristic()`.
 
-### Database Testing
+## helpers
 
-#### Mock Database Interfaces
-- `helpers.NewMockUserDBI()` - In-memory user database mock
-- `helpers.NewMockMediaDBI()` - In-memory media database mock
+Databases:
 
-#### Database Fixtures & Helpers
-- `fixtures.SampleTokens()` - Pre-defined test token data
-- `fixtures.SampleMedia()` - Pre-defined media entries
-- `fixtures.SamplePlaylists()` - Pre-defined playlist data
-- `helpers.HistoryEntryMatcher()` - Flexible matching for history entries
+- `NewMockUserDBI()`, `NewMockMediaDBI()`: testify mocks of the database interfaces.
+- `NewInMemoryUserDB(t)`, `NewInMemoryMediaDB(tb)`, `NewTestDatabase(t)`: real SQLite, each returns `(db, cleanup)`.
+- `NewUserDBInDataDir(t)`: a UserDB at `DataDir/user.db`, for backup and restore tests.
+- Matchers: `HistoryEntryMatcher()` (needs non-zero `Time` and a `TokenID`), `MappingMatcher()`, `MediaMatcher()`, `SystemMatcher()`, `TextMatcher()`, `SearchResultMatcher()`, `SlugResolutionMatcher(mediaDBID)`.
+- sqlmock expectations: `ExpectHistoryInsert`, `ExpectMappingQuery`, `ExpectMappingInsert`, `ExpectMediaSearch`, `ExpectTransactionBegin`, `ExpectTransactionCommit`, `ExpectTransactionRollback`. Get the `*sql.DB` from `testsqlmock.NewSQLMock()`; `helpers.NewSQLMock()` only returns an error.
 
-### Filesystem Testing
+Filesystem and config:
 
-#### In-Memory Filesystem
-- `helpers.NewMemoryFS()` - In-memory filesystem using afero
-- `fs.WriteFile(path, content, perm)` - Create test files
-- `fs.ReadFile(path)` - Read test files
-- `fs.FileExists(path)` - Check if file exists
-- `fs.CreateConfigFile(path, map)` - Create JSON config from map
-- `fs.CreateMediaDirectory(basePath)` - Create sample media directory structure
-- `fs.CreateDirectoryStructure(structure)` - Create complex directory trees from map
+- `NewMemoryFS()` and `NewOSFS()` return an `*FSHelper` whose `Fs` field is an `afero.Fs`. Methods: `WriteFile(path, data, perm)`, `ReadFile`, `FileExists`, `ListFiles`, `CreateConfigFile(path, map)`, `CreateAuthFile`, `CreateMediaDirectory(base)`, `CreateDirectoryStructure(map)`, `CleanupDir`, `SetupTestConfigEnvironment(base)`.
+- `NewTestConfig(fs, dir)`, `NewTestConfigWithPort(fs, dir, port)`, `NewTestConfigWithListenAndPort(fs, dir, host, port)`. All disable BLE. A nil `fs` uses the real filesystem.
 
-#### Configuration Helpers
-- `helpers.NewTestConfig(fs, configDir)` - Test configuration with random port
-- `helpers.NewTestConfigWithPort(fs, configDir, port)` - Test configuration with specific port
+API:
 
-### Time-Based Testing
+- `NewWebSocketTestServer(t, handler)` serves `/api/v0.1`; `CreateWebSocketClient()`, `GetMessages()`, `ClearMessages()`, `Close()`.
+- `SendJSONRPCRequest(conn, method, params)`, `AssertJSONRPCSuccess(t, resp)`, `AssertJSONRPCError(t, resp, code)`.
+- `NewHTTPTestHelper(handler)` with `PostJSONRPC(method, params)`; `NewMockWebSocketConnection()`; `CreateTestContext(timeout)`.
 
-#### Clockwork for Deterministic Time
-- `clockwork.NewFakeClock()` - Fake clock for fast, deterministic tests
-- `fakeClock.Advance(duration)` - Progress time instantly without waiting
-- `fakeClock.BlockUntilContext(ctx, n)` - Wait for n goroutines to block on clock
-- `clock.Now()` - Get current time (fake or real)
-- `clock.Since(t)` - Calculate elapsed time
-- `clock.NewTicker(d)` - Create ticker (fake or real)
+Other: `NewMockESAPIServer(t)`, `NewMockKodiServer(t)`, `NewMockCommandExecutor()`, `TempSocketPath(t, name)`, `AssertValidActiveMedia(t, m)`, `AssertValidActiveMediaOrNil(t, m)`, `MockLevelWriter` (zerolog).
 
-#### Production Code Pattern
-```go
-type MyService struct {
-    clock clockwork.Clock  // Inject clock for testability
-}
+## Ports
 
-func NewMyService() *MyService {
-    return &MyService{
-        clock: clockwork.NewRealClock(),  // Real clock in production
-    }
-}
-```
+Tests must never use port 7497, the real Core's port. Pass port 0 to the config helpers for an OS-assigned port, and prefer `NewTestConfigWithListenAndPort(fs, dir, "127.0.0.1", 0)` so nothing listens beyond loopback. When a test needs the port up front, bind `127.0.0.1:0` with `net.ListenConfig`, read `listener.Addr().(*net.TCPAddr).Port` and pass that (see `pkg/api/server_startup_test.go`). Don't hard-code port numbers; concurrent tests and a running Core collide on them.
 
-#### Test Pattern
-```go
-func TestMyService(t *testing.T) {
-    fakeClock := clockwork.NewFakeClock()
-    service := &MyService{clock: fakeClock}  // Inject fake clock
+## fixtures
 
-    // Advance time instantly
-    fakeClock.Advance(1 * time.Minute)
+- Tokens: `SampleTokens()`, `NewNFCToken()`, `NewMifareToken()`, `NewAmiiboToken()`, `NewEmptyToken()`, `NewAPIToken()`, `NewUnsafeToken()`, `NewCustomToken(...)`, `NewTokenCollection()`.
+- Media (`*models.ActiveMedia`): `SampleMedia()`, `NewRetroGame()`, `NewModernGame()`, `NewArcadeGame()`, `NewConsoleGame()`, `NewHandheldGame()`, `NewCustomMedia(...)`, `NewMediaCollection()`.
+- Playlists: `SamplePlaylists()`, `NewSamplePlaylist()`, `NewRetroPlaylist()`, `NewEmptyPlaylist()`.
+- Database: `NewHistoryEntry(type, id, value, success)`, `NewMapping(...)`, `NewSystem(id, name)`, `GetTestSystemDefs()`, `GetSystemDefsByID()`; sample sets `HistoryEntries`, `Mappings`, `Systems`, `MediaTitles`.
+- Kodi: `TestMovies`, `TestTVShows`, `TestEpisodes`, `TestActivePlayers`. Steam: `BuildShortcutsVDF(shortcuts)`. `NewStopNotificationBroker()`.
 
-    // No time.Sleep() needed!
-}
-```
+## scantest
 
-**See TESTING.md for comprehensive examples and best practices.**
+`IndexMediaPaths(tb, db, systemID, paths...)`, `IndexMediaPathsWithOpts(tb, db, systemID, opts, paths...)`, `IndexScanResults(tb, db, systemID, opts, results...)` and `Index(ctx, db, systemID, opts, results...)` stage media through the production scan pipeline.
 
-### Fuzz Testing
+## harness
 
-#### Native Go Fuzzing (Go 1.18+)
-- `func FuzzFunctionName(f *testing.F)` - Fuzz test function signature
-- `f.Add(inputs...)` - Seed corpus with known test cases
-- `f.Fuzz(func(t *testing.T, inputs...) { ... })` - Fuzz target function
+`harness.New(t, &harness.Options{...})` starts a sim Core and closes it at test cleanup; `Start(ctx, opts)` is the non-test form. One instance runs per process at a time. Options: `Fixtures`, `Values`, `Config`, `Root`, `Readers` (default one reader, `DefaultReader` = `sim0`), `Fakes`, `Index`, `NoWaitReaders`. `Instance` fields: `Platform`, `Config`, `API` (`Call`, `CallInto`, `WaitNotification`, `Index`, `WaitIdle`), `Control`, `Fakes`, `Audio`, `Fixtures`, `Events` (`Len`, `All`, `Wait`), `Layout`, `Root`; methods `Reader(name)`, `WaitReaders`, `Close`. Example and scenario syntax: [`TESTING.md`](../../TESTING.md) and [`.claude/skills/core-sim/SKILL.md`](../../.claude/skills/core-sim/SKILL.md).
 
-#### Running Fuzz Tests
-```bash
-# Run all tests (includes fuzz corpus) - FAST
-task test
+## examples
 
-# Manual fuzzing (runs until failure or Ctrl+C)
-go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/virtualpath/
-
-# Time-boxed fuzzing
-go test -fuzz=FuzzName -fuzztime=30s ./pkg/helpers/
-```
-
-#### Example Fuzz Test
-```go
-func FuzzParseURI(f *testing.F) {
-    // Seed corpus
-    f.Add("steam://123/Game")
-    f.Add("") // Edge case
-
-    f.Fuzz(func(t *testing.T, uri string) {
-        result, err := ParseURI(uri)
-
-        // Test properties (invariants)
-        if err == nil && !utf8.ValidString(result) {
-            t.Errorf("Invalid UTF-8: %q", result)
-        }
-    })
-}
-```
-
-**Example fuzz tests**: `pkg/helpers/uris_fuzz_test.go`, `pkg/helpers/paths_fuzz_test.go`
-
-### API Testing
-
-#### WebSocket & JSON-RPC
-- `helpers.NewWebSocketTestServer(t, messageHandler)` - WebSocket server for testing
-- `client.SendMessage(data)` - Send test messages
-- `client.ReceiveMessage()` - Receive and validate responses
-
-#### HTTP Testing
-- Standard Go `net/http/httptest` integration
-- Context-aware HTTP client helpers
-
-## Complete Examples
-
-The `examples/` directory contains working examples demonstrating all testing patterns:
-
-### Core Testing Patterns
-- **`api_example_test.go`** - WebSocket communication, JSON-RPC testing, HTTP endpoints
-- **`database_example_test.go`** - Database operations, mock expectations, transaction testing  
-- **`filesystem_example_test.go`** - File operations, configuration management, in-memory filesystem
-- **`mock_usage_example_test.go`** - Platform mocking, reader mocking, expectation setup
-
-### Service Layer Testing
-- **`service_token_processing_test.go`** - End-to-end token processing workflows
-- **`service_state_management_test.go`** - Application state management testing
-- **`service_zapscript_test.go`** - ZapScript execution and custom launcher testing
-
-## Common Patterns
-
-### Basic Test Setup
-```go
-func TestYourFeature(t *testing.T) {
-    t.Parallel()
-    
-    // Setup mocks
-    platform := mocks.NewMockPlatform()
-    platform.SetupBasicMock()
-    
-    // Setup database
-    db := &database.Database{
-        UserDB:  helpers.NewMockUserDBI(),
-        MediaDB: helpers.NewMockMediaDBI(),
-    }
-    
-    // Setup state
-    st, notifications := state.NewState(platform)
-    defer st.StopService()
-    
-    // Your test logic here
-}
-```
-
-### API Server Testing
-```go
-func TestAPIEndpoint(t *testing.T) {
-    // Setup test environment
-    platform := mocks.NewMockPlatform()
-    platform.SetupBasicMock()
-    
-    fs := helpers.NewMemoryFS()
-    cfg, err := helpers.NewTestConfigWithPort(fs, t.TempDir(), 0)
-    require.NoError(t, err)
-    
-    // Start server
-    go api.Start(platform, cfg, st, tokenQueue, db, notifications)
-    
-    // Test API calls...
-}
-```
-
-### Token Processing Testing
-```go
-func TestTokenProcessing(t *testing.T) {
-    // Setup mock reader
-    reader := mocks.NewMockReader()
-    reader.On("ReadTokens", mock.Anything).Return([]tokens.Token{
-        {UID: "test-uid", Data: "test-data"},
-    }, nil)
-    
-    // Test processing...
-}
-```
-
-### Database Operation Testing
-```go
-func TestDatabaseOperations(t *testing.T) {
-    userDB := helpers.NewMockUserDBI()
-    
-    // Set expectations
-    userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
-    
-    // Test your function
-    err := YourFunction(userDB)
-    require.NoError(t, err)
-    
-    // Verify expectations
-    userDB.AssertExpectations(t)
-}
-```
-
-## Test Data & Fixtures
-
-The `fixtures/` directory provides pre-built test data:
-
-#### Token Fixtures
-- `fixtures.SampleTokens()` - Slice of common test tokens
-- `fixtures.NewNFCToken()`, `NewMifareToken()`, `NewAmiiboToken()` - Individual token types
-- `fixtures.NewTokenCollection()` - Collection with lookup methods
-
-#### Media Fixtures
-- `fixtures.SampleMedia()` - Slice of common test media
-- `fixtures.NewRetroGame()`, `NewModernGame()`, `NewArcadeGame()` - Individual media types
-- `fixtures.NewMediaCollection()` - Collection with lookup methods
-
-#### Other Fixtures
-- `fixtures.SamplePlaylists()` - Pre-defined playlist data
-- `fixtures.HistoryEntries` - Pre-populated history entries
-
-## Best Practices
-
-1. **Always use `t.Parallel()`** for independent tests
-2. **Use unique ports** for concurrent API server tests (8000 + testID pattern)
-3. **Clean up resources** with `defer` statements
-4. **Use meaningful test data** from fixtures rather than hardcoded values
-5. **Test behavior, not implementation** - focus on what the code does, not how
-6. **Leverage mocks for hardware dependencies** - no real readers or databases needed
+`api_example_test.go`, `database_example_test.go`, `filesystem_example_test.go`, `mock_usage_example_test.go`, `service_state_management_test.go`, `service_token_processing_test.go`, `service_zapscript_test.go`.

@@ -23,6 +23,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -402,10 +404,35 @@ func NewMockPlatform() *MockPlatform {
 	}
 }
 
+// basicMockRoot is the directory SetupBasicMock's settings point at, made
+// once per test process so code that writes there never lands in the
+// package directory.
+var basicMockRoot = sync.OnceValue(func() string {
+	dir, err := os.MkdirTemp("", "zaparoo-mock-")
+	if err != nil {
+		panic(fmt.Sprintf("mocks: make settings dir: %v", err))
+	}
+	return dir
+})
+
+// BasicMockSettings returns the settings SetupBasicMock registers: data,
+// config, temp and log dirs in a temporary directory shared by the test
+// process. Tests that need their own directories register Settings before
+// calling SetupBasicMock.
+func BasicMockSettings() platforms.Settings {
+	root := basicMockRoot()
+	return platforms.Settings{
+		DataDir:   filepath.Join(root, "data"),
+		ConfigDir: filepath.Join(root, "config"),
+		TempDir:   filepath.Join(root, "tmp"),
+		LogDir:    filepath.Join(root, "logs"),
+	}
+}
+
 // SetupBasicMock configures the mock with typical default values for basic operations
 func (m *MockPlatform) SetupBasicMock() {
 	m.On("ID").Return("mock-platform")
-	m.On("Settings").Return(platforms.Settings{})
+	m.On("Settings").Return(BasicMockSettings())
 	m.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	m.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})

@@ -12,7 +12,12 @@ go.work
 
 .vscode/
 .idea/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/core-sim/
+!.claude/skills/mister-vm/
+!.claude/skills/go-tui-expert/
 .claudeignore
 .opencode/
 .agent-shell/

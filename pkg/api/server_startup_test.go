@@ -353,7 +353,8 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	fs := helpers.NewMemoryFS()
 	configDir := t.TempDir()
-	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 9000)
+	// Port 0: the cancelled context stops startup before anything binds.
+	cfg, err := helpers.NewTestConfigWithListenAndPort(fs, configDir, "127.0.0.1", 0)
 	require.NoError(t, err)
 
 	// Create a state with a context that we can cancel
@@ -901,7 +902,13 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	platform1 := mocks.NewMockPlatform()
 	platform1.SetupBasicMock()
 
-	testPort := 9100 // Use a fixed port for this test
+	// Both servers need the same port, so take a free one from the OS.
+	probe, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	probeAddr, ok := probe.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	testPort := probeAddr.Port
+	require.NoError(t, probe.Close())
 	fs1 := helpers.NewMemoryFS()
 	configDir1 := t.TempDir()
 	cfg1, err := helpers.NewTestConfigWithListenAndPort(fs1, configDir1, "127.0.0.1", testPort)
@@ -927,7 +934,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	// Wait for first server to be ready
 	client := &http.Client{Timeout: 100 * time.Millisecond}
-	url := fmt.Sprintf("http://localhost:%d/api/v0.1", testPort)
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v0.1", testPort)
 	var server1Ready bool
 	for range 50 {
 		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)

@@ -30,6 +30,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -63,7 +64,27 @@ const maxResponseBytes = 8 << 10
 // UploadLog sends the log bundle to the configured paste service and returns
 // the URL it was published at.
 func UploadLog(pl platforms.Platform) (string, error) {
-	return uploadLogTo(pl, config.LogUploadURL, newUploadClient())
+	return uploadLogTo(pl, logUploadTarget(), newUploadClient())
+}
+
+// logUploadURL overrides where UploadLog sends logs; nil means
+// config.LogUploadURL.
+var logUploadURL atomic.Pointer[string]
+
+func logUploadTarget() string {
+	if u := logUploadURL.Load(); u != nil {
+		return *u
+	}
+	return config.LogUploadURL
+}
+
+// SetLogUploadURL points UploadLog at another log service, such as a local
+// fake, until the returned func restores the previous target. It is not a
+// config setting: it exists for tests and the simulator. Safe for concurrent
+// use, though concurrent overrides of one process share a single target.
+func SetLogUploadURL(url string) (restore func()) {
+	prev := logUploadURL.Swap(&url)
+	return func() { logUploadURL.Store(prev) }
 }
 
 func newUploadClient() *http.Client {

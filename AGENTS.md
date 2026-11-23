@@ -34,6 +34,25 @@ Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-
 - Use `filepath.Join` for filesystem paths, including tests. Do not encode host-OS separators into production path logic.
 - Treat useful behavior coverage as the goal; do not weaken assertions merely to make a test pass.
 
+## Testing Core locally
+
+Never run the Linux `zaparoo` binary on a developer machine to try a change. It discovers the real emulators, Steam and the browser, indexes the real ROM folders, opens real readers, plays sounds, and shares port 7497 and the XDG data and config directories with any Core the user runs. Use the sim instead. It runs the real service, API, reader pipeline, ZapScript, launch lifecycle and databases under one throwaway root. Its readers are simulated, its launchers start invisible `sleep` children, its audio is silent and its network services are offline fakes.
+
+- Agent quick start: `.claude/skills/core-sim/SKILL.md`. Full reference: `docs/sim.md`. Testing layers: `TESTING.md`.
+- Regression tests for behavior go in `pkg/testing/harness/testdata/scripts/*.txtar` (testscript, run by `task test`), or in Go with `harness.New(t, &harness.Options{...})`.
+- Use the `zaparoo-sim` binary (`task sim:build`, `task sim:run`) to explore by hand and with `zaparoo-cli`.
+- MiSTer behavior: `.claude/skills/mister-vm/SKILL.md`.
+
+| Behavior | Sim | MiSTer VM | Hardware |
+| --- | --- | --- | --- |
+| Service, API, notifications, ZapScript, mappings, history | yes | yes | yes |
+| Readers: tap, hold, remove, errors, writing cards, launch guard | simulated reader; real `file`, `simpleserial` and `mqtt` drivers | `file` reader scans and removal | yes |
+| Launch lifecycles, preemption, stop, faults | sim launchers with real child processes | MiSTer launchers | yes |
+| Indexing, search, scraping (libretro and RomM fakes) | generated ROM trees | indexing of synthetic media | real corpus |
+| Online, log upload | offline fakes | no | live services |
+| Real launchers, emulators, platform scanners, screens, input effects | no | MiSTer only | yes |
+| FPGA cores, USB/NFC hardware, updates | no | no | yes |
+
 ## Code and compatibility rules
 
 - Use `syncutil.Mutex` and `syncutil.RWMutex`, never the standard mutex types. Deadlock instrumentation depends on these wrappers.

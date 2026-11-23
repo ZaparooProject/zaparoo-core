@@ -25,6 +25,8 @@ package scantest
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -78,19 +80,70 @@ func IndexScanResults(
 	results ...platforms.ScanResult,
 ) database.ScanReconcileStats {
 	tb.Helper()
-	ctx := context.Background()
+	stats, err := Index(context.Background(), db, systemID, opts, results...)
+	require.NoError(tb, err)
+	return stats
+}
 
-	require.NoError(tb, mediascanner.SeedCanonicalTags(ctx, db))
-	require.NoError(tb, db.BeginTransaction(true))
-	require.NoError(tb, db.ClearScanStage())
-	for _, result := range results {
-		require.NoError(tb, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
+// IndexBatchSize is how many staged paths Index writes per transaction. The
+// production indexer commits mid-system on a file limit too; staged rows live
+// in the scan scratch database, so they survive the commit until reconcile.
+const IndexBatchSize = 10_000
+
+// Index is IndexScanResults without a testing.TB, for callers outside tests
+// such as the simulator's fixture generator. It seeds canonical tags, stages
+// every result, reconciles the system with opts and commits. On error the open
+// transaction is rolled back.
+func Index(
+	ctx context.Context,
+	db database.MediaDBI,
+	systemID string,
+	opts database.ScanReconcileOpts,
+	results ...platforms.ScanResult,
+) (stats database.ScanReconcileStats, err error) {
+	if err = mediascanner.SeedCanonicalTags(ctx, db); err != nil {
+		return stats, fmt.Errorf("seed canonical tags: %w", err)
+	}
+	if err = db.BeginTransaction(true); err != nil {
+		return stats, fmt.Errorf("begin transaction: %w", err)
+	}
+	inTx := true
+	defer func() {
+		if err != nil && inTx {
+			err = errors.Join(err, db.RollbackTransaction())
+		}
+	}()
+	if err = db.ClearScanStage(); err != nil {
+		return stats, fmt.Errorf("clear scan stage: %w", err)
+	}
+	for i := range results {
+		if i > 0 && i%IndexBatchSize == 0 {
+			if err = ctx.Err(); err != nil {
+				return stats, fmt.Errorf("index %s: %w", systemID, err)
+			}
+			inTx = false
+			if err = db.CommitTransaction(); err != nil {
+				return stats, fmt.Errorf("commit staging batch: %w", err)
+			}
+			if err = db.BeginTransaction(true); err != nil {
+				return stats, fmt.Errorf("begin transaction: %w", err)
+			}
+			inTx = true
+		}
+		result := &results[i]
+		if err = mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
 			DB: db, SystemID: systemID, Path: result.Path, ProvidedName: result.Name,
 			Source: result.Source, LinkTarget: result.LinkTarget, NoExt: result.NoExt,
-		}))
+		}); err != nil {
+			return stats, fmt.Errorf("stage %q: %w", result.Path, err)
+		}
 	}
-	stats, err := db.ReconcileStagedSystem(ctx, systemID, opts)
-	require.NoError(tb, err)
-	require.NoError(tb, db.CommitTransaction())
-	return stats
+	if stats, err = db.ReconcileStagedSystem(ctx, systemID, opts); err != nil {
+		return stats, fmt.Errorf("reconcile %s: %w", systemID, err)
+	}
+	inTx = false
+	if err = db.CommitTransaction(); err != nil {
+		return stats, fmt.Errorf("commit: %w", err)
+	}
+	return stats, nil
 }

@@ -89,3 +89,12 @@ func TestSharedDatabasesHaveOwners(t *testing.T) {
 		}
 	}
 }
+
+func TestPlaylistsIsACopy(t *testing.T) {
+	t.Parallel()
+	got := Playlists(systemdefs.SystemNES)
+	require.Equal(t, []string{"Nintendo - Nintendo Entertainment System"}, got)
+	got[0] = "changed"
+	assert.Equal(t, "Nintendo - Nintendo Entertainment System", Playlists(systemdefs.SystemNES)[0])
+	assert.Empty(t, Playlists("NotASystem"))
+}

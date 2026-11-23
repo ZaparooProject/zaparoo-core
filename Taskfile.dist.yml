@@ -108,6 +108,26 @@ tasks:
     cmds:
       - go run ./scripts/compress-app
 
+  sim:build:
+    desc: Build the zaparoo-sim development simulator (docs/sim.md)
+    cmds:
+      - >-
+        go build
+        -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/v2/pkg/config.AppVersion=sim-{{.GIT_SHA}}'"
+        -tags "sqlite_omit_load_extension,validator_novalidatefn,expr_static_methods"
+        -o _build/sim/zaparoo-sim ./cmd/sim
+    vars:
+      GIT_SHA:
+        sh: git rev-parse --short HEAD
+
+  sim:run:
+    desc: Build zaparoo-sim and serve it in the foreground from ROOT (default _build/sim/root)
+    vars:
+      ROOT: '{{default "_build/sim/root" .ROOT}}'
+    cmds:
+      - task: sim:build
+      - _build/sim/zaparoo-sim --root "{{.ROOT}}" serve --foreground {{.CLI_ARGS}}
+
   clean:
     desc: Clean build artifacts (optionally specific platform/arch)
     vars:
@@ -238,7 +258,7 @@ tasks:
         exit_code=0
         targets=()
         while IFS= read -r pkg; do
-          if ! listing="$(go test -list '^Fuzz' "./${pkg}")"; then
+          if ! listing="$(go test -tags=validator_novalidatefn,expr_static_methods -list '^Fuzz' "./${pkg}")"; then
             echo "FAIL: listing fuzz targets in ${pkg}"
             exit_code=1
             continue
@@ -261,7 +281,7 @@ tasks:
           func="${target%% *}"
           pkg="${target#* }"
           echo "=== ${func} (${pkg}) ==="
-          if go test -run "^$" -fuzz="${func}" -fuzztime={{.FUZZ_TIME}} "./${pkg}"; then
+          if go test -tags=validator_novalidatefn,expr_static_methods -run "^$" -fuzz="${func}" -fuzztime={{.FUZZ_TIME}} "./${pkg}"; then
             echo "PASS: ${func}"
           else
             echo "FAIL: ${func} in ${pkg}"

@@ -19,9 +19,27 @@
 
 package config
 
+import (
+	"net/url"
+	"strings"
+
+	"github.com/rs/zerolog/log"
+)
+
 // Scraper configures metadata scraper behavior.
 type Scraper struct {
-	GamelistXML ScraperGamelistXML `toml:"gamelist_xml,omitempty"`
+	LibretroThumbnails ScraperLibretroThumbnails `toml:"libretro_thumbnails,omitempty"`
+	GamelistXML        ScraperGamelistXML        `toml:"gamelist_xml,omitempty"`
+}
+
+// DefaultLibretroThumbnailsBaseURL is the libretro thumbnail server RetroArch
+// downloads from.
+const DefaultLibretroThumbnailsBaseURL = "https://thumbnails.libretro.com"
+
+// ScraperLibretroThumbnails configures the libretro thumbnail scraper.
+type ScraperLibretroThumbnails struct {
+	// BaseURL replaces the thumbnail server, such as a local mirror.
+	BaseURL string `toml:"base_url,omitempty"`
 }
 
 // ScraperGamelistXML configures the EmulationStation gamelist.xml scraper.
@@ -38,4 +56,33 @@ func (c *Instance) ScraperGamelistXMLCustomPath() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Scraper.GamelistXML.CustomPath
+}
+
+// ScraperLibretroThumbnailsBaseURL returns the thumbnail server the libretro
+// scraper downloads from, without a trailing slash: the configured base_url
+// when it is an http(s) URL, otherwise the public libretro server.
+func (c *Instance) ScraperLibretroThumbnailsBaseURL() string {
+	if c == nil {
+		return DefaultLibretroThumbnailsBaseURL
+	}
+	c.mu.RLock()
+	raw := strings.TrimSpace(c.vals.Scraper.LibretroThumbnails.BaseURL)
+	c.mu.RUnlock()
+	if raw == "" {
+		return DefaultLibretroThumbnailsBaseURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		log.Warn().Str("base_url", raw).Msg("ignoring invalid scraper.libretro_thumbnails base_url")
+		return DefaultLibretroThumbnailsBaseURL
+	}
+	return strings.TrimRight(raw, "/")
+}
+
+// SetScraperLibretroThumbnailsBaseURL sets the thumbnail server the libretro
+// scraper downloads from; "" restores the public server.
+func (c *Instance) SetScraperLibretroThumbnailsBaseURL(baseURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Scraper.LibretroThumbnails.BaseURL = baseURL
 }

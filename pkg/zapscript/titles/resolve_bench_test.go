@@ -27,9 +27,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/simfixtures"
 )
 
 // benchLaunchers provides test launchers for the NES system.
@@ -52,7 +52,7 @@ func setupResolveBenchDB(b *testing.B, n int) (
 
 	// Generate deterministic filenames and populate the DB through the
 	// production staging pipeline.
-	filenames := fixtures.BuildBenchFilenames(n)
+	filenames := simfixtures.BenchFilenames(n)
 	scantest.IndexMediaPaths(b, db, "nes", filenames...)
 
 	// Build slug search cache (required for search operations)

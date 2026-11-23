@@ -1,0 +1,30 @@
+# Blocking, fire-and-forget and external launchers end media the way their
+# lifecycles say.
+
+sim-start
+rom simblocking/Short.sim simfireforget/Fire.sim simexternal/Outside.sim
+
+# Blocking: Core waits on the child; its natural end clears the media.
+fault {"launcher":"SimBlocking","exitAfterMs":300}
+tap -uid 01 $ROMS/simblocking/Short.sim
+notification media.started
+event process launcher=SimBlocking
+event finished launcher=SimBlocking
+notification media.stopped launcherId=SimBlocking
+
+# Fire-and-forget: the child is not tracked.
+mark
+tap -uid 02 $ROMS/simfireforget/Fire.sim
+event launch launcher=SimFireForget
+event process launcher=SimFireForget
+! event tracked launcher=SimFireForget
+
+# External: the sim tracker publishes the media after a delay; stop kills it.
+mark
+tap -uid 03 $ROMS/simexternal/Outside.sim
+event launch launcher=SimExternal
+event external launcher=SimExternal
+notification media.started mediaPath=$ROMS/simexternal/Outside.sim
+api stop
+event stop launcher=SimExternal
+notification media.stopped launcherId=SimExternal
