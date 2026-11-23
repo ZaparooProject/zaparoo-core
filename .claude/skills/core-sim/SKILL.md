@@ -24,7 +24,7 @@ Do not test by running `zaparoo` (the Linux build) on a developer machine. It fi
 
 | Need | Use |
 | --- | --- |
-| A regression test for a behavior | testscript scenario in `pkg/testing/harness/testdata/scripts/` |
+| A regression test for a behavior | testscript scenario in `pkg/platforms/sim/testdata/scripts/` |
 | A Go test that needs the whole service | `harness.New(t, &harness.Options{...})` |
 | Exploring by hand, an agent session, `zaparoo-cli` | `zaparoo-sim` binary |
 | A single function or package | Ordinary unit tests with `pkg/testing/mocks` (see `TESTING.md`) |
@@ -46,7 +46,7 @@ remove
 notification media.stopped systemId=SNES
 ```
 
-Run one with `go test -race -count=1 -tags=validator_novalidatefn,expr_static_methods ./pkg/testing/harness/ -run TestScripts/<file-name>`. Add `-v`: without it a passing run, and a `-run` name that matches nothing, both print only `ok`. Output is noisy, so send it to a file and grep for `--- PASS`, `--- FAIL` and `>`.
+Run one with `go test -race -count=1 -tags=validator_novalidatefn,expr_static_methods ./pkg/platforms/sim/ -run TestScripts/<file-name>`. Add `-v`: without it a passing run, and a `-run` name that matches nothing, both print only `ok`. Output is noisy, so send it to a file and grep for `--- PASS`, `--- FAIL` and `>`.
 
 Commands, from `pkg/testing/harness/script.go`:
 

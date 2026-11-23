@@ -13,7 +13,7 @@ Shared test infrastructure for Zaparoo Core. Which layer to use, commands and wo
 | `scantest` | Fills a MediaDB through the production scan pipeline; separate from `helpers` to avoid an import cycle with `mediascanner` |
 | `simfixtures` | Writes a deterministic ES-DE-style ROM tree (`Generate`) and fills a large MediaDB for benchmarks (`BigDB`) |
 | `harness` | Boots a full Core service on the sim platform inside `go test` (`New`, `Start`); runs testscript scenarios (`ScriptSetup`, `ScriptCommands`). Linux only |
-| `harness/testdata/scripts` | testscript scenarios (`*.txtar`) run by `TestScripts` |
+| `harness` scenarios | testscript scenarios (`*.txtar`) live in `pkg/platforms/sim/testdata/scripts` and run from `TestScripts` there, so they count toward the sim platform's coverage |
 | `fakes/fakeset` | Starts the offline fakes by name (`libretro`, `romm`, `logs`, `online`) and points a config at them; `Unreachable` is the address used when no fake runs |
 | `fakes/libretro` | Offline libretro thumbnail server |
 | `fakes/romm` | Offline RomM server: platforms, ROMs, artwork, downloads, device linking |

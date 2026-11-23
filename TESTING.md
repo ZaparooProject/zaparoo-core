@@ -12,7 +12,7 @@ Do not run the Linux `zaparoo` binary on a developer machine to try a change. It
 | --- | --- | --- | --- |
 | Unit tests: `pkg/testing/mocks`, `fixtures`, `helpers`, `sqlmock`, afero, clockwork | One function or package | Logic behind a mocked platform, reader, database, filesystem or clock | Anything across the service boundary |
 | In-process harness: `pkg/testing/harness` | A Go test that needs the whole service | Full Core service on the sim platform inside `go test`: API, reader pipeline, ZapScript, launch lifecycle, databases, offline fakes | The sim gaps below |
-| testscript scenarios: `pkg/testing/harness/testdata/scripts/*.txtar` | Regression tests for behavior (preferred) | Same as the harness; run by `TestScripts` in `task test` | The sim gaps below |
+| testscript scenarios: `pkg/platforms/sim/testdata/scripts/*.txtar` | Regression tests for behavior (preferred) | Same as the harness; run by `TestScripts` in `task test` | The sim gaps below |
 | `zaparoo-sim` binary: `cmd/sim` | Exploring by hand, agent sessions, `zaparoo-cli` against an isolated Core | Same as the harness, as a long-running process under one throwaway root | The sim gaps below |
 | MiSTer VM rig: `scripts/mister-vm` | MiSTer launch, MGL, reader, restart and persistence behavior | Real ARM build in a headless MiSTer VM | FPGA cores, HDMI, physical readers, a real ROM corpus |
 | Real hardware | Anything the layers above can't reach | Everything | Repeatability and speed |
@@ -32,7 +32,7 @@ Tests need the build tags `validator_novalidatefn,expr_static_methods`. `task te
 | All tests with race detection (also runs the `mister/` module tests) | `task test` |
 | One package tree | `task test -- ./pkg/service/...` |
 | One test | `go test -race -tags=validator_novalidatefn,expr_static_methods ./pkg/api/ -run TestName` |
-| One scenario | `go test -race -count=1 -tags=validator_novalidatefn,expr_static_methods ./pkg/testing/harness/ -v -run TestScripts/<file-name>` |
+| One scenario | `go test -race -count=1 -tags=validator_novalidatefn,expr_static_methods ./pkg/platforms/sim/ -v -run TestScripts/<file-name>` |
 | All fuzz targets (30s each) | `task fuzz`, or `FUZZ_TIME=2m task fuzz` |
 | One fuzz target | `go test -run '^$' -fuzz=FuzzParseVirtualPathStr -fuzztime=30s ./pkg/helpers/virtualpath/` |
 | Benchmarks | `task bench`, `task bench-db`; `task bench-baseline`, then `task bench-compare` |
@@ -162,7 +162,7 @@ func TestTapLaunches(t *testing.T) {
 
 ## testscript scenario
 
-Prefer a scenario for a behavior regression: it's short, deterministic and runs in `task test`. Add a `.txtar` file to `pkg/testing/harness/testdata/scripts/`, copying the closest existing one.
+Prefer a scenario for a behavior regression: it's short, deterministic and runs in `task test`. Add a `.txtar` file to `pkg/platforms/sim/testdata/scripts/`, copying the closest existing one.
 
 ```txtar
 # Tapping a ROM launches it; removing the token in hold mode stops it.

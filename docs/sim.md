@@ -495,10 +495,10 @@ Other helpers: `WaitReaders(ctx, names...)`, `Reader(name)`, `Close()` (safe to 
 
 ### testscript
 
-Scenarios live in `pkg/testing/harness/testdata/scripts/*.txtar` and run from `TestScripts` in `script_test.go` (part of `task test`). To run one:
+Scenarios live in `pkg/platforms/sim/testdata/scripts/*.txtar` and run from `TestScripts` in `script_test.go` (part of `task test`). To run one:
 
 ```sh
-go test -tags validator_novalidatefn,expr_static_methods ./pkg/testing/harness -run TestScripts/lifecycles
+go test -tags validator_novalidatefn,expr_static_methods ./pkg/platforms/sim -run TestScripts/lifecycles
 ```
 
 Use `harness.ScriptSetup` and `harness.ScriptCommands()` to add the commands to your own testscript runner.

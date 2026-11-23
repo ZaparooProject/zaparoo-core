@@ -357,3 +357,36 @@ func TestCancelWrite(t *testing.T) {
 		t.Fatal("write not cancelled")
 	}
 }
+
+func TestHubListAndRemove(t *testing.T) {
+	t.Parallel()
+	hub := NewHub()
+	b, err := hub.Add("b", DeviceOptions{})
+	require.NoError(t, err)
+	_, err = hub.Add("a", DeviceOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "b", b.Name())
+
+	list := hub.List()
+	require.Len(t, list, 2)
+	assert.Equal(t, "a", list[0].Name)
+	assert.Equal(t, "b", list[1].Name)
+
+	r, _ := newTestReader(t, hub, "b")
+	assert.Equal(t, "Sim reader b", r.Info())
+	require.NoError(t, r.OnMediaChange(nil))
+
+	require.NoError(t, hub.Remove("b"))
+	require.Error(t, hub.Remove("b"))
+	assert.Len(t, hub.List(), 1)
+	assert.False(t, r.Connected())
+}
+
+func TestNewReaderUsesDefaultHub(t *testing.T) {
+	t.Parallel()
+	r := NewReader(nil)
+	assert.Same(t, DefaultHub(), r.hub)
+	meta := r.Metadata()
+	assert.Equal(t, DriverID, meta.ID)
+	assert.True(t, meta.DefaultAutoDetect)
+}
