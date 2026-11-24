@@ -22,11 +22,18 @@
 package sim
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -286,4 +293,68 @@ func TestMatchParams(t *testing.T) {
 	assert.False(t, MatchParams(params, []string{"media.missing=x"}))
 	assert.False(t, MatchParams(params, []string{"systemId.deep=x"}))
 	assert.False(t, MatchParams(json.RawMessage("not json"), []string{"a=b"}))
+}
+
+const spawnHelperEnv = "ZAPAROO_SIM_SPAWN_HELPER_ROOT"
+
+// TestSpawnHelperProcess is not a test: TestChildDiesWithSim runs the test
+// binary as this helper, which starts a child, prints its PID and waits to be
+// killed.
+func TestSpawnHelperProcess(t *testing.T) {
+	root := os.Getenv(spawnHelperEnv)
+	if root == "" {
+		t.Skip("helper process for TestChildDiesWithSim")
+	}
+	l, err := NewLayout(root)
+	require.NoError(t, err)
+	p, err := New(&Options{Layout: l})
+	require.NoError(t, err)
+	proc, err := p.spawn("helper", "", 0, false, nil)
+	require.NoError(t, err)
+	_, _ = fmt.Fprintf(os.Stdout, "child=%d\n", proc.Pid)
+	select {}
+}
+
+// A sim that dies without Stop, such as one killed by a test timeout or
+// SIGKILL, must not leave its emulator stand-ins running.
+func TestChildDiesWithSim(t *testing.T) {
+	t.Parallel()
+	//nolint:gosec // re-runs this test binary as the helper
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSpawnHelperProcess$", "-test.count=1")
+	cmd.Env = append(os.Environ(), spawnHelperEnv+"="+filepath.Join(t.TempDir(), "root"))
+	out, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	pid := 0
+	scanner := bufio.NewScanner(out)
+	for pid == 0 && scanner.Scan() {
+		if v, ok := strings.CutPrefix(scanner.Text(), "child="); ok {
+			pid, err = strconv.Atoi(v)
+			require.NoError(t, err)
+		}
+	}
+	require.NotZero(t, pid, "helper never reported its child")
+	require.NoError(t, syscall.Kill(pid, 0), "child is running before the sim dies")
+
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+	assert.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	}, 5*time.Second, 10*time.Millisecond, "child outlived the sim")
+}
+
+func TestSpawnRefusedAfterStop(t *testing.T) {
+	t.Parallel()
+	p := newTestPlatform(t, &Options{})
+	require.NoError(t, p.Stop())
+	_, err := p.spawn("late", "", 0, false, nil)
+	require.ErrorIs(t, err, errStopped)
+	p.childMu.Lock()
+	defer p.childMu.Unlock()
+	assert.Empty(t, p.children)
 }

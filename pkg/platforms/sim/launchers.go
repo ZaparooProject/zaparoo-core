@@ -86,6 +86,7 @@ var (
 	errInjectedKill      = errors.New("sim: injected kill failure")
 	errUnavailable       = errors.New("sim: launcher made unavailable")
 	errPreflightRefused  = errors.New("sim: SimPreflight always refuses")
+	errStopped           = errors.New("sim: platform stopped")
 )
 
 // BehaviourFolders returns the ROM folder of every behaviour launcher that
@@ -265,15 +266,28 @@ func (p *Platform) spawn(
 	if life > 0 {
 		arg = strconv.FormatFloat(life.Seconds(), 'f', 3, 64)
 	}
+	select {
+	case <-p.done:
+		return nil, errStopped
+	default:
+	}
 	// The child's lifetime is managed by tracking and kill, not a context.
 	//nolint:gosec,noctx // fixed binary and argument, no user input
 	cmd := exec.Command(p.sleepPath, arg)
 	cmd.Dir = p.layout.Temp
+	// Stop kills children on a clean exit; Pdeathsig covers the rest, so a
+	// crashed, killed or timed-out sim never leaves one running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("sim: start child: %w", err)
 	}
 	proc := cmd.Process
-	c := p.addChild(id, proc)
+	c, ok := p.addChild(id, proc)
+	if !ok {
+		_ = proc.Kill()
+		_ = cmd.Wait()
+		return nil, errStopped
+	}
 	p.journal.Record(&Event{Kind: EventProcess, Launcher: id, Path: path, PID: proc.Pid, Detail: arg})
 
 	crashed := make(chan struct{})

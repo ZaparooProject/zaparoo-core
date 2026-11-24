@@ -516,12 +516,19 @@ func (p *Platform) PreparePowerAction(_ context.Context, action hoststatus.Power
 	}, nil
 }
 
-func (p *Platform) addChild(launcherID string, proc *os.Process) *child {
+// addChild registers proc so Stop kills it. It refuses once Stop has run,
+// since Stop's sweep has already passed and would never reach it.
+func (p *Platform) addChild(launcherID string, proc *os.Process) (*child, bool) {
 	c := &child{proc: proc, launcher: launcherID, stopping: make(chan struct{})}
 	p.childMu.Lock()
+	defer p.childMu.Unlock()
+	select {
+	case <-p.done:
+		return nil, false
+	default:
+	}
 	p.children[proc.Pid] = c
-	p.childMu.Unlock()
-	return c
+	return c, true
 }
 
 func (p *Platform) removeChild(pid int) {
