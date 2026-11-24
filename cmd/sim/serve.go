@@ -179,19 +179,19 @@ func serveForeground(ctx context.Context, layout *sim.Layout, opts *serveOptions
 	// Before anything can open an audio device: the sim never makes sound.
 	audio.UseSilentOutput()
 
-	port := opts.port
-	if port == 0 {
-		var err error
-		if port, err = freePort(); err != nil {
-			return err
-		}
-	}
-
 	fakes, err := fakeset.Start(opts.fakes, fakeset.Options{ROMs: layout.ROMs, StateDir: layout.Root})
 	if err != nil {
 		return fmt.Errorf("start fakes: %w", err)
 	}
 	defer func() { _ = fakes.Close() }()
+
+	// Picked after the fakes bind, so the port cannot be one of theirs.
+	port := opts.port
+	if port == 0 {
+		if port, err = freePort(); err != nil {
+			return err
+		}
+	}
 
 	hub := simreader.NewHub()
 	for _, name := range opts.readers {
