@@ -1128,10 +1128,15 @@ func HandleScrapers(env requests.RequestEnv) (any, error) {
 	platformScrapers := env.Platform.Scrapers(env.Config)
 	infos := make([]models.ScraperInfo, 0, len(platformScrapers))
 	for _, s := range platformScrapers {
+		// An unset list means every system; clients expect an array, not null.
+		supported := s.SupportedSystemIDs
+		if supported == nil {
+			supported = []string{}
+		}
 		infos = append(infos, models.ScraperInfo{
 			ID:                 s.ID,
 			Name:               s.Name,
-			SupportedSystems:   s.SupportedSystemIDs,
+			SupportedSystems:   supported,
 			SupportsSkipImages: s.SupportsSkipImages,
 		})
 	}

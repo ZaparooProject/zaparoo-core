@@ -22,7 +22,7 @@ package mediadb
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/stretchr/testify/assert"
 )
 

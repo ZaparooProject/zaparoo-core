@@ -146,6 +146,18 @@ func TestHandleBackupList_Success(t *testing.T) {
 	assert.NotZero(t, backups[0].Size)
 }
 
+// A fresh install has no backup directory yet; the list is still an array
+// rather than a null result (#1854).
+func TestHandleBackupList_NoBackupsReturnsEmptyArray(t *testing.T) {
+	env := newBackupTestEnv(t)
+
+	result, err := HandleBackupList(env)
+	require.NoError(t, err)
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[]`, string(raw))
+}
+
 func TestHandleBackupInspect_Success(t *testing.T) {
 	env := newBackupTestEnv(t)
 	created, err := HandleBackup(env)

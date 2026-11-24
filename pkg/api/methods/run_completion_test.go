@@ -260,19 +260,19 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			name:     "file not found",
 			cause:    fmt.Errorf("failed to run zapscript command: %w: %s", zapscript.ErrFileNotFound, leakedPath),
 			category: models.ErrorCategoryMediaNotFound,
-			message:  "media not found",
+			message:  "file not found",
 		},
 		{
 			name:     "no title match",
 			cause:    fmt.Errorf("resolve %s: %w", leakedPath, titles.ErrNoMatch),
 			category: models.ErrorCategoryMediaNotFound,
-			message:  "media not found",
+			message:  "no matching game found",
 		},
 		{
 			name:     "low confidence match",
 			cause:    titles.ErrLowConfidence,
 			category: models.ErrorCategoryMediaNotFound,
-			message:  "media not found",
+			message:  "no matching game found",
 		},
 		{
 			name:     "run zapscript disabled",
@@ -290,7 +290,7 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			name:     "unknown command",
 			cause:    fmt.Errorf("%w: nonexistent.cmd", zapscript.ErrUnknownCommand),
 			category: models.ErrorCategoryInvalidScript,
-			message:  "ZapScript is invalid",
+			message:  "unknown command",
 		},
 		{
 			name:     "unsupported control action",
@@ -302,7 +302,7 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			name:     "unknown system",
 			cause:    fmt.Errorf("%w: neo", systemdefs.ErrUnknownSystem),
 			category: models.ErrorCategoryInvalidScript,
-			message:  "ZapScript is invalid",
+			message:  "unknown system",
 		},
 		{
 			name:     "invalid next action",
@@ -320,13 +320,13 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			name:     "hook blocked launch",
 			cause:    fmt.Errorf("%w: %w", state.ErrLaunchBlockedByHook, errors.New("hook exit 1")),
 			category: models.ErrorCategoryBlocked,
-			message:  "ZapScript execution was blocked",
+			message:  "blocked by a launch hook",
 		},
 		{
 			name:     "profile required",
 			cause:    state.ErrLaunchRequiresProfile,
 			category: models.ErrorCategoryBlocked,
-			message:  "ZapScript execution was blocked",
+			message:  "a profile must be chosen first",
 		},
 		{
 			name:     "execute denied by allow_execute",

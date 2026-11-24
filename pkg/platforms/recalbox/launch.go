@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -75,7 +77,10 @@ func (p *Platform) launchGame(_ *config.Instance, path string, _ *platforms.Laun
 	path = filepath.Clean(path)
 	info, err := p.fs.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("ROM not found: %w", err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %w", zapscript.ErrFileNotFound, err)
+		}
+		return nil, fmt.Errorf("failed to stat ROM: %w", err)
 	}
 	if info.IsDir() {
 		return nil, fmt.Errorf("ROM path is a directory: %s", path)

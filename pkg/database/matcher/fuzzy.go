@@ -25,8 +25,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/hbollon/go-edlib"
 	"github.com/rs/zerolog/log"
 )

@@ -22,9 +22,9 @@ package misterarcade
 import (
 	"strings"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/mra"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 // alternativesDir is the folder MiSTer arcade distributions file a game's

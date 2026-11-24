@@ -538,6 +538,19 @@ func TestNoOpMethods(t *testing.T) {
 	assert.IsType(t, platforms.NoOpConsoleManager{}, base.ConsoleManager())
 }
 
+func TestManagedByPackageManager(t *testing.T) {
+	original := config.PackageManaged
+	t.Cleanup(func() { config.PackageManaged = original })
+
+	base := NewBase("test")
+
+	config.PackageManaged = ""
+	assert.False(t, base.ManagedByPackageManager())
+
+	config.PackageManaged = "true"
+	assert.True(t, base.ManagedByPackageManager())
+}
+
 func TestLaunchSystem(t *testing.T) {
 	t.Parallel()
 

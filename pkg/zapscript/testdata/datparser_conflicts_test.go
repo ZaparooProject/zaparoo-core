@@ -28,7 +28,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
@@ -109,7 +109,6 @@ func TestSlugConflicts_AllDATs(t *testing.T) {
 
 		return nil
 	})
-
 	if err != nil {
 		t.Fatalf("Error walking DAT files: %v", err)
 	}
@@ -764,7 +763,6 @@ func TestUnmappedTags_AllDATs(t *testing.T) {
 
 		return nil
 	})
-
 	if err != nil {
 		t.Fatalf("Error walking DAT files: %v", err)
 	}
@@ -963,7 +961,6 @@ func TestRomanNumeralI_AllDATs(t *testing.T) {
 
 		return nil
 	})
-
 	if err != nil {
 		t.Fatalf("Error walking DAT files: %v", err)
 	}

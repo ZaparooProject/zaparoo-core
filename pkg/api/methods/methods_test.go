@@ -1007,6 +1007,23 @@ func TestHandleScrapers_ReportsSkipImagesSupport(t *testing.T) {
 	assert.Contains(t, string(raw), `"supportsSkipImages":false`, "the field is always present")
 }
 
+// A scraper that leaves SupportedSystemIDs unset covers every system and must
+// still report an array: clients decoding a list reject null (#1854).
+func TestHandleScrapers_UnsetSupportedSystemsIsEmptyArray(t *testing.T) {
+	t.Parallel()
+
+	env := makeScrapeEnvWithPlatform(t, map[string]platforms.Scraper{
+		"all": emptyPlatformScraper("all", "All systems"),
+	})
+
+	result, err := HandleScrapers(env)
+	require.NoError(t, err)
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"supportedSystems":[]`)
+	assert.NotContains(t, string(raw), `"supportedSystems":null`)
+}
+
 func TestHandleScrapers_IDAndNameMatch(t *testing.T) {
 	t.Parallel()
 

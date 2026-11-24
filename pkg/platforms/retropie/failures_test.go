@@ -21,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,7 @@ import (
 
 var errFault = errors.New("injected fault")
 
-// faultFs fails the operations fail picks: "mkdir", "open", "remove",
+// faultFs fails the operations fail picks: "mkdir", "open", "stat", "remove",
 // "rename", "chmod", and "write" or "close" on a file opened for writing.
 type faultFs struct {
 	afero.Fs
@@ -65,6 +66,13 @@ func (f faultFs) OpenFile(name string, flag int, mode os.FileMode) (afero.File, 
 		return nil, err //nolint:wrapcheck // passthrough
 	}
 	return faultFile{File: file, fs: f}, nil
+}
+
+func (f faultFs) Stat(name string) (os.FileInfo, error) {
+	if err := f.check("stat", name); err != nil {
+		return nil, err
+	}
+	return f.Fs.Stat(name) //nolint:wrapcheck // passthrough
 }
 
 func (f faultFs) Remove(name string) error {
@@ -813,4 +821,24 @@ func TestStateFileFailures(t *testing.T) {
 		_, err := tp.startStateWatcher()
 		require.ErrorContains(t, err, "watch ")
 	})
+}
+
+func TestLaunchMissingMediaIsFileNotFound(t *testing.T) {
+	t.Parallel()
+	tp := newTestPlatform(t)
+	tp.prepareLaunch(t)
+
+	err := tp.launch(context.Background(), "nes", requestSystem, filepath.Join(testRomsDir, "nes", "gone.nes"))
+	require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+}
+
+func TestLaunchUnreadableMediaIsNotFileNotFound(t *testing.T) {
+	t.Parallel()
+	tp := newTestPlatform(t)
+	tp.prepareLaunch(t)
+	tp.Platform.fs = faultFs{Fs: tp.fs, fail: failOn("stat", testROM)}
+
+	err := tp.launch(context.Background(), "nes", requestSystem, testROM)
+	require.ErrorIs(t, err, errFault)
+	assert.NotErrorIs(t, err, zapscript.ErrFileNotFound)
 }

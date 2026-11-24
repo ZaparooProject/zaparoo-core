@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -33,6 +33,13 @@ type renameFailFs struct {
 
 func (renameFailFs) Rename(string, string) error { return errFault }
 
+// statFailFs fails every stat, as an unreadable or vanished mount would.
+type statFailFs struct {
+	afero.Fs
+}
+
+func (statFailFs) Stat(string) (os.FileInfo, error) { return nil, errFault }
+
 func newConfig(t *testing.T) *config.Instance {
 	t.Helper()
 	cfg, err := helpers.NewTestConfig(helpers.NewMemoryFS(), t.TempDir())

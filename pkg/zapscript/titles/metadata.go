@@ -22,8 +22,8 @@ package titles
 import (
 	"strings"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 const (

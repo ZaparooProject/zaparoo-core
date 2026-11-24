@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -421,6 +422,48 @@ func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+// A drive's zaparoo.json name labels the media but names no indexed title, so
+// the title command keeps the name the game launched with.
+func TestActiveMediaZapScriptIgnoresTokenLabel(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	root := filepath.Join(t.TempDir(), "usb")
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+	appState.SetActiveCard(tokens.Token{
+		Type:     "externaldrive",
+		Text:     "N64/game.z64",
+		ScanTime: time.Now(),
+		PathRoot: root,
+		Metadata: &tokens.Metadata{Name: "Mario on a Stick"},
+	})
+	appState.SetActiveMedia(models.NewActiveMedia(
+		"Nintendo64", "Nintendo 64", filepath.Join(root, "N64", "game.z64"), "Super Mario 64", "test-launcher"))
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: &phelpers.LauncherCache{},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	active, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, "Mario on a Stick", active.Name)
+	assert.Equal(t, "@Nintendo64/Super Mario 64", active.ZapScript)
+
+	entry := ActiveMediaEntry(&env, mediaslot.Primary)
+	require.NotNil(t, entry)
+	assert.Equal(t, "@Nintendo64/Super Mario 64", entry.ZapScript)
+}
+
 func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	t.Parallel()
 
@@ -455,6 +498,59 @@ func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	resp, ok := result.(models.ActiveMediaResponse)
 	require.True(t, ok)
 	assert.Equal(t, []string{"save_state"}, resp.LauncherControls)
+}
+
+func TestHandleActiveMedia_DescriptionFromTokenNeverSendsCoverPath(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	activeMedia := models.NewActiveMedia("NES", "NES", "/media/usb/game.nes", "Game", "test-launcher")
+	activeMedia.Description = "Falling blocks."
+	activeMedia.ImagePath = "/media/usb/cover.png"
+	st.SetActiveMedia(activeMedia)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+		Return(database.System{}, errors.New("not found")).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]database.Media{}, nil).Maybe()
+
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{}, nil).Maybe()
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		State:    st,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, "Falling blocks.", resp.Description)
+
+	listed, err := HandleMedia(env)
+	require.NoError(t, err)
+	mediaResp, ok := listed.(models.MediaResponse)
+	require.True(t, ok)
+	require.Len(t, mediaResp.Active, 1)
+	assert.Equal(t, "Falling blocks.", mediaResp.Active[0].Description)
+
+	encoded, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"mediaDescription":"Falling blocks."`)
+	assert.NotContains(t, string(encoded), "cover.png", "the cover path stays inside Core")
 }
 
 func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {

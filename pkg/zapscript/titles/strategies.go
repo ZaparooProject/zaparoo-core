@@ -24,11 +24,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/rs/zerolog/log"
 )
 
