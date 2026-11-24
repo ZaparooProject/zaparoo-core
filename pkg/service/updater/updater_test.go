@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -61,6 +62,36 @@ func TestCheck_DevelopmentVersion(t *testing.T) {
 			assert.Nil(t, result)
 		})
 	}
+}
+
+// A package often installs Core somewhere it cannot write to. Reporting that as
+// unsupported would tell the user to find an installer, when their package
+// manager is the answer.
+func TestEligibilityFor_ManagedOutranksAnUnwritableInstall(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	key := runtime.GOOS + "\x00" + currentBinaryPath()
+	eligibilityPreflight.mu.Lock()
+	if eligibilityPreflight.results == nil {
+		eligibilityPreflight.results = make(map[string]error)
+	}
+	previous, hadPrevious := eligibilityPreflight.results[key]
+	eligibilityPreflight.results[key] = fmt.Errorf("%w: read-only install", ErrPlatformUnsupported)
+	eligibilityPreflight.mu.Unlock()
+	t.Cleanup(func() {
+		eligibilityPreflight.mu.Lock()
+		defer eligibilityPreflight.mu.Unlock()
+		if hadPrevious {
+			eligibilityPreflight.results[key] = previous
+		} else {
+			delete(eligibilityPreflight.results, key)
+		}
+	})
+
+	assert.Equal(t, EligibilityManaged, eligibilityFor(&Options{Managed: true}))
+	assert.Equal(t, EligibilityUnsupported, eligibilityFor(&Options{}))
 }
 
 func TestApply_DevelopmentVersion(t *testing.T) {

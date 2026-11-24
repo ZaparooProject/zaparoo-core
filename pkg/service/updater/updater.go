@@ -434,12 +434,13 @@ func eligibilityFor(opts *Options) string {
 	switch {
 	case config.IsDevelopmentVersion():
 		return EligibilityDevelopment
-	case eligibilityPreflight.check(afero.NewOsFs(), runtime.GOOS, currentBinaryPath()) != nil:
-		// Checked before Managed because this one is a refusal Apply enforces,
-		// while Managed only says the package manager should be doing it.
-		return EligibilityUnsupported
 	case opts.Managed:
+		// Checked before the preflight because a package often installs Core
+		// somewhere read-only, and "use your package manager" is the answer
+		// there. Apply still runs the preflight itself.
 		return EligibilityManaged
+	case eligibilityPreflight.check(afero.NewOsFs(), runtime.GOOS, currentBinaryPath()) != nil:
+		return EligibilityUnsupported
 	default:
 		return EligibilityEligible
 	}
