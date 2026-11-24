@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -662,10 +663,29 @@ func cmdWriteFail(ts *testscript.TestScript, neg bool, args []string) {
 	dev.FailNextWrite(simreader.WriteFailure(fs.Arg(0)))
 }
 
-func cmdSounds(ts *testscript.TestScript, neg bool, _ []string) {
+// cmdSounds prints the sounds played since the last call and forgets them.
+// A sound can play after the notification a script waited for, so -wait
+// NAME first waits until that sound is among them.
+func cmdSounds(ts *testscript.TestScript, neg bool, args []string) {
 	noNeg(ts, neg, "sounds")
 	st := running(ts)
-	for _, s := range st.in.Audio.Played() {
+	fs := scriptFlags(ts, "sounds")
+	wait := fs.String("wait", "", "sound to wait for")
+	timeout := fs.Duration("timeout", ScriptWaitTimeout, "how long to wait")
+	parse(ts, fs, args)
+	if fs.NArg() > 0 {
+		ts.Fatalf("usage: sounds [-wait NAME] [-timeout D]")
+	}
+	played := st.in.Audio.Played()
+	deadline := time.Now().Add(*timeout)
+	for *wait != "" && !slices.Contains(played, *wait) {
+		if time.Now().After(deadline) {
+			ts.Fatalf("sounds: no %q after %s; played %v", *wait, *timeout, played)
+		}
+		time.Sleep(20 * time.Millisecond)
+		played = st.in.Audio.Played()
+	}
+	for _, s := range played {
 		_, _ = fmt.Fprintln(ts.Stdout(), s)
 	}
 	st.in.Audio.Reset()

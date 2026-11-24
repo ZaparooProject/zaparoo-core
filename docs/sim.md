@@ -7,7 +7,7 @@ There are two ways to use it:
 - `zaparoo-sim` (`cmd/sim`): a CLI that starts a sim Core and drives it by hand, with scripts or with `zaparoo-cli`.
 - `pkg/testing/harness`: the same sim in-process, for Go tests and testscript (`.txtar`) scenarios.
 
-Agent quick start: `.claude/skills/core-sim/SKILL.md`. Testing layers: `TESTING.md`.
+Agent quick start: `.agents/skills/core-sim/SKILL.md`. Testing layers: `TESTING.md`.
 
 ## What it is and the safety guarantees
 
@@ -522,7 +522,7 @@ Use `harness.ScriptSetup` and `harness.ScriptCommands()` to add the commands to 
 | `fault JSON` / `fault clear [LAUNCHER]` | JSON uses the camelCase fault fields. Unknown fields are an error. |
 | `write-complete [-reader R] [UID]` | Present a tag to the pending write. |
 | `write-fail [-reader R] MODE` | Make the next write fail. |
-| `sounds` | Print the sounds since the last `sounds`, one per line, and reset. |
+| `sounds [-wait NAME] [-timeout D]` | Print the sounds since the last `sounds`, one per line, and reset. A sound can play after the notification you waited for, so `-wait` first waits until that sound has played. |
 | `status` | Print the control status as JSON. |
 
 Only `api`, `api-wait`, `notification` and `event` accept `!`. `notification` and `event` time out after 15s unless `-timeout` is given.

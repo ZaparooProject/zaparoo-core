@@ -22,7 +22,6 @@ package database_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -45,11 +44,12 @@ func newDiscSetTestDB(t *testing.T) (*database.Database, []database.DiscSetMembe
 	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
 	t.Cleanup(userCleanup)
 
-	dir := filepath.Join("roms", "PSX", "Game")
+	// Media paths are stored with forward slashes on every OS, so they are
+	// written that way here rather than built with filepath.Join.
 	paths := []string{
-		filepath.Join(dir, "Game (Disc 1).chd"),
-		filepath.Join(dir, "Game (Disc 2).chd"),
-		filepath.Join(dir, "Game (Disc 3).chd"),
+		"roms/PSX/Game/Game (Disc 1).chd",
+		"roms/PSX/Game/Game (Disc 2).chd",
+		"roms/PSX/Game/Game (Disc 3).chd",
 	}
 	scantest.IndexMediaPaths(t, mediaDB, "PSX", paths...)
 	rows, err := mediaDB.GetMediaBySystemID("PSX")
@@ -210,7 +210,7 @@ func TestApplyMediaUserFlagsToSetRefusesBadRequests(t *testing.T) {
 	_, err = database.ApplyMediaUserFlagsToSet(ctx, db, "PSX", discs, discs[0].Path, flagSet{"bogus": true})
 	require.Error(t, err)
 	_, err = database.ApplyMediaUserFlagsToSet(ctx, db, "PSX", discs,
-		filepath.Join("roms", "PSX", "Other.chd"), flagSet{database.MediaUserFlagLiked: true})
+		"roms/PSX/Other.chd", flagSet{database.MediaUserFlagLiked: true})
 	require.Error(t, err)
 	for _, disc := range discs {
 		assert.Empty(t, discStored(t, db, disc.Path))
@@ -221,8 +221,8 @@ func TestApplyMediaUserFlagsToSetWritesUnindexedDiscsToUserDBOnly(t *testing.T) 
 	t.Parallel()
 	db, discs := newDiscSetTestDB(t)
 	unindexed := []database.DiscSetMember{
-		{Path: filepath.Join("roms", "PSX", "Gone", "Gone (Disc 1).chd")},
-		{Path: filepath.Join("roms", "PSX", "Gone", "Gone (Disc 2).chd")},
+		{Path: "roms/PSX/Gone/Gone (Disc 1).chd"},
+		{Path: "roms/PSX/Gone/Gone (Disc 2).chd"},
 	}
 	// The media database is busy, but nothing here needs it.
 	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
@@ -358,10 +358,9 @@ func TestApplyMediaUserFlagsToSetRetryProjectsAfterAFailedProjection(t *testing.
 func TestApplyMediaUserFlagsToSetTellsTheListenerPerDisc(t *testing.T) {
 	t.Parallel()
 	db, changes := notifyingDB(t)
-	dir := filepath.Join("roms", "PSX", "Game")
 	discs := []database.DiscSetMember{
-		{Path: filepath.Join(dir, "Game (Disc 1).chd")},
-		{Path: filepath.Join(dir, "Game (Disc 2).chd")},
+		{Path: "roms/PSX/Game/Game (Disc 1).chd"},
+		{Path: "roms/PSX/Game/Game (Disc 2).chd"},
 	}
 	require.NoError(t, db.UserDB.SetMediaUserFlag("PSX", discs[0].Path, database.MediaUserFlagFavorite, true))
 	require.NoError(t, db.UserDB.SetMediaUserFlag("PSX", discs[1].Path, database.MediaUserFlagFavorite, true))

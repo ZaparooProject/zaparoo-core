@@ -75,7 +75,7 @@ Tests must never use port 7497, the real Core's port. Pass port 0 to the config 
 
 ## harness
 
-`harness.New(t, &harness.Options{...})` starts a sim Core and closes it at test cleanup; `Start(ctx, opts)` is the non-test form. One instance runs per process at a time. Options: `Fixtures`, `Values`, `Config`, `Root`, `Readers` (default one reader, `DefaultReader` = `sim0`), `Fakes`, `Index`, `NoWaitReaders`. `Instance` fields: `Platform`, `Config`, `API` (`Call`, `CallInto`, `WaitNotification`, `Index`, `WaitIdle`), `Control`, `Fakes`, `Audio`, `Fixtures`, `Events` (`Len`, `All`, `Wait`), `Layout`, `Root`; methods `Reader(name)`, `WaitReaders`, `Close`. Example and scenario syntax: [`TESTING.md`](../../TESTING.md) and [`.claude/skills/core-sim/SKILL.md`](../../.claude/skills/core-sim/SKILL.md).
+`harness.New(t, &harness.Options{...})` starts a sim Core and closes it at test cleanup; `Start(ctx, opts)` is the non-test form. One instance runs per process at a time. Options: `Fixtures`, `Values`, `Config`, `Root`, `Readers` (default one reader, `DefaultReader` = `sim0`), `Fakes`, `Index`, `NoWaitReaders`. `Instance` fields: `Platform`, `Config`, `API` (`Call`, `CallInto`, `WaitNotification`, `Index`, `WaitIdle`), `Control`, `Fakes`, `Audio`, `Fixtures`, `Events` (`Len`, `All`, `Wait`), `Layout`, `Root`; methods `Reader(name)`, `WaitReaders`, `Close`. Example and scenario syntax: [`TESTING.md`](../../TESTING.md) and [`.agents/skills/core-sim/SKILL.md`](../../.agents/skills/core-sim/SKILL.md).
 
 ## examples
 

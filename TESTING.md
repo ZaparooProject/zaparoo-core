@@ -21,7 +21,7 @@ The sim (harness, scenarios and binary) runs the real service with simulated rea
 
 The harness and sim platform build only on Linux (`linux && !android`), so scenarios and harness tests don't run elsewhere.
 
-For the sim workflow and the Core behavior to assert on, read [`.claude/skills/core-sim/SKILL.md`](.claude/skills/core-sim/SKILL.md). For the MiSTer rig, read [`.claude/skills/mister-vm/SKILL.md`](.claude/skills/mister-vm/SKILL.md) and [`scripts/mister-vm/README.md`](scripts/mister-vm/README.md).
+For the sim workflow and the Core behavior to assert on, read [`.agents/skills/core-sim/SKILL.md`](.agents/skills/core-sim/SKILL.md). For the MiSTer rig, read [`.agents/skills/mister-vm/SKILL.md`](.agents/skills/mister-vm/SKILL.md) and [`scripts/mister-vm/README.md`](scripts/mister-vm/README.md).
 
 ## Commands
 
@@ -183,4 +183,4 @@ The commands are defined in `pkg/testing/harness/script.go` and listed in the co
 
 ## The zaparoo-sim binary
 
-Use it to explore by hand or to drive Core from an agent or `zaparoo-cli`. Every path lives under one root, and the API listens on loopback only and refuses port 7497. Start with the quick start in [`.claude/skills/core-sim/SKILL.md`](.claude/skills/core-sim/SKILL.md); the full command reference is [`docs/sim.md`](docs/sim.md).
+Use it to explore by hand or to drive Core from an agent or `zaparoo-cli`. Every path lives under one root, and the API listens on loopback only and refuses port 7497. Start with the quick start in [`.agents/skills/core-sim/SKILL.md`](.agents/skills/core-sim/SKILL.md); the full command reference is [`docs/sim.md`](docs/sim.md).
