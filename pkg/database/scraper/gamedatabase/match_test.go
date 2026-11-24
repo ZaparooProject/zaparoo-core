@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	gdb "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
@@ -135,7 +136,7 @@ func TestMatchKeys(t *testing.T) {
 	t.Parallel()
 	slugger := newSlugger(slugs.MediaTypeGame)
 	fileSlug := func(name string) string {
-		return slugs.Slugify(slugs.MediaTypeGame, tags.ParseTitleFromFilenameForMedia(name, false, slugs.MediaTypeGame))
+		return slugs.Slugify(slugs.MediaTypeGame, filetitle.Parse(name, false, slugs.MediaTypeGame))
 	}
 
 	plain := matchKeys(&gdb.Row{Title: "Super Mario World", TitleScreen: gdb.SameAsTitle}, "supermarioworld", slugger)

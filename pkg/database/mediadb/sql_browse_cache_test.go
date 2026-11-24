@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
+	"github.com/ZaparooProject/go-slugs/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

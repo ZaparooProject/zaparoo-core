@@ -26,12 +26,12 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -59,7 +59,7 @@ func historyMediaName(active *models.ActiveMedia) string {
 	if system, err := systemdefs.GetSystem(active.SystemID); err == nil && system != nil {
 		mediaType = system.GetMediaType()
 	}
-	return tags.ParseTitleFromFilenameForMedia(helpers.GetPathName(active.Path), false, mediaType)
+	return filetitle.Parse(helpers.GetPathName(active.Path), false, mediaType)
 }
 
 const (

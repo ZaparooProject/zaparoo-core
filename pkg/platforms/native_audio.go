@@ -32,12 +32,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/gme"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 )
 
@@ -249,11 +250,11 @@ func audioDisplayName(location string) string {
 		if base == "/" || base == "." {
 			return u.Hostname()
 		}
-		return tags.ParseTitleFromFilename(strings.TrimSuffix(base, pathpkg.Ext(base)), false)
+		return filetitle.Parse(strings.TrimSuffix(base, pathpkg.Ext(base)), false, slugs.MediaTypeGame)
 	}
 	if file, track, ok := audio.SplitTrackPath(location); ok {
 		return fmt.Sprintf("%s - %d", audioDisplayName(file), track+1)
 	}
 	base := filepath.Base(location)
-	return tags.ParseTitleFromFilename(strings.TrimSuffix(base, filepath.Ext(base)), false)
+	return filetitle.Parse(strings.TrimSuffix(base, filepath.Ext(base)), false, slugs.MediaTypeGame)
 }

@@ -45,8 +45,8 @@ github.com/ZaparooProject/go-gameid v0.2.0 h1:nYDxozhwsJXacdh/lwHOJofz4SlA609WKT
 github.com/ZaparooProject/go-gameid v0.2.0/go.mod h1:gPQg1jQ4jgkguOJeKUiIqZeucz0GsSR67UQ/JOgYUDI=
 github.com/ZaparooProject/go-pn532 v0.27.0 h1:1qwVeRH6ojbdGf4JRxrUf8lXVx2dLHlT/Hn3A/Jvv/8=
 github.com/ZaparooProject/go-pn532 v0.27.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
-github.com/ZaparooProject/go-slugs v0.0.0-20261122071609-e3acf49e9329 h1:mlg4I+dU8gseQJ6GgrYQQsG0hgR/mc1EzTqOcsvqksg=
-github.com/ZaparooProject/go-slugs v0.0.0-20261122071609-e3acf49e9329/go.mod h1:4dFEMjN39QX3d4ZUcHQ3tQwA+NOzXipOljafrkeGR+U=
+github.com/ZaparooProject/go-slugs v0.0.0-20261124092133-1b976469ee82 h1:4XMtsI5XXA+ij9Ky3YodG/WxURQRqBvdPY9J7ODZPaw=
+github.com/ZaparooProject/go-slugs v0.0.0-20261124092133-1b976469ee82/go.mod h1:4dFEMjN39QX3d4ZUcHQ3tQwA+NOzXipOljafrkeGR+U=
 github.com/ZaparooProject/go-zapscript v0.23.0 h1:ss9oPYaqpBj8VV1dhbNEel+jvo3zg+Zuqa1D+ZgdJks=
 github.com/ZaparooProject/go-zapscript v0.23.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=

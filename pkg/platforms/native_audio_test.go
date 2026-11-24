@@ -28,11 +28,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -543,7 +544,7 @@ func TestControlSeekDuration(t *testing.T) {
 
 // --- audioDisplayName ---
 
-// TestAudioDisplayName verifies the helper is self-consistent with tags.ParseTitleFromFilename.
+// TestAudioDisplayName verifies the helper is self-consistent with filetitle.Parse.
 func TestAudioDisplayName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -559,7 +560,7 @@ func TestAudioDisplayName(t *testing.T) {
 			t.Parallel()
 			base := filepath.Base(tt.path)
 			stem := strings.TrimSuffix(base, filepath.Ext(base))
-			want := tags.ParseTitleFromFilename(stem, false)
+			want := filetitle.Parse(stem, false, slugs.MediaTypeGame)
 			assert.Equal(t, want, audioDisplayName(tt.path))
 		})
 	}
@@ -690,7 +691,7 @@ func TestLaunchNativeAudio_BackgroundNeverResumes(t *testing.T) {
 // path names nothing.
 func TestAudioDisplayName_Streams(t *testing.T) {
 	t.Parallel()
-	soma := tags.ParseTitleFromFilename("groovesalad-128-mp3", false)
+	soma := filetitle.Parse("groovesalad-128-mp3", false, slugs.MediaTypeGame)
 	tests := map[string]string{
 		"https://ice1.somafm.com/groovesalad-128-mp3":               soma,
 		"https://stream.radiofrance.fr/fip/fip.m3u8?id=radiofrance": "fip",

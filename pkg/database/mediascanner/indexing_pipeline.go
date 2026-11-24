@@ -28,10 +28,11 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/browseprefix"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/arcadenames"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scummvmnames"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -385,7 +386,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		switch {
 		case platformsshared.IsStandardSchemeForDecoding(scheme):
 			// For http/https, extract the extension for tag creation
-			// ParseTitleFromFilename will strip it from the display title later
+			// filetitle.Parse will strip it from the display title later
 			ext := strings.ToLower(filepath.Ext(f.FileName))
 			if helpers.IsValidExtension(ext) {
 				f.Ext = ext
@@ -474,7 +475,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		if stripped, ok := browseprefix.StripWithPolicy(f.FileName, prefixPolicy); ok && !catalogResolved {
 			fileNameForTitle = stripped
 		}
-		f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+		f.Title = filetitle.Parse(fileNameForTitle, false, mediaType)
 		// A directory whose files mostly open with a number gets that prefix
 		// stripped, which is right for "01 - Track" and wrong where the number
 		// is the whole title: "1942 (W, Rev B)" strips to " (W, Rev B)" and
@@ -483,9 +484,9 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		// whole upload batch. Keep the unstripped name rather than none.
 		if f.Title == "" && fileNameForTitle != f.FileName {
 			fileNameForTitle = f.FileName
-			f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+			f.Title = filetitle.Parse(fileNameForTitle, false, mediaType)
 		}
-		f.DisplayTitle = tags.ParseDisplayTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+		f.DisplayTitle = filetitle.ParseDisplay(fileNameForTitle, false, mediaType)
 	}
 	if f.DisplayTitle == "" {
 		f.DisplayTitle = f.Title

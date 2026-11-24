@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -37,7 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
@@ -275,7 +275,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
 		mediaType = system.GetMediaType()
 	}
-	displayName := tags.ParseTitleFromFilenameForMedia(getDisplayName(publishedPath), false, mediaType)
+	displayName := filetitle.Parse(getDisplayName(publishedPath), false, mediaType)
 
 	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
 		ctx, cancel := activeMediaLookupContext(params.Context)
