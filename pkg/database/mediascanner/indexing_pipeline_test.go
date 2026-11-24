@@ -787,6 +787,16 @@ func TestGetPathFragments_PrefixStripNeverEmptiesTitle(t *testing.T) {
 		"a title that is only the stripped prefix must keep its unstripped name")
 	assert.NotEmpty(t, numericTitle.Slug, "a kept title must still slugify")
 
+	// A name that is nothing but a date and tags strips to tags alone.
+	dateOnly := GetPathFragments(&PathFragmentParams{
+		Path:         string(filepath.Separator) + filepath.Join("NES", "1989-01 (USA).nes"),
+		SystemID:     "NES",
+		PrefixPolicy: datePolicy,
+	})
+	assert.Equal(t, "1989-01", dateOnly.Title,
+		"a strip that leaves only tags must keep the unstripped name")
+	assert.NotEmpty(t, dateOnly.Slug, "a kept title must still slugify")
+
 	// The policy must still do its job where something survives the strip.
 	datedRelease := GetPathFragments(&PathFragmentParams{
 		Path:         string(filepath.Separator) + filepath.Join("NES", "1989-01 Bomberman (USA).nes"),
