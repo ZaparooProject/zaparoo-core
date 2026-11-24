@@ -37,9 +37,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/browseprefix"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -1410,6 +1411,8 @@ func NewNamesIndexWithSources(
 	// stabilises early and collapses the repeated regex cost across 100k+ files.
 	tags.SetNormalizeTagCache(make(map[string]string))
 	defer tags.SetNormalizeTagCache(nil)
+	filetitle.SetNormalizeCache(make(map[string]string))
+	defer filetitle.SetNormalizeCache(nil)
 
 	// Same lifecycle for company-name normalization, which runs the slug word
 	// pipeline per developer/publisher paren tag and repeats heavily.

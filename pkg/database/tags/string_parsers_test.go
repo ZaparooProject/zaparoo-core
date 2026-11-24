@@ -27,28 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCollapseSpaces(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "hello world", collapseSpaces("hello world"))
-	assert.Equal(t, "hello world", collapseSpaces("hello  world"))
-	assert.Equal(t, "hello world", collapseSpaces("  hello   world  "))
-	assert.Equal(t, "a b", collapseSpaces("a\t\nb"))
-	assert.Empty(t, collapseSpaces(""))
-	assert.Empty(t, collapseSpaces("   "))
-}
-
-func TestStripLeadingNumberPrefix(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "Song Title", stripLeadingNumberPrefix("01 - Song Title"))
-	assert.Equal(t, "Game Name", stripLeadingNumberPrefix("1. Game Name"))
-	assert.Equal(t, "track", stripLeadingNumberPrefix("001-track"))
-	assert.Equal(t, "rest", stripLeadingNumberPrefix("42  rest"))
-	assert.Equal(t, "nodigits", stripLeadingNumberPrefix("nodigits"))
-	assert.Equal(t, "123", stripLeadingNumberPrefix("123"))
-	assert.Equal(t, "123abc", stripLeadingNumberPrefix("123abc"))
-	assert.Empty(t, stripLeadingNumberPrefix(""))
-}
-
 func TestStartsWithYear(t *testing.T) {
 	t.Parallel()
 	assert.True(t, startsWithYear("1985.mp3"))
@@ -345,26 +323,6 @@ func TestRemoveSeasonEpisode(t *testing.T) {
 	assert.Equal(t, "Show   Title", removeSeasonEpisode("Show S01E02 Title"))
 	assert.Equal(t, "No episodes", removeSeasonEpisode("No episodes"))
 	assert.Equal(t, "Show Title", removeSeasonEpisode("ShowS01E02Title"))
-}
-
-func TestFindUnbracketedYear(t *testing.T) {
-	t.Parallel()
-	input := "Movie 2018 720p"
-	m := findUnbracketedYear(input)
-	assert.True(t, m.ok)
-	assert.Equal(t, "2018", input[m.cap1s:m.cap1e])
-
-	m = findUnbracketedYear("1995 title")
-	assert.True(t, m.ok)
-
-	m = findUnbracketedYear("title 2020")
-	assert.True(t, m.ok)
-
-	assert.False(t, findUnbracketedYear("abc2018def").ok)
-	assert.False(t, findUnbracketedYear("title_2018_cut").ok)
-	assert.False(t, findUnbracketedYear("title 1969 stuff").ok)
-	assert.False(t, findUnbracketedYear("title 1234 stuff").ok)
-	assert.False(t, findUnbracketedYear("").ok)
 }
 
 func TestWordBoundary(t *testing.T) {

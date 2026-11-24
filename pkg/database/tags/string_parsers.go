@@ -58,35 +58,6 @@ func isRegexWordByte(b byte) bool {
 	return isAlphanumeric(b) || b == '_'
 }
 
-// collapseSpaces replaces runs of whitespace with a single space.
-// Also trims leading/trailing whitespace (unlike the regex it replaces).
-// Callers always call strings.TrimSpace afterward, so this is equivalent.
-// Replaces: reMultiSpace = regexp.MustCompile(`\s+`)
-func collapseSpaces(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-// stripLeadingNumberPrefix removes a leading number followed by separators.
-// Replaces: reLeadingNum = regexp.MustCompile(`^\d+[.\s\-]+`)
-// Used as: reLeadingNum.ReplaceAllString(title, "")
-func stripLeadingNumberPrefix(s string) string {
-	i := 0
-	for i < len(s) && isDigit(s[i]) {
-		i++
-	}
-	if i == 0 {
-		return s
-	}
-	j := i
-	for j < len(s) && (s[j] == '.' || s[j] == '-' || isWhitespace(s[j])) {
-		j++
-	}
-	if j == i {
-		return s
-	}
-	return s[j:]
-}
-
 // startsWithYear checks if s starts with a 4-digit year (19XX or 20XX).
 // Replaces: reYear4Digit = regexp.MustCompile(`^(19\d{2}|20\d{2})`)
 // Used as: reYear4Digit.MatchString(remaining)
@@ -654,28 +625,6 @@ func removeSeasonEpisode(s string) string {
 		return s
 	}
 	return b.String()
-}
-
-// findUnbracketedYear finds a year (1970-2099) at word boundaries.
-// Replaces: reYearScene = regexp.MustCompile(`\b(19[789]\d|20\d{2})\b`)
-func findUnbracketedYear(s string) parseMatch {
-	for i := 0; i <= len(s)-4; i++ {
-		if !isWordBoundaryBefore(s, i) {
-			continue
-		}
-		if !isYearValue(s[i : i+4]) {
-			continue
-		}
-		if !isWordBoundaryAfter(s, i+4) {
-			continue
-		}
-		return parseMatch{
-			start: i, end: i + 4,
-			cap1s: i, cap1e: i + 4,
-			ok: true,
-		}
-	}
-	return parseMatch{}
 }
 
 func isASCIILetter(b byte) bool {

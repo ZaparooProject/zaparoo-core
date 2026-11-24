@@ -34,13 +34,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -438,7 +438,7 @@ func indexedFolderItems(
 				continue
 			}
 			items = append(items, playlists.PlaylistItem{
-				Name:      mediatags.StripStructuralSetMarkers(rows[i].Name),
+				Name:      filetitle.StripStructuralSetMarkers(rows[i].Name),
 				ZapScript: rows[i].Path,
 			})
 		}

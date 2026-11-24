@@ -25,10 +25,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/sessionevidence"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -123,7 +124,7 @@ func (p *Platform) sessionForLaunch(
 ) *database.ExternalSession {
 	session := &database.ExternalSession{
 		LaunchID: uuid.NewString(), LauncherID: launcherID,
-		MediaPath: path, MediaName: tags.ParseTitleFromFilename(helpers.GetPathName(path), false),
+		MediaPath: path, MediaName: filetitle.Parse(helpers.GetPathName(path), false, slugs.MediaTypeGame),
 		SystemID: definition.System, SystemName: systemDisplayName(definition.System),
 		Target: definition.Package,
 		BootID: state.BootID, RequestedMs: state.SampledMs, RequestedElapsedMs: state.ElapsedMs,

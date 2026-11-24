@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	gdb "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
@@ -67,7 +68,7 @@ func (s *slugger) slug(title string) string {
 	if cached, ok := s.cache[title]; ok {
 		return cached
 	}
-	slug := slugs.Slugify(s.mediaType, tags.ParseTitleFromFilenameForMedia(title, false, s.mediaType))
+	slug := slugs.Slugify(s.mediaType, filetitle.Parse(title, false, s.mediaType))
 	s.cache[title] = slug
 	return slug
 }
