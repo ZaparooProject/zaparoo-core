@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -444,4 +445,49 @@ func TestNewUploadClient_SendsUserAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, useragent.String(), <-userAgent)
+}
+
+// Not parallel: SetLogUploadURL changes a process-wide target.
+func TestSetLogUploadURL_OverridesAndRestores(t *testing.T) { //nolint:paralleltest // Global target.
+	require.Equal(t, config.LogUploadURL, logUploadTarget())
+
+	restoreOuter := SetLogUploadURL("http://outer.test/")
+	assert.Equal(t, "http://outer.test/", logUploadTarget())
+	restoreInner := SetLogUploadURL("http://inner.test/")
+	assert.Equal(t, "http://inner.test/", logUploadTarget())
+	restoreInner()
+	assert.Equal(t, "http://outer.test/", logUploadTarget())
+	restoreOuter()
+	assert.Equal(t, config.LogUploadURL, logUploadTarget())
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			if i%2 == 0 {
+				SetLogUploadURL("http://race.test/")()
+				return
+			}
+			_ = logUploadTarget()
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, config.LogUploadURL, logUploadTarget(), "every override was restored")
+}
+
+func TestUploadLog_UsesTheOverride(t *testing.T) { //nolint:paralleltest // Global target.
+	logDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, config.LogFile), []byte("hello\n"), 0o600))
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir, DataDir: t.TempDir()})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("http://fake.test/1.log\n"))
+	}))
+	defer server.Close()
+	restore := SetLogUploadURL(server.URL)
+	defer restore()
+
+	link, err := UploadLog(pl)
+	require.NoError(t, err)
+	assert.Equal(t, "http://fake.test/1.log", link)
 }

@@ -1,0 +1,20 @@
+# Launching while tracked media runs stops the old child with the preemption
+# intent before the new one starts.
+
+sim-start
+rom snes/Alpha.sfc nes/Beta.nes
+
+tap -uid 01 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES
+event tracked launcher=SimSNES
+
+tap -uid 02 $ROMS/nes/Beta.nes
+event stop launcher=SimSNES intent=preemption
+# The old child's exit and the new launch race, so check the exit without
+# moving the cursor.
+event -peek process-exit launcher=SimSNES detail=stopped
+event launch launcher=SimNES
+notification media.started systemId=NES
+status
+stdout '"SimNES"'
+! stdout '"SimSNES"'

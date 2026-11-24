@@ -1,0 +1,23 @@
+# A token whose text is the ZapScript **launch.random:snes launches a random
+# indexed SNES game. In hold mode, taking the card off stops it.
+
+sim-start -scan-mode hold
+rom snes/Alpha.sfc snes/Beta.sfc snes/Gamma.sfc
+index
+stdout '^media [1-9][0-9]*$'
+
+tap -uid 0b **launch.random:snes
+notification tokens.added uid=0b
+event launch launcher=SimSNES
+event tracked launcher=SimSNES
+notification media.started systemId=SNES
+api media.active
+stdout '"systemId": "SNES"'
+
+remove
+notification tokens.removed
+event stop intent=menu
+event process-exit
+notification media.stopped systemId=SNES
+api media.active
+! stdout systemId

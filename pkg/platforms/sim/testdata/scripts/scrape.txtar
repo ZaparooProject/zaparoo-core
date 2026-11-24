@@ -1,0 +1,24 @@
+# Scrapers run against the offline libretro and RomM fakes.
+
+sim-start -fakes libretro,romm
+fixtures -systems snes -per-system 5
+index
+# Indexing starts scrapes of the sources it found (the RomM library); wait
+# for them before starting another.
+idle
+api scrapers
+stdout 'libretro-thumbnails'
+
+api media.scrape {"scraperId":"libretro-thumbnails","systems":["SNES"]}
+notification -timeout 60s media.scraping scraperId=libretro-thumbnails done=true
+api media.scrape.status
+stdout '"matched": [1-9]'
+
+# The post-index RomM scrape already covered the library; a forced rescrape
+# matches it again from the fake.
+idle
+api media.scrape {"scraperId":"romm","systems":["SNES"],"force":true}
+notification -timeout 60s media.scraping scraperId=romm done=true
+api media.scrape.status
+stdout '"scraperId": "romm"'
+stdout '"matched": [1-9]'

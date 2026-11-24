@@ -1,0 +1,16 @@
+# Generated fixtures index through the real media.generate, search finds them
+# and a title token launches one.
+
+sim-start
+fixtures -systems snes,genesis -per-system 10 -realistic
+stdout '^files [1-9][0-9]* media [1-9]'
+rom 'snes/Zaparoo Sim Quest (USA).sfc'
+index
+stdout '^media [1-9][0-9]+$'
+
+api media.search {"query":"Zaparoo Sim Quest","systems":["SNES"]}
+stdout 'Zaparoo Sim Quest \(USA\)\.sfc'
+
+tap -uid 0a SNES/Zaparoo Sim Quest
+notification media.started systemId=SNES
+event launch launcher=SimSNES

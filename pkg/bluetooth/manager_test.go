@@ -911,3 +911,19 @@ func TestManager_KeyReloadFailureDoesNotStopTheTransport(t *testing.T) {
 		m.Stop()
 	}
 }
+
+func TestNewDisabledManager_IgnoresConfig(t *testing.T) {
+	t.Parallel()
+
+	m := NewDisabledManager(newTestConfig(t, true))
+	m.Start()
+	defer m.Stop()
+
+	require.Eventually(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.unsupported
+	}, eventually, 10*time.Millisecond, "an enabled transport must still stay off the adapter")
+	assert.False(t, m.Serving())
+	assert.Empty(t, m.Roles())
+}

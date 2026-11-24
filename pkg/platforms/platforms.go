@@ -694,6 +694,9 @@ type Settings struct {
 	// DisableSelfUpdate means the host updates this component as part of its own package.
 	// Neither automatic nor manually requested executable updates may run.
 	DisableSelfUpdate bool
+	// DisableBluetooth keeps Core away from the host's Bluetooth adapter
+	// whatever the configuration says, for hosts it must never touch.
+	DisableBluetooth bool
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool

@@ -292,7 +292,7 @@ func TestReleaseTargetsCoverEveryCommand(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd"))
 	require.NoError(t, err)
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && !devCommands[entry.Name()] {
 			assert.True(t, covered["./cmd/"+entry.Name()], "cmd/%s is not scanned", entry.Name())
 		}
 	}

@@ -40,7 +40,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/uuid v1.6.0
 	github.com/gopxl/beep/v2 v2.1.1
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/klauspost/compress v1.20.4
@@ -52,6 +52,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/rivo/tview v0.42.0
+	github.com/rogpeppe/go-internal v1.14.1
 	github.com/rs/zerolog v1.35.1
 	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8
 	github.com/sasha-s/go-deadlock v0.3.9
@@ -145,6 +146,7 @@ require (
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )

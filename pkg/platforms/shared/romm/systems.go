@@ -20,6 +20,7 @@
 package romm
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -229,4 +230,17 @@ func SystemForPlatform(slug, fsSlug string) (string, bool) {
 		return "", false
 	}
 	return system.ID, true
+}
+
+// PlatformSlugs lists, sorted, the RomM platform slugs whose ROMs index under
+// systemID.
+func PlatformSlugs(systemID string) []string {
+	var out []string
+	for slug, id := range slugSystems {
+		if id == systemID {
+			out = append(out, slug)
+		}
+	}
+	slices.Sort(out)
+	return out
 }

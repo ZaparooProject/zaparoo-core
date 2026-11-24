@@ -25,22 +25,25 @@
 //
 // Example usage:
 //
-//	func TestWebSocketAPI(t *testing.T) {
-//		// Create message handler
+//	func TestPing(t *testing.T) {
+//		// Answer every request with "pong".
 //		handler := func(session *melody.Session, msg []byte) {
-//			session.Write([]byte(`{"response": "ok"}`))
+//			var req map[string]any
+//			_ = json.Unmarshal(msg, &req)
+//			resp, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "result": "pong", "id": req["id"]})
+//			_ = session.Write(resp)
 //		}
 //
-//		// Create test WebSocket server
 //		server := helpers.NewWebSocketTestServer(t, handler)
 //		defer server.Close()
 //
-//		// Connect and test
-//		client := server.NewClient(t)
-//		defer client.Close()
-//
-//		err := client.SendMessage([]byte(`{"test": "message"}`))
+//		conn, err := server.CreateWebSocketClient()
 //		require.NoError(t, err)
+//		defer conn.Close()
+//
+//		response, err := helpers.SendJSONRPCRequest(conn, "ping", nil)
+//		require.NoError(t, err)
+//		helpers.AssertJSONRPCSuccess(t, response)
 //	}
 //
 // For complete examples, see pkg/testing/examples/api_example_test.go

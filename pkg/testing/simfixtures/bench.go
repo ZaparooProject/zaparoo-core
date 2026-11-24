@@ -17,17 +17,22 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package fixtures
+package simfixtures
 
 import (
 	"fmt"
 	"math/rand"
 )
 
-// BuildBenchFilenames generates n deterministic ROM-like filenames for
-// benchmarking. Uses a fixed seed (42) for reproducibility. No region
-// tags are included so that title resolution confidence stays high.
-func BuildBenchFilenames(n int) []string {
+// BenchSeed is the seed BenchFilenames uses.
+const BenchSeed = 42
+
+// BenchFilenames returns n fictional ROM paths of the form
+// /roms/system/<title>.nes for benchmarks, the same for every call. Titles
+// carry no region or dump tags, so title resolution stays confident. Some
+// repeat. The committed benchmark baseline was measured on exactly these
+// inputs, so changing them invalidates it.
+func BenchFilenames(n int) []string {
 	prefixes := []string{
 		"Super", "Mega", "Ultra", "Final", "Grand", "Dark", "Crystal",
 		"Shadow", "Iron", "Bright", "Neo", "Hyper", "Royal", "Star",
@@ -41,7 +46,7 @@ func BuildBenchFilenames(n int) []string {
 		"Origins", "Legends", "Rising", "Revolution", "Arena", "Force",
 	}
 
-	rng := rand.New(rand.NewSource(42)) //nolint:gosec // Deterministic seed for reproducible benchmarks
+	rng := rand.New(rand.NewSource(BenchSeed)) //nolint:gosec // Deterministic seed for reproducible benchmarks
 	filenames := make([]string, n)
 	for i := range filenames {
 		filenames[i] = fmt.Sprintf("/roms/system/%s %s %s %d.nes",

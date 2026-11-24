@@ -20,14 +20,10 @@
 package rommlib
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -38,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/romm"
+	fakeromm "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fakes/romm"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
@@ -53,62 +50,40 @@ var (
 
 // server is a RomM server with one SNES platform.
 type server struct {
-	*httptest.Server
-	assets      map[string][]byte
-	roms        []romm.Rom
-	assetCalls  atomic.Int32
-	unavailable atomic.Bool
-	failAssets  atomic.Bool
+	*fakeromm.Server
 }
 
 func newServer(t *testing.T, roms ...romm.Rom) *server {
 	t.Helper()
-	s := &server{roms: roms, assets: map[string][]byte{}}
-	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
-	t.Cleanup(s.Close)
+	s := &server{fakeromm.New(fakeromm.Options{
+		Platforms: []romm.Platform{{ID: 1, Slug: "snes", FSSlug: "snes", Name: "SNES"}},
+		Roms:      roms,
+	})}
+	_, err := s.Start("127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
-func (s *server) serve(w http.ResponseWriter, r *http.Request) {
-	if s.unavailable.Load() {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
+// assetCalls counts the artwork requests the server has seen.
+func (s *server) assetCalls() int {
+	n := 0
+	for _, r := range s.Requests() {
+		if strings.HasPrefix(r.Path, "/assets/") {
+			n++
+		}
 	}
-	switch p := r.URL.Path; {
-	case p == "/api/platforms":
-		writeJSON(w, []romm.Platform{{ID: 1, Slug: "snes", FSSlug: "snes", Name: "SNES"}})
-	case p == "/api/roms":
-		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-		page := map[string]any{"items": []romm.Rom{}, "total": len(s.roms), "offset": offset}
-		if offset == 0 {
-			page["items"] = s.roms
-		}
-		writeJSON(w, page)
-	case strings.HasPrefix(p, "/assets/"):
-		s.assetCalls.Add(1)
-		if s.failAssets.Load() {
-			w.WriteHeader(http.StatusBadGateway)
-			return
-		}
-		body, ok := s.assets[p]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_, _ = w.Write(body)
-	default:
-		w.WriteHeader(http.StatusNotFound)
-	}
+	return n
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+func (s *server) failAssets(t *testing.T) {
+	t.Helper()
+	require.NoError(t, s.SetFault(fakeromm.Fault{Status: http.StatusBadGateway, PathPrefix: "/assets/"}))
 }
 
 func (s *server) config() *config.Instance {
 	cfg := &config.Instance{}
-	cfg.SetLauncherServerURL(romm.LauncherID, s.URL)
+	cfg.SetLauncherServerURL(romm.LauncherID, s.URL())
 	return cfg
 }
 
@@ -157,8 +132,8 @@ func newHarness(t *testing.T, roms ...romm.Rom) *harness {
 		db: testhelpers.NewMockMediaDBI(), fs: afero.NewMemMapFs(), srv: newServer(t, roms...),
 		free: 1 << 40,
 	}
-	h.srv.assets["/assets/romm/resources/roms/1/cover/big.png"] = pngBytes
-	h.srv.assets["/assets/romm/resources/roms/1/screenshots/0.jpg"] = jpegBytes
+	h.srv.SetAsset("/assets/romm/resources/roms/1/cover/big.png", pngBytes)
+	h.srv.SetAsset("/assets/romm/resources/roms/1/screenshots/0.jpg", jpegBytes)
 	h.writes = &[]database.ScrapeWriteTarget{}
 	h.db.On("ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -302,7 +277,7 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 	assert.Equal(t, []string{"en"}, mediaTags(rich, tags.TagTypeLang))
 	assert.Equal(t, "A test description.", propText(rich.TitleProps, tags.TagPropertyDescription))
 
-	key := serverKey(h.srv.URL)
+	key := serverKey(h.srv.URL())
 	assert.Equal(t, "images://romm/"+key+"/1/cover.png", propText(rich.MediaProps, tags.TagPropertyImageBoxart))
 	assert.Equal(t, "images://romm/"+key+"/1/screenshot.jpg",
 		propText(rich.MediaProps, tags.TagPropertyImageScreenshot))
@@ -329,20 +304,20 @@ func TestScrapeReusesStoredArtwork(t *testing.T) {
 	h.db.On("SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	h.scrape(t, scraper.ScrapeOptions{})
-	require.Equal(t, int32(2), h.srv.assetCalls.Load())
+	require.Equal(t, 2, h.srv.assetCalls())
 	h.scrape(t, scraper.ScrapeOptions{})
-	assert.Equal(t, int32(2), h.srv.assetCalls.Load(), "stored artwork is reused")
+	assert.Equal(t, 2, h.srv.assetCalls(), "stored artwork is reused")
 
 	// A forced run downloads again, and a changed format replaces the old file.
-	h.srv.assets["/assets/romm/resources/roms/1/cover/big.png"] = jpegBytes
+	h.srv.SetAsset("/assets/romm/resources/roms/1/cover/big.png", jpegBytes)
 	h.db.On("GetScrapeRunMediaIDs", mock.Anything, ScraperID, "run-1", int64(7)).
 		Return(map[int64]struct{}{}, nil).Once()
 	h.scrape(t, scraper.ScrapeOptions{Force: true, RunID: "run-1"})
-	assert.Equal(t, int32(4), h.srv.assetCalls.Load())
+	assert.Equal(t, 4, h.srv.assetCalls())
 	last := (*h.writes)[len(*h.writes)-1].Write
 	assert.Contains(t, last.MediaTags, scraper.RunTagInfo(ScraperID, "run-1"))
 	assert.True(t, strings.HasSuffix(propText(last.MediaProps, tags.TagPropertyImageBoxart), "/cover.jpg"))
-	dir := filepath.Join(filepath.FromSlash(imageRoot), serverKey(h.srv.URL), "1")
+	dir := filepath.Join(filepath.FromSlash(imageRoot), serverKey(h.srv.URL()), "1")
 	_, err := h.fs.Stat(filepath.Join(dir, "cover.png"))
 	assert.Error(t, err, "the old format is removed")
 }
@@ -361,13 +336,13 @@ func TestScrapeKeepsTextWhenLowOnSpace(t *testing.T) {
 	write := (*h.writes)[0].Write
 	assert.Empty(t, write.MediaProps)
 	assert.NotEmpty(t, write.TitleProps)
-	assert.Zero(t, h.srv.assetCalls.Load())
+	assert.Zero(t, h.srv.assetCalls())
 }
 
 func TestScrapeRejectsUnsupportedImages(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, richRom())
-	h.srv.assets["/assets/romm/resources/roms/1/cover/big.png"] = []byte("<html>not an image</html>")
+	h.srv.SetAsset("/assets/romm/resources/roms/1/cover/big.png", []byte("<html>not an image</html>"))
 	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
 		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
 	h.db.On("GetScrapedMediaIDs", mock.Anything, ScraperID, int64(7)).Return(map[int64]struct{}{}, nil)
@@ -410,7 +385,7 @@ func TestScrapeRetriesFailedArtwork(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, richRom())
 	cover := "/assets/romm/resources/roms/1/cover/big.png"
-	h.srv.failAssets.Store(true)
+	h.srv.failAssets(t)
 	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
 		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
 	h.db.On("GetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES).Return("", nil)
@@ -422,8 +397,8 @@ func TestScrapeRetriesFailedArtwork(t *testing.T) {
 	assert.Empty(t, (*h.writes)[0].Write.MediaProps)
 	h.db.AssertNotCalled(t, "SetScrapeFingerprint", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
-	h.srv.failAssets.Store(false)
-	h.srv.assets[cover] = pngBytes
+	h.srv.ClearFault()
+	h.srv.SetAsset(cover, pngBytes)
 	h.scrape(t, scraper.ScrapeOptions{FillMissing: true})
 	require.Len(t, *h.writes, 2)
 	assert.NotEmpty(t, propText((*h.writes)[1].Write.MediaProps, tags.TagPropertyImageBoxart))
@@ -435,7 +410,7 @@ func TestScrapeRetriesFailedArtwork(t *testing.T) {
 func TestScrapeFingerprintsPastMissingArtwork(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, richRom())
-	delete(h.srv.assets, "/assets/romm/resources/roms/1/cover/big.png")
+	h.srv.DeleteAsset("/assets/romm/resources/roms/1/cover/big.png")
 	h.db.On("GetMediaBySystemID", systemdefs.SystemSNES).
 		Return([]database.MediaWithFullPath{row(100, 1, romm.RomPath(1, "Super Game"))}, nil)
 	h.db.On("GetScrapeFingerprint", mock.Anything, ScraperID, systemdefs.SystemSNES).Return("", nil)
@@ -459,7 +434,7 @@ func TestScrapeKeepsReserveForImageSize(t *testing.T) {
 	h.scrape(t, scraper.ScrapeOptions{})
 	require.Len(t, *h.writes, 1)
 	assert.Empty(t, propText((*h.writes)[0].Write.MediaProps, tags.TagPropertyImageBoxart))
-	assert.Equal(t, int32(1), h.srv.assetCalls.Load(), "downloads stop once the reserve is reached")
+	assert.Equal(t, 1, h.srv.assetCalls(), "downloads stop once the reserve is reached")
 }
 
 func TestScrapeFillMissingResumesRun(t *testing.T) {
@@ -490,7 +465,7 @@ func TestScrapeSkipsSystemsNotRequested(t *testing.T) {
 func TestScrapeUnavailableServerIsNotFatal(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, richRom())
-	h.srv.unavailable.Store(true)
+	require.NoError(t, h.srv.SetFault(fakeromm.Fault{Status: http.StatusServiceUnavailable}))
 	updates := h.scrape(t, scraper.ScrapeOptions{})
 	final := updates[len(updates)-1]
 	assert.True(t, final.Done)

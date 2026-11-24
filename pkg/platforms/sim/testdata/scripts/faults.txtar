@@ -1,0 +1,52 @@
+# Injected faults surface through Core's real error paths.
+
+sim-start
+rom snes/Alpha.sfc snes/Beta.sfc
+
+# A failed launch reports run.failed and plays the fail sound.
+fault {"launcher":"SimSNES","failLaunches":1}
+tap -uid 01 $ROMS/snes/Alpha.sfc
+event fault launcher=SimSNES
+event launch-error launcher=SimSNES
+notification run.failed
+sounds
+stdout '^fail$'
+! notification media.started
+
+# The fault was used up: the next launch works.
+remove
+tap -uid 02 $ROMS/snes/Beta.sfc
+notification media.started systemId=SNES
+
+# A stop failure leaves the media running.
+fault {"launcher":"SimSNES","failStops":1}
+! api stop
+event stop-error launcher=SimSNES
+api media.active
+stdout '"systemId": "SNES"'
+
+# A crashed Blocking child clears the media: Core waits on it.
+fault clear
+remove
+api stop
+rom simblocking/Crash.sim
+mark
+fault {"launcher":"SimBlocking","crashAfterMs":200}
+tap -uid 03 $ROMS/simblocking/Crash.sim
+notification media.started mediaPath=$ROMS/simblocking/Crash.sim
+event process-exit launcher=SimBlocking detail=crashed
+notification media.stopped launcherId=SimBlocking
+
+# A crashed Tracked child leaves the media: Core keeps the handle only to
+# stop it, and the next stop finds it gone.
+fault clear
+remove
+mark
+fault {"launcher":"SimSNES","crashAfterMs":200}
+tap -uid 04 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES
+event process-exit launcher=SimSNES detail=crashed
+api media.active
+stdout '"systemId": "SNES"'
+api stop
+notification media.stopped systemId=SNES

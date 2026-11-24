@@ -1,0 +1,25 @@
+# A tap launches media on a tracked sim launcher, which runs a real child
+# process. In hold mode, taking the card off stops it.
+
+sim-start -scan-mode hold
+rom 'snes/Super Game.sfc'
+
+tap -uid 04aa11 $ROMS/snes/Super Game.sfc
+notification tokens.added uid=04aa11
+event launch launcher=SimSNES
+event tracked
+notification media.started systemId=SNES mediaName='Super Game'
+api media.active
+stdout '"systemId": "SNES"'
+status
+stdout '"trackedPid": [1-9]'
+sounds
+stdout '^success$'
+
+remove
+notification tokens.removed
+event stop intent=menu
+event process-exit
+notification media.stopped systemId=SNES
+api media.active
+! stdout systemId

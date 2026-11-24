@@ -68,3 +68,79 @@ func TestScraperGamelistXMLCustomPath_SaveLoadRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, customPath, reloaded.ScraperGamelistXMLCustomPath())
 }
+
+func TestScraperLibretroThumbnailsBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		toml string
+		want string
+	}{
+		{name: "unset", want: DefaultLibretroThumbnailsBaseURL},
+		{name: "empty section", toml: "[scraper.libretro_thumbnails]\n", want: DefaultLibretroThumbnailsBaseURL},
+		{
+			name: "local mirror", want: "http://127.0.0.1:8080",
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"http://127.0.0.1:8080/\"\n",
+		},
+		{
+			name: "https with path", want: "https://mirror.example/thumbs",
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \" https://mirror.example/thumbs \"\n",
+		},
+		{
+			name: "not http", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"ftp://mirror.example\"\n",
+		},
+		{
+			name: "no host", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"mirror.example\"\n",
+		},
+		{
+			name: "query", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs?token=x\"\n",
+		},
+		{
+			name: "empty query", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs?\"\n",
+		},
+		{
+			name: "fragment", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs#top\"\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			require.NoError(t, cfg.LoadTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ScraperLibretroThumbnailsBaseURL())
+		})
+	}
+
+	assert.Equal(t, DefaultLibretroThumbnailsBaseURL, (*Instance)(nil).ScraperLibretroThumbnailsBaseURL())
+}
+
+func TestScraperLibretroThumbnailsBaseURL_SetSaveLoad(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Save())
+	contents, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(contents), "libretro_thumbnails", "the default is not written out")
+
+	cfg.SetScraperLibretroThumbnailsBaseURL("http://127.0.0.1:9000")
+	require.NoError(t, cfg.Save())
+	contents, err = afero.ReadFile(cfg.getFs(), cfg.cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(contents), "[scraper.libretro_thumbnails]")
+
+	reloaded, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:9000", reloaded.ScraperLibretroThumbnailsBaseURL())
+
+	reloaded.SetScraperLibretroThumbnailsBaseURL("")
+	assert.Equal(t, DefaultLibretroThumbnailsBaseURL, reloaded.ScraperLibretroThumbnailsBaseURL())
+}

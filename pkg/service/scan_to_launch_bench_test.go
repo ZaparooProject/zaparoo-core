@@ -34,10 +34,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/simfixtures"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/mock"
 )
@@ -70,7 +70,7 @@ func setupPipelineBench(b *testing.B, n int) *pipelineBenchEnv {
 	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(b)
 
 	// Populate with titles through the production staging pipeline.
-	filenames := fixtures.BuildBenchFilenames(n)
+	filenames := simfixtures.BenchFilenames(n)
 	scantest.IndexMediaPaths(b, mediaDB, "NES", filenames...)
 	if err := mediaDB.RebuildSlugSearchCache(); err != nil {
 		b.Fatal(err)

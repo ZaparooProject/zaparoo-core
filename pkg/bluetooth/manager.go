@@ -124,6 +124,14 @@ func NewManager(cfg *config.Instance) *Manager {
 	})
 }
 
+// NewDisabledManager builds a manager that never opens an adapter, whatever
+// the configuration says, for hosts whose Bluetooth Core must not touch.
+func NewDisabledManager(cfg *config.Instance) *Manager {
+	return newManagerWith(cfg, clockwork.NewRealClock(), func(context.Context) (ble.Adapter, error) {
+		return nil, ble.ErrUnsupported
+	})
+}
+
 func newManagerWith(
 	cfg *config.Instance,
 	clock clockwork.Clock,

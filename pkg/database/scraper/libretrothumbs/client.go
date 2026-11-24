@@ -41,8 +41,9 @@ import (
 	"github.com/spf13/afero"
 )
 
-// DefaultBaseURL is the libretro thumbnail server RetroArch downloads from.
-const DefaultBaseURL = "https://thumbnails.libretro.com"
+// DefaultBaseURL is the libretro thumbnail server RetroArch downloads from,
+// used unless [scraper.libretro_thumbnails] base_url names another.
+const DefaultBaseURL = config.DefaultLibretroThumbnailsBaseURL
 
 const (
 	indexMaxAge   = 7 * 24 * time.Hour

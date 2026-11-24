@@ -1,0 +1,29 @@
+# With the launch guard on, a new card while media plays is staged; tapping
+# it again confirms. With require_confirm, only the API confirms.
+
+sim-start -launch-guard
+rom snes/Alpha.sfc nes/Beta.nes
+
+tap -uid 01 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES
+
+tap -uid 02 $ROMS/nes/Beta.nes
+notification tokens.staged uid=02
+! notification media.started systemId=NES
+remove
+tap -uid 02 $ROMS/nes/Beta.nes
+event stop intent=preemption
+notification media.started systemId=NES
+
+sim-stop
+sim-start -guard-confirm
+rom snes/Alpha.sfc nes/Beta.nes
+tap -uid 01 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES
+tap -uid 02 $ROMS/nes/Beta.nes
+notification tokens.staged uid=02
+remove
+tap -uid 02 $ROMS/nes/Beta.nes
+! notification media.started systemId=NES
+api confirm
+notification media.started systemId=NES

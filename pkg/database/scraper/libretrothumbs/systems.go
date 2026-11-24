@@ -190,3 +190,9 @@ var systemsByDatabase = sync.OnceValue(func() map[string][]string {
 func SystemsForDatabase(name string) []string {
 	return slices.Clone(systemsByDatabase()[strings.ToLower(strings.TrimSpace(name))])
 }
+
+// Playlists lists the libretro-thumbnails playlist folders a Core system's
+// thumbnails are looked up in, in the order they are tried.
+func Playlists(systemID string) []string {
+	return slices.Clone(playlists[systemID])
+}

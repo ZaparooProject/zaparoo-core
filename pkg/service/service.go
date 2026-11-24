@@ -543,6 +543,9 @@ func startServiceWithOptions(
 	// pause its advertising while the user scans for or pairs a
 	// controller, and started below so the API can register for it.
 	bleManager := bluetooth.NewManager(cfg)
+	if pl.Settings().DisableBluetooth {
+		bleManager = bluetooth.NewDisabledManager(cfg)
+	}
 
 	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish, bleManager.SetAdvertisingPaused)
 	st.SetDeviceMonitor(deviceMonitor)
