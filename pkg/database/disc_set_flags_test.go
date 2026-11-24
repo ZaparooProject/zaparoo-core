@@ -114,7 +114,7 @@ func TestApplyMediaUserFlagsToSetAddsToTheLaunchDisc(t *testing.T) {
 func TestApplyMediaUserFlagsToSetLeavesAFlagASiblingHolds(t *testing.T) {
 	t.Parallel()
 	db, discs := newDiscSetTestDB(t)
-	require.NoError(t, db.UserDB.SetMediaUserFlag("PSX", discs[2].Path, database.MediaUserFlagFavorite, true))
+	applyToSet(t, db, discs, 2, flagSet{database.MediaUserFlagFavorite: true})
 	before, err := db.UserDB.ListMediaUserFlagTimes(database.MediaUserFlagFavorite)
 	require.NoError(t, err)
 	require.Len(t, before, 1)
@@ -327,6 +327,31 @@ func TestApplyMediaUserFlagsToSetMarksTheWriteUntilProjected(t *testing.T) {
 
 	require.NoError(t, database.ReconcileMediaUserData(ctx, db))
 	assert.False(t, marker(), "the reconcile clears the marker it answered")
+	requireSetInStep(t, db, discs)
+}
+
+func TestApplyMediaUserFlagsToSetRetryProjectsAfterAFailedProjection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, discs := newDiscSetTestDB(t)
+	applyToSet(t, db, discs, 0, flagSet{database.MediaUserFlagLiked: true})
+
+	broken := &database.Database{UserDB: db.UserDB, MediaDB: failingTagsMediaDB{MediaDBI: db.MediaDB}}
+	_, err := database.ApplyMediaUserFlagsToSet(ctx, broken, "PSX", discs, discs[2].Path,
+		flagSet{database.MediaUserFlagDisliked: true})
+	require.Error(t, err)
+	assert.Equal(t, flagSet{database.MediaUserFlagLiked: true}, projectedUserTags(t, db, discs[0].MediaDBID),
+		"MediaDB is behind")
+
+	// The same request again finds UserDB already holding it. It still
+	// brings MediaDB in line, with no restart in between.
+	written, err := database.ApplyMediaUserFlagsToSet(ctx, db, "PSX", discs, discs[2].Path,
+		flagSet{database.MediaUserFlagDisliked: true})
+	require.NoError(t, err)
+	assert.Equal(t, map[database.MediaUserFlag]bool{
+		database.MediaUserFlagLiked:    false,
+		database.MediaUserFlagDisliked: true,
+	}, written)
 	requireSetInStep(t, db, discs)
 }
 

@@ -269,7 +269,7 @@ func (t *launchTarget) matches(entry *database.ContentRuleEntry) (bool, error) {
 	case database.ContentKindDeck:
 		return t.inDeck(entry.Value)
 	case database.ContentKindTags:
-		return t.hasTags(entry.Value)
+		return t.hasTags(entry.Value, entry.Effect == database.ContentEffectDeny)
 	default:
 		// A kind this build does not know matches nothing: an allow entry
 		// written by a newer build opens nothing here, which is the safe
@@ -302,11 +302,13 @@ func (t *launchTarget) inDeck(deckID string) (bool, error) {
 // errNoIndex reports a tag entry met with no media index to read tags from.
 var errNoIndex = errors.New("media index is not available")
 
-// hasTags reports whether the media carries the tag filter. Media the index
-// holds no tags for matches no filter, including one made only of
-// exclusions, so a tag entry never opens what the index does not know. A
+// hasTags reports whether the media carries the tag filter. For an allow
+// entry, media with no indexed or user tags matches no filter, including one
+// made only of exclusions, so a tag entry never opens what the index does
+// not know. A deny entry is judged on the tags as they are, so an
+// exclusion-only deny covers untagged media as it covers tagged media. A
 // lookup that fails is reported as such.
-func (t *launchTarget) hasTags(value string) (bool, error) {
+func (t *launchTarget) hasTags(value string, deny bool) (bool, error) {
 	if t.path == "" || t.systemID == "" {
 		return false, nil
 	}
@@ -342,7 +344,7 @@ func (t *launchTarget) hasTags(value string) (bool, error) {
 		}
 		mediaTags = append(slices.Clip(mediaTags), t.userTags...)
 	}
-	if len(mediaTags) == 0 {
+	if len(mediaTags) == 0 && !deny {
 		return false, nil
 	}
 	return tagsSatisfy(mediaTags, tagFilters), nil

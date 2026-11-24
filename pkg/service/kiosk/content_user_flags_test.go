@@ -118,3 +118,30 @@ func TestDislikedRuleRefusesEveryDiscOfADislikedSet(t *testing.T) {
 	requireRefused(t, check(lock, "", "PSX", paths["saga2"]), kiosk.ReasonHidden)
 	require.NoError(t, check(lock, "", "NES", paths["mario"]))
 }
+
+func TestExclusionOnlyDenyCoversUntaggedGames(t *testing.T) {
+	t.Parallel()
+	lock, db, _ := newLock(t)
+	paths := flagLibrary(t, db)
+	setUserFlags(t, db, "NES", paths["mario"], &database.MediaUserData{IsFavorite: true})
+	setRule(t, db, "", database.ContentModeAll, tagRule(database.ContentEffectDeny, "-user:favorite"))
+	enableOpen(t, lock)
+
+	require.NoError(t, check(lock, "", "NES", paths["mario"]))
+	// Other.nes has no indexed tags and no flags, the disc a disc tag only.
+	// Neither is a favorite, so the deny covers both alike.
+	requireRefused(t, check(lock, "", "NES", paths["other"]), kiosk.ReasonDenied)
+	requireRefused(t, check(lock, "", "PSX", paths["quest1"]), kiosk.ReasonDenied)
+	requireRefused(t, check(lock, "", "NES",
+		filepath.Join(filepath.Dir(paths["mario"]), "Gone.nes")), kiosk.ReasonDenied)
+}
+
+func TestExclusionOnlyAllowStillNeedsTags(t *testing.T) {
+	t.Parallel()
+	lock, db, _ := newLock(t)
+	paths := flagLibrary(t, db)
+	setRule(t, db, "", database.ContentModeAllowed, tagRule(database.ContentEffectAllow, "-user:favorite"))
+	enableOpen(t, lock)
+
+	requireRefused(t, check(lock, "", "NES", paths["other"]), kiosk.ReasonNotAllowed)
+}

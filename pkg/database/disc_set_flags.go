@@ -68,7 +68,7 @@ func IsDiscSetFlag(flag MediaUserFlag) bool {
 // ApplyMediaUserFlagsToSet records flag changes for a multi-disc folder.
 // launchPath names the disc that receives a flag no disc holds yet, and the
 // only disc a hidden change applies to. Every UserDB write goes in one
-// transaction, then each changed disc's MediaDB projection follows, under
+// transaction, then every indexed disc's MediaDB projection follows, under
 // the same marker ApplyMediaUserFlags keeps. It returns the flags whose
 // MediaDB tag changed on any disc, with their new value.
 func ApplyMediaUserFlagsToSet(
@@ -124,12 +124,12 @@ func ApplyMediaUserFlagsToSet(
 		return nil, fmt.Errorf("failed to read media user data: %w", err)
 	}
 	writes := PlanDiscSetFlagWrites(systemID, discs, launch, current, changes)
-	if len(writes) == 0 {
-		return make(map[MediaUserFlag]bool), nil
-	}
 
+	// A request UserDB already holds writes nothing there, but still
+	// projects: an earlier attempt whose projection failed may have left
+	// MediaDB behind, and this retry is what brings it in line.
 	markerHeld := false
-	if projects {
+	if projects && len(writes) > 0 {
 		_, found, markerErr := db.UserDB.GetDeviceState(DeviceStateKeyMediaUserFlagWrite)
 		if markerErr != nil {
 			return nil, fmt.Errorf("failed to read media user flag write marker: %w", markerErr)
@@ -142,14 +142,18 @@ func ApplyMediaUserFlagsToSet(
 		}
 	}
 
-	if err := db.UserDB.SetMediaUserFlags(writes); err != nil {
-		return nil, fmt.Errorf("failed to set media user flags: %w", err)
+	if len(writes) > 0 {
+		if err := db.UserDB.SetMediaUserFlags(writes); err != nil {
+			return nil, fmt.Errorf("failed to set media user flags: %w", err)
+		}
 	}
 
+	// Every indexed disc is projected, not only those written now, so a
+	// disc an earlier failed attempt left behind is caught up too. The
+	// projection writes only differences.
 	written := make(map[MediaUserFlag]bool)
 	for i := range discs {
-		if discs[i].MediaDBID <= 0 ||
-			!slices.ContainsFunc(writes, func(w MediaUserFlagWrite) bool { return w.Path == discs[i].Path }) {
+		if discs[i].MediaDBID <= 0 {
 			continue
 		}
 		discWritten, projectErr := projectMediaUserFlags(ctx, db, systemID, discs[i].Path, discs[i].MediaDBID)
@@ -161,7 +165,7 @@ func ApplyMediaUserFlagsToSet(
 			written[flag] = written[flag] || value
 		}
 	}
-	if projects && !markerHeld {
+	if projects && len(writes) > 0 && !markerHeld {
 		// A marker that cannot be cleared only costs the next start a reconcile.
 		if delErr := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); delErr != nil {
 			log.Warn().Err(delErr).Msg("failed to clear the media user flag write marker")
