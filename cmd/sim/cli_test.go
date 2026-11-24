@@ -258,6 +258,12 @@ func TestCLIForeground(t *testing.T) {
 	c.ok("unplug")
 	assert.Contains(t, c.ok("readers"), "unplugged")
 	c.ok("plug")
+	// Core reopens a plugged reader on its next connect tick; a write sent
+	// before then finds no reader and fails at once.
+	require.Eventually(t, func() bool {
+		out, err := c.run("readers")
+		return err == nil && strings.Contains(out, "): open")
+	}, 20*time.Second, 50*time.Millisecond)
 
 	// Card writes: complete one, then fail the next.
 	writeDone := make(chan error, 1)
