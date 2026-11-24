@@ -102,11 +102,30 @@ func ApplyMediaUserFlags(
 			return nil, fmt.Errorf("failed to set media user %s: %w", flag, err)
 		}
 	}
-	written := make(map[MediaUserFlag]bool)
 	if mediaDBID <= 0 {
-		return written, nil
+		return make(map[MediaUserFlag]bool), nil
 	}
 
+	written, err := projectMediaUserFlags(ctx, db, systemID, path, mediaDBID)
+	if err != nil {
+		return nil, err
+	}
+	if markerHeld {
+		return written, nil
+	}
+	// A marker that cannot be cleared only costs the next start a reconcile.
+	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
+		log.Warn().Err(err).Msg("failed to clear the media user flag write marker")
+	}
+	return written, nil
+}
+
+// projectMediaUserFlags brings one file's user tags in MediaDB in line with
+// the row UserDB holds for its path, writing only the differences, and
+// returns the flags whose tag changed with their new value.
+func projectMediaUserFlags(
+	ctx context.Context, db *Database, systemID, path string, mediaDBID int64,
+) (map[MediaUserFlag]bool, error) {
 	stored, _, err := db.UserDB.GetMediaUserData(systemID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read media user data: %w", err)
@@ -122,6 +141,7 @@ func ApplyMediaUserFlags(
 		}
 	}
 
+	written := make(map[MediaUserFlag]bool)
 	var add, remove []MediaTagRef
 	for _, flag := range MediaUserFlags {
 		want := stored.Flag(flag)
@@ -140,13 +160,6 @@ func ApplyMediaUserFlags(
 		if err := db.MediaDB.UpdateMediaTags(ctx, mediaDBID, remove, add); err != nil {
 			return nil, fmt.Errorf("failed to update media tag projection: %w", err)
 		}
-	}
-	if markerHeld {
-		return written, nil
-	}
-	// A marker that cannot be cleared only costs the next start a reconcile.
-	if err := db.UserDB.DeleteDeviceState(DeviceStateKeyMediaUserFlagWrite); err != nil {
-		log.Warn().Err(err).Msg("failed to clear the media user flag write marker")
 	}
 	return written, nil
 }

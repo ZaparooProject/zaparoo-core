@@ -1701,6 +1701,8 @@ func buildBrowseResponse(
 	var singletonAliases map[string]database.SingletonContainerAlias
 	if len(tags) == 0 {
 		singletonAliases = resolveDirSingletonAliases(env, path, dirs, systems)
+	} else {
+		singletonAliases = resolveFilteredDiscSetAliases(env, path, dirs, systems)
 	}
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))

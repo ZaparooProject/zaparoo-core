@@ -4006,6 +4006,9 @@ func (db *MediaDB) SearchMediaWithFilters(
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 
+	if filters.SkipTags {
+		ctx = withoutSearchTags(ctx)
+	}
 	scoped := *filters
 	var visibilityErr error
 	scoped.Tags, visibilityErr = discoveryTags(

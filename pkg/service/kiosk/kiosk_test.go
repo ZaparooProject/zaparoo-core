@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,6 +143,54 @@ func TestUnlockExpiresOnItsOwn(t *testing.T) {
 	assert.False(t, lock.Locked())
 
 	clock.Advance(2 * time.Second)
+	assert.Eventually(t, lock.Locked, time.Second, time.Millisecond)
+}
+
+func TestRelockHoldsRestoreAccessForItsListeners(t *testing.T) {
+	t.Parallel()
+	lock, _, clock := newLock(t)
+	var held, heldInListener atomic.Bool
+	relocked := make(chan struct{}, 1)
+	lock.SetRestoreAccess(func() (func(), error) {
+		held.Store(true)
+		return func() { held.Store(false) }, nil
+	})
+	lock.OnChange(func(status kiosk.Status) {
+		if status.State == kiosk.StateLocked {
+			heldInListener.Store(held.Load())
+			select {
+			case relocked <- struct{}{}:
+			default:
+			}
+		}
+	})
+	enableOpen(t, lock)
+	<-relocked
+	require.NoError(t, lock.Unlock(time.Minute))
+
+	clock.Advance(2 * time.Minute)
+	select {
+	case <-relocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock did not relock")
+	}
+	assert.True(t, heldInListener.Load(), "listeners run with restore access held")
+	assert.Eventually(t, func() bool { return !held.Load() }, time.Second, time.Millisecond,
+		"and it is released after")
+}
+
+func TestRelockWithoutRestoreAccessStillLocks(t *testing.T) {
+	t.Parallel()
+	lock, _, clock := newLock(t)
+	// Once a restore has finished and Core waits to restart, the gate
+	// refuses; the device must lock all the same.
+	lock.SetRestoreAccess(func() (func(), error) {
+		return nil, errors.New("backup restore restart is pending")
+	})
+	enableOpen(t, lock)
+	require.NoError(t, lock.Unlock(time.Minute))
+
+	clock.Advance(2 * time.Minute)
 	assert.Eventually(t, lock.Locked, time.Second, time.Millisecond)
 }
 

@@ -107,6 +107,9 @@ func ScriptSetup(env *testscript.Env) error {
 //	                           the same for sim journal events (launch, stop, ...);
 //	                           -peek leaves the cursor where it was, for events
 //	                           whose order is not fixed
+//	played PATH...             wait until play history's newest entry is the
+//	                           media at the path the arguments join to; history
+//	                           is written after media.started is sent
 //	mark                       move both cursors to now
 //	fault JSON | fault clear [LAUNCHER]
 //	write-complete [-reader R] [UID]
@@ -132,6 +135,7 @@ func ScriptCommands() map[string]func(ts *testscript.TestScript, neg bool, args 
 		"api-wait":       cmdAPIWait,
 		"notification":   cmdNotification,
 		"event":          cmdEvent,
+		"played":         cmdPlayed,
 		"mark":           cmdMark,
 		"fault":          cmdFault,
 		"write-complete": cmdWriteComplete,
@@ -561,6 +565,36 @@ func cmdEvent(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Fatalf("event %s %v: none after %s; journal since cursor:\n%s", kind, matches, timeout, b.String())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func cmdPlayed(ts *testscript.TestScript, neg bool, args []string) {
+	noNeg(ts, neg, "played")
+	st := running(ts)
+	if len(args) == 0 {
+		ts.Fatalf("usage: played PATH...")
+	}
+	want := strings.Join(args, " ")
+	ctx, cancel := ctxFor(ScriptWaitTimeout)
+	defer cancel()
+	last := ""
+	for {
+		result, err := st.in.API.Call(ctx, models.MethodMediaHistory, map[string]any{"limit": 1})
+		if err == nil {
+			var history models.MediaHistoryResponse
+			ts.Check(json.Unmarshal(result, &history))
+			if len(history.Entries) > 0 {
+				last = history.Entries[0].MediaPath
+				if last == want {
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			ts.Fatalf("played: newest history entry is %q, want %q (last error: %v)", last, want, err)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 

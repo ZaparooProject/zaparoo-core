@@ -23,6 +23,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,9 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	if response, handled, dirErr := updateHiddenDirectory(&env, mediaRef, changes); handled || dirErr != nil {
 		return response, dirErr
 	}
+	if response, handled, setErr := updateDiscSetFolder(&env, mediaRef, changes); handled || setErr != nil {
+		return response, setErr
+	}
 
 	resolveStarted := time.Now()
 	resolved, err := resolveMediaRefs(&env, []mediaRefParam{mediaRef})
@@ -96,6 +100,21 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	}
 
 	row := resolved[0].Row
+	// A disc of a multi-disc folder shares the folder's preferences: what it
+	// turns off, or clears by its opposite, is turned off on every disc.
+	set, err := resolveDiscSetOf(&env, row.System.SystemID, row.System.DBID, row.Path)
+	if err != nil {
+		return nil, err
+	}
+	if set != nil {
+		setTags, setErr := applyDiscSetFlags(&env, row.System.SystemID, set, row.Path, changes)
+		if setErr != nil {
+			return nil, setErr
+		}
+		log.Debug().Int64("mediaDBID", row.DBID).Int("discs", len(set.discs)).
+			Dur("totalDuration", time.Since(started)).Msg("media tags update applied to disc set")
+		return models.TagsResponse{Tags: setTags}, nil
+	}
 	resolveDuration := time.Since(resolveStarted)
 
 	updateStarted := time.Now()
@@ -253,6 +272,125 @@ func updateHiddenDirectory(
 		folderTags = append(folderTags, hiddenDirectoryTag())
 	}
 	return models.TagsResponse{Tags: folderTags}, true, nil
+}
+
+// updateDiscSetFolder handles a request that names a multi-disc folder by its
+// path with a change other than user:hidden alone. The folder's preferences
+// are its discs': a flag turned on goes to the disc the folder launches
+// unless one already holds it, and a flag turned off is turned off on all.
+// A user:hidden in the same request hides the folder itself, as it would on
+// its own. handled is false for any other request.
+func updateDiscSetFolder(
+	env *requests.RequestEnv, ref mediaRefParam, changes map[database.MediaUserFlag]bool,
+) (response any, handled bool, err error) {
+	if ref.MediaID != nil {
+		return nil, false, nil
+	}
+	system, err := env.Database.MediaDB.FindSystemBySystemID(ref.System)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to resolve system: %w", err)
+	}
+	dirPath := pathutil.CanonicalMediaPath(ref.Path)
+	exact, err := env.Database.MediaDB.FindMediaBySystemAndPaths(env.Context, system.DBID, []string{dirPath})
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to find media: %w", err)
+	}
+	if _, isMedia := exact[dirPath]; isMedia {
+		return nil, false, nil
+	}
+	childDir := strings.TrimSuffix(dirPath, "/") + "/"
+	sets, err := resolveDiscSets(env, system.SystemID, system.DBID, []string{childDir})
+	if err != nil {
+		return nil, false, err
+	}
+	set := sets[childDir]
+	if set == nil {
+		return nil, false, nil
+	}
+
+	setChanges := make(map[database.MediaUserFlag]bool, len(changes))
+	for flag, value := range changes {
+		if flag != database.MediaUserFlagHidden {
+			setChanges[flag] = value
+		}
+	}
+	hidden, hiddenRequested := changes[database.MediaUserFlagHidden]
+	if hiddenRequested {
+		hiddenOnly := map[database.MediaUserFlag]bool{database.MediaUserFlagHidden: hidden}
+		if _, _, dirErr := updateHiddenDirectory(env, ref, hiddenOnly); dirErr != nil {
+			return nil, true, dirErr
+		}
+	}
+	setTags, err := applyDiscSetFlags(env, system.SystemID, set, set.alias.Row.Path, setChanges)
+	if err != nil {
+		return nil, true, err
+	}
+	if hiddenRequested && hidden && !mediaTagsHidden(setTags) {
+		setTags = append(setTags, hiddenDirectoryTag())
+	}
+	log.Debug().Str("system", system.SystemID).Str("path", dirPath).Int("discs", len(set.discs)).
+		Msg("media tags update applied to disc set folder")
+	return models.TagsResponse{Tags: setTags}, true, nil
+}
+
+// applyDiscSetFlags records changes for a disc set, with launchPath taking a
+// flag no disc holds yet, and returns the tags the set's entry shows: the
+// launch disc's own with the user flags of every disc.
+func applyDiscSetFlags(
+	env *requests.RequestEnv,
+	systemID string,
+	set *discSet,
+	launchPath string,
+	changes map[database.MediaUserFlag]bool,
+) ([]database.TagInfo, error) {
+	var projected map[database.MediaUserFlag]bool
+	if len(changes) > 0 {
+		var applyErr error
+		projected, applyErr = database.ApplyMediaUserFlagsToSet(
+			env.Context, env.Database, systemID, set.members(), launchPath, changes,
+		)
+		// The snapshot never inserts, so it is safe even when the write failed.
+		for i := range set.discs {
+			snapshotMediaUserIdentity(env, systemID, set.discs[i].Path)
+		}
+		if applyErr != nil {
+			return nil, mediaWriteClientError(
+				fmt.Errorf("failed to apply media user flags: %w", applyErr), database.MediaWriteOperationNone,
+			)
+		}
+	}
+	_, hiddenRequested := changes[database.MediaUserFlagHidden]
+	_, hiddenProjected := projected[database.MediaUserFlagHidden]
+	if (hiddenRequested || hiddenProjected) && env.State != nil {
+		notifications.MediaVisibility(env.State.Notifications)
+	}
+	if syncedFlagChanged(changes) && env.State != nil {
+		env.State.NotifyLibraryStateChanged()
+	}
+
+	launch := slices.IndexFunc(set.discs, func(m database.Media) bool { return m.Path == launchPath })
+	if launch < 0 {
+		return nil, errors.New("launch disc is not one of the set's discs")
+	}
+	discTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBIDs(env.Context, set.mediaDBIDs())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media tags: %w", err)
+	}
+	titleTags, err := env.Database.MediaDB.GetMediaTitleTagsByMediaTitleDBID(
+		env.Context, set.discs[launch].MediaTitleDBID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media title tags: %w", err)
+	}
+	all := make([][]database.TagInfo, 0, len(set.discs))
+	for i := range set.discs {
+		all = append(all, discTags[set.discs[i].DBID])
+	}
+	merged := database.MergeDiscSetUserTags(discTags[set.discs[launch].DBID], all...)
+	return append(merged, titleTags...), nil
 }
 
 // hiddenDirectoryIsListed reports whether a browse lists dirPath as an entry

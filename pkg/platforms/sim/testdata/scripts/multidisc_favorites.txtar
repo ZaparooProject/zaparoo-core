@@ -1,0 +1,64 @@
+# A multi-disc folder is one game for favorites: the folder takes the flag,
+# shows it whichever disc it launches, lists once in a favorites search and
+# a filtered browse, drops the flag from every disc when any disc removes
+# it, and passes a favorites-only kiosk rule from any disc.
+
+sim-start
+rom 'psx/Saga/Saga (Disc 1).chd' 'psx/Saga/Saga (Disc 2).chd' 'psx/Saga/Saga (Disc 3).chd'
+rom 'psx/Solo.chd'
+index PSX
+stdout '^media 4$'
+
+api media.tags.update {"system":"PSX","path":"$ROMS/psx/Saga","add":["user:favorite"]}
+stdout '"tag": "favorite"'
+
+api media.browse {"path":"$ROMS/psx","systems":["PSX"]}
+stdout '"multiDisc": true'
+stdout '"relativePath": "PSX/Saga/Saga \(Disc 1\)\.chd"'
+stdout '"tag": "favorite"'
+
+# Playing disc 2 moves the folder's launch disc; the folder stays a favorite.
+tap -uid 01 $ROMS/psx/Saga/Saga (Disc 2).chd
+notification media.started systemId=PSX
+played $ROMS/psx/Saga/Saga (Disc 2).chd
+api media.browse {"path":"$ROMS/psx","systems":["PSX"]}
+stdout '"relativePath": "PSX/Saga/Saga \(Disc 2\)\.chd"'
+stdout '"tag": "favorite"'
+
+api media.search {"tags":["user:favorite"]}
+stdout -count=1 '"path":'
+stdout '"multiDisc": true'
+stdout '"path": ".*Saga \(Disc 2\)\.chd"'
+
+api media.search {"tags":["user:favorite"],"sort":"added-desc"}
+stdout -count=1 '"path":'
+stdout '"path": ".*Saga \(Disc 2\)\.chd"'
+
+api media.browse {"path":"$ROMS/psx","systems":["PSX"],"tags":["user:favorite"]}
+stdout -count=1 '"multiDisc": true'
+stdout '"relativePath": "PSX/Saga/Saga \(Disc 2\)\.chd"'
+! stdout 'Solo\.chd'
+
+# Removing the flag through any disc clears the whole set.
+api media.tags.update {"system":"PSX","path":"$ROMS/psx/Saga/Saga (Disc 1).chd","remove":["user:favorite"]}
+! stdout '"tag": "favorite"'
+api media.search {"tags":["user:favorite"]}
+! stdout '"path":'
+
+# Adding it back through a disc favorites the set again.
+api media.tags.update {"system":"PSX","path":"$ROMS/psx/Saga/Saga (Disc 3).chd","add":["user:favorite"]}
+stdout '"tag": "favorite"'
+api media.search {"tags":["user:favorite"]}
+stdout -count=1 '"path":'
+stdout '"multiDisc": true'
+
+# Under a favorites-only rule a disc without the flag launches through its
+# set; the single game does not.
+api profiles.content.update {"profileId":"","mode":"allowed","entries":[{"effect":"allow","kind":"tags","value":"user:favorite"}]}
+api profiles.new {"name":"Parent","role":"admin","pin":"1234"}
+api kiosk.enable {"preset":"family","confirmEmpty":true}
+mark
+tap -uid 02 $ROMS/psx/Saga/Saga (Disc 1).chd
+notification media.started systemId=PSX
+tap -uid 03 $ROMS/psx/Solo.chd
+notification kiosk.launch.refused

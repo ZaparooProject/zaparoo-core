@@ -545,6 +545,14 @@ func (d *MediaUserData) ValidateFlags() error {
 	return nil
 }
 
+// MediaUserFlagWrite is one SetMediaUserFlag write in a batch.
+type MediaUserFlagWrite struct {
+	SystemID string
+	Path     string
+	Flag     MediaUserFlag
+	Value    bool
+}
+
 // MediaUserRef names one media path in UserDB. Path is canonical.
 type MediaUserRef struct {
 	SystemID string
@@ -1358,6 +1366,10 @@ type SearchFilters struct {
 	TitleDBID int64 `json:"-"`
 	// ExcludeHidden is set only for discovery, never explicit launch resolution.
 	ExcludeHidden bool `json:"-"`
+	// SkipTags leaves Tags and ZapScriptTags unread, for a caller that only
+	// orders or folds the matches and attaches tags to the few it returns
+	// with AttachSearchTags.
+	SkipTags bool `json:"-"`
 }
 
 // SearchTitleGroup is one title of a grouped media search: the title's sort
@@ -1560,6 +1572,9 @@ type UserDBI interface {
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
 	SetMediaUserHidden(systemID, path string, hidden bool) error
 	SetMediaUserFlag(systemID, path string, flag MediaUserFlag, value bool) error
+	// SetMediaUserFlags applies several SetMediaUserFlag writes in one
+	// transaction, so they are all kept or none is.
+	SetMediaUserFlags(writes []MediaUserFlagWrite) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
 	SetMediaUserSnapshot(systemID, path, mediaName, slug string, tags []string) error
 	UpsertMediaUserData(data *MediaUserData) error
@@ -2044,6 +2059,15 @@ type MediaDBI interface {
 	ResolveSingletonContainerAliases(
 		ctx context.Context, systemDBID int64, candidates []SingletonAliasCandidate,
 	) ([]SingletonContainerAlias, error)
+	// FindDiscSets returns the disc images of each of dirs that is a
+	// multi-disc folder for systemDBID: a folder whose direct media are all
+	// disc images of one title, with no media in folders below it. The map is
+	// keyed by the folder with a trailing slash and holds its discs in path
+	// order. Folders that are not disc sets are absent.
+	FindDiscSets(ctx context.Context, systemDBID int64, dirs []string) (map[string][]Media, error)
+	// AttachSearchTags reads the tags and disambiguating tags of results
+	// read with SearchFilters.SkipTags, as a search would have attached them.
+	AttachSearchTags(ctx context.Context, results []SearchResultWithCursor) error
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is

@@ -21,14 +21,18 @@ package kiosk
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
@@ -236,16 +240,19 @@ func containsFold(list []string, want string) bool {
 // launchTarget is one launch being judged. The deck and tag lookups cost a
 // query each, so they are made at most once and only when an entry asks.
 type launchTarget struct {
-	ctx         context.Context
-	svc         *Service
-	decksErr    error
-	tagsErr     error
-	decks       map[string][]int64
-	systemID    string
-	path        string
-	tags        []database.TagInfo
-	decksLoaded bool
-	tagsLoaded  bool
+	ctx            context.Context
+	svc            *Service
+	decksErr       error
+	tagsErr        error
+	userTagsErr    error
+	decks          map[string][]int64
+	systemID       string
+	path           string
+	tags           []database.TagInfo
+	userTags       []database.TagInfo
+	decksLoaded    bool
+	tagsLoaded     bool
+	userTagsLoaded bool
 }
 
 // matches reports whether an entry covers the launch. The error is a lookup
@@ -262,7 +269,7 @@ func (t *launchTarget) matches(entry *database.ContentRuleEntry) (bool, error) {
 	case database.ContentKindDeck:
 		return t.inDeck(entry.Value)
 	case database.ContentKindTags:
-		return t.hasTags(entry.Value)
+		return t.hasTags(entry.Value, entry.Effect == database.ContentEffectDeny)
 	default:
 		// A kind this build does not know matches nothing: an allow entry
 		// written by a newer build opens nothing here, which is the safe
@@ -295,11 +302,13 @@ func (t *launchTarget) inDeck(deckID string) (bool, error) {
 // errNoIndex reports a tag entry met with no media index to read tags from.
 var errNoIndex = errors.New("media index is not available")
 
-// hasTags reports whether the media carries the tag filter. Media the index
-// holds no tags for matches no filter, including one made only of
-// exclusions, so a tag entry never opens what the index does not know. A
+// hasTags reports whether the media carries the tag filter. For an allow
+// entry, media with no indexed or user tags matches no filter, including one
+// made only of exclusions, so a tag entry never opens what the index does
+// not know. A deny entry is judged on the tags as they are, so an
+// exclusion-only deny covers untagged media as it covers tagged media. A
 // lookup that fails is reported as such.
-func (t *launchTarget) hasTags(value string) (bool, error) {
+func (t *launchTarget) hasTags(value string, deny bool) (bool, error) {
 	if t.path == "" || t.systemID == "" {
 		return false, nil
 	}
@@ -322,10 +331,94 @@ func (t *launchTarget) hasTags(value string) (bool, error) {
 	if t.tagsErr != nil {
 		return false, fmt.Errorf("look up media tags: %w", t.tagsErr)
 	}
-	if len(t.tags) == 0 {
+	mediaTags := t.tags
+	if slices.ContainsFunc(tagFilters, func(f gozapscript.TagFilter) bool {
+		return strings.EqualFold(f.Type, string(mediatags.TagTypeUser))
+	}) {
+		if !t.userTagsLoaded {
+			t.userTagsLoaded = true
+			t.userTags, t.userTagsErr = t.loadUserTags()
+		}
+		if t.userTagsErr != nil {
+			return false, fmt.Errorf("look up user flags: %w", t.userTagsErr)
+		}
+		mediaTags = append(slices.Clip(mediaTags), t.userTags...)
+	}
+	if len(mediaTags) == 0 && !deny {
 		return false, nil
 	}
-	return tagsSatisfy(t.tags, tagFilters), nil
+	return tagsSatisfy(mediaTags, tagFilters), nil
+}
+
+// loadUserTags returns the user flags of indexed media as tags. They live in
+// UserDB, not among the tags a title is told apart by. A disc of a
+// multi-disc folder also carries the flags its sibling discs hold, since the
+// folder is one game, shown as the folder shows them; hidden stays the disc's
+// own.
+func (t *launchTarget) loadUserTags() ([]database.TagInfo, error) {
+	mediaDB := t.svc.db.MediaDB
+	if mediaDB == nil {
+		return nil, errNoIndex
+	}
+	system, err := mediaDB.FindSystemBySystemID(t.systemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find system: %w", err)
+	}
+	indexed, err := mediaDB.FindMediaBySystemAndPaths(t.ctx, system.DBID, []string{t.path})
+	if err != nil {
+		return nil, fmt.Errorf("find media: %w", err)
+	}
+	if _, ok := indexed[t.path]; !ok {
+		return nil, nil
+	}
+	own := database.MediaUserRef{SystemID: system.SystemID, Path: t.path}
+	refs := []database.MediaUserRef{own}
+	if container.MayHaveContainerTarget(t.path) {
+		dir := container.ParentDir(t.path)
+		sets, setErr := mediaDB.FindDiscSets(t.ctx, system.DBID, []string{dir})
+		if setErr != nil {
+			return nil, fmt.Errorf("find disc set: %w", setErr)
+		}
+		discs := sets[dir]
+		if slices.ContainsFunc(discs, func(m database.Media) bool { return m.Path == t.path }) {
+			refs = refs[:0]
+			for i := range discs {
+				refs = append(refs, database.MediaUserRef{SystemID: system.SystemID, Path: discs[i].Path})
+			}
+		}
+	}
+	data, err := t.svc.db.UserDB.GetMediaUserDataForPaths(refs)
+	if err != nil {
+		return nil, fmt.Errorf("read media user data: %w", err)
+	}
+	flagTags := func(ref database.MediaUserRef) []database.TagInfo {
+		row, ok := data[ref]
+		if !ok {
+			return nil
+		}
+		var list []database.TagInfo
+		for _, flag := range database.MediaUserFlags {
+			if row.Flag(flag) {
+				list = append(list, database.TagInfo{Type: string(mediatags.TagTypeUser), Tag: string(flag)})
+			}
+		}
+		return list
+	}
+	out := flagTags(own)
+	if len(refs) == 1 {
+		return out, nil
+	}
+	siblings := make([][]database.TagInfo, 0, len(refs))
+	for _, ref := range refs {
+		if ref != own {
+			siblings = append(siblings, flagTags(ref))
+		}
+	}
+	out = database.MergeDiscSetUserTags(out, siblings...)
+	return out, nil
 }
 
 func splitTagList(value string) []string {

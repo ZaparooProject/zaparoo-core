@@ -58,6 +58,7 @@ Commands, from `pkg/testing/harness/script.go`:
 - **Waiting and checking:**
   - `notification [-timeout] METHOD [k=v...]` waits for an API notification.
   - `event [-peek] [-timeout] KIND [k=v...]` waits for a sim journal event; `-peek` doesn't move the cursor.
+  - `played PATH...` waits until play history's newest entry is that path; history is written after `media.started`.
   - `mark` moves both cursors to now.
   - `sounds` prints the sounds played and clears the list.
 - **Faults:** `fault JSON` and `fault clear [ID]`.

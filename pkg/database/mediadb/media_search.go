@@ -188,7 +188,9 @@ func sqliteNoCaseCompare(a, b string) int {
 	return cmp.Compare(len(a), len(b))
 }
 
-func compareSearchResults(a, b *database.SearchResultWithCursor, sortOrder string) int {
+// CompareSearchResults orders two results as a search with sortOrder returns
+// them: by sort value as SQLite compares it, then by media ID.
+func CompareSearchResults(a, b *database.SearchResultWithCursor, sortOrder string) int {
 	var order int
 	switch sortOrder {
 	case "name-asc", "name-desc":
@@ -255,7 +257,7 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 	}
 
 	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
-		return compareSearchResults(&a, &b, filters.Sort)
+		return CompareSearchResults(&a, &b, filters.Sort)
 	})
 	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
 		return a.MediaID == b.MediaID
@@ -300,7 +302,7 @@ func (db *MediaDB) searchSplitAcrossCacheAndSQL(
 	}
 
 	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
-		return compareSearchResults(&a, &b, filters.Sort)
+		return CompareSearchResults(&a, &b, filters.Sort)
 	})
 	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
 		return a.MediaID == b.MediaID

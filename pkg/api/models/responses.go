@@ -92,6 +92,9 @@ type SearchResultMedia struct {
 	// its versions. Valid until the next media index.
 	TitleID  int64 `json:"titleId,omitempty"`
 	HasCover bool  `json:"hasCover"`
+	// MultiDisc marks a result that stands for a multi-disc folder: it
+	// launches one of the folder's discs and carries the user tags of all.
+	MultiDisc bool `json:"multiDisc,omitempty"`
 }
 
 // Version link reasons: why a media.versions row is a version of the game

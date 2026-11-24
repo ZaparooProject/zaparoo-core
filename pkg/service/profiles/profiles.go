@@ -383,8 +383,14 @@ func (s *Service) Deactivate() error {
 // DeactivateForKioskLock drops an admin profile that is active when the
 // kiosk lock engages, so the device is not left on a profile nobody could
 // have switched to while it was locked. Other profiles stay as they are.
+//
+// It runs from a kiosk transition, which always holds backup-restore access
+// (see kiosk.Service.SetRestoreAccess), or at startup before the API can
+// begin a restore, so it does not take that access again. Taking it here
+// would read-lock the gate a second time on the same goroutine, under the
+// kiosk transition lock.
 func (s *Service) DeactivateForKioskLock() error {
-	return s.clearActive(func(active *models.ActiveProfile) (bool, error) {
+	return s.clearActiveHeld(func(active *models.ActiveProfile) (bool, error) {
 		return active != nil && active.Role == ProfileRoleAdmin, nil
 	})
 }
@@ -416,7 +422,12 @@ func (s *Service) clearActive(decide func(active *models.ActiveProfile) (bool, e
 		return fmt.Errorf("cannot deactivate profile during backup restore: %w", err)
 	}
 	defer release()
+	return s.clearActiveHeld(decide)
+}
 
+// clearActiveHeld is clearActive for a caller that already holds
+// backup-restore access.
+func (s *Service) clearActiveHeld(decide func(active *models.ActiveProfile) (bool, error)) error {
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
 
