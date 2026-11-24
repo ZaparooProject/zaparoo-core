@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
@@ -38,11 +39,13 @@ import (
 
 type libraryStub struct {
 	database.MediaDBI
-	groups map[int64][]int64
-	rows   []database.MediaFullRow
+	groups  map[int64][]int64
+	rows    []database.MediaFullRow
+	lookups int
 }
 
 func (db *libraryStub) FindMediaIDsByPaths(_ context.Context, paths []string) ([]database.MediaPathID, error) {
+	db.lookups++
 	var matches []database.MediaPathID
 	for i := range db.rows {
 		row := &db.rows[i]
@@ -73,8 +76,9 @@ func (db *libraryStub) GetTitlesByDBIDs(_ context.Context, ids []int64) ([]datab
 		for i := range db.rows {
 			row := &db.rows[i]
 			if row.Title.DBID == id {
+				// Production leaves SystemID empty and fills SystemDBID.
 				titles = append(titles, database.TitleWithSystem{
-					DBID: id, Slug: row.Title.Slug, SystemID: row.System.SystemID,
+					DBID: id, Slug: row.Title.Slug, SystemDBID: row.Title.SystemDBID,
 				})
 				break
 			}
@@ -84,10 +88,14 @@ func (db *libraryStub) GetTitlesByDBIDs(_ context.Context, ids []int64) ([]datab
 }
 
 func arcadeRow(path, slug string, mediaID, titleID int64) database.MediaFullRow {
+	return systemRow("Arcade", 1, path, slug, mediaID, titleID)
+}
+
+func systemRow(system string, systemDBID int64, path, slug string, mediaID, titleID int64) database.MediaFullRow {
 	return database.MediaFullRow{
-		System: database.System{SystemID: "Arcade"},
+		System: database.System{SystemID: system, DBID: systemDBID},
 		Media:  database.Media{Path: path, DBID: mediaID},
-		Title:  database.MediaTitle{Slug: slug, DBID: titleID},
+		Title:  database.MediaTitle{Slug: slug, DBID: titleID, SystemDBID: systemDBID},
 	}
 }
 
@@ -118,11 +126,13 @@ func TestImportPendingScopes(t *testing.T) {
 	ctx := t.Context()
 	original := arcadeRow("/games/example.mra", "example", 1, 10)
 	alternate := arcadeRow("/games/example-alt.mra", "example-alt", 2, 11)
+	// A same-group title on another system must not join the Arcade group.
+	foreign := systemRow("NES", 2, "/games/example.nes", "a-example", 3, 12)
 	db := &libraryStub{
-		rows: []database.MediaFullRow{original, alternate},
+		rows: []database.MediaFullRow{original, alternate, foreign},
 		groups: map[int64][]int64{
-			10: {10, 11},
-			11: {10, 11},
+			10: {10, 11, 12},
+			11: {10, 11, 12},
 		},
 	}
 	gamePNG := makePNG(t, color.NRGBA{R: 255, A: 255})
@@ -190,6 +200,49 @@ func TestImportPendingRetriesAndRejects(t *testing.T) {
 	assert.Equal(t, 1, calls)
 }
 
+// An unmatched capture is looked up once per completed index, not on every
+// pass, and is dropped once it outlives MaxCaptureAge.
+func TestImporterWaitsForIndexAndExpires(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	inbox := filepath.Join(dir, InboxDir)
+	db := &libraryStub{}
+	calls := 0
+	now := time.Now()
+	importer := &Importer{
+		DB: db, Inbox: inbox, DataDir: dir, MaxBytes: 1 << 20,
+		Changed: func(string) { calls++ },
+		Now:     func() time.Time { return now },
+	}
+	pngData := makePNG(t, color.NRGBA{A: 255})
+	waiting := stage(t, dir, "capture-wait01", "/games/later.mra", "screenshot", scopeVersion, pngData)
+
+	require.NoError(t, importer.Run(t.Context(), 0))
+	require.NoError(t, importer.Run(t.Context(), 0))
+	assert.Equal(t, 1, db.lookups, "no lookup again until an index completes")
+	assert.DirExists(t, waiting)
+
+	db.rows = []database.MediaFullRow{arcadeRow("/games/later.mra", "later", 1, 10)}
+	require.NoError(t, importer.Run(t.Context(), 1))
+	assert.Equal(t, 2, db.lookups)
+	assert.Equal(t, 1, calls)
+	assert.NoDirExists(t, waiting)
+
+	never := stage(t, dir, "capture-never1", "/games/gone.mra", "screenshot", scopeVersion, pngData)
+	rejected := stage(t, dir, ".rejected-capture-bad001", "/games/gone.mra", "screenshot", scopeVersion, pngData)
+	leftover := stage(t, dir, ".imported-capture-old001", "/games/gone.mra", "screenshot", scopeVersion, pngData)
+	require.NoError(t, importer.Run(t.Context(), 1))
+	assert.DirExists(t, never)
+	assert.DirExists(t, rejected, "a recent rejection is kept for diagnosis")
+	assert.NoDirExists(t, leftover, "a failed cleanup is retried")
+
+	now = now.Add(MaxCaptureAge + time.Hour)
+	require.NoError(t, importer.Run(t.Context(), 1))
+	assert.NoDirExists(t, never, "an expired capture is dropped without waiting for an index")
+	assert.NoDirExists(t, rejected)
+	assert.Empty(t, importer.waiting)
+}
+
 func FuzzParseRequest(f *testing.F) {
 	f.Add([]byte("{\"version\":1,\"gamePath\":\"example.mra\",\"imageType\":\"screenshot\",\"scope\":\"title\"}"))
 	f.Add([]byte("{\"version\":1,\"imageType\":\"../../test\",\"scope\":\"../\"}"))
@@ -205,4 +258,46 @@ func FuzzParseRequest(f *testing.F) {
 			assert.Contains(t, []string{scopeVersion, scopeTitle}, request.Scope)
 		}
 	})
+}
+
+func TestHasOverride(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := t.Context()
+	versioned := arcadeRow("/games/versioned.mra", "versioned", 1, 10)
+	original := arcadeRow("/games/example.mra", "example", 2, 20)
+	alternate := arcadeRow("/games/example-alt.mra", "example-alt", 3, 21)
+	plain := arcadeRow("/games/plain.mra", "plain", 4, 30)
+	db := &libraryStub{
+		rows:   []database.MediaFullRow{versioned, original, alternate, plain},
+		groups: map[int64][]int64{20: {20, 21}, 21: {20, 21}},
+	}
+
+	has, err := HasOverride(ctx, db, dir, "Arcade", plain.Path, plain.DBID)
+	require.NoError(t, err)
+	assert.False(t, has, "a system without imports has no overrides")
+
+	pngData := makePNG(t, color.NRGBA{G: 255, A: 255})
+	stage(t, dir, "capture-vers01", versioned.Path, "screenshot", scopeVersion, pngData)
+	require.NoError(t, ImportPending(ctx, db, filepath.Join(dir, InboxDir), dir, 1<<20, func(string) {}))
+	has, err = HasOverride(ctx, db, dir, "Arcade", versioned.Path, versioned.DBID)
+	require.NoError(t, err)
+	assert.True(t, has, "the captured version")
+	has, err = HasOverride(ctx, db, dir, "Arcade", plain.Path, plain.DBID)
+	require.NoError(t, err)
+	assert.False(t, has, "another game in the same system")
+
+	stage(t, dir, "capture-titl01", alternate.Path, "screenshot", scopeTitle, pngData)
+	require.NoError(t, ImportPending(ctx, db, filepath.Join(dir, InboxDir), dir, 1<<20, func(string) {}))
+	for _, row := range []database.MediaFullRow{original, alternate} {
+		has, err = HasOverride(ctx, db, dir, "Arcade", row.Path, row.DBID)
+		require.NoError(t, err)
+		assert.True(t, has, "every member of the captured title group: %s", row.Path)
+	}
+	has, err = HasOverride(ctx, db, dir, "Arcade", plain.Path, plain.DBID)
+	require.NoError(t, err)
+	assert.False(t, has, "a game outside the captured title group")
+	has, err = HasOverride(ctx, db, dir, "NES", versioned.Path, versioned.DBID)
+	require.NoError(t, err)
+	assert.False(t, has, "the same path in another system")
 }

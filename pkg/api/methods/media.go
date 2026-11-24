@@ -619,6 +619,11 @@ func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 	InvalidateMediaThumbMemoSystems(systemIDs)
 }
 
+var mediaIndexGeneration atomic.Uint64
+
+// MediaIndexGeneration changes each time an index completes.
+func MediaIndexGeneration() uint64 { return mediaIndexGeneration.Load() }
+
 func GenerateMediaDB(
 	ctx context.Context,
 	pl platforms.Platform,
@@ -995,6 +1000,7 @@ func startMediaDBGeneration(
 		}
 		mediaImageNoImages.clear()
 		invalidateIndexedThumbnails(systems, rebuild)
+		mediaIndexGeneration.Add(1)
 		statusInstance.markFinished()
 		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,

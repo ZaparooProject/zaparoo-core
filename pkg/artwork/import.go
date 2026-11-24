@@ -215,35 +215,90 @@ func pendingName(name string) bool {
 	return true
 }
 
-// ImportPending consumes completed bundles published by Main_MiSTer. A bundle
-// for a game the user hasn't indexed yet remains available for a later pass.
+// MaxCaptureAge is how long a capture waits for its game to be indexed, and
+// how long a rejected capture is kept for diagnosis, before it is deleted.
+const MaxCaptureAge = 7 * 24 * time.Hour
+
+const (
+	importedPrefix = ".imported-"
+	rejectedPrefix = ".rejected-"
+)
+
+// Importer consumes completed bundles published by Main_MiSTer. A bundle for
+// a game that isn't indexed yet waits for the next completed index instead of
+// being looked up again on every pass.
+type Importer struct {
+	DB      database.MediaDBI
+	Changed func(system string)
+	Now     func() time.Time
+	// waiting maps an unmatched capture to the index generation it was last
+	// looked up in.
+	waiting  map[string]uint64
+	Inbox    string
+	DataDir  string
+	MaxBytes int64
+}
+
+// ImportPending runs one import pass with no memory of earlier passes.
 func ImportPending(
 	ctx context.Context, db database.MediaDBI, inbox, dataDir string, maxBytes int64, changed func(string),
 ) error {
-	entries, err := os.ReadDir(inbox)
+	importer := &Importer{DB: db, Inbox: inbox, DataDir: dataDir, MaxBytes: maxBytes, Changed: changed}
+	return importer.Run(ctx, 0)
+}
+
+// Run imports every pending capture. indexGeneration changes whenever an
+// index completes, which is the only time an unmatched capture can resolve.
+func (im *Importer) Run(ctx context.Context, indexGeneration uint64) error {
+	entries, err := os.ReadDir(im.Inbox)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("read artwork inbox: %w", err)
 	}
-	root, err := os.OpenRoot(inbox)
+	root, err := os.OpenRoot(im.Inbox)
 	if err != nil {
 		return fmt.Errorf("open artwork inbox: %w", err)
 	}
 	defer func() { _ = root.Close() }()
+	now := time.Now()
+	if im.Now != nil {
+		now = im.Now()
+	}
+	if im.waiting == nil {
+		im.waiting = make(map[string]uint64)
+	}
 
 	type queuedCapture struct {
 		time time.Time
 		name string
 	}
 	pending := make([]queuedCapture, 0, len(entries))
+	present := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() || !pendingName(entry.Name()) {
+		if !entry.IsDir() {
 			continue
 		}
-		if info, err := entry.Info(); err == nil {
-			pending = append(pending, queuedCapture{name: entry.Name(), time: info.ModTime()})
+		name := entry.Name()
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		switch {
+		case pendingName(name):
+			present[name] = struct{}{}
+			pending = append(pending, queuedCapture{name: name, time: info.ModTime()})
+		case strings.HasPrefix(name, importedPrefix):
+			// A staging folder whose cleanup failed on an earlier pass.
+			removeBundle(root, name, "remove imported artwork staging folder")
+		case strings.HasPrefix(name, rejectedPrefix) && now.Sub(info.ModTime()) > MaxCaptureAge:
+			removeBundle(root, name, "remove rejected artwork capture")
+		}
+	}
+	for name := range im.waiting {
+		if _, ok := present[name]; !ok {
+			delete(im.waiting, name)
 		}
 	}
 	slices.SortStableFunc(pending, func(a, b queuedCapture) int { return a.time.Compare(b.time) })
@@ -251,45 +306,65 @@ func ImportPending(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		importPendingCapture(ctx, db, dataDir, root, item.name, maxBytes, changed)
+		expired := now.Sub(item.time) > MaxCaptureAge
+		if generation, ok := im.waiting[item.name]; ok && generation == indexGeneration && !expired {
+			continue
+		}
+		if im.importPendingCapture(ctx, root, item.name) {
+			delete(im.waiting, item.name)
+			continue
+		}
+		if expired {
+			log.Info().Str("capture", item.name).Msg("dropping screenshot artwork for a game that was never indexed")
+			removeBundle(root, item.name, "remove expired artwork capture")
+			delete(im.waiting, item.name)
+			continue
+		}
+		im.waiting[item.name] = indexGeneration
 	}
 	return nil
 }
 
-func importPendingCapture(
-	ctx context.Context, db database.MediaDBI, dataDir string, root *os.Root,
-	name string, maxBytes int64, changed func(string),
-) {
+func removeBundle(root *os.Root, name, action string) {
+	if err := root.RemoveAll(name); err != nil {
+		log.Warn().Err(err).Str("capture", name).Msg(action)
+	}
+}
+
+// importPendingCapture reports false only when the capture is still waiting
+// for its game to be indexed.
+func (im *Importer) importPendingCapture(ctx context.Context, root *os.Root, name string) bool {
+	logger := log.With().Str("capture", name).Logger()
 	capture, err := root.OpenRoot(name)
 	if err != nil {
-		log.Warn().Err(err).Str("capture", name).Msg("open queued artwork")
-		return
+		logger.Warn().Err(err).Msg("open queued artwork")
+		return true
 	}
-	system, err := importCapture(ctx, db, dataDir, capture, maxBytes)
+	system, err := importCapture(ctx, im.DB, im.DataDir, capture, im.MaxBytes)
 	_ = capture.Close()
-	logger := log.With().Str("capture", name).Logger()
 	switch {
 	case err == nil:
-		changed(system)
-		done := ".imported-" + name
+		im.Changed(system)
+		done := importedPrefix + name
 		if moveErr := root.Rename(name, done); moveErr != nil {
 			logger.Warn().Err(moveErr).Msg("mark artwork capture imported")
-			return
+			// Never import the same capture twice.
+			removeBundle(root, name, "remove imported artwork capture")
+			return true
 		}
-		for _, file := range []string{requestName, captureName, ""} {
-			if removeErr := root.Remove(filepath.Join(done, file)); removeErr != nil {
-				logger.Warn().Err(removeErr).Msg("remove imported artwork staging file")
-			}
-		}
+		removeBundle(root, done, "remove imported artwork staging folder")
 		logger.Info().Str("system", system).Msg("imported screenshot artwork")
-	case errors.Is(err, errGameUnindexed), errors.Is(err, context.Canceled):
-		// Retry when the game is indexed or the service restarts.
+	case errors.Is(err, errGameUnindexed):
+		return false
+	case errors.Is(err, context.Canceled):
+		// Retry when the service restarts.
 	case errors.Is(err, errInvalidCapture):
 		logger.Warn().Err(err).Msg("rejected screenshot artwork")
-		if moveErr := root.Rename(name, ".rejected-"+name); moveErr != nil {
+		if moveErr := root.Rename(name, rejectedPrefix+name); moveErr != nil {
 			logger.Warn().Err(moveErr).Msg("quarantine artwork capture")
 		}
 	default:
 		logger.Warn().Err(err).Msg("retrying screenshot artwork import")
 	}
+	return true
 }

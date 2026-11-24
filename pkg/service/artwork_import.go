@@ -33,15 +33,19 @@ import (
 )
 
 func importScreenshotArtwork(ctx context.Context, pl platforms.Platform, db database.MediaDBI) {
-	dataDir := helpers.DataDir(pl)
-	inbox := filepath.Join(pl.Settings().DataDir, artwork.InboxDir)
-	maxBytes := methods.MediaImageMaxBytes(pl)
+	importer := &artwork.Importer{
+		DB:       db,
+		Inbox:    filepath.Join(pl.Settings().DataDir, artwork.InboxDir),
+		DataDir:  helpers.DataDir(pl),
+		MaxBytes: methods.MediaImageMaxBytes(pl),
+		Changed: func(system string) {
+			methods.InvalidateMediaThumbMemoSystems([]string{system})
+		},
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
-		if err := artwork.ImportPending(ctx, db, inbox, dataDir, maxBytes, func(system string) {
-			methods.InvalidateMediaThumbMemoSystems([]string{system})
-		}); err != nil && ctx.Err() == nil {
+		if err := importer.Run(ctx, methods.MediaIndexGeneration()); err != nil && ctx.Err() == nil {
 			log.Warn().Err(err).Msg("import screenshot artwork")
 		}
 		select {

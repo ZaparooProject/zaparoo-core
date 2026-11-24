@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -33,8 +34,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/artwork"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
@@ -573,4 +576,81 @@ func mustReadFile(t *testing.T, fs afero.Fs, path string) []byte {
 	data, err := afero.ReadFile(fs, path)
 	require.NoError(t, err)
 	return data
+}
+
+// Imported artwork for one game bypasses only that game's recorded cover. The
+// rest of the system keeps the recorded-thumbnail path.
+func TestHandleMediaImage_ImportedArtworkBypassesOnlyItsGame(t *testing.T) {
+	// Not parallel: installs the process-wide thumb cache pointer and hook.
+	mediaImageNoImages.clear()
+	plain := makeMediaFullRow(521, 5210)
+	captured := makeMediaFullRow(522, 5220)
+	dir := t.TempDir()
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return(ids.Mister)
+	platform.On("Settings").Return(platforms.Settings{HostManagedPaths: true, DataDir: dir})
+
+	importDB := testhelpers.NewMockMediaDBI()
+	importDB.On("FindMediaIDsByPaths", mock.Anything, []string{captured.Path}).
+		Return([]database.MediaPathID{{DBID: captured.DBID}}, nil).Once()
+	importDB.On("GetMediaWithTitleAndSystem", mock.Anything, captured.DBID).Return(captured, nil).Once()
+	inbox := filepath.Join(dir, artwork.InboxDir)
+	staging := filepath.Join(inbox, "capture-byp001")
+	require.NoError(t, os.MkdirAll(staging, 0o750))
+	request := fmt.Sprintf(
+		"{\"version\":1,\"gamePath\":%q,\"scope\":\"version\",\"imageType\":\"screenshot\"}", captured.Path,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "request.json"), []byte(request), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "capture.png"), solidPNG(t, 2, color.RGBA{A: 0xff}), 0o600))
+	require.NoError(t, artwork.ImportPending(
+		t.Context(), importDB, inbox, dir, MediaImageMaxBytes(platform), func(string) {},
+	))
+	importDB.AssertExpectations(t)
+
+	cache := newMemThumbCache()
+	installThumbCache(t, cache)
+	sourcePath, sourceKey := writeCoverSource(t, []byte("original"))
+	setMediaThumbCacheForTest(t, cache, sourceKey, 256, []byte("thumb"), "image/webp")
+	semTouched := false
+	mediaImageBeforeSemAcquire = func() { semTouched = true }
+	t.Cleanup(func() { mediaImageBeforeSemAcquire = nil })
+	recorded := func(row *database.MediaFullRow) database.MediaCoverThumb {
+		return database.MediaCoverThumb{
+			MediaDBID: row.DBID, SystemID: row.System.SystemID, Path: row.Path,
+			TypeTag: coverTestBoxart, SourceKey: sourceKey, SourcePath: sourcePath,
+			AvailableTypeTags: []string{coverTestBoxart},
+		}
+	}
+
+	// No row, property or group expectations: the plain game must not load any.
+	plainDB := testhelpers.NewMockMediaDBI()
+	plainDB.On("FindSystemBySystemID", plain.System.SystemID).Return(plain.System, nil).Once()
+	plainDB.On("FindMediaBySystemAndPath", mock.Anything, plain.System.DBID, plain.Path).
+		Return(&plain.Media, nil).Once()
+	plainDB.On("GetMediaCoverThumb", mock.Anything, plain.DBID).Return(recorded(plain), true, nil).Once()
+	env := makeMediaImageEnv(t, plainDB, mediaImageParams(plain, `"maxSize": 256`))
+	env.Platform = platform
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("thumb")), resp.Data)
+	assert.False(t, semTouched, "a game without imported artwork keeps the recorded path")
+	plainDB.AssertExpectations(t)
+
+	capturedDB := testhelpers.NewMockMediaDBI()
+	expectMediaImageResolve(capturedDB, captured)
+	capturedDB.On("GetMediaCoverThumb", mock.Anything, captured.DBID).Return(recorded(captured), true, nil).Once()
+	capturedDB.On("GetMediaProperties", mock.Anything, captured.DBID).Return([]database.MediaProperty{}, nil).Once()
+	capturedDB.On("GetMediaTitleProperties", mock.Anything, captured.Title.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+	env = makeMediaImageEnv(t, capturedDB, mediaImageParams(captured, `"maxSize": 256, "imageTypes": ["screenshot"]`))
+	env.Platform = platform
+	result, err = HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-screenshot", resp.TypeTag)
+	assert.True(t, semTouched, "the captured game takes the full lookup")
+	capturedDB.AssertExpectations(t)
 }

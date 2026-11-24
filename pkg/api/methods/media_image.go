@@ -1698,9 +1698,13 @@ func recordedThumbResponse(
 	}
 	// User artwork is resolved from persistent storage outside the scraped
 	// properties the thumbnail record knows about.
-	if env.Platform != nil && env.Platform.ID() == ids.Mister &&
-		artwork.HasSystem(helpers.DataDir(env.Platform), thumb.SystemID) {
-		return models.MediaImageResponse{}, false
+	if env.Platform != nil && env.Platform.ID() == ids.Mister {
+		hasOverride, overrideErr := artwork.HasOverride(
+			env.Context, db, helpers.DataDir(env.Platform), thumb.SystemID, thumb.Path, thumb.MediaDBID,
+		)
+		if overrideErr != nil || hasOverride {
+			return models.MediaImageResponse{}, false
+		}
 	}
 	if !recordedTypeMatchesPrefs(thumb.TypeTag, thumb.AvailableTypeTags, prefs) {
 		return models.MediaImageResponse{}, false

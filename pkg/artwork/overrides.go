@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/rs/zerolog/log"
 )
 
 const overridesDir = "artwork-overrides"
@@ -56,9 +58,97 @@ func assignmentDir(dataDir, system, scope, identity string) string {
 	return filepath.Join(systemDir(dataDir, system), scope, stableKey(identity))
 }
 
-func HasSystem(dataDir, system string) bool {
-	info, err := os.Stat(systemDir(dataDir, system))
-	return err == nil && info.IsDir()
+// assignmentIndex lists the hashed identities that have override folders in
+// one system, so requests for every other game skip the SD card entirely.
+type assignmentIndex struct {
+	versions map[string]struct{}
+	titles   map[string]struct{}
+	revision uint64
+}
+
+func (idx *assignmentIndex) empty() bool {
+	return len(idx.versions) == 0 && len(idx.titles) == 0
+}
+
+var (
+	indexMu syncutil.Mutex
+	indexes = make(map[string]*assignmentIndex)
+)
+
+func listAssignments(dir string) map[string]struct{} {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Debug().Err(err).Str("dir", dir).Msg("list artwork assignments")
+		}
+		return nil
+	}
+	keys := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			keys[entry.Name()] = struct{}{}
+		}
+	}
+	return keys
+}
+
+// systemIndex returns the system's assignment index, rebuilding it after an
+// import publishes a new override.
+func systemIndex(dataDir, system string) *assignmentIndex {
+	dir := systemDir(dataDir, system)
+	current := revision.Load()
+	indexMu.Lock()
+	defer indexMu.Unlock()
+	if idx, ok := indexes[dir]; ok && idx.revision == current {
+		return idx
+	}
+	// The revision is read before listing, so an import that lands during the
+	// listing leaves a stale revision and the next request lists again.
+	idx := &assignmentIndex{
+		revision: current,
+		versions: listAssignments(filepath.Join(dir, scopeVersion)),
+		titles:   listAssignments(filepath.Join(dir, scopeTitle)),
+	}
+	indexes[dir] = idx
+	return idx
+}
+
+func (idx *assignmentIndex) hasTitle(slugs []string) bool {
+	for _, slug := range slugs {
+		if _, ok := idx.titles[stableKey(slug)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// HasOverride reports whether a media row has any imported artwork, loading
+// the row's title group only when the system has title-wide artwork.
+func HasOverride(
+	ctx context.Context, db database.MediaDBI, dataDir, system, path string, mediaDBID int64,
+) (bool, error) {
+	idx := systemIndex(dataDir, system)
+	if idx.empty() {
+		return false, nil
+	}
+	if _, ok := idx.versions[stableKey(path)]; ok {
+		return true, nil
+	}
+	if len(idx.titles) == 0 {
+		return false, nil
+	}
+	row, err := db.GetMediaWithTitleAndSystem(ctx, mediaDBID)
+	if err != nil {
+		return false, fmt.Errorf("load media for artwork lookup: %w", err)
+	}
+	if row == nil {
+		return false, nil
+	}
+	slugs, err := groupSlugs(ctx, db, row)
+	if err != nil {
+		return false, err
+	}
+	return idx.hasTitle(slugs), nil
 }
 
 func IsOverridePath(dataDir, path string) bool {
@@ -137,7 +227,7 @@ func groupSlugs(ctx context.Context, db database.MediaDBI, row *database.MediaFu
 			return nil, fmt.Errorf("load artwork version group titles: %w", titleErr)
 		}
 		for _, member := range titles {
-			if member.DBID != row.Title.DBID && member.SystemID == row.System.SystemID {
+			if member.DBID != row.Title.DBID && member.SystemDBID == row.System.DBID {
 				slugs = append(slugs, member.Slug)
 			}
 		}
@@ -153,17 +243,19 @@ func Properties(
 	ctx context.Context, db database.MediaDBI, dataDir string, row *database.MediaFullRow,
 ) (version, title []database.MediaProperty, err error) {
 	system := row.System.SystemID
-	if !HasSystem(dataDir, system) {
+	idx := systemIndex(dataDir, system)
+	if idx.empty() {
 		return nil, nil, nil
 	}
 
 	exact := make(map[string]assignment)
-	dir := assignmentDir(dataDir, system, scopeVersion, row.Path)
-	if readErr := readAssignments(dir, exact); readErr != nil {
-		return nil, nil, readErr
+	if _, ok := idx.versions[stableKey(row.Path)]; ok {
+		dir := assignmentDir(dataDir, system, scopeVersion, row.Path)
+		if readErr := readAssignments(dir, exact); readErr != nil {
+			return nil, nil, readErr
+		}
 	}
-	titleDir := filepath.Join(systemDir(dataDir, system), scopeTitle)
-	if _, statErr := os.Stat(titleDir); errors.Is(statErr, os.ErrNotExist) {
+	if len(idx.titles) == 0 {
 		return assignmentProperties(exact), nil, nil
 	}
 	slugs, err := groupSlugs(ctx, db, row)
@@ -172,6 +264,9 @@ func Properties(
 	}
 	shared := make(map[string]assignment)
 	for _, slug := range slugs {
+		if _, ok := idx.titles[stableKey(slug)]; !ok {
+			continue
+		}
 		if readErr := readAssignments(assignmentDir(dataDir, system, scopeTitle, slug), shared); readErr != nil {
 			return assignmentProperties(exact), nil, readErr
 		}
