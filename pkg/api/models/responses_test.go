@@ -226,6 +226,29 @@ func TestActiveMedia_Equal(t *testing.T) {
 			},
 			expected: false, // Different systems despite having similar episode-like title
 		},
+		{
+			name: "same token label, different launched titles",
+			a: &ActiveMedia{
+				SystemID: "SNES", SystemName: "SNES", Path: "/media/usb/a.sfc",
+				Name: "My Games", LaunchedName: "Alpha",
+			},
+			b: &ActiveMedia{
+				SystemID: "SNES", SystemName: "SNES", Path: "/media/usb/b.sfc",
+				Name: "My Games", LaunchedName: "Bravo",
+			},
+			expected: false,
+		},
+		{
+			name: "labeled media matches the same title reported unlabeled",
+			a: &ActiveMedia{
+				SystemID: "SNES", SystemName: "SNES", Path: "/media/usb/a.sfc",
+				Name: "My Games", LaunchedName: "Alpha",
+			},
+			b: &ActiveMedia{
+				SystemID: "SNES", SystemName: "SNES", Path: "/tmp/a.sfc", Name: "Alpha",
+			},
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {

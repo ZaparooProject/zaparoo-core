@@ -343,3 +343,33 @@ func TestHandleMediaBrowseOpensASystemBackedBySourceRootWhenBrowseCacheIsFullyBu
 	}
 	assert.True(t, sawGame, "the game must still appear once the browse cache is fully built, not just via fallback")
 }
+
+// A merged-root cursor carries no routes when the system has none, so a later
+// page re-enters the no-sources return. Entries must still be an array (#1854).
+func TestHandleMediaBrowseRootContentsCursorWithoutSourcesReturnsEmptyArray(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+
+	platform := &sourceBrowseTestPlatform{MockPlatform: mocks.NewMockPlatform()}
+	platform.On("RootDirs", mock.Anything).Return([]string{})
+	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	cursor, err := encodeFilesStartCursor(0, 0, &browseCursorScope{RootView: browseRootViewContents})
+	require.NoError(t, err)
+	rootView := browseRootViewContents
+	systems := []string{systemdefs.SystemNES}
+	paramsJSON, err := json.Marshal(models.BrowseParams{Systems: &systems, RootView: &rootView, Cursor: &cursor})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context: context.Background(), Params: paramsJSON, Database: db, Platform: platform,
+		Config: &config.Instance{}, LauncherCache: nesLauncherCache(),
+	}
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"entries":[]`)
+}

@@ -2713,6 +2713,9 @@ func remoteBackupToInfo(resp *remoteBackupResponse) RemoteBackupInfo {
 		VerifiedAt:    resp.VerifiedAt,
 		RestoredAt:    resp.RestoredAt,
 	}
+	if info.Categories == nil {
+		info.Categories = map[string]remoteCategorySummary{}
+	}
 	if resp.SourceDevice != nil {
 		info.SourceDevice = &RemoteBackupSourceDevice{
 			ID:       resp.SourceDevice.ID,

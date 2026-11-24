@@ -21,6 +21,7 @@ package retroarch
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -247,6 +248,65 @@ func TestLauncherReportsMissingCore(t *testing.T) {
 	proc, err := launcher.Launch(&config.Instance{}, "game.nes", nil)
 
 	assert.Nil(t, proc)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "core is not installed")
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+	assert.Equal(t, "RetroArch", repair.Params()[platforms.LaunchRepairParamLauncher])
+	assert.Equal(t, "the RetroArch core for this system is not installed", repair.Error())
+	assert.NotContains(t, repair.Error(), root)
+}
+
+func TestLauncherReportsMissingExecutable(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(string(filepath.Separator), "runtime")
+	launcher := NewLauncher(Options{
+		FS:       fs,
+		Exec:     []string{filepath.Join(root, "retroarch")},
+		CoresDir: filepath.Join(root, "cores"),
+	}, CoreLaunch{ID: "RetroArchMesen", Core: "mesen_libretro.so"})
+
+	proc, err := launcher.Launch(&config.Instance{}, "game.nes", nil)
+
+	assert.Nil(t, proc)
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+	assert.Equal(t, "RetroArch", repair.Params()[platforms.LaunchRepairParamLauncher])
+	assert.Equal(t, "RetroArch is not installed", repair.Error())
+}
+
+// statFailFs fails every stat, as an unreadable mount would.
+type statFailFs struct {
+	afero.Fs
+}
+
+var errStatFault = errors.New("injected stat fault")
+
+func (statFailFs) Stat(string) (os.FileInfo, error) { return nil, errStatFault }
+
+// A stat failure other than a missing file is not reported as "not
+// installed": the cause is kept for the log and errors.Is.
+func TestLauncherKeepsStatFailuresThatAreNotMissingFiles(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(string(filepath.Separator), "runtime")
+	executable := NewLauncher(Options{
+		FS:       statFailFs{Fs: afero.NewMemMapFs()},
+		Exec:     []string{filepath.Join(root, "retroarch")},
+		CoresDir: filepath.Join(root, "cores"),
+	}, CoreLaunch{ID: "RetroArchMesen", Core: "mesen_libretro.so"})
+	_, err := executable.Launch(&config.Instance{}, "game.nes", nil)
+	require.ErrorIs(t, err, errStatFault)
+	assert.Contains(t, err.Error(), "failed to stat retroarch executable")
+
+	core := NewLauncher(Options{
+		FS:       statFailFs{Fs: afero.NewMemMapFs()},
+		Exec:     []string{"retroarch"},
+		CoresDir: filepath.Join(root, "cores"),
+	}, CoreLaunch{ID: "RetroArchMesen", Core: "mesen_libretro.so"})
+	_, err = core.Launch(&config.Instance{}, "game.nes", nil)
+	require.ErrorIs(t, err, errStatFault)
+	assert.Contains(t, err.Error(), "failed to stat retroarch core")
 }

@@ -246,6 +246,7 @@ func TestScraperDefinition(t *testing.T) {
 	assert.True(t, s.SupportsFillMissing)
 	assert.True(t, s.AutoScrapeAllLaunchers, "runs after indexing once a server is configured")
 	assert.Equal(t, scraper.AutoOrderLibraryServer, s.AutoScrapeOrder)
+	assert.NotNil(t, s.SupportedSystemIDs, "an unset list reaches the API as null")
 	assert.Empty(t, s.SupportedSystemIDs)
 	assert.False(t, NewPlatformScraper(&config.Instance{}).AutoScrapeAllLaunchers)
 	pl := mocks.NewMockPlatform()

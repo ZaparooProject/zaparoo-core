@@ -153,7 +153,7 @@ Earlier Core versions returned `null` as soon as the token was accepted, before 
   "id": "52f6242e-7a5a-11ef-bf93-020304050607",
   "error": {
     "code": 1,
-    "message": "media not found",
+    "message": "file not found",
     "data": {
       "category": "media_not_found"
     }
@@ -614,7 +614,8 @@ None.
 | positionMs       | number   | No       | Current playback position in milliseconds when reported by the launcher. Currently available for native audio. |
 | durationMs       | number   | No       | Total playback duration in milliseconds when reported by the launcher. Currently available for native audio. |
 | playbackState    | string   | No       | Launcher-reported playback state: `playing`, `paused`, or `stopped`. Currently available for native audio; omitted when unavailable. |
-| mediaName        | string   | Yes      | Display name of the media.                 |
+| mediaName        | string   | Yes      | Display name of the media. When the media was launched from an external drive whose `zaparoo.json` sets `name`, and the media file is on that drive, this is that name. |
+| mediaDescription | string   | No       | Description of the media from the `zaparoo.json` of the external drive it was launched from, under the same rule as `mediaName`. Omitted when there is none. |
 | slot             | string   | No       | Media slot for the item. Omitted or `primary` is foreground media; `background` is background audio. |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
 | zapScript        | string   | Yes      | ZapScript command to launch this media item. For a track in the `background` slot this is the track's path, since track titles are not unique across albums. |
@@ -2126,7 +2127,7 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
 
 **Access:** All clients.
 
-Returns the cover art of the audio track native audio is playing in a slot: the picture embedded in the track's tags, else a `cover`, `folder` or `front` image (`.jpg`, `.jpeg` or `.png`, any case) in the track's folder. The track is always the one the slot is playing; the request never names a path. Requests share the image concurrency limit and low-priority lane of [media.image](#mediaimage).
+Returns the cover art of the media playing in a slot. For `primary` media launched from an external drive whose `zaparoo.json` sets `image`, and stored on that drive, it is that image, served only when it is a PNG or JPEG of at most 4096×4096 pixels. Otherwise it is the cover art of the audio track native audio is playing in the slot: the picture embedded in the track's tags, else a `cover`, `folder` or `front` image (`.jpg`, `.jpeg` or `.png`, any case) in the track's folder. The media is always the one the slot is playing; the request never names a path. Requests share the image concurrency limit and low-priority lane of [media.image](#mediaimage).
 
 #### Parameters
 
@@ -2138,13 +2139,14 @@ Returns the cover art of the audio track native audio is playing in a slot: the 
 
 #### Result
 
-The same object as [media.image](#mediaimage), with `typeTag` `audio:embedded` for art from the track's tags or `audio:folder` for an image beside it.
+The same object as [media.image](#mediaimage), with `typeTag` `token:cover` for an external drive's `zaparoo.json` image, `audio:embedded` for art from the track's tags or `audio:folder` for an image beside it.
 
 Errors:
 
-- `no active audio track`: nothing is playing through native audio in the slot.
-- `no cover art`: the track has no embedded picture and no image beside it.
-- `cover art is too large`: the art is larger than the platform's image limit.
+- `no image for the active media`: nothing is playing through native audio in the slot, and the media has no `zaparoo.json` image.
+- `no cover art`: the track has no embedded picture and no image beside it, or the `zaparoo.json` image can no longer be read, for example because the drive was removed.
+- `cover art is too large`: the art is larger than the platform's image limit, or a `zaparoo.json` image is larger than 4096×4096 pixels.
+- `cover art is not a PNG or JPEG image`: the `zaparoo.json` image is in another format or is damaged.
 
 #### Example
 

@@ -376,3 +376,25 @@ func TestLaunchSystemWithoutAnyCoreStillFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to launch core")
 	assert.False(t, launched, "an unrelated installed core must not be launched")
 }
+
+// A slot-routed alternate core that is not installed must report the missing
+// core as a repair, naming the core but not its path.
+func TestLaunchAltCoreWithSlotsReportsMissingCore(t *testing.T) {
+	// Not parallel: withRBFCache swaps the global cache the launch path reads.
+	withRBFCache(t, []cores.RBFInfo{{
+		Path:      filepath.Join(misterconfig.SDRootDir, "_Console", "NES_20260311.rbf"),
+		Filename:  "NES_20260311.rbf",
+		ShortName: "NES",
+		MglName:   filepath.Join("_Console", "NES"),
+	}})
+
+	launch := launchAltCoreWithDefinition(&kitrinxNGPCCore)
+	proc, err := launch(&config.Instance{}, filepath.Join(misterconfig.SDRootDir, "games", "NGPC", "a.ngc"), nil)
+
+	assert.Nil(t, proc)
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+	assert.Equal(t, "the MiSTer core NGPC is not installed", repair.Error())
+	assert.Equal(t, "NGPC", repair.Params()[platforms.LaunchRepairParamPlugin])
+}

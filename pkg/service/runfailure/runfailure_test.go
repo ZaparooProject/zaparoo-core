@@ -28,6 +28,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -50,13 +51,19 @@ func TestClassify(t *testing.T) {
 	}{
 		{name: "script busy", err: platforms.ErrScriptAlreadyRunning, category: models.ErrorCategoryBusy},
 		{name: "launch in progress", err: state.ErrLaunchInProgress, category: models.ErrorCategoryBusy},
-		{name: "file not found", err: zapscript.ErrFileNotFound, category: models.ErrorCategoryMediaNotFound},
+		{
+			name: "file not found", err: zapscript.ErrFileNotFound,
+			category: models.ErrorCategoryMediaNotFound, message: "file not found",
+		},
 		{
 			name:     "wrapped no title match",
 			err:      fmt.Errorf("error resolving title SNES/Zelda: %w", titles.ErrNoMatch),
-			category: models.ErrorCategoryMediaNotFound, message: "media not found",
+			category: models.ErrorCategoryMediaNotFound, message: "no matching game found",
 		},
-		{name: "low confidence", err: titles.ErrLowConfidence, category: models.ErrorCategoryMediaNotFound},
+		{
+			name: "low confidence", err: titles.ErrLowConfidence,
+			category: models.ErrorCategoryMediaNotFound, message: "no matching game found",
+		},
 		{name: "disabled", err: state.ErrRunZapScriptDisabled, category: models.ErrorCategoryDisabled},
 		{
 			name:     "too long keeps the limit text",
@@ -65,7 +72,10 @@ func TestClassify(t *testing.T) {
 			message: fmt.Sprintf("zapscript exceeds maximum length: %d bytes (max %d)",
 				zapscript.MaxScriptLength+1, zapscript.MaxScriptLength),
 		},
-		{name: "unknown command", err: zapscript.ErrUnknownCommand, category: models.ErrorCategoryInvalidScript},
+		{
+			name: "unknown command", err: zapscript.ErrUnknownCommand,
+			category: models.ErrorCategoryInvalidScript, message: "unknown command",
+		},
 		{
 			name: "write with other commands", category: models.ErrorCategoryInvalidScript,
 			err: zapscript.ErrWriteNotAlone,
@@ -76,13 +86,31 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name: "invalid advanced arguments", category: models.ErrorCategoryInvalidScript,
-			err: fmt.Errorf("%w: slot", zapscript.ErrInvalidArguments),
+			err: fmt.Errorf("%w: slot", zapscript.ErrInvalidArguments), message: "invalid command arguments",
+		},
+		{
+			name: "unknown system inside invalid arguments", category: models.ErrorCategoryInvalidScript,
+			err:     fmt.Errorf("%w: %w", zapscript.ErrInvalidArguments, systemdefs.ErrUnknownSystem),
+			message: "unknown system",
 		},
 		{
 			name: "command outside the token's bound", category: models.ErrorCategoryBlocked,
 			err: fmt.Errorf("%w: execute", zapscript.ErrCommandNotPermitted),
 		},
-		{name: "unknown system", err: systemdefs.ErrUnknownSystem, category: models.ErrorCategoryInvalidScript},
+		{
+			name: "unknown system", err: systemdefs.ErrUnknownSystem,
+			category: models.ErrorCategoryInvalidScript, message: "unknown system",
+		},
+		{
+			name: "no launcher for the file",
+			err: fmt.Errorf("launch media: error finding launcher: %w for: /media/usb/game.z64",
+				helpers.ErrNoLauncher),
+			category: models.ErrorCategoryExecutionFailed, message: "no launcher can open this file",
+		},
+		{
+			name: "launcher unavailable", err: platforms.ErrLauncherUnavailable,
+			category: models.ErrorCategoryExecutionFailed, message: "the launcher is unavailable",
+		},
 		{
 			name: "rotation time under a second", category: models.ErrorCategoryInvalidScript,
 			err: fmt.Errorf("%w: advance=500ms", zapscript.ErrInvalidRotation),
@@ -91,8 +119,18 @@ func TestClassify(t *testing.T) {
 			name: "playlist start out of range", category: models.ErrorCategoryInvalidScript,
 			err: fmt.Errorf("%w: start=0", zapscript.ErrInvalidPlaylistStart),
 		},
-		{name: "blocked", err: zapscript.ErrCommandBlocked, category: models.ErrorCategoryBlocked},
-		{name: "requires profile", err: state.ErrLaunchRequiresProfile, category: models.ErrorCategoryBlocked},
+		{
+			name: "blocked", err: zapscript.ErrCommandBlocked,
+			category: models.ErrorCategoryBlocked, message: "ZapScript execution was blocked",
+		},
+		{
+			name: "blocked by hook", err: fmt.Errorf("%w: exit 1", state.ErrLaunchBlockedByHook),
+			category: models.ErrorCategoryBlocked, message: "blocked by a launch hook",
+		},
+		{
+			name: "requires profile", err: state.ErrLaunchRequiresProfile,
+			category: models.ErrorCategoryBlocked, message: "a profile must be chosen first",
+		},
 		{name: "playtime", err: playtime.ErrLimitReached, category: models.ErrorCategoryPlaytimeLimit},
 		{
 			name:     "unknown error carries no detail",

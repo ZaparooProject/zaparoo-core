@@ -25,15 +25,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 // DATFile represents a parsed No-Intro or TOSEC DAT file
 type DATFile struct {
-	XMLName xml.Name   `xml:"datafile"`
-	Header  DATHeader  `xml:"header"`
-	Games   []DATGame  `xml:"game"`
+	XMLName xml.Name  `xml:"datafile"`
+	Header  DATHeader `xml:"header"`
+	Games   []DATGame `xml:"game"`
 }
 
 // DATHeader contains metadata about the DAT file
@@ -200,39 +200,39 @@ func matchSpecialCases(datName string) string {
 
 	// Map common DAT name patterns to system IDs
 	specialCases := map[string]string{
-		"game boy color":        "GameboyColor",
-		"game boy advance":      "GBA",
-		"game boy":              "Gameboy",
-		"game gear":             "GameGear",
-		"master system":         "MasterSystem",
-		"mega drive":            "Genesis",
-		"mega cd":               "MegaCD",
-		"sega cd":               "MegaCD",
-		"super nintendo":        "SNES",
-		"family computer":       "NES",
-		"famicom":               "NES",
-		"disk system":           "FDS",
-		"pc engine":             "TurboGrafx16",
-		"turbografx":            "TurboGrafx16",
-		"neo geo pocket color":  "NeoGeoPocketColor",
-		"neo geo pocket":        "NeoGeoPocket",
-		"neo geo cd":            "NeoGeoCD",
-		"neo geo":               "NeoGeo",
-		"wonderswan color":      "WonderSwanColor",
-		"wonderswan":            "WonderSwan",
-		"playstation":           "PSX",
-		"commander x16":         "CommanderX16",
-		"zx spectrum":           "ZXSpectrum",
-		"amstrad cpc":           "Amstrad",
-		"commodore 64":          "C64",
-		"atari 2600":            "Atari2600",
-		"atari 7800":            "Atari7800",
-		"atari lynx":            "AtariLynx",
-		"atari st":              "AtariST",
-		"intellivision":         "Intellivision",
-		"colecovision":          "ColecoVision",
-		"mp-1000":               "APF",
-		"archimedes":            "Archimedes",
+		"game boy color":       "GameboyColor",
+		"game boy advance":     "GBA",
+		"game boy":             "Gameboy",
+		"game gear":            "GameGear",
+		"master system":        "MasterSystem",
+		"mega drive":           "Genesis",
+		"mega cd":              "MegaCD",
+		"sega cd":              "MegaCD",
+		"super nintendo":       "SNES",
+		"family computer":      "NES",
+		"famicom":              "NES",
+		"disk system":          "FDS",
+		"pc engine":            "TurboGrafx16",
+		"turbografx":           "TurboGrafx16",
+		"neo geo pocket color": "NeoGeoPocketColor",
+		"neo geo pocket":       "NeoGeoPocket",
+		"neo geo cd":           "NeoGeoCD",
+		"neo geo":              "NeoGeo",
+		"wonderswan color":     "WonderSwanColor",
+		"wonderswan":           "WonderSwan",
+		"playstation":          "PSX",
+		"commander x16":        "CommanderX16",
+		"zx spectrum":          "ZXSpectrum",
+		"amstrad cpc":          "Amstrad",
+		"commodore 64":         "C64",
+		"atari 2600":           "Atari2600",
+		"atari 7800":           "Atari7800",
+		"atari lynx":           "AtariLynx",
+		"atari st":             "AtariST",
+		"intellivision":        "Intellivision",
+		"colecovision":         "ColecoVision",
+		"mp-1000":              "APF",
+		"archimedes":           "Archimedes",
 	}
 
 	for pattern, systemID := range specialCases {

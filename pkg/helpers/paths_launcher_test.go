@@ -118,6 +118,60 @@ func TestGuessLauncherForPath(t *testing.T) {
 	}
 }
 
+func TestGuessSystemForPath(t *testing.T) {
+	t.Parallel()
+
+	launchers := []platforms.Launcher{
+		{ID: "GameboyColor", SystemID: systemdefs.SystemGameboyColor, Extensions: []string{".gbc"}},
+		{ID: "SNES", SystemID: systemdefs.SystemSNES, Extensions: []string{".sfc"}},
+		{ID: "PSX", SystemID: systemdefs.SystemPSX, Extensions: []string{".bin"}},
+		{ID: "MegaCD", SystemID: systemdefs.SystemMegaCD, Extensions: []string{".bin"}},
+		{ID: "PCSX2", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
+		{ID: "Play", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
+	}
+	drive := filepath.Join(string(filepath.Separator), "run", "media", "user", "STICK")
+
+	tests := []struct {
+		name       string
+		path       string
+		wantSystem string
+	}{
+		{
+			name: "folder and extension agree", path: filepath.Join(drive, "GBC", "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+		},
+		{
+			name: "unique extension at the top level", path: filepath.Join(drive, "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+		},
+		{
+			name: "folder disambiguates shared extension", path: filepath.Join(drive, "PSX", "Game.bin"),
+			wantSystem: systemdefs.SystemPSX,
+		},
+		{
+			name: "several launchers for one system", path: filepath.Join(drive, "Game.iso"),
+			wantSystem: systemdefs.SystemPS2,
+		},
+		{
+			name: "folder alias with several launchers", path: filepath.Join(drive, "PS2", "Game.iso"),
+			wantSystem: systemdefs.SystemPS2,
+		},
+		{name: "shared extension without a folder", path: filepath.Join(drive, "Game.bin")},
+		{name: "folder naming another system", path: filepath.Join(drive, "SNES", "Game.gbc")},
+		{name: "unsupported extension", path: filepath.Join(drive, "GBC", "notes.txt")},
+		{name: "missing extension", path: filepath.Join(drive, "GBC", "README")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			systemID, ok := GuessSystemForPath(tt.path, launchers)
+			assert.Equal(t, tt.wantSystem != "", ok)
+			assert.Equal(t, tt.wantSystem, systemID)
+		})
+	}
+}
+
 func TestPathIsLauncher_AbsoluteFolderNoRootDirs(t *testing.T) {
 	t.Parallel()
 

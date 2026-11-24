@@ -153,3 +153,36 @@ func ResolveRelativePath(path string) string {
 	}
 	return filepath.Join(exeDir, path)
 }
+
+// ErrNotLocalFile reports a path that is not a plain file reachable from its
+// root without leaving it or following a link.
+var ErrNotLocalFile = errors.New("not a regular file under the root")
+
+// LocalFileUnder resolves rel, a slash-separated relative path, against root
+// and returns the joined path with its file info. Every directory on the way
+// must be a real directory and the last element a regular file: an absolute
+// path, a ".." step, a symlink or any other link type is refused, so the
+// result cannot point outside root.
+func LocalFileUnder(root, rel string) (path string, info os.FileInfo, err error) {
+	if root == "" || rel == "" || strings.Contains(rel, `\`) {
+		return "", nil, ErrNotLocalFile
+	}
+	rel = filepath.FromSlash(rel)
+	if !filepath.IsLocal(rel) {
+		return "", nil, ErrNotLocalFile
+	}
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	current := root
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err = os.Lstat(current)
+		if err != nil {
+			return "", nil, fmt.Errorf("stat %s: %w", current, err)
+		}
+		last := i == len(parts)-1
+		if (last && !info.Mode().IsRegular()) || (!last && info.Mode().Type() != os.ModeDir) {
+			return "", nil, ErrNotLocalFile
+		}
+	}
+	return current, info, nil
+}

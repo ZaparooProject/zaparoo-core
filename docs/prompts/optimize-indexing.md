@@ -31,9 +31,9 @@ Every 10k files: `CommitTransaction()` + `FlushScanStateMaps()` (clears TitleIDs
 | `pkg/database/mediascanner/mediascanner.go` | `NewNamesIndex()` orchestrator, transaction batching, fastwalk | Mixed |
 | `pkg/database/mediascanner/indexing_pipeline.go` | `AddMediaPath()`, `GetPathFragments()`, `FlushScanStateMaps()`, `SeedCanonicalTags()` | DB writes: 240x |
 | `pkg/database/tags/filename_parser.go` | `ParseFilenameToCanonicalTags()`, ~20 compiled regex patterns | CPU: 66x |
-| `pkg/database/slugs/slugify.go` | `Slugify()`, 9-stage Unicode normalization pipeline | CPU: 66x |
-| `pkg/database/slugs/normalization.go` | Unicode normalization stages | CPU: 66x |
-| `pkg/database/slugs/media_parsing.go` | Media-type-specific parsing dispatchers | CPU: 66x |
+| `slugify.go` in go-slugs | `Slugify()`, 9-stage Unicode normalization pipeline | CPU: 66x |
+| `normalization.go` in go-slugs | Unicode normalization stages | CPU: 66x |
+| `media_parsing.go` in go-slugs | Media-type-specific parsing dispatchers | CPU: 66x |
 | `pkg/database/mediascanner/mediascanner_bench_test.go` | All indexing benchmarks | - |
 
 ## Key Hotspots
@@ -81,7 +81,7 @@ go test -run='^$' -bench='Benchmark(MediaScanner_|GetPathFragments_Batch)' \
   -benchmem -count=6 -timeout=30m ./pkg/database/mediascanner/
 
 # Slugification (called during indexing)
-go test -run='^$' -bench='BenchmarkSlugify' -benchmem -count=6 ./pkg/database/slugs/
+go test -run='^$' -bench='BenchmarkSlugify' -benchmem -count=6 .  # in a go-slugs checkout
 
 # Tag parsing (called during indexing)
 go test -run='^$' -bench='Benchmark' -benchmem -count=6 ./pkg/database/tags/

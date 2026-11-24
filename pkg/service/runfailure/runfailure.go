@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -100,36 +101,46 @@ func Classify(err error) (category, message string) {
 	case errors.Is(err, state.ErrLaunchInProgress),
 		errors.Is(err, state.ErrMediaLaunchInProgress):
 		return models.ErrorCategoryBusy, "another launch is in progress"
-	case errors.Is(err, zapscript.ErrFileNotFound),
-		errors.Is(err, titles.ErrNoMatch),
+	case errors.Is(err, zapscript.ErrFileNotFound):
+		return models.ErrorCategoryMediaNotFound, "file not found"
+	case errors.Is(err, titles.ErrNoMatch),
 		errors.Is(err, titles.ErrLowConfidence):
-		return models.ErrorCategoryMediaNotFound, "media not found"
+		return models.ErrorCategoryMediaNotFound, "no matching game found"
 	case errors.Is(err, state.ErrRunZapScriptDisabled):
 		return models.ErrorCategoryDisabled, "ZapScript execution is disabled"
 	case errors.Is(err, zapscript.ErrScriptTooLong):
 		// The length error names only the limit and the size, so its own text
 		// is safe and tells the caller which bound was exceeded.
 		return models.ErrorCategoryInvalidScript, err.Error()
+	case errors.Is(err, zapscript.ErrUnknownCommand):
+		return models.ErrorCategoryInvalidScript, "unknown command"
+	case errors.Is(err, systemdefs.ErrUnknownSystem):
+		return models.ErrorCategoryInvalidScript, "unknown system"
+	case errors.Is(err, zapscript.ErrInvalidArguments):
+		return models.ErrorCategoryInvalidScript, "invalid command arguments"
 	case errors.Is(err, zapscript.ErrInvalidScript),
-		errors.Is(err, zapscript.ErrInvalidArguments),
-		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, zapscript.ErrWriteNotAlone),
 		errors.Is(err, zapscript.ErrWriteUnsupported),
 		errors.Is(err, zapscript.ErrUnsupportedControlAction),
 		errors.Is(err, zapscript.ErrInvalidRotation),
 		errors.Is(err, zapscript.ErrInvalidPlaylistStart),
-		errors.Is(err, systemdefs.ErrUnknownSystem),
 		errors.Is(err, state.ErrInvalidNextAction):
 		return models.ErrorCategoryInvalidScript, "ZapScript is invalid"
+	case errors.Is(err, state.ErrLaunchRequiresProfile):
+		return models.ErrorCategoryBlocked, "a profile must be chosen first"
+	case errors.Is(err, state.ErrLaunchBlockedByHook):
+		return models.ErrorCategoryBlocked, "blocked by a launch hook"
 	case errors.Is(err, zapscript.ErrCommandBlocked),
 		errors.Is(err, zapscript.ErrCommandNotPermitted),
 		errors.Is(err, zapscript.ErrLaunchNotAdmitted),
 		errors.Is(err, zapscript.ErrExecuteNotAllowed),
 		errors.Is(err, zapscript.ErrHTTPNotAllowed),
-		errors.Is(err, zapscript.ErrRemoteSource),
-		errors.Is(err, state.ErrLaunchBlockedByHook),
-		errors.Is(err, state.ErrLaunchRequiresProfile):
+		errors.Is(err, zapscript.ErrRemoteSource):
 		return models.ErrorCategoryBlocked, "ZapScript execution was blocked"
+	case errors.Is(err, helpers.ErrNoLauncher):
+		return models.ErrorCategoryExecutionFailed, "no launcher can open this file"
+	case errors.Is(err, platforms.ErrLauncherUnavailable):
+		return models.ErrorCategoryExecutionFailed, "the launcher is unavailable"
 	case errors.Is(err, playtime.ErrLimitReached):
 		return models.ErrorCategoryPlaytimeLimit, "playtime limit reached"
 	default:

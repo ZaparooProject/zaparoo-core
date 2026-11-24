@@ -121,6 +121,9 @@ func TestSharedDeviceOnSamplesDoesNotWaitForControlLock(t *testing.T) {
 
 	// Control operations may hold devMu while the realtime callback fires.
 	// Callback must use its immutable snapshot rather than wait on that lock.
+	// devMu stays held until the test returns, so a callback that waits on it
+	// never finishes. The timeout only bounds that failure; it is generous
+	// because a slow scheduler under -race must not read as a lock wait.
 	d.devMu.Lock()
 	defer d.devMu.Unlock()
 	done := make(chan struct{})
@@ -132,7 +135,7 @@ func TestSharedDeviceOnSamplesDoesNotWaitForControlLock(t *testing.T) {
 	select {
 	case <-done:
 		assert.InDelta(t, float32(0.25), float32At(output, 0, 0), 1e-6)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		t.Fatal("realtime callback blocked on device control lock")
 	}
 }

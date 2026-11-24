@@ -220,7 +220,7 @@ func standaloneEmuDeckLauncher(
 		Lifecycle: platforms.LifecycleBlocking,
 		Availability: func(*config.Instance) error {
 			if !emuDeckEmulatorAvailable(options, paths, emulator) {
-				return fmt.Errorf("EmuDeck emulator is not installed: %s", emulator.wrapper)
+				return platforms.NewEmulatorNotInstalledError("EmuDeck")
 			}
 			return nil
 		},
@@ -269,7 +269,10 @@ func emuDeckStandaloneCommand(
 	executable := emuDeckWrapperPath(paths, emulator)
 	if !validEmuDeckWrapper(executable) {
 		if emulator.flatpakID == "" || !options.IsFlatpakInstalled(emulator.flatpakID) {
-			return nil, fmt.Errorf("EmuDeck emulator is not installed: %s", emulator.wrapper)
+			log.Warn().Str("wrapper", executable).Str("flatpak", emulator.flatpakID).
+				Msg("EmuDeck emulator not installed")
+			//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+			return nil, platforms.NewEmulatorNotInstalledError("EmuDeck")
 		}
 		executable = "flatpak"
 		args, err = flatpakRunArgs(emulator.flatpakID, path, args)

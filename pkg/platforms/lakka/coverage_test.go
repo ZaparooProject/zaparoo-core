@@ -239,7 +239,7 @@ func TestLauncherBuildFailureAndGameRunning(t *testing.T) {
 	launcher := snesLauncher(t, p.Launchers(cfg))
 
 	proc, err := launcher.Launch(cfg, testContent, &platforms.LaunchOptions{})
-	require.ErrorContains(t, err, "retroarch is not installed")
+	require.ErrorContains(t, err, "RetroArch is not installed")
 	assert.Nil(t, proc)
 	assert.Empty(t, ra.sent(), "a launch that cannot be built never reaches RetroArch")
 	assert.Empty(t, p.frontend.currentLaunch())

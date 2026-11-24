@@ -25,7 +25,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/go-slugs"
 )
 
 // thumbnailName applies libretro's file-name rule: these characters cannot
