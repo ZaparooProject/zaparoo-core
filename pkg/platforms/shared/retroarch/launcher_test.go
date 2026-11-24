@@ -45,7 +45,7 @@ func TestNewLauncher(t *testing.T) {
 		Scan:       true,
 	}
 	fs := afero.NewMemMapFs()
-	root := filepath.Join(string(filepath.Separator), "runtime")
+	root := filepath.Join(t.TempDir(), "runtime")
 	executable := filepath.Join(root, "retroarch")
 	coresDir := filepath.Join(root, "cores")
 	configPath := filepath.Join(root, "retroarch.cfg")
@@ -207,7 +207,7 @@ func TestLauncherPreflightErrorsBeforeExec(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	root := filepath.Join(string(filepath.Separator), "runtime")
+	root := filepath.Join(t.TempDir(), "runtime")
 	binary := filepath.Join(root, "retroarch")
 	coresDir := filepath.Join(root, "cores")
 	require.NoError(t, fs.MkdirAll(coresDir, 0o750))
@@ -234,7 +234,7 @@ func TestLauncherReportsMissingCore(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	root := filepath.Join(string(filepath.Separator), "runtime")
+	root := filepath.Join(t.TempDir(), "runtime")
 	binary := filepath.Join(root, "retroarch")
 	require.NoError(t, fs.MkdirAll(root, 0o750))
 	require.NoError(t, afero.WriteFile(fs, binary, []byte("binary"), 0o750))
@@ -260,7 +260,7 @@ func TestLauncherReportsMissingExecutable(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	root := filepath.Join(string(filepath.Separator), "runtime")
+	root := filepath.Join(t.TempDir(), "runtime")
 	launcher := NewLauncher(Options{
 		FS:       fs,
 		Exec:     []string{filepath.Join(root, "retroarch")},
@@ -291,7 +291,7 @@ func (statFailFs) Stat(string) (os.FileInfo, error) { return nil, errStatFault }
 func TestLauncherKeepsStatFailuresThatAreNotMissingFiles(t *testing.T) {
 	t.Parallel()
 
-	root := filepath.Join(string(filepath.Separator), "runtime")
+	root := filepath.Join(t.TempDir(), "runtime")
 	executable := NewLauncher(Options{
 		FS:       statFailFs{Fs: afero.NewMemMapFs()},
 		Exec:     []string{filepath.Join(root, "retroarch")},
