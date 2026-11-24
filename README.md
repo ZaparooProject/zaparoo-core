@@ -156,6 +156,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/Yshuro">
+                    <img src="https://avatars.githubusercontent.com/u/83331159?v=4" width="100;" alt="Yshuro"/>
+                    <br />
+                    <sub><b>Sami</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/iedame">
                     <img src="https://avatars.githubusercontent.com/u/60272?v=4" width="100;" alt="iedame"/>
                     <br />
@@ -177,6 +184,15 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/jerris">
+                    <img src="https://avatars.githubusercontent.com/u/2783269?v=4" width="100;" alt="jerris"/>
+                    <br />
+                    <sub><b>Jerris Heaton</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
                 <a href="https://github.com/gmcnaught">
                     <img src="https://avatars.githubusercontent.com/u/1371263?v=4" width="100;" alt="gmcnaught"/>
                     <br />
@@ -190,8 +206,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>fayep</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/Emashzed">
                     <img src="https://avatars.githubusercontent.com/u/994075?v=4" width="100;" alt="Emashzed"/>
