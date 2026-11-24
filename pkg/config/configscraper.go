@@ -60,7 +60,8 @@ func (c *Instance) ScraperGamelistXMLCustomPath() string {
 
 // ScraperLibretroThumbnailsBaseURL returns the thumbnail server the libretro
 // scraper downloads from, without a trailing slash: the configured base_url
-// when it is an http(s) URL, otherwise the public libretro server.
+// when it is an http(s) URL, otherwise the public libretro server. Image paths
+// are appended to it, so a query or fragment would corrupt every lookup.
 func (c *Instance) ScraperLibretroThumbnailsBaseURL() string {
 	if c == nil {
 		return DefaultLibretroThumbnailsBaseURL
@@ -72,7 +73,8 @@ func (c *Instance) ScraperLibretroThumbnailsBaseURL() string {
 		return DefaultLibretroThumbnailsBaseURL
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		strings.ContainsAny(raw, "?#") {
 		log.Warn().Str("base_url", raw).Msg("ignoring invalid scraper.libretro_thumbnails base_url")
 		return DefaultLibretroThumbnailsBaseURL
 	}

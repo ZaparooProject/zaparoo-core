@@ -95,6 +95,18 @@ func TestScraperLibretroThumbnailsBaseURL(t *testing.T) {
 			name: "no host", want: DefaultLibretroThumbnailsBaseURL,
 			toml: "[scraper.libretro_thumbnails]\nbase_url = \"mirror.example\"\n",
 		},
+		{
+			name: "query", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs?token=x\"\n",
+		},
+		{
+			name: "empty query", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs?\"\n",
+		},
+		{
+			name: "fragment", want: DefaultLibretroThumbnailsBaseURL,
+			toml: "[scraper.libretro_thumbnails]\nbase_url = \"https://mirror.example/thumbs#top\"\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
