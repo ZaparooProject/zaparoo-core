@@ -289,8 +289,9 @@ func browseLiveRoots(env *requests.RequestEnv, params *models.BrowseParams) (any
 	}
 
 	type liveRoot struct {
-		path string
-		real string
+		path   string
+		real   string
+		direct bool
 	}
 	var found []liveRoot
 	for _, root := range browseRootDirs(env) {
@@ -305,23 +306,55 @@ func browseLiveRoots(env *requests.RequestEnv, params *models.BrowseParams) (any
 		if err != nil {
 			continue
 		}
-		found = append(found, liveRoot{path: filepath.ToSlash(filepath.Clean(root)), real: resolved})
+		clean := filepath.Clean(root)
+		found = append(found, liveRoot{
+			path:   filepath.ToSlash(clean),
+			real:   resolved,
+			direct: clean == resolved,
+		})
 	}
 
 	inside := func(path, parent string) bool {
 		rel, err := filepath.Rel(parent, path)
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	}
+	// reachable reports whether live browsing from parent walks down to path
+	// by the same path text, so launcher folders still match, without
+	// crossing a hidden dot folder.
+	reachable := func(path, parent string) bool {
+		if !inside(filepath.FromSlash(path), filepath.FromSlash(parent)) {
+			return false
+		}
+		rel, err := filepath.Rel(filepath.FromSlash(parent), filepath.FromSlash(path))
+		if err != nil {
+			return false
+		}
+		for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+			if part != "." && strings.HasPrefix(part, ".") {
+				return false
+			}
+		}
+		return true
+	}
 	entries := make([]models.BrowseEntry, 0, len(found))
 	for i, root := range found {
 		covered := false
 		for j, other := range found {
-			if i == j || !inside(root.real, other.real) {
+			if i == j {
 				continue
 			}
-			// The same folder listed twice keeps its first listing.
-			if root.real != other.real || j < i {
-				covered = true
+			// The same folder listed twice keeps its direct path over a
+			// symlinked one, then its first listing.
+			if root.real == other.real {
+				if other.direct != root.direct {
+					covered = other.direct
+				} else {
+					covered = j < i
+				}
+			} else {
+				covered = inside(root.real, other.real) && reachable(root.path, other.path)
+			}
+			if covered {
 				break
 			}
 		}

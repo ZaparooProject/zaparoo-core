@@ -412,14 +412,21 @@ func TestHandleMediaBrowse_LiveListsRoots(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires Windows privileges")
 	}
-	base := filepath.ToSlash(t.TempDir())
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	base := filepath.ToSlash(tmp)
 	fat := base + "/fat"
 	usb := base + "/usb0"
 	linked := base + "/linked"
-	for _, dir := range []string{fat + "/games", fat + "/_Homebrew", usb + "/games", base + "/real"} {
+	places := base + "/places"
+	for _, dir := range []string{
+		fat + "/games", fat + "/_Homebrew", fat + "/.hidden/games", usb + "/games", base + "/real",
+		base + "/storage/library",
+	} {
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 	}
 	require.NoError(t, os.Symlink(base+"/real", linked))
+	require.NoError(t, os.Symlink(base+"/storage", places))
 	require.NoError(t, os.WriteFile(base+"/file", []byte("x"), 0o600))
 
 	pl := mocks.NewMockPlatform()
@@ -435,6 +442,9 @@ func TestHandleMediaBrowse_LiveListsRoots(t *testing.T) {
 		base + "/real",
 		fat + "/games",
 		fat,
+		fat + "/.hidden/games",
+		places,
+		base + "/storage/library",
 		usb + "/",
 	})
 	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(liveBrowseLaunchers())
@@ -443,17 +453,20 @@ func TestHandleMediaBrowse_LiveListsRoots(t *testing.T) {
 	results, err := runLiveBrowse(t, helpers.NewMockMediaDBI(), pl, map[string]any{})
 	require.NoError(t, err)
 
-	// Nested roots fold into the outer one, missing roots, files, virtual
-	// and relative roots are left out, and one folder reached by two paths
-	// keeps the first. The empty usb0 is listed though nothing is indexed.
+	// Nested roots fold into the outer one unless the way down crosses a
+	// hidden folder or a symlink, missing roots, files, virtual and relative
+	// roots are left out, and one folder reached by two paths keeps its
+	// direct path. The empty usb0 is listed though nothing is indexed.
 	paths := make([]string, len(results.Entries))
 	for i, entry := range results.Entries {
 		paths[i] = entry.Path
 		assert.Equal(t, "root", entry.Type)
 		assert.Equal(t, filepath.Base(entry.Path), entry.Name)
 	}
-	assert.Equal(t, []string{fat, linked, usb}, paths)
-	assert.Equal(t, 3, results.TotalDirs)
+	assert.Equal(t, []string{
+		fat, fat + "/.hidden/games", places, base + "/real", base + "/storage/library", usb,
+	}, paths)
+	assert.Equal(t, 6, results.TotalDirs)
 	assert.Nil(t, results.Pagination)
 }
 
