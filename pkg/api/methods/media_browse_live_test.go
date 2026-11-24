@@ -359,7 +359,10 @@ func TestHandleMediaBrowse_LiveRejectsBadRequests(t *testing.T) {
 		name   string
 		want   string
 	}{
-		{name: "no path", params: map[string]any{}, want: "requires a path"},
+		{name: "roots cursor", params: map[string]any{"cursor": liveCursor}, want: "roots do not support a cursor"},
+		{name: "roots letter", params: map[string]any{"letter": "A"}, want: "roots do not support a letter"},
+		{name: "roots sort", params: map[string]any{"sort": "name-asc"}, want: "roots do not support sort"},
+		{name: "roots systems", params: map[string]any{"systems": []string{"NES"}}, want: "system filters"},
 		{name: "traversal", params: map[string]any{"path": root + "/_Chronological/../../outside"}, want: "disallowed"},
 		{name: "outside root", params: map[string]any{"path": outside}, want: "not within an allowed root"},
 		{
@@ -402,6 +405,56 @@ func TestHandleMediaBrowse_LiveRejectsBadRequests(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
+}
+
+func TestHandleMediaBrowse_LiveListsRoots(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows privileges")
+	}
+	base := filepath.ToSlash(t.TempDir())
+	fat := base + "/fat"
+	usb := base + "/usb0"
+	linked := base + "/linked"
+	for _, dir := range []string{fat + "/games", fat + "/_Homebrew", usb + "/games", base + "/real"} {
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+	}
+	require.NoError(t, os.Symlink(base+"/real", linked))
+	require.NoError(t, os.WriteFile(base+"/file", []byte("x"), 0o600))
+
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{
+		fat + "/_Homebrew",
+		usb + "/games",
+		usb,
+		base + "/usb1",
+		base + "/file",
+		"steam://",
+		"relative/games",
+		linked,
+		base + "/real",
+		fat + "/games",
+		fat,
+		usb + "/",
+	})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(liveBrowseLaunchers())
+	pl.On("Settings").Return(platforms.Settings{}).Maybe()
+
+	results, err := runLiveBrowse(t, helpers.NewMockMediaDBI(), pl, map[string]any{})
+	require.NoError(t, err)
+
+	// Nested roots fold into the outer one, missing roots, files, virtual
+	// and relative roots are left out, and one folder reached by two paths
+	// keeps the first. The empty usb0 is listed though nothing is indexed.
+	paths := make([]string, len(results.Entries))
+	for i, entry := range results.Entries {
+		paths[i] = entry.Path
+		assert.Equal(t, "root", entry.Type)
+		assert.Equal(t, filepath.Base(entry.Path), entry.Name)
+	}
+	assert.Equal(t, []string{fat, linked, usb}, paths)
+	assert.Equal(t, 3, results.TotalDirs)
+	assert.Nil(t, results.Pagination)
 }
 
 func TestHandleMediaBrowse_IndexedRejectsLiveCursor(t *testing.T) {

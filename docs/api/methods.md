@@ -1356,13 +1356,15 @@ Visibility is separate from ordinary tag filtering: hidden media is excluded fro
 
 Set `live: true` to list a filesystem `path` straight from disk instead of from the media index. This reaches folders the index does not cover, such as MiSTer menu folders of `.mgl` files (`/media/fat/_Chronological`) or Arcade Organizer folders. The path must sit under the same allowed roots as an indexed browse, and with symlinks resolved it must stay under them. Folders are listed first, then files that a launcher accepts; dot files, broken symlinks and symlinks that resolve outside the roots are left out. Each file's `zapScript` launches its own path, so writing it to a tag keeps the entry the user picked. A file whose path, or whose symlink target, is an indexed media file gets that media's `mediaId`, `systemId` and cover fields. Other files carry the system of the launcher that accepts them, or no system for a generic launcher. Live browse ignores visibility settings, and `fileCount`, `relativePath` on the result, and single-game folder collapsing are not provided. It cannot be combined with `systems`, `tags` or `rootView`. `letter` and `sort` work as for indexed browse. Cursors from a live browse are only valid for a live browse with the same `path`, `letter` and `sort`. One directory read is capped at 10,000 entries.
 
+A live browse with no `path` lists the folders a live browse can start from instead: each allowed root that is a folder on disk at the time, as a `root` entry with its `name` and `path`, in path order. A root inside another listed root is left out, since browsing the outer one reaches it. Roots are listed whether or not anything under them is indexed, so a drive appears while it is mounted. This listing has no pagination and rejects `cursor`, `letter` and `sort`.
+
 #### Parameters
 
 All parameters are optional. When called with no parameters, returns root entries.
 
 | Key        | Type   | Required | Description                                                                                                |
 | :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
-| live       | boolean | No      | List `path` from disk instead of the media index. Requires a filesystem `path`. Defaults to `false`. Repeat with cursor requests. |
+| live       | boolean | No      | List `path` from disk instead of the media index. Without `path`, list the roots a live browse can start from. Defaults to `false`. Repeat with cursor requests. |
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths, launcher-relative paths (e.g. `SNES/USA`), and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
