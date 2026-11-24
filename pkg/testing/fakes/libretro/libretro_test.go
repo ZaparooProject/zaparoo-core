@@ -78,7 +78,7 @@ func get(t *testing.T, base, p string) (status int, body string) {
 func TestServesListingsAndImages(t *testing.T) {
 	t.Parallel()
 	root := writeTree(t,
-		"nes/Mega Man: Rock (USA).nes",
+		"nes/Tom & Jerry (USA).nes",
 		"nes/.hidden.nes",
 		"nes/media/Skip.nes",
 		"nes/readme.txt",
@@ -102,10 +102,10 @@ func TestServesListingsAndImages(t *testing.T) {
 	}{
 		{
 			name: "listing", path: dir + "/Named_Boxarts/", status: http.StatusOK,
-			contains: `href="` + url.PathEscape("Mega Man_ Rock (USA).png") + `"`,
+			contains: `href="` + url.PathEscape("Tom _ Jerry (USA).png") + `"`,
 		},
 		{
-			name: "image", path: dir + "/Named_Titles/" + url.PathEscape("Mega Man_ Rock (USA).png"),
+			name: "image", path: dir + "/Named_Titles/" + url.PathEscape("Tom _ Jerry (USA).png"),
 			status: http.StatusOK, png: true,
 		},
 		{name: "extra thumbnail", path: "/Custom/Named_Snaps/A_B.png", status: http.StatusOK, png: true},
