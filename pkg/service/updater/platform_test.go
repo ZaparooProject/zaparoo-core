@@ -106,15 +106,51 @@ func TestPreflightPlatform_DefersAnUnresolvableBinaryToApply(t *testing.T) {
 	assert.NoError(t, preflightPlatform(afero.NewMemMapFs(), "windows", ""))
 }
 
-func TestPreflightPlatform_AllowsPlatformsThatReplaceTheirOwnBinary(t *testing.T) {
+func TestPreflightPlatform_AllowsAWritableInstallOnEveryPlatform(t *testing.T) {
 	t.Parallel()
 
-	// The path is never looked at off Windows: a single rename over the running
-	// binary needs nothing the rest of the install did not already need.
-	missing := filepath.Join("no-such-dir", "zaparoo")
 	for _, goos := range []string{"linux", "darwin", "freebsd"} {
-		assert.NoError(t, preflightPlatform(afero.NewMemMapFs(), goos, missing), goos)
+		fs := afero.NewMemMapFs()
+		dir := filepath.Join("opt", "zaparoo")
+		require.NoError(t, fs.MkdirAll(dir, 0o755))
+		assert.NoError(t, preflightPlatform(fs, goos, filepath.Join(dir, "zaparoo")), goos)
 	}
+}
+
+// A distribution or Nix package puts Core somewhere read-only. Every install
+// writes its candidate and backup binaries beside the target, so without this
+// the install would download, snapshot the database and only then fail.
+func TestPreflightPlatform_RefusesAReadOnlyInstallOffWindows(t *testing.T) {
+	t.Parallel()
+
+	for _, goos := range []string{"linux", "darwin"} {
+		baseFS := afero.NewMemMapFs()
+		dir := filepath.Join("nix", "store", "abc-zaparoo", "bin")
+		require.NoError(t, baseFS.MkdirAll(dir, 0o755))
+
+		err := preflightPlatform(afero.NewReadOnlyFs(baseFS), goos, filepath.Join(dir, "zaparoo"))
+
+		require.ErrorIs(t, err, ErrPlatformUnsupported, goos)
+		assert.Contains(t, err.Error(), dir, goos)
+		assert.Contains(t, err.Error(), "the same way it was installed", goos)
+		assert.NotContains(t, err.Error(), "Windows", goos)
+	}
+}
+
+// Off Windows the swap is a plain rename over the target, which only needs the
+// directory, so the Windows-only rename probe must not be consulted.
+func TestPreflightPlatform_SkipsTheTargetRenameProbeOffWindows(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("opt", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o755))
+
+	err := preflightPlatformWith(fs, "linux", filepath.Join(dir, "zaparoo"), func(string) error {
+		return errors.New("rename probe must not run off Windows")
+	})
+
+	assert.NoError(t, err)
 }
 
 func TestCheckInstallDirWritable_LeavesNothingBehind(t *testing.T) {

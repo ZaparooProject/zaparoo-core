@@ -168,13 +168,13 @@ func TestHandleMediaActiveImage_ClientErrors(t *testing.T) {
 		t.Parallel()
 		env := activeImageEnv(t, mediaslot.Primary, tagged, platforms.NativeAudioLauncherID, `{"slot":"background"}`)
 		_, err := HandleMediaActiveImage(env)
-		requireClientError(t, err, "no active audio track")
+		requireClientError(t, err, "no image for the active media")
 	})
 	t.Run("not native audio", func(t *testing.T) {
 		t.Parallel()
 		env := activeImageEnv(t, mediaslot.Primary, tagged, "retroarch", `{}`)
 		_, err := HandleMediaActiveImage(env)
-		requireClientError(t, err, "no active audio track")
+		requireClientError(t, err, "no image for the active media")
 	})
 	t.Run("no art", func(t *testing.T) {
 		t.Parallel()

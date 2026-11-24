@@ -21,14 +21,14 @@ require (
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20261103071945-eb7a6cfa5657
-	github.com/creativeprojects/go-selfupdate v1.7.0
+	github.com/creativeprojects/go-selfupdate v1.7.1
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/expr-lang/expr v1.17.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/gen2brain/malgo v0.11.27
+	github.com/gen2brain/malgo v0.11.28
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/getsentry/sentry-go/zerolog v0.50.0
 	github.com/go-chi/chi/v5 v5.5.0
@@ -50,7 +50,7 @@ require (
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.4.3
-	github.com/pressly/goose/v3 v3.30.0
+	github.com/pressly/goose/v3 v3.30.1
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
 	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8
@@ -70,7 +70,7 @@ require (
 	golang.org/x/text v0.44.0
 	golang.org/x/time v0.16.0
 	google.golang.org/protobuf v1.36.12
-	gopkg.in/ini.v1 v1.67.3
+	gopkg.in/ini.v1 v1.68.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	pgregory.net/rapid v1.3.0
@@ -99,7 +99,7 @@ require (
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
-	github.com/google/go-github/v86 v86.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
@@ -120,7 +120,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mewkiz/flac v1.0.12 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
-	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/mfridman/interpolate v0.2.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/nwaples/rardecode/v2 v2.2.2 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect

@@ -46,6 +46,7 @@ import (
 	"github.com/KarpelesLab/gowebp"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/artwork"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -167,10 +168,11 @@ const (
 // image-load pipeline for warm repeat requests, and is forgotten whenever an
 // index or scrape completes.
 type resolvedThumb struct {
-	system      string
-	typeTag     string
-	path        string
-	contentType string
+	system          string
+	typeTag         string
+	path            string
+	contentType     string
+	artworkRevision uint64
 }
 
 type mediaThumbCache struct {
@@ -1505,6 +1507,10 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 		maxSizeForLog = int(snapped)
 	}
 	prefs := imagePrefs(nil, ref.ImageTypes)
+	var artworkRevision uint64
+	if env.Platform != nil && env.Platform.ID() == ids.Mister {
+		artworkRevision = artwork.Revision()
+	}
 
 	// cache is nil unless this request resizes and a thumbnail cache exists.
 	var cache *mediaThumbCache
@@ -1517,7 +1523,8 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	// Pre-semaphore fast path: if this exact request was served before and the
 	// disk thumbnail is still present, return it without loading the original.
 	if cache != nil {
-		if resolved, ok := cache.getResolvedThumb(ref, prefs, maxSize); ok {
+		resolved, ok := cache.getResolvedThumb(ref, prefs, maxSize)
+		if ok && resolved.artworkRevision == artworkRevision {
 			if response, found := thumbFileResponse(
 				cache, resolved.path, resolved.contentType, resolved.typeTag, "", localPath,
 			); found {
@@ -1527,6 +1534,9 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	}
 
 	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
+	if artworkRevision != 0 {
+		noImageKey += fmt.Sprintf(":artwork:%d", artworkRevision)
+	}
 	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
 		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
@@ -1536,7 +1546,9 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	// still match what a full lookup would pick and serve the disk thumbnail
 	// without reading the original artwork or waiting for the lookup semaphore.
 	if cache != nil {
-		if response, found := recordedThumbResponse(&env, cache, ref, prefs, maxSize, localPath); found {
+		if response, found := recordedThumbResponse(
+			&env, cache, ref, prefs, maxSize, localPath, artworkRevision,
+		); found {
 			return response, nil
 		}
 	}
@@ -1558,6 +1570,7 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 			cache, raw.sourceKey, raw.typeTag, maxSize, raw.text, localPath,
 		); found {
 			resolved.system = raw.system
+			resolved.artworkRevision = artworkRevision
 			cache.setResolvedThumb(ref, prefs, maxSize, resolved)
 			recordCachedCoverThumb(&env, cache, raw, prefs, maxSize)
 			return response, nil
@@ -1592,6 +1605,7 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 			} else {
 				cache.setResolvedThumb(ref, prefs, maxSize, resolvedThumb{
 					system: raw.system, typeTag: raw.typeTag, path: path, contentType: contentType,
+					artworkRevision: artworkRevision,
 				})
 				recordCoverThumb(&env, raw, prefs, avgColor)
 			}
@@ -1663,6 +1677,7 @@ func recordedThumbResponse(
 	prefs []string,
 	maxSize int,
 	localPath bool,
+	artworkRevision uint64,
 ) (models.MediaImageResponse, bool) {
 	// A directory's own artwork outranks the cover recorded for its media.
 	if env.Database == nil || env.Database.MediaDB == nil || isDirectoryMediaRef(ref) {
@@ -1680,6 +1695,16 @@ func recordedThumbResponse(
 	}
 	if !found || (ref.MediaID == nil && thumb.SystemID != ref.System) {
 		return models.MediaImageResponse{}, false
+	}
+	// User artwork is resolved from persistent storage outside the scraped
+	// properties the thumbnail record knows about.
+	if env.Platform != nil && env.Platform.ID() == ids.Mister {
+		hasOverride, overrideErr := artwork.HasOverride(
+			env.Context, db, helpers.DataDir(env.Platform), thumb.SystemID, thumb.Path, thumb.MediaDBID,
+		)
+		if overrideErr != nil || hasOverride {
+			return models.MediaImageResponse{}, false
+		}
 	}
 	if !recordedTypeMatchesPrefs(thumb.TypeTag, thumb.AvailableTypeTags, prefs) {
 		return models.MediaImageResponse{}, false
@@ -1700,6 +1725,7 @@ func recordedThumbResponse(
 		return models.MediaImageResponse{}, false
 	}
 	resolved.system = thumb.SystemID
+	resolved.artworkRevision = artworkRevision
 	cache.setResolvedThumb(ref, prefs, maxSize, resolved)
 	return response, true
 }
@@ -1987,6 +2013,19 @@ func loadRawMediaImageDirectoryRef(
 	return raw, err
 }
 
+func mediaArtworkOverrides(
+	env *requests.RequestEnv, row *database.MediaFullRow,
+) (version, title []database.MediaProperty) {
+	if env.Platform == nil || env.Platform.ID() != ids.Mister {
+		return nil, nil
+	}
+	version, title, err := artwork.Properties(env.Context, env.Database.MediaDB, helpers.DataDir(env.Platform), row)
+	if err != nil {
+		log.Warn().Err(err).Int64("mediaDBID", row.DBID).Msg("read user artwork")
+	}
+	return version, title
+}
+
 func loadRawMediaImageRow(
 	env *requests.RequestEnv,
 	row *database.MediaFullRow,
@@ -2002,6 +2041,10 @@ func loadRawMediaImageRow(
 	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+	version, title := mediaArtworkOverrides(env, row)
+	if len(version) != 0 || len(title) != 0 {
+		mediaPropSources = append([][]database.MediaProperty{version, title}, mediaPropSources...)
 	}
 	return selectRawMediaImageFromSources(
 		env.Context, afero.NewOsFs(), requestImageDir(env), env.Platform, db, row, mediaPropSources, titleProps,
@@ -2023,20 +2066,7 @@ func loadRawMediaImageByID(
 	if resolved[0].Err != nil {
 		return nil, resolved[0].Err
 	}
-	db := env.Database.MediaDB
-	row := resolved[0].Row
-	mediaPropSources, err := mediaImagePropSources(env, row)
-	if err != nil {
-		return nil, err
-	}
-	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
-	}
-	return selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), requestImageDir(env), env.Platform, db, row, mediaPropSources, titleProps,
-		prefs, maxBytes, probe,
-	)
+	return loadRawMediaImageRow(env, resolved[0].Row, prefs, maxBytes, probe)
 }
 
 func imagePrefs(topLevel, itemLevel []string) []string {
@@ -2297,6 +2327,18 @@ func loadMediaImageFile(
 			return mediaImageFile{}, true, nil
 		}
 		path = resolved
+	}
+	if platform != nil && platform.ID() == ids.Mister && artwork.IsOverridePath(helpers.DataDir(platform), path) {
+		// Content keys recognize same-size replacements on FAT, whose timestamps
+		// may not advance between two imports.
+		data, readErr := readMediaBinaryFile(fs, path, maxBytes)
+		if errors.Is(readErr, os.ErrNotExist) {
+			return mediaImageFile{}, true, nil
+		}
+		if readErr != nil {
+			return mediaImageFile{}, false, mediaImageReadError(path, readErr)
+		}
+		return mediaImageFile{data: data, sourceKey: dataThumbSourceKey("image/png", data)}, false, nil
 	}
 	info, err := fs.Stat(path)
 	if err != nil {

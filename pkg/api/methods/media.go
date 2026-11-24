@@ -619,6 +619,11 @@ func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 	InvalidateMediaThumbMemoSystems(systemIDs)
 }
 
+var mediaIndexGeneration atomic.Uint64
+
+// MediaIndexGeneration changes each time an index completes.
+func MediaIndexGeneration() uint64 { return mediaIndexGeneration.Load() }
+
 func GenerateMediaDB(
 	ctx context.Context,
 	pl platforms.Platform,
@@ -995,6 +1000,7 @@ func startMediaDBGeneration(
 		}
 		mediaImageNoImages.clear()
 		invalidateIndexedThumbnails(systems, rebuild)
+		mediaIndexGeneration.Add(1)
 		statusInstance.markFinished()
 		notifications.MediaIndexing(ns, WithMediaCounts(&models.IndexingStatusResponse{
 			Exists:     true,
@@ -1557,7 +1563,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		mediaID, zapScript := activeMediaEnrichment(&env, system.ID, activeMedia.Path, activeMedia.Name)
+		mediaID, zapScript := activeMediaEnrichment(&env, system.ID, activeMedia.Path, activeMedia.TitleName())
 
 		primaryEntry := models.ActiveMedia{
 			MediaID:          mediaID,
@@ -1567,6 +1573,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			SystemID:         system.ID,
 			SystemName:       system.Name,
 			Name:             activeMedia.Name,
+			Description:      activeMedia.Description,
 			Path:             activeMedia.Path,
 			Slot:             mediaslot.Primary,
 			LauncherControls: activeMedia.LauncherControls,
@@ -1816,7 +1823,7 @@ func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMedia
 		// path is what plays it again.
 		zapScript = backgroundTrackZapScript(media.Path)
 	} else {
-		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.Name)
+		mediaID, zapScript = activeMediaEnrichment(env, media.SystemID, media.Path, media.TitleName())
 	}
 
 	entry := models.ActiveMedia{
@@ -1826,6 +1833,7 @@ func ActiveMediaEntry(env *requests.RequestEnv, slot string) *models.ActiveMedia
 		SystemID:         media.SystemID,
 		SystemName:       media.SystemName,
 		Name:             media.Name,
+		Description:      media.Description,
 		Path:             media.Path,
 		Slot:             slot,
 		LauncherControls: media.LauncherControls,

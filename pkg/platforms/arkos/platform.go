@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
@@ -296,7 +298,10 @@ func (p *Platform) launchGame(
 	}
 	path = filepath.Clean(path)
 	if info, err := p.fs.Stat(path); err != nil {
-		return nil, fmt.Errorf("ROM not found: %w", err)
+		if errors.Is(err, iofs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %w", zapscript.ErrFileNotFound, err)
+		}
+		return nil, fmt.Errorf("failed to stat ROM: %w", err)
 	} else if info.IsDir() {
 		return nil, fmt.Errorf("ROM path is a directory: %s", path)
 	}

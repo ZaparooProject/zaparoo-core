@@ -558,7 +558,31 @@ func TestSetCoreAvailability_MissingCoreIsUnavailableWithReason(t *testing.T) {
 	require.NotNil(t, launchers[0].Availability)
 	err := launchers[0].Availability(nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "_Console/SNES")
+	assert.Equal(t, "the MiSTer core SNES is not installed", err.Error())
+}
+
+// A load_path override that is not installed is the core reported, even when
+// the system's registered core is installed.
+func TestSetCoreAvailability_MissingLoadPathReportsTheOverride(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Console/SNES_Custom"
+`))
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	err := launchers[0].Availability(cfg)
+	require.Error(t, err)
+	assert.Equal(t, "the MiSTer core SNES_Custom is not installed", err.Error())
 }
 
 // TestSetCoreAvailability_MissingAltCoreIsUnavailable covers the rule that
@@ -580,7 +604,7 @@ func TestSetCoreAvailability_MissingAltCoreIsUnavailable(t *testing.T) {
 
 	err := launchers[0].Availability(nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "_LLAPI/SNES_LLAPI")
+	assert.Equal(t, "the MiSTer core SNES_LLAPI is not installed", err.Error())
 }
 
 // TestSetCoreAvailability_InstalledAltCoreIsAvailable is the other half: once
@@ -673,8 +697,11 @@ func TestGameAndWatchAvailability_OwnCoreInstalled(t *testing.T) {
 func TestGameAndWatchAvailability_OnlyStockCoreInstalled(t *testing.T) {
 	withRBFCache(t, []cores.RBFInfo{gnwRBFInfo})
 	err := gameAndWatchAvailability(t)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "core not installed: _Console/GameAndWatch")
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+	assert.Equal(t, "GameAndWatch", repair.Params()[platforms.LaunchRepairParamPlugin])
+	assert.Equal(t, "the MiSTer core GameAndWatch is not installed", repair.Error())
 }
 
 func TestGameAndWatchCore_ResolvesOwnRBF(t *testing.T) {
@@ -756,9 +783,39 @@ func TestLaunchSystemLauncher_MissingCore(t *testing.T) {
 
 	p := &Platform{}
 	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "core not installed")
-	assert.Contains(t, err.Error(), "_Console/SNES")
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+	assert.Equal(t, "the MiSTer core SNES is not installed", repair.Error())
+	assert.Equal(t, map[string]string{
+		platforms.LaunchRepairParamLauncher: "MiSTer",
+		platforms.LaunchRepairParamPlugin:   "SNES",
+	}, repair.Params())
+}
+
+func TestErrMissingCoreKeepsUnsafeNamesOutOfTheMessage(t *testing.T) {
+	t.Parallel()
+	generic := "the MiSTer core for this system is not installed"
+	for _, name := range []string{"", "/media/fat/_Console/SNES", "_Console/..", "a b", "a\nb"} {
+		err := errMissingCore(name)
+		assert.Equal(t, generic, err.Error(), name)
+	}
+	assert.Equal(t, "the MiSTer core jtcps1 is not installed", errMissingCore("jtcps1").Error())
+}
+
+// A registered pattern's date and hash placeholders are dropped, so the name
+// reaches both the message and the plugin parameter.
+func TestErrMissingCoreDropsPatternPlaceholders(t *testing.T) {
+	t.Parallel()
+	for path, name := range map[string]string{
+		"_Console/AdventureVision_<date>_<hash>_DB9": "AdventureVision_DB9",
+		"_Unstable/SNES_unstable_<date>_<hash>":      "SNES_unstable",
+	} {
+		var repair *platforms.LaunchRepairError
+		require.ErrorAs(t, errMissingCore(path), &repair)
+		assert.Equal(t, "the MiSTer core "+name+" is not installed", repair.Error())
+		assert.Equal(t, name, repair.Params()[platforms.LaunchRepairParamPlugin])
+	}
 }
 
 func TestLaunchSystemLauncher_NonCoreLauncher(t *testing.T) {

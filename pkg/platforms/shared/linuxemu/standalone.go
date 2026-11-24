@@ -24,6 +24,7 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/standalone"
+	"github.com/rs/zerolog/log"
 )
 
 type standaloneDef struct {
@@ -284,7 +285,8 @@ func resolveStandaloneInstallation(
 	if def.flatpakID != "" && options.IsFlatpakInstalled(def.flatpakID) {
 		return standaloneInstallation{executable: "flatpak", flatpakID: def.flatpakID}, nil
 	}
-	return standaloneInstallation{}, fmt.Errorf("emulator not installed: %s", def.id)
+	//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+	return standaloneInstallation{}, platforms.NewEmulatorNotInstalledError(def.id)
 }
 
 func standaloneInstallationAvailable(options *Options, installation standaloneInstallation) bool {
@@ -300,6 +302,7 @@ func buildStandaloneLaunchCommand(options *Options, def *standaloneDef, path str
 		options, def, discoverStandaloneAppImages(options.HomeDir),
 	)
 	if err != nil {
+		log.Warn().Str("launcher", def.id).Msg("standalone emulator not installed")
 		return nil, err
 	}
 	return buildStandaloneLaunchCommandForInstallation(options, def, installation, path)
@@ -357,7 +360,7 @@ func newNativeStandaloneLauncher(
 		Lifecycle: platforms.LifecycleBlocking, SkipFilesystemScan: !def.scan,
 		Availability: func(*config.Instance) error {
 			if !standaloneInstallationAvailable(options, installation) {
-				return fmt.Errorf("emulator not installed: %s", def.id)
+				return platforms.NewEmulatorNotInstalledError(def.id)
 			}
 			return nil
 		},

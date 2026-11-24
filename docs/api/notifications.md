@@ -545,7 +545,7 @@ as `busy` and leaves the playlist where it is.
     "script": "@Arcade/Metal Slug X (year:1999)",
     "command": "launch.title",
     "category": "media_not_found",
-    "message": "media not found",
+    "message": "no matching game found",
     "playlistId": "deck://lhm6n9t8",
     "playlistIndex": 0
   }

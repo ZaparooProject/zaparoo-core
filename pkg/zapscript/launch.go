@@ -421,17 +421,21 @@ func resolveLauncherRefInList(
 	return "", false
 }
 
-func applySystemDefaultLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) string {
+// applySystemDefaultLauncherForPath applies the default launcher of the system
+// whose available launcher claims path. It reports whether a launcher is set
+// or one claims path, so a false result means nothing could be inferred.
+func applySystemDefaultLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) bool {
 	if current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher); current != "" {
-		return current
+		return true
 	}
 
 	launcher, found := inferLauncherForPath(pl, env, path)
 	if !found || launcher.SystemID == "" {
 		log.Debug().Str("path", path).Msg("could not infer system default launcher from path")
-		return ""
+		return found
 	}
-	return applySystemDefaultLauncher(pl, env, launcher.SystemID)
+	applySystemDefaultLauncher(pl, env, launcher.SystemID)
+	return true
 }
 
 func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) (platforms.Launcher, bool) {
@@ -471,6 +475,23 @@ func inferLauncherForPathWithAvailability(
 	return launchers[best], true
 }
 
+// guessUnclaimedFileSystem names the system of a file that no launcher's
+// folders or schemes claim, such as a game on a removable drive, so it
+// launches as though its system had been given with ?system=. A file a
+// launcher does claim keeps that launcher, even an unavailable one, so its
+// failure still says what to install.
+func guessUnclaimedFileSystem(pl platforms.Platform, env *platforms.CmdEnv, path string) (string, bool) {
+	if helpers.ReURI.MatchString(path) || pathClaimed(pl, env, path) {
+		return "", false
+	}
+	systemID, ok := helpers.GuessSystemForPath(path, env.Launchers.Get(pl, env.Cfg))
+	if ok {
+		log.Info().Str("path", path).Str("system", systemID).
+			Msg("guessed system for a file outside every launcher folder")
+	}
+	return systemID, ok
+}
+
 func launcherInferenceScore(l *platforms.Launcher) int {
 	score := 0
 	if len(l.Schemes) > 0 {
@@ -491,9 +512,29 @@ func inferLauncherForSystemPath(
 	path string,
 	systemID string,
 ) (platforms.Launcher, bool) {
+	candidates := systemPathCandidates(pl, env, path, systemID)
+	if detected, result := helpers.SelectDetectedLauncher(candidates); result == helpers.LauncherDetectionUnique {
+		return detected, true
+	} else if result != helpers.LauncherDetectionUnscanned {
+		return platforms.Launcher{}, false
+	}
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
+	}
+	return candidates[0], true
+}
+
+// systemPathCandidates returns the available launchers of systemID that can
+// start path, judged by its extension.
+func systemPathCandidates(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	systemID string,
+) []platforms.Launcher {
 	ext := filepath.Ext(path)
 	if ext == "" {
-		return platforms.Launcher{}, false
+		return nil
 	}
 
 	launchers := env.Launchers.Get(pl, env.Cfg)
@@ -512,16 +553,46 @@ func inferLauncherForSystemPath(
 			}
 		}
 	}
+	return candidates
+}
 
-	if detected, result := helpers.SelectDetectedLauncher(candidates); result == helpers.LauncherDetectionUnique {
-		return detected, true
-	} else if result != helpers.LauncherDetectionUnscanned {
+// unclaimedFileSystemLauncher picks a launcher of systemID for a file no
+// launcher claims, when inferLauncherForSystemPath could not single one out.
+// Nothing else would launch such a file, so rather than fail, it ranks the
+// candidates the way a path a launcher does claim is ranked: a launcher found
+// installed first, then by specificity and registration order.
+func unclaimedFileSystemLauncher(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	systemID string,
+) (platforms.Launcher, bool) {
+	candidates := systemPathCandidates(pl, env, path, systemID)
+	best := -1
+	bestRank := -1
+	for i := range candidates {
+		rank := launcherInferenceScore(&candidates[i])
+		switch {
+		case candidates[i].Detected != nil && *candidates[i].Detected:
+			rank += 20000
+		case !helpers.LauncherKnownMissing(&candidates[i]):
+			rank += 10000
+		}
+		if rank > bestRank {
+			best, bestRank = i, rank
+		}
+	}
+	if best == -1 {
 		return platforms.Launcher{}, false
 	}
-	if len(candidates) != 1 {
-		return platforms.Launcher{}, false
-	}
-	return candidates[0], true
+	return candidates[best], true
+}
+
+// pathClaimed reports whether any launcher, available or not, claims path
+// through its folders, schemes or tests.
+func pathClaimed(pl platforms.Platform, env *platforms.CmdEnv, path string) bool {
+	_, claimed := inferLauncherForPathWithAvailability(pl, env, path, false)
+	return claimed
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -1080,6 +1151,9 @@ type launchTarget struct {
 	mediaID               int64
 	resolveMediaByPath    bool
 	guideLauncherBySystem bool
+	// unclaimed is set when the system was guessed for a file no launcher
+	// claims, so the launcher choice need not ask that again.
+	unclaimed bool
 }
 
 func getLaunchClosure(
@@ -1087,7 +1161,16 @@ func getLaunchClosure(
 	env *platforms.CmdEnv,
 	explicitLauncher bool,
 ) func(launchTarget) error {
-	return func(target launchTarget) error {
+	return func(target launchTarget) (launchErr error) {
+		// A launcher chosen for this target, such as its system's default,
+		// must not carry into the next pick when a random launch retries
+		// after finding no launcher.
+		advArgs := env.Cmd.AdvArgs
+		defer func() {
+			if errors.Is(launchErr, helpers.ErrNoLauncher) {
+				env.Cmd.AdvArgs = advArgs
+			}
+		}()
 		explicit := explicitLauncher
 		// rommMediaID is the RomM row the game was launched from. The
 		// installed file does not take its identity, but a launcher override
@@ -1147,8 +1230,13 @@ func getLaunchClosure(
 			}
 			if target.systemID != "" {
 				applySystemDefaultLauncher(pl, env, target.systemID)
-			} else {
-				applySystemDefaultLauncherForPath(pl, env, target.path)
+			} else if !applySystemDefaultLauncherForPath(pl, env, target.path) {
+				if systemID, guessed := guessUnclaimedFileSystem(pl, env, target.path); guessed {
+					target.systemID = systemID
+					target.guideLauncherBySystem = true
+					target.unclaimed = true
+					applySystemDefaultLauncher(pl, env, systemID)
+				}
 			}
 			if !overridden {
 				dropLauncherForOtherScheme(pl, env, target.path)
@@ -1205,6 +1293,9 @@ func getLaunchClosure(
 			log.Info().Msgf("launching with launcher: %s", launcher.ID)
 		} else if target.guideLauncherBySystem {
 			inferred, found := inferLauncherForSystemPath(pl, env, target.path, target.systemID)
+			if !found && (target.unclaimed || !pathClaimed(pl, env, target.path)) {
+				inferred, found = unclaimedFileSystemLauncher(pl, env, target.path, target.systemID)
+			}
 			if found {
 				launcher = &inferred
 				log.Info().

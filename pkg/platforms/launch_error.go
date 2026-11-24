@@ -206,6 +206,19 @@ func NewLaunchRepairErrorWithReason(
 	}
 }
 
+// NewEmulatorNotInstalledError reports a launch refused because the emulator
+// it runs is missing. launcher names the emulator for the launcher parameter
+// and may be empty. Callers log the missing path themselves.
+func NewEmulatorNotInstalledError(launcher string) error {
+	var params map[string]string
+	if launcher != "" {
+		params = map[string]string{LaunchRepairParamLauncher: launcher}
+	}
+	return NewLaunchRepairErrorWithReason(
+		LaunchRepairLauncherNotInstalled, params, "the emulator for this system is not installed",
+	)
+}
+
 func safeRepairMessage(message string) string {
 	if message == "" || len(message) > maxRepairMessageBytes ||
 		strings.ContainsAny(message, "\x00\r\n") {

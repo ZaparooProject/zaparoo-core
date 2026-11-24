@@ -302,6 +302,12 @@ func getBaseDevice(deviceID string) string {
 // findTokenFileInDir searches for zaparoo.txt (case-insensitive) in the given directory.
 // Returns the full path if found, or empty string if not found.
 func findTokenFileInDir(dir string) string {
+	return findFileInDir(dir, tokenFileName)
+}
+
+// findFileInDir returns the path of the entry in dir whose name matches name
+// without regard to case, or "" when there is none.
+func findFileInDir(dir, name string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -311,7 +317,7 @@ func findTokenFileInDir(dir string) string {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.EqualFold(entry.Name(), tokenFileName) {
+		if strings.EqualFold(entry.Name(), name) {
 			return filepath.Join(dir, entry.Name())
 		}
 	}
@@ -520,6 +526,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		Source:   tokens.SourceReader,
 		ReaderID: r.ReaderID(),
 		PathRoot: filepath.Clean(foundMount),
+		Metadata: loadSidecar(filepath.Clean(foundMount)),
 	}
 
 	// Before adding token, verify device is still mounted (race condition protection)

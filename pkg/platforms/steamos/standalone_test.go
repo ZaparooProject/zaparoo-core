@@ -7,6 +7,7 @@
 package steamos
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -138,7 +140,11 @@ func TestNativeStandaloneLauncherAvailabilityAndBuildErrors(t *testing.T) {
 
 		err := launcher.Availability(nil)
 
-		require.ErrorContains(t, err, "emulator not installed")
+		var repair *platforms.LaunchRepairError
+		require.ErrorAs(t, err, &repair)
+		assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+		assert.Equal(t, "MissingNative", repair.Params()[platforms.LaunchRepairParamLauncher])
+		assert.Equal(t, "the emulator for this system is not installed", repair.Error())
 	})
 
 	t.Run("available native executable", func(t *testing.T) {
@@ -275,4 +281,32 @@ func TestScummVMArgs(t *testing.T) {
 
 	_, err = scummVMArgs(filepath.Join(dir, "game.dat"))
 	require.Error(t, err)
+}
+
+func requireEmulatorNotInstalled(t *testing.T, err error, launcher string) {
+	t.Helper()
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+	assert.Equal(t, "the emulator for this system is not installed", repair.Error())
+	assert.Equal(t, launcher, repair.Params()[platforms.LaunchRepairParamLauncher])
+}
+
+func TestMissingFlatpakEmulatorsAreLaunchRepairs(t *testing.T) {
+	// Not parallel: an empty PATH makes every flatpak lookup report missing.
+	t.Setenv("PATH", t.TempDir())
+	const missing = "org.zaparoo.Missing"
+
+	standaloneLauncher := newNativeStandaloneLauncher(&standaloneDef{
+		id: "MissingFlatpak", flatpakID: missing, args: batchArgs(),
+	})
+	requireEmulatorNotInstalled(t, standaloneLauncher.Availability(nil), "MissingFlatpak")
+
+	emulator := EmulatorConfig{FlatpakID: missing}
+	emuDeckLauncher := standaloneEmuDeckLauncher("ps2", esde.SystemInfo{SystemID: "PS2"}, emulator)
+	requireEmulatorNotInstalled(t, emuDeckLauncher.Availability(nil), "EmuDeck")
+
+	proc, err := launchStandaloneEmulator(context.Background(), emulator, "/roms/ps2/game.iso", "ps2")
+	assert.Nil(t, proc)
+	requireEmulatorNotInstalled(t, err, "EmuDeck")
 }

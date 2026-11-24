@@ -801,16 +801,38 @@ type ActiveMedia struct {
 	DurationMs *int64    `json:"durationMs,omitempty"`
 	// Track is what the tags of an audio track played in-process say about
 	// it, omitted when it has none or they have not been read yet.
-	Track            *TrackInfo         `json:"track,omitempty"`
-	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
-	LauncherID       string             `json:"launcherId"`
-	SystemID         string             `json:"systemId"`
-	SystemName       string             `json:"systemName"`
-	Path             string             `json:"mediaPath"`
-	Name             string             `json:"mediaName"`
-	Slot             string             `json:"slot,omitempty"`
-	LauncherControls []string           `json:"launcherControls,omitempty"`
-	MediaID          int64              `json:"mediaId,omitempty"`
+	Track         *TrackInfo         `json:"track,omitempty"`
+	PlaybackState MediaPlaybackState `json:"playbackState,omitempty"`
+	LauncherID    string             `json:"launcherId"`
+	SystemID      string             `json:"systemId"`
+	SystemName    string             `json:"systemName"`
+	Path          string             `json:"mediaPath"`
+	Name          string             `json:"mediaName"`
+	// Description is the media's description from the token that launched
+	// it, such as an external drive's zaparoo.json.
+	Description string `json:"mediaDescription,omitempty"`
+	// ImagePath is the cover the launching token declared for this media,
+	// served by media.active.image. It is a local path and never sent.
+	ImagePath string `json:"-"`
+	// ImageRoot is the root of the drive ImagePath is on. The cover is opened
+	// through it, so a folder swapped for a link cannot lead off the drive.
+	ImageRoot string `json:"-"`
+	// LaunchedName is the name the media launched with when the launching
+	// token's metadata replaced Name. A title command must use it: the
+	// token's label names no indexed title. It is never sent.
+	LaunchedName     string   `json:"-"`
+	Slot             string   `json:"slot,omitempty"`
+	LauncherControls []string `json:"launcherControls,omitempty"`
+	MediaID          int64    `json:"mediaId,omitempty"`
+}
+
+// TitleName is the name a title command for this media resolves: the name
+// it launched with, not a label the launching token gave it.
+func (a *ActiveMedia) TitleName() string {
+	if a.LaunchedName != "" {
+		return a.LaunchedName
+	}
+	return a.Name
 }
 
 // TrackInfo is the tag metadata of an audio track. Fields the track does not
@@ -880,8 +902,10 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 
 	// Compare names by slugifying them to handle minor formatting differences
 	// (e.g., "Game Name" vs "game-name", "S01E02" vs "1x02" are considered equal)
-	slugA := slugs.Slugify(mediaTypeA, a.Name)
-	slugB := slugs.Slugify(mediaTypeB, with.Name)
+	// The launched title is compared, not a label the launching token gave
+	// it: two games from one drive share the drive's label.
+	slugA := slugs.Slugify(mediaTypeA, a.TitleName())
+	slugB := slugs.Slugify(mediaTypeB, with.TitleName())
 
 	// If names match (after slugification), consider them equal regardless of path
 	// This handles cases where launcher uses virtual paths (kodi-episode://123)
