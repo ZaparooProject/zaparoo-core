@@ -243,6 +243,28 @@ func TestHandleMediaScrape_InvalidParams(t *testing.T) {
 	require.Error(t, err)
 }
 
+// expectScrapeFinished expects the scrape goroutine's one
+// BackgroundOperationDone call and returns a wait for the goroutine to finish.
+// The running flag alone is not proof: every test shares it, and a goroutine
+// an earlier test left behind can clear it before this test's run is done.
+func expectScrapeFinished(t *testing.T, mockDB *testhelpers.MockMediaDBI) func() {
+	t.Helper()
+	done := make(chan struct{})
+	mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		close(done)
+	}).Return().Once()
+	return func() {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the scrape goroutine never called BackgroundOperationDone")
+		}
+		// clearIfOwner runs right after BackgroundOperationDone unwinds.
+		require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	}
+}
+
 // TestHandleMediaScrape_HappyPath verifies that a valid request starts the
 // goroutine, returns nil result, and sends an initial "scraping: true"
 // notification followed by "done: true" once the channel closes.
@@ -261,7 +283,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 	// Linked rows take the run's results once it finishes, across every
 	// system the run covered.
@@ -322,9 +344,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	assert.True(t, gotDone, "expected a done=true notification")
 
 	// Wait for the goroutine to fully wind down before asserting status.
-	require.Eventually(t, func() bool {
-		return !IsScrapingRunning()
-	}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
+	scrapeFinished()
 	mockDB.AssertCalled(t, "RecomputeVersionGroups", assertmock.Anything, []string(nil))
 
 	statusResult, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
@@ -427,7 +447,7 @@ func TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount(t *testing.T) {
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 	mockDB.On("RefreshScrapedMediaCounts", assertmock.Anything).Return(nil)
 	mockDB.On("GetStoredScrapedMediaCount", assertmock.Anything, "test-scraper").Return(9, true, nil)
@@ -462,9 +482,7 @@ func TestHandleMediaScrape_TerminalCountUsesRefreshedStoredCount(t *testing.T) {
 				continue
 			}
 			assert.Equal(t, 9, payload.TotalScraped)
-			require.Eventually(t, func() bool {
-				return !IsScrapingRunning()
-			}, 2*time.Second, 10*time.Millisecond)
+			scrapeFinished()
 			return
 		case <-timeout:
 			t.Fatal("timed out waiting for the terminal media.scraping notification")
@@ -529,7 +547,7 @@ func TestHandleMediaScrape_PublishesDoneAfterTagRefresh(t *testing.T) {
 			}).Return(nil).Once()
 			mockDB.On("TrackBackgroundOperation").Return()
 			mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-			mockDB.On("BackgroundOperationDone").Return()
+			scrapeFinished := expectScrapeFinished(t, mockDB)
 			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
 			_, err := HandleMediaScrape(requests.RequestEnv{
@@ -552,8 +570,7 @@ func TestHandleMediaScrape_PublishesDoneAfterTagRefresh(t *testing.T) {
 				select {
 				case n := <-ns:
 					if terminalSeen(n) {
-						require.Eventually(t, func() bool { return !IsScrapingRunning() },
-							2*time.Second, 10*time.Millisecond)
+						scrapeFinished()
 						mockDB.AssertExpectations(t)
 						return
 					}
@@ -720,7 +737,7 @@ func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 			mockDB.On("WALCheckpoint").Return(nil).Once()
 			mockDB.On("TrackBackgroundOperation").Return()
 			mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-			mockDB.On("BackgroundOperationDone").Return()
+			scrapeFinished := expectScrapeFinished(t, mockDB)
 			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
 			pl := mocks.NewMockPlatform()
@@ -761,9 +778,7 @@ func TestHandleMediaScrape_ForgetsResolvedThumbsOnCompletion(t *testing.T) {
 				}
 			}
 
-			require.Eventually(t, func() bool {
-				return !IsScrapingRunning()
-			}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
+			scrapeFinished()
 
 			assert.Same(t, oldCache, mediaThumbCachePointer.Load())
 			_, memoOK := oldCache.getResolvedThumb(ref, nil, 100)
@@ -808,7 +823,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
 
 	pauser := syncutil.NewPauser()
@@ -879,9 +894,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 		}
 	}
 
-	require.Eventually(t, func() bool {
-		return !IsScrapingRunning()
-	}, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	mockDB.AssertExpectations(t)
 }
 
@@ -917,7 +930,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
 
 	pl := mocks.NewMockPlatform()
@@ -940,9 +953,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, result)
 
-	require.Eventually(t, func() bool {
-		return !IsScrapingRunning()
-	}, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	_, memoOK := cache.getResolvedThumb(ref, nil, 256)
 	assert.False(t, memoOK, "failed scrape must re-resolve artwork changed before failure")
 
@@ -1323,7 +1334,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "resume-scraper", "resume-run").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return().Once()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
@@ -1357,9 +1368,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	assert.Equal(t, "resume-run", opts.RunID)
 	assert.Equal(t, operation.Scope, opts.Scope)
 	assert.True(t, opts.Force)
-	require.Eventually(t, func() bool {
-		return !IsScrapingRunning()
-	}, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	mockDB.AssertExpectations(t)
 }
 
@@ -1385,7 +1394,7 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return().Once()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "scope-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
@@ -1420,7 +1429,7 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 	opts := receiveScrapeOptions(t, gotOptions)
 	require.Equal(t, expectedScope, opts.Scope)
 	require.Equal(t, []string{"NES"}, opts.Systems)
-	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	mockDB.AssertExpectations(t)
 }
 
@@ -1439,7 +1448,7 @@ func TestHandleMediaScrape_AnswersBeforeScraperStartupFinishes(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return().Once()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "slow-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
@@ -1481,7 +1490,7 @@ func TestHandleMediaScrape_AnswersBeforeScraperStartupFinishes(t *testing.T) {
 	assert.True(t, IsScrapingRunning(), "the admitted scrape is running while its startup finishes")
 
 	close(startupRelease)
-	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	mockDB.AssertExpectations(t)
 }
 
@@ -1577,7 +1586,7 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	// Startup itself is tracked, even when no producer goroutine is created.
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return().Once()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	env := makeScrapeEnv(t,
 		map[string]platforms.Scraper{"fail-scraper": failingScraper},
 		mockDB,
@@ -1587,6 +1596,7 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	_, err := HandleMediaScrape(env)
 	require.NoError(t, err, "startup runs after the request is answered")
 
+	scrapeFinished()
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning() && mockDB.ActiveMediaWriteOperation() == database.MediaWriteOperationNone
 	}, 2*time.Second, 10*time.Millisecond, "a failed start clears the status and releases the lease")
@@ -2046,7 +2056,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("GetOptimizationStatus").Return("pending", nil).Maybe()
-	mockDB.On("BackgroundOperationDone").Return()
+	scrapeFinished := expectScrapeFinished(t, mockDB)
 	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(5, nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(9, nil).Once()
@@ -2119,9 +2129,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 	// than querying again (the mock allows one progress query).
 	assert.Equal(t, []int{5}, progressCounts)
 	assert.Equal(t, 9, doneCount)
-	require.Eventually(t, func() bool {
-		return !IsScrapingRunning()
-	}, 2*time.Second, 10*time.Millisecond)
+	scrapeFinished()
 	mockDB.AssertExpectations(t)
 }
 
