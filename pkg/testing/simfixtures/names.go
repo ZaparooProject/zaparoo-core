@@ -30,9 +30,9 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/go-slugs"
+	"github.com/ZaparooProject/go-slugs/filetitle"
 	gdb "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/gamedatabase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamedatabase"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/testdata"
 )
 
@@ -61,7 +61,7 @@ type title struct {
 // titleSlug is the slug the indexer gives a filename stem and the
 // gamedatabase scraper gives a dataset title; the scraper joins on it.
 func titleSlug(s string) string {
-	return slugs.Slugify(slugs.MediaTypeGame, tags.ParseTitleFromFilename(s, false))
+	return slugs.Slugify(slugs.MediaTypeGame, filetitle.Parse(s, false, slugs.MediaTypeGame))
 }
 
 // sanitizeStem makes a title safe as a file name on every platform, the way
