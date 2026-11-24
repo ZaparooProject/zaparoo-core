@@ -107,11 +107,53 @@ func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 // conditional delete, run in one transaction so two concurrent edits to the
 // same path cannot read-modify-write over each other.
 func (db *UserDB) SetMediaUserFlag(systemID, path string, flag database.MediaUserFlag, value bool) error {
+	upsert, err := mediaUserFlagUpsertSQL(flag)
+	if err != nil {
+		return err
+	}
+	return mediaUserDataColumnWrite(
+		db.ctx, db.sql.Load(), upsert, systemID, pathutil.CanonicalMediaPath(path), value, time.Now().Unix(),
+	)
+}
+
+// SetMediaUserFlags applies several SetMediaUserFlag writes, possibly to
+// different paths, in one transaction: either every write is kept or none
+// is. Each write follows SetMediaUserFlag's rules, in order, and the
+// preferences revision advances once.
+func (db *UserDB) SetMediaUserFlags(writes []database.MediaUserFlagWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	upserts := make([]string, len(writes))
+	for i := range writes {
+		upsert, err := mediaUserFlagUpsertSQL(writes[i].Flag)
+		if err != nil {
+			return err
+		}
+		upserts[i] = upsert
+	}
+	now := time.Now().Unix()
+	return mediaUserDataTx(db.ctx, db.sql.Load(), now, func(tx *sql.Tx) error {
+		for i := range writes {
+			path := pathutil.CanonicalMediaPath(writes[i].Path)
+			if err := sqlMediaUserColumnWrite(
+				db.ctx, tx, upserts[i], writes[i].SystemID, path, writes[i].Value, now,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// mediaUserFlagUpsertSQL builds the column-scoped upsert SetMediaUserFlag
+// runs for flag. Numbered parameters: ?1 system, ?2 path, ?3 value,
+// ?4 created, ?5 updated.
+func mediaUserFlagUpsertSQL(flag database.MediaUserFlag) (string, error) {
 	spec, ok := mediaUserFlagColumns[flag]
 	if !ok {
-		return fmt.Errorf("unknown media user flag %q", flag)
+		return "", fmt.Errorf("unknown media user flag %q", flag)
 	}
-	// Numbered parameters: ?1 system, ?2 path, ?3 value, ?4 created, ?5 updated.
 	var sb strings.Builder
 	_, _ = sb.WriteString("insert into MediaUserData(SystemID, Path, ")
 	_, _ = sb.WriteString(spec.column)
@@ -138,9 +180,7 @@ func (db *UserDB) SetMediaUserFlag(systemID, path string, flag database.MediaUse
 		}
 	}
 	_, _ = sb.WriteString("\tUpdatedAt = excluded.UpdatedAt;")
-	return mediaUserDataColumnWrite(
-		db.ctx, db.sql.Load(), sb.String(), systemID, pathutil.CanonicalMediaPath(path), value, time.Now().Unix(),
-	)
+	return sb.String(), nil
 }
 
 // GetMediaUserDataForPaths returns the user-data rows of the given paths in
@@ -417,17 +457,25 @@ func mediaUserDataColumnWrite(
 	ctx context.Context, db *sql.DB, upsert, systemID, path string, value any, now int64,
 ) error {
 	return mediaUserDataTx(ctx, db, now, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
-			return fmt.Errorf("failed to upsert media user data column: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`delete from MediaUserData where SystemID = ? and Path = ? and `+mediaUserNoIntent+`;`,
-			systemID, path,
-		); err != nil {
-			return fmt.Errorf("failed to prune empty media user data row: %w", err)
-		}
-		return nil
+		return sqlMediaUserColumnWrite(ctx, tx, upsert, systemID, path, value, now)
 	})
+}
+
+// sqlMediaUserColumnWrite runs one column-scoped upsert inside tx and deletes
+// the row if no user intent remains.
+func sqlMediaUserColumnWrite(
+	ctx context.Context, tx *sql.Tx, upsert, systemID, path string, value any, now int64,
+) error {
+	if _, err := tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
+		return fmt.Errorf("failed to upsert media user data column: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`delete from MediaUserData where SystemID = ? and Path = ? and `+mediaUserNoIntent+`;`,
+		systemID, path,
+	); err != nil {
+		return fmt.Errorf("failed to prune empty media user data row: %w", err)
+	}
+	return nil
 }
 
 // mediaUserDataTx runs a MediaUserData write and advances the preferences

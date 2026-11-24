@@ -563,6 +563,31 @@ func logFetchAndAttachTagsTiming(
 		Msg("fetch and attach tags timing")
 }
 
+// skipSearchTagsKey marks a context whose search reads no tags, set from
+// SearchFilters.SkipTags so every search path honours it.
+type skipSearchTagsKey struct{}
+
+func withoutSearchTags(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipSearchTagsKey{}, true)
+}
+
+func searchTagsSkipped(ctx context.Context) bool {
+	skipped, ok := ctx.Value(skipSearchTagsKey{}).(bool)
+	return ok && skipped
+}
+
+// AttachSearchTags implements MediaDBI.
+func (db *MediaDB) AttachSearchTags(ctx context.Context, results []database.SearchResultWithCursor) error {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return ErrNullSQL
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return attachTagsAndDisambiguation(ctx, sqlDB, results)
+}
+
 // attachTagsAndDisambiguation attaches all tags to the results and then populates
 // ZapScriptTags from each title's precomputed disambiguating types. Search entry
 // points use this; fetchAndAttachTags itself stays a pure tag-attach step.
@@ -571,6 +596,9 @@ func attachTagsAndDisambiguation(
 	db sqlQueryable,
 	results []database.SearchResultWithCursor,
 ) error {
+	if searchTagsSkipped(ctx) {
+		return nil
+	}
 	hasTitleIDs := allResultsHaveTitleIDs(results)
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return err

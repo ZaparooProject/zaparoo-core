@@ -267,6 +267,13 @@ func (m *MockUserDBI) SetMediaUserFlag(systemID, path string, flag database.Medi
 	return nil
 }
 
+func (m *MockUserDBI) SetMediaUserFlags(writes []database.MediaUserFlagWrite) error {
+	if err := m.Called(writes).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user flags failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
 	args := m.Called(systemID, path, launcherID)
 	if err := args.Error(0); err != nil {
@@ -4149,6 +4156,27 @@ func (m *MockMediaDBI) ResolveSingletonContainerAliases(
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindDiscSets(
+	ctx context.Context, systemDBID int64, dirs []string,
+) (map[string][]database.Media, error) {
+	if !m.hasExpectedCall("FindDiscSets") {
+		return nil, nil //nolint:nilnil // default mock behavior: no disc sets
+	}
+	args := m.Called(ctx, systemDBID, dirs)
+	if result, ok := args.Get(0).(map[string][]database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) AttachSearchTags(ctx context.Context, results []database.SearchResultWithCursor) error {
+	if !m.hasExpectedCall("AttachSearchTags") {
+		return nil
+	}
+	args := m.Called(ctx, results)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func (m *MockMediaDBI) FindMediaBySystemAndPathFold(

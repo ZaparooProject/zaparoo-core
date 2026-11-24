@@ -21,9 +21,6 @@ package methods
 
 import (
 	"cmp"
-	"context"
-	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -31,8 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -86,13 +81,6 @@ func parseAddedSortValue(value string) (setAt int64, name string, err error) {
 	return setAt, name, nil
 }
 
-// addedRow is one result with its place in the added-desc order.
-type addedRow struct {
-	name   string
-	result database.SearchResultWithCursor
-	setAt  int64
-}
-
 // compareAdded orders rows by set time, newest first, then rows with no time
 // after every dated row, each run by name ascending and then by media ID.
 func compareAdded(aAt int64, aName string, aID, bAt int64, bName string, bID int64) int {
@@ -126,85 +114,4 @@ func caseFoldCompare(a, b string) int {
 		}
 	}
 	return cmp.Compare(len(a), len(b))
-}
-
-// searchByAdded answers an added-desc search. The flag filter bounds the set
-// to the games the user flagged, so it is read whole in name order, ordered
-// by when each game got the flag, and paged after the cursor's position.
-// limit is the page size plus one, as for every other search.
-func searchByAdded(
-	ctx context.Context,
-	db *database.Database,
-	flag database.MediaUserFlag,
-	filters *database.SearchFilters,
-	after *database.SearchCursor,
-	limit int,
-) ([]database.SearchResultWithCursor, error) {
-	var cursorAt int64
-	var cursorName string
-	if after != nil {
-		var err error
-		if cursorAt, cursorName, err = parseAddedSortValue(after.SortValue); err != nil {
-			return nil, err
-		}
-	}
-
-	times, err := db.UserDB.ListMediaUserFlagTimes(flag)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read when games were added: %w", err)
-	}
-	setAt := make(map[string]int64, len(times))
-	for i := range times {
-		setAt[times[i].SystemID+"\x00"+times[i].Path] = times[i].SetAt
-	}
-
-	read := *filters
-	read.Sort = "name-asc"
-	read.Cursor = nil
-	read.SortCursor = nil
-	read.Limit = addedSearchPage
-	rows := make([]addedRow, 0)
-	for page := 0; ; page++ {
-		results, searchErr := db.MediaDB.SearchMediaWithFilters(ctx, &read)
-		if searchErr != nil {
-			return nil, fmt.Errorf("error searching media with filters: %w", searchErr)
-		}
-		for i := range results {
-			result := results[i]
-			at := setAt[result.SystemID+"\x00"+pathutil.CanonicalMediaPath(result.Path)]
-			rows = append(rows, addedRow{result: result, setAt: at, name: result.SortValue})
-		}
-		if len(results) < read.Limit {
-			break
-		}
-		if page+1 >= addedSearchMaxPages {
-			log.Warn().Int("rows", len(rows)).Msg("added-desc search stopped at its read limit")
-			break
-		}
-		last := results[len(results)-1]
-		read.SortCursor = &database.SearchCursor{SortValue: last.SortValue, Sort: read.Sort, LastID: last.MediaID}
-	}
-
-	slices.SortFunc(rows, func(a, b addedRow) int {
-		return compareAdded(a.setAt, a.name, a.result.MediaID, b.setAt, b.name, b.result.MediaID)
-	})
-	start := 0
-	if after != nil {
-		start = len(rows)
-		for i := range rows {
-			if compareAdded(rows[i].setAt, rows[i].name, rows[i].result.MediaID,
-				cursorAt, cursorName, after.LastID) > 0 {
-				start = i
-				break
-			}
-		}
-	}
-	end := min(start+limit, len(rows))
-	out := make([]database.SearchResultWithCursor, 0, end-start)
-	for i := start; i < end; i++ {
-		result := rows[i].result
-		result.SortValue = addedSortValue(rows[i].setAt, rows[i].name)
-		out = append(out, result)
-	}
-	return out, nil
 }

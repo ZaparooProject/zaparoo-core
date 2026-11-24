@@ -53,6 +53,7 @@ func setupKiosk(
 	st *state.State, db *database.Database, pl platforms.Platform, profilesSvc *profiles.Service,
 ) *kiosk.Service {
 	lock := kiosk.NewService(db, clockwork.NewRealClock())
+	lock.SetRestoreAccess(st.AcquireRestoreAccess)
 	st.SetKiosk(lock)
 
 	if err := lock.InitRecoveryToken(afero.NewOsFs(), helpers.DataDir(pl)); err != nil {

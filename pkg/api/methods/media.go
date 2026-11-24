@@ -1296,6 +1296,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 		addedFlag = flag
 	}
+	// A search that requires a user flag lists a multi-disc folder once.
+	_, flagRequired := addedSortFlag(tagFilters)
+	flagged := flagRequired && !grouped && params.TitleID == nil && env.Database != nil
 
 	// Normalize letter parameter (validation already done by struct tag)
 	var validatedLetter *string
@@ -1346,6 +1349,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	searchStarted := time.Now()
 	var groups []database.SearchTitleGroup
+	var flaggedRows []flaggedSearchRow
 	var versionCounts []int
 	var hasNextPage bool
 	switch {
@@ -1402,10 +1406,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			versions = open
 		}
 		searchResults = pageTitleVersions(versions, sortOrder, cursor, sortCursor, limit)
-	case addedFlag != "":
-		searchResults, err = searchByAdded(ctx, env.Database, addedFlag, &searchFilters, sortCursor, limit)
+	case flagged:
+		flaggedRows, err = searchFlagged(ctx, &env, addedFlag, &searchFilters, cursor, sortCursor, limit)
 		if err != nil {
 			return nil, err
+		}
+		searchResults = make([]database.SearchResultWithCursor, 0, len(flaggedRows))
+		for i := range flaggedRows {
+			searchResults = append(searchResults, flaggedRows[i].result)
 		}
 	default:
 		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
@@ -1420,6 +1428,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		hasNextPage = len(searchResults) > maxResults
 		if hasNextPage {
 			searchResults = searchResults[:maxResults]
+			if flaggedRows != nil {
+				flaggedRows = flaggedRows[:maxResults]
+			}
 		}
 	}
 
@@ -1428,6 +1439,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	for i := range results {
 		if versionCounts != nil {
 			results[i].VersionCount = &versionCounts[i]
+		}
+		if i < len(flaggedRows) && flaggedRows[i].set != nil {
+			results[i].MultiDisc = true
+			results[i].DisambiguatingTags = withoutDiscTags(results[i].DisambiguatingTags)
 		}
 	}
 	coverDuration := builder.cover
@@ -1442,6 +1457,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		var nextCursor *string
 		if hasNextPage {
 			lastResult := searchResults[len(searchResults)-1]
+			if flaggedRows != nil {
+				lastResult = flaggedRows[len(flaggedRows)-1].key
+			}
 			var cursorStr string
 			var err error
 			switch {

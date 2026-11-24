@@ -228,6 +228,9 @@ type Service struct {
 	state         State
 	recoveryToken string
 	listeners     []func(Status)
+	// restoreAccess, when set, is held across a transition the lock makes
+	// on its own. See SetRestoreAccess.
+	restoreAccess func() (func(), error)
 	settings      Settings
 	mu            syncutil.RWMutex
 	// transitionMu serializes whole transitions, listeners included, so two
@@ -339,6 +342,17 @@ func (s *Service) OnChange(fn func(Status)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.listeners = append(s.listeners, fn)
+}
+
+// SetRestoreAccess gives the lock the backup-restore gate. Listeners write
+// the user database, so every transition runs with restore access held: an
+// API request holds it for its whole handler, and the relock timer, the one
+// transition no request makes, takes it here first. Listeners can then rely
+// on it instead of taking it again under transitionMu.
+func (s *Service) SetRestoreAccess(acquire func() (func(), error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restoreAccess = acquire
 }
 
 // EnableOptions qualify an Enable call.
@@ -493,6 +507,21 @@ func (s *Service) Unlock(d time.Duration) error {
 }
 
 func (s *Service) relockOnExpiry() {
+	s.mu.RLock()
+	acquire := s.restoreAccess
+	s.mu.RUnlock()
+	if acquire != nil {
+		// This waits out a restore in progress rather than leave the device
+		// unlocked. It fails only once a restore has finished and Core is
+		// about to restart, when the relock still has to happen.
+		release, err := acquire()
+		if err != nil {
+			log.Warn().Err(err).Msg("kiosk: relocking without restore access")
+		} else {
+			defer release()
+		}
+	}
+
 	s.transitionMu.Lock()
 	defer s.transitionMu.Unlock()
 	s.mu.RLock()

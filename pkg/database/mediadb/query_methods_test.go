@@ -154,3 +154,40 @@ func TestMediaDB_BrowseDirCount_FromMediaFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "the SNES directory contains one subdirectory (USA)")
 }
+
+func TestMediaDB_SearchSkipTagsThenAttach(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	root := filepath.Join(string(filepath.Separator), "roms", "NES")
+	scantest.IndexMediaPaths(t, mediaDB, "NES",
+		filepath.Join(root, "Mario (USA).nes"),
+		filepath.Join(root, "Mario (Japan).nes"),
+		filepath.Join(root, "Zelda (Europe).nes"))
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	for _, query := range []string{"", "mario"} {
+		filters := database.SearchFilters{
+			Systems: []systemdefs.System{*nes}, Query: query, Sort: "name-asc", Limit: 10,
+		}
+		want, err := mediaDB.SearchMediaWithFilters(ctx, &filters)
+		require.NoError(t, err)
+		require.NotEmpty(t, want)
+
+		filters.SkipTags = true
+		bare, err := mediaDB.SearchMediaWithFilters(ctx, &filters)
+		require.NoError(t, err)
+		require.Len(t, bare, len(want))
+		for i := range bare {
+			assert.Equal(t, want[i].MediaID, bare[i].MediaID, "query %q", query)
+			assert.Empty(t, bare[i].Tags, "query %q reads no tags", query)
+		}
+
+		require.NoError(t, mediaDB.AttachSearchTags(ctx, bare))
+		assert.Equal(t, want, bare, "query %q: attached tags match a search's own", query)
+	}
+	require.NoError(t, mediaDB.AttachSearchTags(ctx, nil))
+}

@@ -3702,6 +3702,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	// logic in FindSingleContainerLaunchMedia).
 	type resolved struct {
 		childDir  string
+		discs     []database.Media
 		media     database.Media
 		multiDisc bool
 	}
@@ -3729,7 +3730,11 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 				}
 			}
 		}
-		candidates = append(candidates, resolved{childDir: childDir, media: *chosen, multiDisc: multiDisc})
+		c := resolved{childDir: childDir, media: *chosen, multiDisc: multiDisc}
+		if multiDisc {
+			c.discs = directRows
+		}
+		candidates = append(candidates, c)
 	}
 	if len(candidates) == 0 {
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
@@ -3737,8 +3742,20 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 
 	// Batch-fetch full rows (title + system) and file-level tags.
 	mediaDBIDs := make([]int64, 0, len(candidates))
-	for _, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		mediaDBIDs = append(mediaDBIDs, c.media.DBID)
+	}
+	// A disc set's entry shows the user flags of all its discs, so their
+	// tags are read in the same query as the launch discs'.
+	tagDBIDs := slices.Clone(mediaDBIDs)
+	for i := range candidates {
+		c := &candidates[i]
+		for i := range c.discs {
+			if c.discs[i].DBID != c.media.DBID {
+				tagDBIDs = append(tagDBIDs, c.discs[i].DBID)
+			}
+		}
 	}
 	fullRowsStart := time.Now()
 	fullRows, err := db.GetMediaWithTitleAndSystemByIDs(ctx, mediaDBIDs)
@@ -3747,7 +3764,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	}
 	fullRowsDur = time.Since(fullRowsStart)
 	tagsStart := time.Now()
-	tagsMap, err := db.GetMediaTagsByMediaDBIDs(ctx, mediaDBIDs)
+	tagsMap, err := db.GetMediaTagsByMediaDBIDs(ctx, tagDBIDs)
 	if err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases tags: %w", err)
 	}
@@ -3758,7 +3775,8 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	// populate ZapScriptTags (same path as the search/browse queries).
 	aliases := make([]database.SingletonContainerAlias, 0, len(candidates))
 	synthetic := make([]database.SearchResultWithCursor, 0, len(candidates))
-	for _, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		row, ok := fullRows[c.media.DBID]
 		if !ok {
 			continue
@@ -3766,6 +3784,13 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		mediaTags := tagsMap[c.media.DBID]
 		if mediaTags == nil {
 			mediaTags = []database.TagInfo{}
+		}
+		if c.multiDisc {
+			discTags := make([][]database.TagInfo, 0, len(c.discs))
+			for i := range c.discs {
+				discTags = append(discTags, tagsMap[c.discs[i].DBID])
+			}
+			mediaTags = database.MergeDiscSetUserTags(mediaTags, discTags...)
 		}
 		aliases = append(aliases, database.SingletonContainerAlias{
 			ChildDir:  c.childDir,
