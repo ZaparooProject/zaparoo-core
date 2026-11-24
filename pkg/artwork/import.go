@@ -250,10 +250,19 @@ func ImportPending(
 // Run imports every pending capture. indexGeneration changes whenever an
 // index completes, which is the only time an unmatched capture can resolve.
 func (im *Importer) Run(ctx context.Context, indexGeneration uint64) error {
-	entries, err := os.ReadDir(im.Inbox)
+	// Stat first: Windows reports listing a file as a directory as "not
+	// found", which would make a broken inbox look like no inbox at all.
+	info, err := os.Stat(im.Inbox)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("stat artwork inbox: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("artwork inbox %s is not a directory", im.Inbox)
+	}
+	entries, err := os.ReadDir(im.Inbox)
 	if err != nil {
 		return fmt.Errorf("read artwork inbox: %w", err)
 	}
