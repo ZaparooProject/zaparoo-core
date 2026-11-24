@@ -19,25 +19,42 @@
 
 package simfixtures
 
-import "strings"
+import (
+	"fmt"
+	"math/rand"
+)
 
 // BenchSeed is the seed BenchFilenames uses.
 const BenchSeed = 42
 
-// BenchFilenames returns n distinct fictional ROM paths of the form
+// BenchFilenames returns n fictional ROM paths of the form
 // /roms/system/<title>.nes for benchmarks, the same for every call. Titles
-// carry no region or dump tags, so title resolution stays confident, and no
-// two share a slug.
+// carry no region or dump tags, so title resolution stays confident. Some
+// repeat. The committed benchmark baseline was measured on exactly these
+// inputs, so changing them invalidates it.
 func BenchFilenames(n int) []string {
-	titles := syntheticTitles(systemRand(BenchSeed, "bench"), n, make(map[string]bool, n))
-	out := make([]string, len(titles))
-	var b strings.Builder
-	for i := range titles {
-		b.Reset()
-		b.WriteString("/roms/system/")
-		b.WriteString(titles[i].stem)
-		b.WriteString(".nes")
-		out[i] = b.String()
+	prefixes := []string{
+		"Super", "Mega", "Ultra", "Final", "Grand", "Dark", "Crystal",
+		"Shadow", "Iron", "Bright", "Neo", "Hyper", "Royal", "Star",
 	}
-	return out
+	middles := []string{
+		"Mario", "Fighter", "Quest", "Fantasy", "Dragon", "Knight",
+		"Warrior", "Battle", "Storm", "Legend", "World", "Racer",
+	}
+	suffixes := []string{
+		"Bros", "Adventure", "Saga", "Chronicles", "Wars", "Legacy",
+		"Origins", "Legends", "Rising", "Revolution", "Arena", "Force",
+	}
+
+	rng := rand.New(rand.NewSource(BenchSeed)) //nolint:gosec // Deterministic seed for reproducible benchmarks
+	filenames := make([]string, n)
+	for i := range filenames {
+		filenames[i] = fmt.Sprintf("/roms/system/%s %s %s %d.nes",
+			prefixes[rng.Intn(len(prefixes))],
+			middles[rng.Intn(len(middles))],
+			suffixes[rng.Intn(len(suffixes))],
+			rng.Intn(99)+1,
+		)
+	}
+	return filenames
 }
