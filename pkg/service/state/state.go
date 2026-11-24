@@ -1278,6 +1278,7 @@ func (s *State) updateActiveMediaStateAs(
 	}
 
 	media.Slot = mediaslot.Primary
+	applyTokenMetadata(media, &s.activeToken)
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
@@ -1352,6 +1353,27 @@ func (s *State) updateActiveMediaStateAs(
 	// No changes
 	s.mu.Unlock()
 	return false
+}
+
+// applyTokenMetadata labels media with the name, description and cover the
+// active token declares, such as an external drive's zaparoo.json. It applies
+// only to media stored under the token's own root, so a drive whose script
+// launches a game from the library cannot relabel that game.
+func applyTokenMetadata(media *models.ActiveMedia, token *tokens.Token) {
+	meta := token.Metadata
+	if meta == nil || token.PathRoot == "" || media.Path == "" ||
+		!helpers.PathHasPrefix(media.Path, token.PathRoot) {
+		return
+	}
+	if meta.Name != "" && meta.Name != media.Name {
+		media.LaunchedName = media.Name
+		media.Name = meta.Name
+	}
+	media.Description = meta.Description
+	media.ImagePath = meta.ImagePath
+	if meta.ImagePath != "" {
+		media.ImageRoot = token.PathRoot
+	}
 }
 
 // SetBackgroundMedia sets the background-slot media. Clearing it with nil is

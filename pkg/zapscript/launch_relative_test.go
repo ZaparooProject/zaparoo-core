@@ -573,3 +573,171 @@ func TestFindFile_VirtualEntryWinsOverUnreadableRoot(t *testing.T) {
 	_, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join("Amiga", "Games", "Not Listed"))
 	require.ErrorIs(t, err, os.ErrPermission)
 }
+
+func n64Launcher(id string) platforms.Launcher {
+	return platforms.Launcher{
+		ID: id, SystemID: systemdefs.SystemNintendo64, Folders: []string{"N64"}, Extensions: []string{".z64"},
+	}
+}
+
+// TestCmdLaunch_GuessesSystemForUnclaimedFile launches a game no launcher's
+// folders claim, such as one on a removable drive, by guessing its system
+// from its folder name or extension, as though ?system= had been given.
+func TestCmdLaunch_GuessesSystemForUnclaimedFile(t *testing.T) {
+	t.Parallel()
+
+	detected := true
+	tests := []struct {
+		name         string
+		file         string
+		arg          string
+		wantLauncher string
+		launchers    []platforms.Launcher
+	}{
+		{
+			name: "folder name with several launchers for the system",
+			file: filepath.Join("N64", "Game.z64"),
+			arg:  "N64/Game.z64",
+			launchers: []platforms.Launcher{
+				n64Launcher("n64-a"),
+				n64Launcher("n64-b"),
+			},
+			wantLauncher: "n64-a",
+		},
+		{
+			name: "an installed launcher is preferred",
+			file: filepath.Join("N64", "Game.z64"),
+			arg:  "N64/Game.z64",
+			launchers: []platforms.Launcher{
+				n64Launcher("n64-a"),
+				{
+					ID: "n64-b", SystemID: systemdefs.SystemNintendo64, Folders: []string{"N64"},
+					Extensions: []string{".z64"}, Detected: &detected,
+				},
+			},
+			wantLauncher: "n64-b",
+		},
+		{
+			name: "extension only one system takes, at the top level",
+			file: "Game.gbc",
+			arg:  "Game.gbc",
+			launchers: []platforms.Launcher{
+				{
+					ID: "gbc", SystemID: systemdefs.SystemGameboyColor, Folders: []string{"GBC"},
+					Extensions: []string{".gbc"},
+				},
+				{ID: "snes", SystemID: systemdefs.SystemSNES, Folders: []string{"SNES"}, Extensions: []string{".sfc"}},
+			},
+			wantLauncher: "gbc",
+		},
+		{
+			name: "unavailable launcher is skipped",
+			file: filepath.Join("N64", "Game.z64"),
+			arg:  "N64/Game.z64",
+			launchers: []platforms.Launcher{
+				{
+					ID: "n64-a", SystemID: systemdefs.SystemNintendo64, Folders: []string{"N64"},
+					Extensions:   []string{".z64"},
+					Availability: func(*config.Instance) error { return platforms.ErrLauncherUnavailable },
+				},
+				n64Launcher("n64-b"),
+			},
+			wantLauncher: "n64-b",
+		},
+		{
+			name: "folder name naming another system is not overruled",
+			file: filepath.Join("SNES", "Game.z64"),
+			arg:  "SNES/Game.z64",
+			launchers: []platforms.Launcher{
+				n64Launcher("n64-a"),
+				{ID: "snes", SystemID: systemdefs.SystemSNES, Folders: []string{"SNES"}, Extensions: []string{".sfc"}},
+			},
+		},
+		{
+			name: "explicit system with several launchers",
+			file: filepath.Join("Games", "Game.z64"),
+			arg:  "Games/Game.z64?system=Nintendo64",
+			launchers: []platforms.Launcher{
+				n64Launcher("n64-a"),
+				n64Launcher("n64-b"),
+			},
+			wantLauncher: "n64-a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pathRoot := launchTestAbsPath("drive")
+			file := filepath.Join(pathRoot, tt.file)
+			fs := helpers.NewMemoryFS()
+			require.NoError(t, fs.WriteFile(file, []byte("rom"), 0o600))
+
+			cfg := &config.Instance{}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Launchers", cfg).Return(tt.launchers)
+			mockPlatform.On("RootDirs", cfg).Return([]string{launchTestAbsPath("roms")})
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+			mockPlatform.On("LaunchMedia", cfg, file, mock.MatchedBy(func(l *platforms.Launcher) bool {
+				if tt.wantLauncher == "" {
+					return l == nil
+				}
+				return l != nil && l.ID == tt.wantLauncher
+			}), mock.Anything, mock.Anything).Return(nil).Once()
+
+			cmd, err := zapscript.NewParser(tt.arg).ParseScript()
+			require.NoError(t, err)
+			require.Len(t, cmd.Cmds, 1)
+			env := platforms.CmdEnv{
+				Cmd:      cmd.Cmds[0],
+				Cfg:      cfg,
+				PathRoot: pathRoot,
+			}
+
+			_, err = cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+			require.NoError(t, err)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCmdLaunch_ClaimedFileKeepsItsLauncher keeps a file a launcher's folder
+// claims from being guessed onto another launcher when that one is
+// unavailable, so the launch still names what to install.
+func TestCmdLaunch_ClaimedFileKeepsItsLauncher(t *testing.T) {
+	t.Parallel()
+
+	roms := launchTestAbsPath("roms")
+	file := filepath.Join(roms, "N64", "Game.z64")
+	fs := helpers.NewMemoryFS()
+	require.NoError(t, fs.WriteFile(file, []byte("rom"), 0o600))
+
+	launchers := []platforms.Launcher{
+		{
+			ID: "n64-a", SystemID: systemdefs.SystemNintendo64, Folders: []string{"N64"},
+			Extensions:   []string{".z64"},
+			Availability: func(*config.Instance) error { return platforms.ErrLauncherUnavailable },
+		},
+		{ID: "n64-b", SystemID: systemdefs.SystemNintendo64, Folders: []string{"Other"}, Extensions: []string{".z64"}},
+	}
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{roms})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, file, mock.MatchedBy(func(l *platforms.Launcher) bool {
+		return l == nil
+	}), mock.Anything, mock.Anything).Return(nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch", Args: []string{file}},
+		Cfg: cfg,
+	}
+
+	_, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}

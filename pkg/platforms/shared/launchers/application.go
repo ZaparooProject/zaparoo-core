@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/rs/zerolog/log"
 )
 
 type applicationInstallation struct {
@@ -70,7 +71,12 @@ func newApplicationResolver(
 			resolved = true
 			return installation, nil
 		}
-		return applicationInstallation{}, fmt.Errorf("%s is not installed", nativeExecutable)
+		// Availability checks call this too, so a warning would repeat on
+		// every launcher refresh.
+		log.Debug().Str("executable", nativeExecutable).Str("flatpak", flatpakID).Msg("application not installed")
+		return applicationInstallation{}, platforms.NewLaunchRepairErrorWithReason(
+			platforms.LaunchRepairLauncherNotInstalled, nil, "this app is not installed",
+		)
 	}
 }
 

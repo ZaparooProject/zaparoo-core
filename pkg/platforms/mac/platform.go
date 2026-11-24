@@ -274,7 +274,7 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager {
 }
 
 func (*Platform) ManagedByPackageManager() bool {
-	return false
+	return config.IsPackageManaged()
 }
 
 func (*Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {

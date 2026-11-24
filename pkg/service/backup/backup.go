@@ -427,7 +427,7 @@ func (m *Manager) prunePreRestoreZips() error {
 func (m *Manager) List() ([]ListInfo, error) {
 	entries, err := os.ReadDir(m.backupDir())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return []ListInfo{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("listing backup ZIPs: %w", err)

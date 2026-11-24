@@ -26,8 +26,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ZaparooProject/go-slugs"
 	gdb "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/gamedatabase"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 

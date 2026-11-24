@@ -156,6 +156,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/iedame">
+                    <img src="https://avatars.githubusercontent.com/u/60272?v=4" width="100;" alt="iedame"/>
+                    <br />
+                    <sub><b>Rafael Ieda</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/mogorman">
                     <img src="https://avatars.githubusercontent.com/u/64710?v=4" width="100;" alt="mogorman"/>
                     <br />
@@ -183,6 +190,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>fayep</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/Emashzed">
                     <img src="https://avatars.githubusercontent.com/u/994075?v=4" width="100;" alt="Emashzed"/>
@@ -190,8 +199,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Emashzed</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/philips">
                     <img src="https://avatars.githubusercontent.com/u/33544?v=4" width="100;" alt="philips"/>

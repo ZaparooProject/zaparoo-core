@@ -4046,6 +4046,15 @@ func TestRemoteBackupToInfoMarksNewerSchemaIncompatible(t *testing.T) {
 	assert.False(t, remoteBackupToInfo(&current).Incompatible)
 }
 
+// Online omitting categories must not reach the API as null (#1854).
+func TestRemoteBackupToInfoMissingCategoriesIsEmptyObject(t *testing.T) {
+	t.Parallel()
+	info := remoteBackupToInfo(&remoteBackupResponse{ID: "1"})
+	raw, err := json.Marshal(info)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"categories":{}`)
+}
+
 func TestManagerRestoreRemoteSynthesizesEmptyFiles(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 	newSave := []byte("remote-save\n")

@@ -23,6 +23,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -177,6 +178,32 @@ func TestLaunchGame_RejectsBadPaths(t *testing.T) {
 	_, err := p.launchGame(nil, testROM, nil)
 	require.ErrorContains(t, err, "no user")
 	assert.Empty(t, cmdCalls(cmd), "ES is never stopped for a launch that cannot run")
+}
+
+func TestLaunchGame_MissingROMIsFileNotFound(t *testing.T) {
+	t.Parallel()
+	p := newTestPlatform(t, newTestFs(t), newMockCmd())
+
+	_, err := p.launchGame(nil, "/roms/snes/Missing.sfc", nil)
+	require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+}
+
+// statFailFs fails every stat, as an unreadable or vanished mount would.
+type statFailFs struct {
+	afero.Fs
+}
+
+var errStatFault = errors.New("injected stat fault")
+
+func (statFailFs) Stat(string) (os.FileInfo, error) { return nil, errStatFault }
+
+func TestLaunchGame_UnreadableROMIsNotFileNotFound(t *testing.T) {
+	t.Parallel()
+	p := newTestPlatform(t, statFailFs{Fs: newTestFs(t)}, newMockCmd())
+
+	_, err := p.launchGame(nil, testROM, nil)
+	require.ErrorIs(t, err, errStatFault)
+	assert.NotErrorIs(t, err, zapscript.ErrFileNotFound)
 }
 
 func TestWaitTrackedProcess_RestoresES(t *testing.T) {

@@ -113,10 +113,11 @@ func (r *TestAppRunner) QueueUpdateDraw(f func()) {
 	<-done
 }
 
-// SetFocus sets focus on a primitive and waits for the draw.
+// SetFocus sets focus on a primitive on the event loop and waits for the
+// draw. Calling app.SetFocus from the test goroutine races the running
+// app's draw, which reads the same focus state.
 func (r *TestAppRunner) SetFocus(p tview.Primitive) {
-	r.app.SetFocus(p)
-	r.Draw()
+	r.QueueUpdateDraw(func() { r.app.SetFocus(p) })
 }
 
 // SimulateKey simulates a key press by calling the focused primitive's

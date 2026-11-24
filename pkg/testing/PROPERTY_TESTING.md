@@ -94,7 +94,7 @@ go test ./pkg/database/...
 go test -run TestProperty ./pkg/database/matcher/
 
 # Run with verbose output
-go test -v -run TestProperty ./pkg/database/slugs/
+go test -v -run TestProperty ./pkg/database/matcher/
 ```
 
 ### Regression Files (.fail)
@@ -156,7 +156,6 @@ Property test files across the project:
 - `pkg/database/matcher/fuzzy_property_test.go` - Fuzzy matching properties
 - `pkg/database/mediadb/batch_inserter_property_test.go` - Batch insert properties
 - `pkg/database/mediadb/slug_cache_property_test.go` - Cache key determinism
-- `pkg/database/slugs/slugify_property_test.go` - Slug normalization properties
 - `pkg/database/tags/tags_property_test.go` - Tag parsing properties
 - `pkg/database/userdb/media_history_property_test.go` - Media history properties
 - `pkg/helpers/paths_property_test.go` - Path normalization and comparison
