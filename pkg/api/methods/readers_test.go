@@ -456,6 +456,30 @@ func TestHandleReaderWriteCancel(t *testing.T) {
 		m.AssertCalled(t, "CancelWrite")
 	})
 
+	// Params are optional per the API docs, and the TUI calls this method
+	// without any, so missing and null params must cancel on all readers.
+	for _, tc := range []struct {
+		name   string
+		params json.RawMessage
+	}{
+		{name: "no params", params: nil},
+		{name: "null params", params: json.RawMessage(`null`)},
+	} {
+		t.Run("broadcast mode - "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := createWriteCapableReader("reader-1")
+			m.On("CancelWrite").Return()
+			rs := []readers.Reader{m}
+
+			result, err := methods.HandleReaderWriteCancel(tc.params, rs)
+
+			require.NoError(t, err)
+			assert.Equal(t, methods.NoContent{}, result)
+			m.AssertCalled(t, "CancelWrite")
+		})
+	}
+
 	t.Run("broadcast mode - cancels all write-capable readers", func(t *testing.T) {
 		t.Parallel()
 

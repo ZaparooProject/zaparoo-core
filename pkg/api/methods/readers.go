@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -106,9 +107,13 @@ func HandleReaderWriteCancel(
 	params json.RawMessage,
 	allReaders []readers.Reader,
 ) (any, error) {
+	// Params are optional: no params (or null) cancels on every write-capable
+	// reader, the same as an empty object.
 	var p models.ReaderWriteCancelParams
-	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
-		return nil, models.ClientErrf("invalid params: %w", err)
+	if len(params) > 0 && !bytes.Equal(bytes.TrimSpace(params), []byte("null")) {
+		if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
 	}
 
 	if p.ReaderID != nil && *p.ReaderID != "" {
