@@ -1441,6 +1441,44 @@ func GuessLauncherForPath(path string) (platforms.Launcher, bool) {
 	return launcher, ok
 }
 
+// GuessSystemForPath infers the system of a file no launcher's folders claim,
+// such as one on a removable drive. It uses the evidence GuessLauncherForPath
+// does: a recognized system folder name in the path, or else an extension
+// that only one system's launchers take. It names a system rather than a
+// launcher, so a system with several launchers is still recognized and its
+// launcher can be chosen the way a ?system= argument chooses one.
+func GuessSystemForPath(path string, launchers []platforms.Launcher) (string, bool) {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return "", false
+	}
+
+	systems := make(map[string]struct{})
+	for i := range launchers {
+		if launchers[i].SystemID != "" && launcherHasExtension(&launchers[i], ext) {
+			systems[launchers[i].SystemID] = struct{}{}
+		}
+	}
+	if len(systems) == 0 {
+		return "", false
+	}
+
+	if folderSystem, ok := folderTrailSystem(path); ok {
+		if _, takesExt := systems[folderSystem]; takesExt {
+			return folderSystem, true
+		}
+		return "", false
+	}
+
+	if len(systems) != 1 {
+		return "", false
+	}
+	for systemID := range systems {
+		return systemID, true
+	}
+	return "", false
+}
+
 // LauncherCanLaunch reports whether a launcher is able to start media itself.
 func LauncherCanLaunch(l *platforms.Launcher) bool {
 	return l.Launch != nil || l.BuildLaunchCommand != nil

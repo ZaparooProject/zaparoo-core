@@ -46,6 +46,16 @@ const (
 	SourceRemote   = "Remote"   // Allowlisted Zaparoo Online remote operation
 )
 
+// Metadata is the display information a token carries for the media it
+// launches. Every field is optional. ImagePath is an absolute path under the
+// token's PathRoot, already checked to be a regular file reached without a
+// link.
+type Metadata struct {
+	Name        string
+	Description string
+	ImagePath   string
+}
+
 //nolint:govet // Field order groups token identity and structural command source.
 type Token struct {
 	ScanTime time.Time
@@ -61,6 +71,10 @@ type Token struct {
 	// PathRoot is an optional filesystem root used to resolve relative paths
 	// originating from source-backed tokens such as external drives.
 	PathRoot string
+	// Metadata labels the media this token launches from under PathRoot,
+	// such as the name and cover an external drive declares for the game it
+	// carries. It never decides what runs.
+	Metadata *Metadata
 	// Traits is the set of traits this token's ZapScript declared, resolved
 	// once where the token entered the system. Tokens derived from this one,
 	// such as playlist tracks and hook scripts, inherit it rather than

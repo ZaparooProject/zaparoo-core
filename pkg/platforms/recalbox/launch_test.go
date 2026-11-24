@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,6 +153,26 @@ func TestLaunchGame_RejectsBadPaths(t *testing.T) {
 		_, err := p.launchGame(cfg, path, nil)
 		assert.Error(t, err, path)
 	}
+}
+
+func TestLaunchGame_MissingROMIsFileNotFound(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+
+	_, err := p.launchGame(nil, "/recalbox/share/roms/snes/missing.sfc", nil)
+	require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+}
+
+func TestLaunchGame_UnreadableROMIsNotFileNotFound(t *testing.T) {
+	t.Parallel()
+	fs := newTestFs(t)
+	p, _, _ := newTestPlatform(t, fs)
+	p.fs = statFailFs{Fs: fs}
+
+	_, err := p.launchGame(nil, "/recalbox/share/roms/snes/a.sfc", nil)
+	require.ErrorIs(t, err, errFault)
+	assert.NotErrorIs(t, err, zapscript.ErrFileNotFound)
 }
 
 func TestLaunchGame_NoSystemList(t *testing.T) {

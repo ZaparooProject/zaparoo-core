@@ -318,7 +318,8 @@ func launchArcade(
 					rbf := strings.TrimSpace(mra.Rbf)
 					resolved, resolveErr := resolveArcadeMRAPath(path, rbf, misterconfig.RootDirs(cfg))
 					if resolveErr != nil {
-						return nil, resolveErr
+						log.Warn().Err(resolveErr).Str("path", path).Msg("arcade core not installed")
+						return nil, errMissingCore(rbf)
 					}
 					if resolved != path {
 						log.Info().Str("from", path).Str("to", resolved).
@@ -771,7 +772,10 @@ func launchAltCoreWithDefinition(
 		// A different media protocol cannot safely fall back to the primary RBF.
 		if definition.Slots != nil {
 			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, definition.LauncherID, definition.ID); !ok {
-				return nil, fmt.Errorf("alternate core not installed: %s", definition.LauncherID)
+				corePath := misterExpectedCorePath(cfg, definition.LauncherID, definition.ID)
+				log.Warn().Str("launcher", definition.LauncherID).Str("rbf", corePath).
+					Msg("alternate core not installed")
+				return nil, errMissingCore(corePath)
 			}
 		}
 

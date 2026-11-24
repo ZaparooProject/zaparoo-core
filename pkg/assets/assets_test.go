@@ -186,3 +186,16 @@ func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	assert.Equal(t, "Genesis", lateMetadata.ID)
 	assert.Equal(t, int32(1), reads.Load())
 }
+
+func TestGetSystemMetadata_HandheldCategory(t *testing.T) {
+	resetSystemMetadataCache(t)
+
+	for _, id := range []string{"NDS", "3DS", "PSP", "Vita", "NGage", "GameCom"} {
+		metadata, err := GetSystemMetadata(id)
+		require.NoError(t, err)
+		assert.Equal(t, "Handheld", metadata.Category, id)
+	}
+	metadata, err := GetSystemMetadata("VirtualBoy")
+	require.NoError(t, err)
+	assert.Equal(t, "Console", metadata.Category, "the Virtual Boy is a tabletop console")
+}

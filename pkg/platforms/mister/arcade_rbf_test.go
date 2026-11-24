@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,8 +153,10 @@ func TestLaunchArcade_MissingCoreFailsLaunch(t *testing.T) {
 
 	launcher := launchArcade(NewPlatform(), "Arcade")
 	proc, err := launcher(&config.Instance{}, mra, nil)
-	require.Error(t, err)
 	assert.Nil(t, proc)
-	assert.Contains(t, err.Error(), "zaparoo_missing_core")
-	assert.Contains(t, err.Error(), filepath.Join(filepath.Dir(mra), "cores"))
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+	assert.Equal(t, "zaparoo_missing_core", repair.Params()[platforms.LaunchRepairParamPlugin])
+	assert.Equal(t, "the MiSTer core zaparoo_missing_core is not installed", repair.Error())
 }

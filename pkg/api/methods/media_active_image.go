@@ -24,7 +24,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -40,11 +45,17 @@ import (
 const (
 	activeImageTypeEmbedded = "audio:" + trackmeta.SourceEmbedded
 	activeImageTypeFolder   = "audio:" + trackmeta.SourceFolder
+	// activeImageTypeCover is a cover declared by the token that launched
+	// the media, such as an external drive's zaparoo.json.
+	activeImageTypeCover = "token:cover"
 )
 
 var (
-	errNoActiveAudioTrack = errors.New("no active audio track")
-	errNoCoverArt         = errors.New("no cover art")
+	errNoActiveImage    = errors.New("no image for the active media")
+	errNoCoverArt       = errors.New("no cover art")
+	errCoverArtTooLarge = errors.New("cover art is too large")
+	// errUnsupportedCoverArt is a declared cover that is not a PNG or JPEG.
+	errUnsupportedCoverArt = errors.New("cover art is not a PNG or JPEG image")
 )
 
 // readTrackPicture is trackmeta.ReadPicture, replaced by tests.
@@ -80,11 +91,6 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 	}
 	localPath := params.Delivery == mediaImageDeliveryPath
 
-	trackPath, ok := activeAudioTrackPath(&env, slot)
-	if !ok {
-		return nil, models.ClientErrf("%w", errNoActiveAudioTrack)
-	}
-
 	maxSize := 0
 	var cache *mediaThumbCache
 	if params.MaxSize != nil {
@@ -92,9 +98,18 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 		cache = mediaThumbCachePointer.Load()
 	}
 
+	if cover := activeMediaCover(&env, slot); cover.path != "" {
+		return serveActiveMediaCover(&env, cover, maxSize, cache, localPath)
+	}
+
+	trackPath, ok := activeAudioTrackPath(&env, slot)
+	if !ok {
+		return nil, models.ClientErrf("%w", errNoActiveImage)
+	}
+
 	trackInfo, err := os.Stat(trackPath)
 	if err != nil {
-		return nil, models.ClientErrf("%w", errNoActiveAudioTrack)
+		return nil, models.ClientErrf("%w", errNoActiveImage)
 	}
 	trackKey := fileThumbSourceKey(trackPath, trackInfo)
 
@@ -114,7 +129,7 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 	case errors.Is(err, trackmeta.ErrNoArt):
 		return nil, models.ClientErrf("%w", errNoCoverArt)
 	case errors.Is(err, trackmeta.ErrTagsTooLarge):
-		return nil, models.ClientErrf("cover art is too large")
+		return nil, models.ClientErrf("%w", errCoverArtTooLarge)
 	case err != nil:
 		return nil, fmt.Errorf("read cover art: %w", err)
 	}
@@ -132,7 +147,30 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 		sourceKey = activeImageSourceKey(trackmeta.SourceFolder, trackKey, fileThumbSourceKey(pic.Path, artInfo))
 	}
 
-	binary, contentType := pic.Data, pic.MIMEType
+	return deliverActiveImage(&env, &activeImage{
+		data:        pic.Data,
+		contentType: pic.MIMEType,
+		sourceKey:   sourceKey,
+		sourcePath:  sourcePath,
+		typeTag:     typeTag,
+	}, maxSize, cache, localPath)
+}
+
+// activeImage is art found for the active media, ready to deliver.
+type activeImage struct {
+	contentType string
+	sourceKey   string
+	sourcePath  string
+	typeTag     string
+	data        []byte
+}
+
+// deliverActiveImage resizes img when maxSize asks for it, caches the result
+// and returns it inline or as a cached local path.
+func deliverActiveImage(
+	env *requests.RequestEnv, img *activeImage, maxSize int, cache *mediaThumbCache, localPath bool,
+) (any, error) {
+	binary, contentType := img.data, img.contentType
 	if maxSize > 0 {
 		resizeSem := cache.resizeSemaphore()
 		select {
@@ -143,17 +181,138 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 		binary, contentType, _ = resizeImageWithColor(binary, contentType, maxSize)
 		<-resizeSem
 		if cache != nil {
-			path, cacheErr := cache.set(sourceKey, maxSize, binary, contentType)
+			path, cacheErr := cache.set(img.sourceKey, maxSize, binary, contentType)
 			if cacheErr != nil {
 				log.Debug().Err(cacheErr).Msg("media.active.image: failed to cache thumbnail")
 			} else if localPath {
-				if response, served := localMediaImageResponse(cache, path, contentType, typeTag); served {
+				if response, served := localMediaImageResponse(cache, path, contentType, img.typeTag); served {
 					return response, nil
 				}
 			}
 		}
 	}
-	return inlineMediaImageResponse(binary, contentType, sourcePath, typeTag), nil
+	return inlineMediaImageResponse(binary, contentType, img.sourcePath, img.typeTag), nil
+}
+
+// activeCover is a cover the launching token declared: its path and the
+// root of the drive it is on.
+type activeCover struct {
+	root string
+	path string
+}
+
+// activeMediaCover returns the cover the launching token declared for the
+// primary media, with an empty path when it declared none.
+func activeMediaCover(env *requests.RequestEnv, slot string) activeCover {
+	if slot != mediaslot.Primary || env.State == nil {
+		return activeCover{}
+	}
+	media := env.State.ActiveMedia()
+	if media == nil || media.ImageRoot == "" {
+		return activeCover{}
+	}
+	return activeCover{root: media.ImageRoot, path: media.ImagePath}
+}
+
+// activeCoverSourceKey names a declared cover in the thumbnail cache. It
+// changes whenever the file does.
+func activeCoverSourceKey(coverKey string) string {
+	return "c:" + activeImageTypeCover + ":" + coverKey
+}
+
+// serveActiveMediaCover delivers the cover a token declared for the active
+// media. The file was checked when the token was read; it is checked again
+// here because the drive holding it can change, and only a PNG or JPEG
+// within the size and dimension limits is served. It is reached through the
+// drive's root, so nothing swapped in after the token was read can lead off
+// the drive.
+func serveActiveMediaCover(
+	env *requests.RequestEnv, cover activeCover, maxSize int, cache *mediaThumbCache, localPath bool,
+) (any, error) {
+	rel, err := filepath.Rel(cover.root, cover.path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	root, err := os.OpenRoot(cover.root)
+	if err != nil {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(rel)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	sourceKey := activeCoverSourceKey(fileThumbSourceKey(cover.path, info))
+	if cache != nil {
+		if response, _, found := cachedMediaImageResponse(
+			cache, sourceKey, activeImageTypeCover, maxSize, cover.path, localPath,
+		); found {
+			return response, nil
+		}
+	}
+
+	data, err := readActiveCover(root, rel, info, MediaImageMaxBytes(env.Platform))
+	if err != nil {
+		return nil, err
+	}
+	contentType, err := activeCoverContentType(data)
+	if err != nil {
+		return nil, err
+	}
+	return deliverActiveImage(env, &activeImage{
+		data:        data,
+		contentType: contentType,
+		sourceKey:   sourceKey,
+		sourcePath:  cover.path,
+		typeTag:     activeImageTypeCover,
+	}, maxSize, cache, localPath)
+}
+
+// readActiveCover reads rel under root, refusing it when the file opened is
+// not the one info describes, as when it was swapped after the check. The
+// open does not wait, so a named pipe swapped in cannot hold the request.
+func readActiveCover(root *os.Root, rel string, info os.FileInfo, maxBytes int64) ([]byte, error) {
+	file, err := root.OpenFile(rel, coverOpenFlags, 0)
+	if err != nil {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, models.ClientErrf("%w", errNoCoverArt)
+	}
+	data, err := readOpenedMediaFile(file, opened, maxBytes)
+	var tooLarge *mediaBinaryTooLargeError
+	if errors.As(err, &tooLarge) {
+		return nil, models.ClientErrf("%w", errCoverArtTooLarge)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read cover art: %w", err)
+	}
+	return data, nil
+}
+
+// activeCoverContentType identifies a declared cover as PNG or JPEG from its
+// bytes and checks the frame it declares before anything decodes it.
+func activeCoverContentType(data []byte) (string, error) {
+	var contentType string
+	var decodeConfig func(io.Reader) (image.Config, error)
+	switch {
+	case bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")):
+		contentType, decodeConfig = "image/png", png.DecodeConfig
+	case bytes.HasPrefix(data, []byte{0xff, 0xd8, 0xff}):
+		contentType, decodeConfig = "image/jpeg", jpeg.DecodeConfig
+	default:
+		return "", models.ClientErrf("%w", errUnsupportedCoverArt)
+	}
+	cfg, err := decodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", models.ClientErrf("%w", errUnsupportedCoverArt)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > mediaImageMaxPixels {
+		return "", models.ClientErrf("%w", errCoverArtTooLarge)
+	}
+	return contentType, nil
 }
 
 // activeAudioTrackPath returns the path of the track native audio is

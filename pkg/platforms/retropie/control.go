@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -123,7 +125,10 @@ func (p *Platform) checkLaunchable(folder string, kind requestKind, path string)
 	}
 	info, err := p.fs.Stat(path)
 	if err != nil {
-		return fmt.Errorf("media not found: %w", err)
+		if errors.Is(err, iofs.ErrNotExist) {
+			return fmt.Errorf("%w: %w", zapscript.ErrFileNotFound, err)
+		}
+		return fmt.Errorf("failed to stat media: %w", err)
 	}
 	// The autostart loop only runs regular files, so anything else would be
 	// taken and dropped while Core waits for a game that never starts.
@@ -136,7 +141,9 @@ func (p *Platform) checkLaunchable(folder string, kind requestKind, path string)
 		// emulators configured, so the launch would vanish silently.
 		cfgPath := filepath.Join(p.configsDir, folder, "emulators.cfg")
 		if !fileExists(p.fs, cfgPath) {
-			return fmt.Errorf("no emulator is installed for RetroPie system %q (%s not found)", folder, cfgPath)
+			log.Warn().Str("system", folder).Str("path", cfgPath).Msg("retropie: no emulator configured for system")
+			//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+			return platforms.NewEmulatorNotInstalledError("")
 		}
 	case requestPort:
 		// A port is a shell script run as the console user, so only scripts

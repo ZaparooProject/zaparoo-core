@@ -41,10 +41,12 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/artwork"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/wuffspng"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -2586,4 +2588,43 @@ func TestDecodeResizableImage_RejectsOversizedFrames(t *testing.T) {
 	_, err = decodeResizableImage(pngWithDimensions(t, 4096, 4096), "image/png")
 	require.Error(t, err, "a 1x1 body does not fill the declared frame")
 	assert.NotContains(t, err.Error(), "pixel limit", "a frame at the limit is let through to the decoder")
+}
+
+func TestHandleMediaImage_ImportedArtworkRefreshesMissingImage(t *testing.T) {
+	row := makeMediaFullRow(601, 6010)
+	dir := t.TempDir()
+	db := testhelpers.NewMockMediaDBI()
+	expectMediaImageResolve(db, row)
+	db.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{}, nil)
+	db.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).Return([]database.MediaProperty{}, nil)
+	db.On("FindMediaIDsByPaths", mock.Anything, []string{row.Path}).
+		Return([]database.MediaPathID{{DBID: row.DBID}}, nil).Once()
+	env := makeMediaImageEnv(t, db, mediaImageParams(row, "\"imageTypes\": [\"screenshot\"]"))
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return(ids.Mister)
+	platform.On("Settings").Return(platforms.Settings{HostManagedPaths: true, DataDir: dir})
+	env.Platform = platform
+
+	_, err := HandleMediaImage(env)
+	require.Error(t, err)
+
+	inbox := filepath.Join(dir, artwork.InboxDir)
+	staging := filepath.Join(inbox, "capture-img001")
+	require.NoError(t, os.MkdirAll(staging, 0o750))
+	request := fmt.Sprintf(
+		"{\"version\":1,\"gamePath\":%q,\"scope\":\"version\",\"imageType\":\"screenshot\"}", row.Path,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "request.json"), []byte(request), 0o600))
+	var imageData bytes.Buffer
+	require.NoError(t, png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "capture.png"), imageData.Bytes(), 0o600))
+	maxBytes := MediaImageMaxBytes(platform)
+	require.NoError(t, artwork.ImportPending(t.Context(), db, inbox, dir, maxBytes, func(string) {}))
+
+	response, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	result, ok := response.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-screenshot", result.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(imageData.Bytes()), result.Data)
 }
