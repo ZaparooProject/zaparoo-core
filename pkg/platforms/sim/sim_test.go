@@ -93,6 +93,8 @@ func TestDefaultsKeepTheSimIsolated(t *testing.T) {
 	assert.False(t, *v.Updates.Check)
 	assert.False(t, *v.Updates.Install)
 	assert.False(t, v.ErrorReporting)
+	assert.True(t, (&Platform{layout: l}).Settings().DisableBluetooth,
+		"bleEnabled can be switched on at runtime, so the platform must refuse the adapter")
 	assert.Equal(t, []string{l.ROMs}, v.Launchers.IndexRoot)
 	for _, id := range RealDrivers() {
 		require.NotNil(t, v.Readers.Drivers[id].AutoDetect, id)

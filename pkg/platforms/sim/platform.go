@@ -184,6 +184,8 @@ func (p *Platform) Settings() platforms.Settings {
 		LogDir:            p.layout.Logs,
 		HostManagedPaths:  true,
 		DisableSelfUpdate: true,
+		// The desktop's adapter may be driving the user's controllers.
+		DisableBluetooth: true,
 	}
 }
 
