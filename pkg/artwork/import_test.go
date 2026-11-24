@@ -22,7 +22,6 @@ package artwork
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -39,13 +38,20 @@ import (
 
 type libraryStub struct {
 	database.MediaDBI
-	groups  map[int64][]int64
-	rows    []database.MediaFullRow
-	lookups int
+	findErr   error
+	rowErr    error
+	groupErr  error
+	titlesErr error
+	groups    map[int64][]int64
+	rows      []database.MediaFullRow
+	lookups   int
 }
 
 func (db *libraryStub) FindMediaIDsByPaths(_ context.Context, paths []string) ([]database.MediaPathID, error) {
 	db.lookups++
+	if db.findErr != nil {
+		return nil, db.findErr
+	}
 	var matches []database.MediaPathID
 	for i := range db.rows {
 		row := &db.rows[i]
@@ -57,20 +63,29 @@ func (db *libraryStub) FindMediaIDsByPaths(_ context.Context, paths []string) ([
 }
 
 func (db *libraryStub) GetMediaWithTitleAndSystem(_ context.Context, id int64) (*database.MediaFullRow, error) {
+	if db.rowErr != nil {
+		return nil, db.rowErr
+	}
 	for i := range db.rows {
 		row := &db.rows[i]
 		if row.DBID == id {
 			return row, nil
 		}
 	}
-	return nil, errors.New("media row not in fixture")
+	return nil, nil //nolint:nilnil // matches MediaDB, which returns no row for an unknown ID
 }
 
 func (db *libraryStub) GetVersionGroupMembers(_ context.Context, _ []int64) (map[int64][]int64, error) {
+	if db.groupErr != nil {
+		return nil, db.groupErr
+	}
 	return db.groups, nil
 }
 
 func (db *libraryStub) GetTitlesByDBIDs(_ context.Context, ids []int64) ([]database.TitleWithSystem, error) {
+	if db.titlesErr != nil {
+		return nil, db.titlesErr
+	}
 	var titles []database.TitleWithSystem
 	for _, id := range ids {
 		for i := range db.rows {

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -34,6 +35,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/artwork"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -653,4 +655,49 @@ func TestHandleMediaImage_ImportedArtworkBypassesOnlyItsGame(t *testing.T) {
 	assert.Equal(t, "property:image-screenshot", resp.TypeTag)
 	assert.True(t, semTouched, "the captured game takes the full lookup")
 	capturedDB.AssertExpectations(t)
+}
+
+func TestBuildMediaMetaResponse_ImportedArtwork(t *testing.T) {
+	t.Parallel()
+	row := makeMediaFullRow(531, 5310)
+	dir := t.TempDir()
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return(ids.Mister)
+	platform.On("Settings").Return(platforms.Settings{HostManagedPaths: true, DataDir: dir})
+
+	db := testhelpers.NewMockMediaDBI()
+	db.On("FindMediaIDsByPaths", mock.Anything, []string{row.Path}).
+		Return([]database.MediaPathID{{DBID: row.DBID}}, nil)
+	db.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil)
+	db.On("GetVersionGroupMembers", mock.Anything, []int64{row.Title.DBID}).
+		Return(map[int64][]int64{}, nil).Times(2)
+	inbox := filepath.Join(dir, artwork.InboxDir)
+	for name, scope := range map[string]string{"capture-meta01": "version", "capture-meta02": "title"} {
+		staging := filepath.Join(inbox, name)
+		require.NoError(t, os.MkdirAll(staging, 0o750))
+		request := fmt.Sprintf(
+			"{\"version\":1,\"gamePath\":%q,\"scope\":%q,\"imageType\":\"screenshot\"}", row.Path, scope,
+		)
+		require.NoError(t, os.WriteFile(filepath.Join(staging, "request.json"), []byte(request), 0o600))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(staging, "capture.png"), solidPNG(t, 2, color.RGBA{A: 0xff}), 0o600,
+		))
+	}
+	require.NoError(t, artwork.ImportPending(
+		t.Context(), db, inbox, dir, MediaImageMaxBytes(platform), func(string) {},
+	))
+
+	env := requests.RequestEnv{Context: t.Context(), Platform: platform, Database: &database.Database{MediaDB: db}}
+	resp := buildMediaMetaResponse(&env, row, "", nil, nil, nil, nil, nil)
+	assert.Contains(t, resp.Media.Properties, "property:image-screenshot")
+	assert.Contains(t, resp.Media.Title.Properties, "property:image-screenshot")
+	assert.Contains(t, resp.Media.AvailableImageTypes, "screenshot")
+
+	// A failed group lookup still returns the exact-version artwork.
+	db.On("GetVersionGroupMembers", mock.Anything, []int64{row.Title.DBID}).
+		Return(nil, errors.New("database busy")).Once()
+	resp = buildMediaMetaResponse(&env, row, "", nil, nil, nil, nil, nil)
+	assert.Contains(t, resp.Media.Properties, "property:image-screenshot")
+	assert.NotContains(t, resp.Media.Title.Properties, "property:image-screenshot")
+	db.AssertExpectations(t)
 }
