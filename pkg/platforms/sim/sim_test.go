@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	simreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/sim"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,6 +80,38 @@ func TestCheckRootRefusesUnsafeRoots(t *testing.T) {
 	missing, err := NewLayout(filepath.Join(dir, "new"))
 	require.NoError(t, err)
 	require.NoError(t, missing.CheckRoot())
+}
+
+func TestCheckRootFollowsSymlinks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// The target is never created: a dangling link into the real data
+	// directory must still be refused before anything writes through it.
+	target := filepath.Join(linuxbase.Settings().DataDir, "sim-symlink-check")
+	link := filepath.Join(dir, "into-real")
+	require.NoError(t, os.Symlink(target, link))
+	l, err := NewLayout(link)
+	require.NoError(t, err)
+	require.Error(t, l.CheckRoot(), "a link into the real data directory")
+
+	nested, err := NewLayout(filepath.Join(link, "deeper"))
+	require.NoError(t, err)
+	require.Error(t, nested.CheckRoot(), "a path under a link into the real data directory")
+
+	safe := filepath.Join(dir, "safe")
+	require.NoError(t, os.Mkdir(safe, 0o750))
+	safeLink := filepath.Join(dir, "to-safe")
+	require.NoError(t, os.Symlink(safe, safeLink))
+	l, err = NewLayout(safeLink)
+	require.NoError(t, err)
+	require.NoError(t, l.CheckRoot(), "a link to an empty scratch directory is fine")
+
+	loop := filepath.Join(dir, "loop")
+	require.NoError(t, os.Symlink(loop, loop))
+	l, err = NewLayout(loop)
+	require.NoError(t, err)
+	assert.NotPanics(t, func() { _ = l.CheckRoot() }, "a symlink loop terminates")
 }
 
 func TestDefaultsKeepTheSimIsolated(t *testing.T) {

@@ -78,12 +78,14 @@ func NewLayout(root string) (Layout, error) {
 
 // CheckRoot refuses roots that could be real data: the filesystem root, the
 // home directory, the real Zaparoo directories or anything above or inside
-// them, and a non-empty directory that is not already a sim root.
+// them, and a non-empty directory that is not already a sim root. Symlinks
+// are followed, so a link cannot smuggle a real directory in as a sim root.
 func (l *Layout) CheckRoot() error {
-	if l.Root == "/" {
+	root := resolvePath(l.Root)
+	if root == "/" {
 		return errors.New("refusing to use / as a sim root")
 	}
-	if home, err := os.UserHomeDir(); err == nil && samePath(l.Root, home) {
+	if home, err := os.UserHomeDir(); err == nil && samePath(root, resolvePath(home)) {
 		return errors.New("refusing to use the home directory as a sim root")
 	}
 	zap := linuxbase.Settings()
@@ -91,7 +93,8 @@ func (l *Layout) CheckRoot() error {
 		if dir == "" {
 			continue
 		}
-		if within(l.Root, dir) || within(dir, l.Root) {
+		realDir := resolvePath(dir)
+		if within(root, realDir) || within(realDir, root) {
 			return fmt.Errorf("refusing sim root %s: it overlaps the real Zaparoo directory %s", l.Root, dir)
 		}
 	}
@@ -121,6 +124,38 @@ func (l *Layout) Ensure() error {
 		return fmt.Errorf("write sim marker: %w", err)
 	}
 	return nil
+}
+
+// maxLinkHops bounds symlink chains so a loop cannot hang resolvePath.
+const maxLinkHops = 40
+
+// resolvePath returns path with every symlink followed, including links whose
+// target does not exist yet and paths whose tail has not been created.
+func resolvePath(path string) string {
+	path = filepath.Clean(path)
+	for range maxLinkHops {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return resolved
+		}
+		info, err := os.Lstat(path)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, linkErr := os.Readlink(path)
+			if linkErr != nil {
+				return path
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			path = filepath.Clean(target)
+			continue
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return path
+		}
+		return filepath.Join(resolvePath(parent), filepath.Base(path))
+	}
+	return path
 }
 
 func samePath(a, b string) bool {
