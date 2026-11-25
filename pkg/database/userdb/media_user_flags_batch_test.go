@@ -21,7 +21,6 @@ package userdb
 
 import (
 	"context"
-	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -30,9 +29,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// batchTestPaths returns two stored media paths. UserDB stores them with
+// forward slashes on every OS, and the raw SQL below matches them as stored.
 func batchTestPaths() (disc1, disc2 string) {
-	dir := filepath.Join("roms", "PSX", "Game")
-	return filepath.Join(dir, "Game (Disc 1).chd"), filepath.Join(dir, "Game (Disc 2).chd")
+	return "roms/PSX/Game/Game (Disc 1).chd", "roms/PSX/Game/Game (Disc 2).chd"
 }
 
 func TestSetMediaUserFlagsWritesEveryPathOnce(t *testing.T) {

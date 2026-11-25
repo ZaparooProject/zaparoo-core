@@ -60,7 +60,7 @@ Commands, from `pkg/testing/harness/script.go`:
   - `event [-peek] [-timeout] KIND [k=v...]` waits for a sim journal event; `-peek` doesn't move the cursor.
   - `played PATH...` waits until play history's newest entry is that path; history is written after `media.started`.
   - `mark` moves both cursors to now.
-  - `sounds` prints the sounds played and clears the list.
+  - `sounds [-wait NAME]` prints the sounds played and clears the list; `-wait` first waits for that sound, which can play after the notification you waited for.
 - **Faults:** `fault JSON` and `fault clear [ID]`.
 
 `api`, `api-wait`, `notification` and `event` accept a leading `!` to assert the opposite. `wait` is a testscript builtin, which is why the notification command is named `notification`. `$VAR` does not expand inside single quotes. The existing scripts cover tap/launch/remove, preemption, launch guard, writing cards, lifecycles, the library, faults and scraping; copy the closest one.

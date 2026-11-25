@@ -12,12 +12,9 @@ go.work
 
 .vscode/
 .idea/
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/core-sim/
-!.claude/skills/mister-vm/
-!.claude/skills/go-tui-expert/
+# Agent-specific folders stay local. Shared skills live in .agents/skills/;
+# Claude Code reads only .agents/skills/, so link it there locally.
+.claude/
 .claudeignore
 .opencode/
 .agent-shell/

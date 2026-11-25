@@ -9,7 +9,7 @@ tap -uid 01 $ROMS/snes/Alpha.sfc
 event fault launcher=SimSNES
 event launch-error launcher=SimSNES
 notification run.failed
-sounds
+sounds -wait fail
 stdout '^fail$'
 ! notification media.started
 

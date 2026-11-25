@@ -1,101 +1,108 @@
 # Agent Instructions
 
-## Repository purpose
-
-- Go daemon that turns physical token scans into cross-platform game and media actions through ZapScript.
-- Public interfaces include JSON-RPC over WebSocket/HTTP, configuration schemas, UserDB and MediaDB schemas, reader and platform interfaces, and update metadata.
-- Use the Go version declared in `go.mod`. Read `docs/ARCHITECTURE.md` when a task crosses subsystem boundaries.
+Zaparoo Core is a Go daemon that turns token scans into game and media launches through ZapScript. Use the Go version in `go.mod`. Read `docs/ARCHITECTURE.md` when a task crosses subsystem boundaries.
 
 ## Commands
 
-- Build current platform: `task build`
-- Targeted tests: `task test -- ./pkg/path/...`
+- Build for the current platform: `task build`
+- Test one package: `task test -- ./pkg/path/...`
+- Run one test: `go test -race -tags=validator_novalidatefn,expr_static_methods ./pkg/path/ -run TestName`
 - Full tests with race detection: `task test`
-- Non-mutating lint: `task lint`
-- Apply lint and formatting fixes deliberately: `task lint-fix`
-- Supported cross-platform lint: `task cross-lint:all`
+- Lint without changing files: `task lint`
+- Lint for every supported OS: `task cross-lint:all`. It runs `golangci-lint --fix`, so review `git diff` afterwards.
+- Apply lint and formatting fixes: `task lint-fix`. It can rewrite unrelated files; never use it as a check.
 - Vulnerabilities: `task vulncheck`
 - Nil analysis: `task nilcheck`
 - Deadlock detection: `task deadlock`
 - Fuzz targets: `task fuzz`
 - Benchmarks: `task bench`, `task bench-db`, `task bench-compare`
+- Sim binary: `task sim:build`, `task sim:run`
 
-Use targeted package tests while iterating, then `task test` and `task lint` before finishing normal Go changes. Do not use `task lint-fix` as a read-only check because it can rewrite unrelated files.
+Run targeted tests while iterating, then `task test` and `task lint` before finishing a Go change.
 
-Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-native dependencies; use `task cross-lint:all` for supported cross-platform analysis and leave native execution to CI.
+Do not run ad hoc `GOOS=...` builds, tests or lints. Core has CGO and platform-native dependencies; `task cross-lint:all` covers the other platforms, and CI runs them natively.
+
+## Running Core
+
+Never run the Linux `zaparoo` binary on a developer machine. It finds the real emulators, Steam and browser, indexes real ROM folders, opens real readers, plays sounds, and shares port 7497 and the XDG directories with the user's own Core.
+
+Use the sim instead: the real service, API, reader pipeline, ZapScript, launch lifecycle and databases under one throwaway root, with simulated readers, `sleep` launchers, silent audio and offline network fakes.
+
+- Quick start: `.agents/skills/core-sim/SKILL.md`. Full reference: `docs/sim.md`.
+- What each layer (sim, MiSTer VM, hardware) can and cannot test: `TESTING.md`.
+- MiSTer behavior: `.agents/skills/mister-vm/SKILL.md`.
 
 ## Testing
 
 - Read `TESTING.md` and `pkg/testing/README.md` before adding substantial test infrastructure.
-- Add or update tests for behavior changes and bug fixes. Prefer a regression test that fails before a bug fix.
-- Mock hardware, network, process, and platform boundaries. Tests must not require a physical reader or target device.
-- Reuse mocks, fixtures, database helpers, and examples under `pkg/testing/` instead of creating parallel infrastructure.
-- Use afero for testable filesystem code and fake clocks for time-dependent behavior. Avoid sleeps when deterministic synchronization is possible.
-- Use `filepath.Join` for filesystem paths, including tests. Do not encode host-OS separators into production path logic.
-- Treat useful behavior coverage as the goal; do not weaken assertions merely to make a test pass.
+- Add or update tests for every behavior change and bug fix. Prefer a regression test that fails before the fix.
+- Put behavior regression tests in `pkg/platforms/sim/testdata/scripts/*.txtar` (run by `task test`), or in Go with `harness.New(t, &harness.Options{...})`.
+- Mock hardware, network, process and platform boundaries. Tests must not need a physical reader or target device.
+- Reuse the mocks, fixtures and database helpers under `pkg/testing/` instead of building parallel ones.
+- Use afero for filesystem code and fake clocks for time-dependent code. Do not sleep where deterministic synchronization is possible.
+- Do not weaken an assertion to make a test pass.
 
-## Testing Core locally
+### Paths in tests
 
-Never run the Linux `zaparoo` binary on a developer machine to try a change. It discovers the real emulators, Steam and the browser, indexes the real ROM folders, opens real readers, plays sounds, and shares port 7497 and the XDG data and config directories with any Core the user runs. Use the sim instead. It runs the real service, API, reader pipeline, ZapScript, launch lifecycle and databases under one throwaway root. Its readers are simulated, its launchers start invisible `sleep` children, its audio is silent and its network services are offline fakes.
+Core stores media paths with forward slashes on every OS. PR CI runs the full suite on Linux only; the full Windows suite runs only after merge to `main`, so a path mistake shows up there first.
 
-- Agent quick start: `.claude/skills/core-sim/SKILL.md`. Full reference: `docs/sim.md`. Testing layers: `TESTING.md`.
-- Regression tests for behavior go in `pkg/platforms/sim/testdata/scripts/*.txtar` (testscript, run by `task test`), or in Go with `harness.New(t, &harness.Options{...})`.
-- Use the `zaparoo-sim` binary (`task sim:build`, `task sim:run`) to explore by hand and with `zaparoo-cli`.
-- MiSTer behavior: `.claude/skills/mister-vm/SKILL.md`.
+- A media path that never touches disk: write the literal forward-slash string Core stores, such as `"roms/PSX/Game.chd"`.
+- A path that touches disk: build it with `filepath.Join`, then pass it once through `pathutil.CanonicalMediaPath` (`pkg/helpers/pathutil`) before comparing it with a stored path or using it in a lookup.
+- Production path logic must never hardcode a host-OS separator.
 
-| Behavior | Sim | MiSTer VM | Hardware |
-| --- | --- | --- | --- |
-| Service, API, notifications, ZapScript, mappings, history | yes | yes | yes |
-| Readers: tap, hold, remove, errors, writing cards, launch guard | simulated reader; real `file`, `simpleserial` and `mqtt` drivers | `file` reader scans and removal | yes |
-| Launch lifecycles, preemption, stop, faults | sim launchers with real child processes | MiSTer launchers | yes |
-| Indexing, search, scraping (libretro and RomM fakes) | generated ROM trees | indexing of synthetic media | real corpus |
-| Online, log upload | offline fakes | no | live services |
-| Real launchers, emulators, platform scanners, screens, input effects | no | MiSTer only | yes |
-| FPGA cores, USB/NFC hardware, updates | no | no | yes |
+## Code rules
 
-## Code and compatibility rules
+- Use `syncutil.Mutex` and `syncutil.RWMutex` from `pkg/helpers/syncutil`, never the standard library types. Deadlock instrumentation depends on them.
+- Log with zerolog. No standard `log` package, no direct prints.
+- Keep UserDB and MediaDB access behind their interfaces.
+- Treat token contents, NDEF records, barcodes, MQTT messages, ZapScript, API requests, archives and update metadata as untrusted input.
+- Regenerate generated files such as `pkg/database/mediadb/stat1_seed_data.go` with their documented generator; never hand-edit them.
+- `mister/` is a nested Go module for standalone MiSTer tools. The root `go.mod` builds it from the tree through a `replace`; never re-pin it to a published version. `./...` does not reach it, so its tests and lint run separately, and it releases by its own `mister/vX.Y.Z` tag. See `mister/README.md`.
 
-- Use `syncutil.Mutex` and `syncutil.RWMutex`, never the standard mutex types. Deadlock instrumentation depends on these wrappers.
-- Use zerolog, not the standard `log` package or direct print statements.
-- Preserve backward compatibility for JSON-RPC methods, notifications, API models, configuration files, mappings, launchers, and persisted database data unless a breaking change is explicitly approved.
-- Keep UserDB and MediaDB access behind their interfaces. Existing applied migrations in `pkg/database/{userdb,mediadb}/migrations/` are immutable; add a new migration instead.
-- Configuration schema changes need migration and compatibility handling for existing installations.
-- Treat token contents, NDEF records, barcodes, MQTT messages, ZapScript, API requests, archives, and update metadata as untrusted input.
-- Do not hand-edit generated files such as `pkg/database/mediadb/stat1_seed_data.go`; use their documented generator.
-- Do not add dependencies, platforms, readers, launchers, or public API surface without discussion.
-- `mister/` is a nested Go module published for standalone MiSTer tools. Core builds it from the tree through a `replace` in the root `go.mod`, so a catalog change lands on the same commit; never re-pin it to a published version. Its tests and lint run as separate steps because `./...` does not reach into it, and it is released by its own `mister/vX.Y.Z` tag rather than by a Core release. See `mister/README.md`.
+## Boundaries
 
-## Documentation
+### Always
 
-- Do not create new documentation files unless explicitly requested. Feature work does not authorize new files in `docs/` or elsewhere.
-- Update existing documentation only when necessary to keep it accurate. Keep implementation summaries and verification results in the response, not new documents.
+- Preserve backward compatibility for JSON-RPC methods, notifications, API models, configuration files, mappings, launchers and persisted database data.
+- Add a new migration for schema changes. Applied migrations in `pkg/database/{userdb,mediadb}/migrations/` are immutable.
+- Give configuration schema changes migration and compatibility handling for existing installs.
+- Report which checks ran and which were skipped. Do not claim completion while a relevant check fails or the work is partial.
+
+### Ask first
+
+- Breaking a public interface or persisted format.
+- Adding a dependency, platform, reader, launcher or public API surface.
+- Creating a documentation file. Update existing docs only to keep them accurate; put summaries and verification results in the response.
+- Committing, pushing, rewriting history, updating benchmark baselines or changing release state.
+
+### Never
+
+- Publish OTA metadata, alter a rollout, rotate trust keys, tag a release or run deployment workflows without explicit approval.
+- Read, print or commit `.env`, API keys, private signing material, local databases, logs with user data or generated runtime state.
 
 ## High-risk areas
 
-- Authentication and authorization: `pkg/api/middleware/`, `pkg/config/auth.go`, client pairing, encryption, and profile permissions.
-- Parsing and execution: `pkg/readers/shared/nfctag/`, `pkg/zapscript/`, command execution, archive extraction, and launcher handling.
-- Durable state: database migrations, backups, config migration, and profile data swapping.
-- Updates: `pkg/service/updater/`, `pkg/service/updater/otameta/`, `.github/workflows/ota-*.yml`, `.github/actions/ota-metadata/`, and `scripts/generate-update-manifest/`.
+- Authentication and authorization: `pkg/api/middleware/`, `pkg/config/auth.go`, client pairing, encryption, profile permissions.
+- Parsing and execution: `pkg/readers/shared/nfctag/`, `pkg/zapscript/`, command execution, archive extraction, launcher handling.
+- Durable state: database migrations, backups, config migration, profile data swapping.
+- Updates: `pkg/service/updater/`, `pkg/service/updater/otameta/`, `.github/workflows/ota-*.yml`, `.github/actions/ota-metadata/`, `scripts/generate-update-manifest/`.
 
-For updater, signing, promotion, rollout, withdrawal, or key changes, read `docs/ota-runbook.md` first. Never publish OTA metadata, alter a rollout, rotate trust keys, tag a release, or run deployment workflows without explicit approval. Preserve signature verification, monotonic manifest generations, asset digests, rollback protections, and fail-closed install behavior.
+For updater, signing, promotion, rollout, withdrawal or key changes, read `docs/ota-runbook.md` first. Preserve signature verification, monotonic manifest generations, asset digests, rollback protection and fail-closed installs.
 
-Do not read, print, or commit `.env`, API keys, private signing material, local databases, logs containing user data, or generated runtime state.
+## Extra checks by change type
 
-## Specialized validation
+- Concurrency, lifecycle or locks: `task deadlock` and the relevant race tests.
+- Untrusted parsers or protocols: the relevant fuzz target, or `task fuzz` for wide changes.
+- Dependencies or security-sensitive code: `task vulncheck`.
+- Performance: read `docs/optimization-targets.md`, benchmark with `b.Loop()` and allocation reporting, and include `task bench-compare` output.
+- GitHub workflows: `actionlint`.
+- Cross-platform code: `task cross-lint:all` before pushing.
 
-- Concurrency, lifecycle, or lock changes: `task deadlock` and relevant race tests.
-- Untrusted parsers or protocol changes: run the relevant fuzz target; use `task fuzz` when the scope warrants the full set.
-- Dependency or security-sensitive changes: `task vulncheck`.
-- Performance work: read `docs/optimization-targets.md`, use allocation-reporting benchmarks with `b.Loop()`, and include `task bench-compare` evidence. Do not replace committed baselines without approval.
-- Workflow changes: run `actionlint` on the changed workflow or all workflows.
-- Before pushing cross-platform changes: `task cross-lint:all` and the repository's normal test/lint checks.
+## Pull requests
 
-## Git and pull requests
+- PR titles use Conventional Commit types, enforced by `.github/workflows/pr-title.yml`.
+- PR descriptions have no test-plan section.
 
-- PR titles use Conventional Commit types enforced by `.github/workflows/pr-title.yml`.
-- PR descriptions must not include a test-plan section.
-- Do not commit, push, rewrite history, update benchmark baselines, or modify release state unless explicitly asked.
+## Skills
 
-## Completion
-
-Report exactly which checks ran and any that were skipped. Do not claim completion while a relevant check is failing or the implementation is partial.
+Shared agent skills live in `.agents/skills/`. Claude Code reads only `.claude/skills/`, which is gitignored; link it locally with `mkdir -p .claude && ln -s ../.agents/skills .claude/skills`, or link each skill directory if `.claude/skills/` already holds local skills.

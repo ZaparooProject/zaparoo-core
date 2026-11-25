@@ -474,6 +474,17 @@ func TestSetLogUploadURL_OverridesAndRestores(t *testing.T) { //nolint:parallelt
 	assert.Equal(t, config.LogUploadURL, logUploadTarget(), "every override was restored")
 }
 
+func TestSetLogUploadURL_RestoresOutOfOrder(t *testing.T) { //nolint:paralleltest // Global target.
+	restoreOuter := SetLogUploadURL("http://outer.test/")
+	restoreInner := SetLogUploadURL("http://inner.test/")
+	restoreOuter()
+	assert.Equal(t, "http://inner.test/", logUploadTarget(), "the active override stays")
+	restoreOuter()
+	assert.Equal(t, "http://inner.test/", logUploadTarget(), "a second restore does nothing")
+	restoreInner()
+	assert.Equal(t, config.LogUploadURL, logUploadTarget(), "no stale override is left")
+}
+
 func TestUploadLog_UsesTheOverride(t *testing.T) { //nolint:paralleltest // Global target.
 	logDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(logDir, config.LogFile), []byte("hello\n"), 0o600))
