@@ -393,6 +393,18 @@ func TestStatusNamesContent(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "archive below a folder named like one",
+			status: "GET_STATUS PLAYING fbneo,Pack",
+			path:   "/storage/roms/Dir.zip/Pack.7z/disc/B.sfc",
+			want:   true,
+		},
+		{
+			name:   "no content name",
+			status: "GET_STATUS PLAYING fbneo, ,crc32=1234abcd",
+			path:   "/storage/roms/Pack.7z/B.sfc",
+			want:   false,
+		},
+		{
 			name:   "other file in the archive",
 			status: "GET_STATUS PLAYING snes,A",
 			path:   "/storage/roms/snes/Pack.zip/B.sfc",

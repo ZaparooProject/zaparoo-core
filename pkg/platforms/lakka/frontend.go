@@ -464,8 +464,9 @@ func statusNamesContent(status, path string) bool {
 	}
 	parts := strings.Split(path, "/")
 	for _, part := range parts[:len(parts)-1] {
-		if isArchiveName(part) {
-			return strings.EqualFold(content, fileStem(part))
+		// A folder can be named like an archive, so every name is tried.
+		if isArchiveName(part) && strings.EqualFold(content, fileStem(part)) {
+			return true
 		}
 	}
 	return false
