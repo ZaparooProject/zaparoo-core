@@ -46,7 +46,12 @@ func mockPlatform(t *testing.T, dataDir string, roots []string) *mocks.MockPlatf
 	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
 		{ID: "NES", SystemID: systemdefs.SystemNES, Folders: []string{"NES"}, Extensions: []string{".nes", "ZIP"}},
 		{ID: "PSX", SystemID: systemdefs.SystemPSX, Folders: []string{"PSX"}, Extensions: []string{".cue", ".chd"}},
-		{ID: "Steamish", SystemID: systemdefs.SystemNES, Schemes: []string{"steam"}, Extensions: []string{".exe"}},
+		{ID: "Steamish", SystemID: systemdefs.SystemNES, Schemes: []string{"steam"}},
+		{ID: "NamedOnly", SystemID: systemdefs.SystemNES, ExplicitOnly: true, Extensions: []string{".exe"}},
+		{
+			ID: "Player", SystemID: systemdefs.SystemAudio,
+			Schemes: []string{"cdaudio"}, Extensions: []string{".mp3"},
+		},
 	}).Maybe()
 	return pl
 }
@@ -133,6 +138,16 @@ func TestScanWithoutServerReturnsInput(t *testing.T) {
 	got, err := Scan(context.Background(), &config.Instance{}, pl, systemdefs.SystemNES, in)
 	require.NoError(t, err)
 	assert.Equal(t, in, got)
+}
+
+// A launcher that also plays a scheme still opens its file extensions, but
+// one that only runs when named does not take part in picking files.
+func TestLaunchExtensions(t *testing.T) {
+	t.Parallel()
+
+	pl := mockPlatform(t, t.TempDir(), nil)
+	assert.Equal(t, []string{".nes", ".zip"}, LaunchExtensions(nil, pl, systemdefs.SystemNES))
+	assert.Equal(t, []string{".mp3"}, LaunchExtensions(nil, pl, systemdefs.SystemAudio))
 }
 
 func TestScanSkipsSystemWithoutFileLauncher(t *testing.T) {

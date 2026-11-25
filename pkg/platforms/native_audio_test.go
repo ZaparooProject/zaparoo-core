@@ -702,3 +702,49 @@ func TestAudioDisplayName_Streams(t *testing.T) {
 		assert.Equal(t, want, audioDisplayName(location), location)
 	}
 }
+
+func TestNativeAudioLauncher_CDAudioScheme(t *testing.T) {
+	t.Parallel()
+	l := NativeAudioLauncher(nil, nil, nil, nil)
+	assert.Equal(t, []string{"cdaudio"}, l.Schemes)
+	assert.True(t, l.Test(nil, "cdaudio://sr0"))
+	assert.True(t, l.Test(nil, "cdaudio://sr12/9"))
+	assert.False(t, l.Test(nil, "cdaudio://sr0/0"))
+	assert.False(t, l.Test(nil, "cdaudio://sr1234"))
+	assert.False(t, l.Test(nil, "cdaudio://hda"))
+	assert.True(t, l.VirtualPathExists(nil, "cdaudio://sr1"))
+}
+
+func TestNativeAudioTrackExists_CueTracks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cue := "FILE \"a.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n" +
+		"  TRACK 02 AUDIO\n    INDEX 01 00:00:10\n"
+	cuePath := filepath.Join(dir, "a.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cue), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.bin"), make([]byte, 20*2352), 0o600))
+
+	assert.True(t, nativeAudioTrackExists(cuePath+"/2"))
+	// The data track keeps its number but is not playable.
+	assert.False(t, nativeAudioTrackExists(cuePath+"/1"))
+	assert.False(t, nativeAudioTrackExists(cuePath+"/3"))
+	assert.False(t, nativeAudioTrackExists(filepath.Join(dir, "missing.cue")+"/2"))
+}
+
+func TestNativeAudioOwnsName(t *testing.T) {
+	t.Parallel()
+	assert.True(t, NativeAudioOwnsName("cdaudio://sr0"))
+	assert.True(t, NativeAudioOwnsName("roms/Audio/game.nsf/3"))
+	assert.True(t, NativeAudioOwnsName("roms/Audio/album.cue/3"))
+	assert.False(t, NativeAudioOwnsName("roms/Audio/song.mp3"))
+	assert.False(t, NativeAudioOwnsName("roms/Audio/album.cue"))
+}
+
+func TestAudioDisplayName_CDAudio(t *testing.T) {
+	t.Parallel()
+	// No disc has been opened in sr99, so it has no album title.
+	assert.Equal(t, "Audio CD", audioDisplayName("cdaudio://sr99"))
+	assert.Equal(t, "Audio CD - 4", audioDisplayName("cdaudio://sr99/4"))
+	assert.Equal(t, "cdaudio://bad", audioDisplayName("cdaudio://bad"))
+	assert.Equal(t, "Album - 2", audioDisplayName("roms/Audio/Album.cue/2"))
+}

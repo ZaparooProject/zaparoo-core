@@ -34,6 +34,7 @@ import (
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -311,6 +312,45 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 	return applyGlobalLauncherPreference(pl, env, systemID)
 }
 
+// dropLauncherForOtherFileType clears a launcher picked for a system's files,
+// by a default or the global preference, when it declares the file types it
+// plays and the path is not one of them: an Audio default of a CD player must
+// not take an mp3. The file's own launcher is then found from the path. A
+// launcher that declares no file types, or one named in the script or in the
+// media's own override, is never dropped.
+func dropLauncherForOtherFileType(pl platforms.Platform, env *platforms.CmdEnv, path string) {
+	chosen := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+	if chosen == "" || strings.Contains(path, "://") {
+		return
+	}
+	launchers := env.Launchers.Get(pl, env.Cfg)
+	for i := range launchers {
+		l := &launchers[i]
+		if !strings.EqualFold(l.ID, chosen) {
+			continue
+		}
+		if len(l.Extensions) == 0 || launcherPlaysFileType(env.Cfg, l, path) {
+			return
+		}
+		log.Info().Str("launcher", chosen).Str("path", path).
+			Msg("preferred launcher cannot play this file type, using the file's own launcher")
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+		return
+	}
+}
+
+// launcherPlaysFileType reports whether path has one of l's extensions, or
+// l's test accepts it.
+func launcherPlaysFileType(cfg *config.Instance, l *platforms.Launcher, path string) bool {
+	lp := strings.ToLower(path)
+	for _, ext := range l.Extensions {
+		if strings.HasSuffix(lp, strings.ToLower(ext)) {
+			return true
+		}
+	}
+	return l.Test != nil && l.Test(cfg, path)
+}
+
 // dropLauncherForOtherScheme clears a launcher picked for a system's files, by
 // a default or the global preference, when the path is a link that a different
 // launcher owns: preferring LaunchBox for PC must not send a steam:// link to
@@ -462,7 +502,7 @@ func inferLauncherForPathWithAvailability(
 		// A launcher known to be missing only stands in when
 		// every other match is missing too.
 		missing := helpers.LauncherKnownMissing(&launchers[i])
-		score := launcherInferenceScore(&launchers[i])
+		score := helpers.LauncherSpecificity(&launchers[i], path)
 		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
 			best = i
 			bestScore = score
@@ -490,20 +530,6 @@ func guessUnclaimedFileSystem(pl platforms.Platform, env *platforms.CmdEnv, path
 			Msg("guessed system for a file outside every launcher folder")
 	}
 	return systemID, ok
-}
-
-func launcherInferenceScore(l *platforms.Launcher) int {
-	score := 0
-	if len(l.Schemes) > 0 {
-		score += 1000
-	}
-	if len(l.Folders) > 0 {
-		score += 100
-	}
-	if l.SystemID != "" {
-		score += 10
-	}
-	return score
 }
 
 func inferLauncherForSystemPath(
@@ -540,7 +566,8 @@ func systemPathCandidates(
 	launchers := env.Launchers.Get(pl, env.Cfg)
 	candidates := make([]platforms.Launcher, 0, len(launchers))
 	for i := range launchers {
-		if launchers[i].ScanOnly || !strings.EqualFold(launchers[i].SystemID, systemID) {
+		if launchers[i].ScanOnly || launchers[i].ExplicitOnly ||
+			!strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
 		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
@@ -571,7 +598,7 @@ func unclaimedFileSystemLauncher(
 	best := -1
 	bestRank := -1
 	for i := range candidates {
-		rank := launcherInferenceScore(&candidates[i])
+		rank := helpers.LauncherSpecificity(&candidates[i], path)
 		switch {
 		case candidates[i].Detected != nil && *candidates[i].Detected:
 			rank += 20000
@@ -1240,6 +1267,7 @@ func getLaunchClosure(
 			}
 			if !overridden {
 				dropLauncherForOtherScheme(pl, env, target.path)
+				dropLauncherForOtherFileType(pl, env, target.path)
 			}
 		}
 

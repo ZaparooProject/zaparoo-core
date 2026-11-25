@@ -30,12 +30,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/cdda"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/gme"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/midi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/nativedec"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/vgm"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/cdrom"
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/wav"
 )
@@ -54,6 +56,7 @@ var SupportedExtensions = []string{
 	".vgm", ".vgz",
 	".nsf", ".nsfe", ".gbs", ".hes", ".kss", ".spc",
 	".mid", ".midi", ".kar", ".rmi",
+	".cue",
 }
 
 // PlaylistExtensions lists the playlist files kept with audio. They are not
@@ -65,7 +68,7 @@ const radioProbeTimeout = 10 * time.Second
 
 // multiTrackExtensions are the formats whose single tracks are addressed as
 // <file>/<n>, n counting from 1.
-var multiTrackExtensions = []string{".nsf", ".nsfe", ".gbs", ".hes", ".kss"}
+var multiTrackExtensions = []string{".nsf", ".nsfe", ".gbs", ".hes", ".kss", ".cue"}
 
 // liveDecoder is a decoder whose audio arrives in real time.
 type liveDecoder interface {
@@ -81,6 +84,12 @@ type trackDecoder interface {
 	TrackStarts() []int
 }
 
+// trackMetaDecoder is a track decoder that knows the tags of each of its
+// tracks.
+type trackMetaDecoder interface {
+	TrackMeta(i int) *trackmeta.Meta
+}
+
 type openedDecoder struct {
 	decoder beep.StreamSeekCloser
 	file    *os.File
@@ -93,7 +102,10 @@ type openedDecoder struct {
 }
 
 type decodeOptions struct {
-	radio         *radio.Probe
+	radio *radio.Probe
+	// openDrive opens an optical drive for cdaudio:// paths; nil is
+	// cdrom.Open.
+	openDrive     func(path string) (cdrom.Drive, error)
 	onMeta        func(*trackmeta.Meta)
 	midiSoundFont string
 	lowPower      bool
@@ -153,6 +165,13 @@ func openDecoder(path string, opts decodeOptions) (*openedDecoder, error) {
 	if opts.radio != nil || IsStreamURL(path) {
 		return openRadio(path, opts)
 	}
+	if cdda.IsCDAudioPath(path) {
+		d, err := cdda.OpenDisc(path, cdda.DiscOptions{Open: opts.openDrive})
+		if err != nil {
+			return nil, fmt.Errorf("open audio cd: %w", err)
+		}
+		return cddaDecoder(d), nil
+	}
 
 	track := -1
 	if file, n, ok := SplitTrackPath(path); ok {
@@ -163,6 +182,12 @@ func openDecoder(path string, opts decodeOptions) (*openedDecoder, error) {
 
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
+	case ext == ".cue":
+		d, err := cdda.OpenCue(path, cdda.CueOptions{Track: track + 1})
+		if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", ext, err)
+		}
+		return cddaDecoder(d), nil
 	case ext == ".vgm" || ext == ".vgz":
 		d, err := vgm.Open(path, vgm.Options{SampleRate: targetSampleRate})
 		if err != nil {
@@ -258,6 +283,17 @@ func openRadio(url string, opts decodeOptions) (*openedDecoder, error) {
 		od.meta = &trackmeta.Meta{Album: station}
 	}
 	return od, nil
+}
+
+// cddaDecoder wraps a CD audio decoder. Its tags always come from the sheet
+// or disc, never from the file, and an album skips between its tracks.
+func cddaDecoder(d *cdda.Decoder) *openedDecoder {
+	meta := d.TrackMeta(0)
+	od := &openedDecoder{decoder: d, rate: beep.SampleRate(d.SampleRate()), meta: meta}
+	if len(d.TrackStarts()) > 1 {
+		od.tracks = d
+	}
+	return od
 }
 
 func nonEmptyMeta(m *trackmeta.Meta) *trackmeta.Meta {

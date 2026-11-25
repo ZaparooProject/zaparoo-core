@@ -56,6 +56,7 @@ const (
 	NotificationDeviceBluetooth      = "device.bluetooth.changed"
 	NotificationPlaylistsChanged     = "playlists.changed"
 	NotificationMediaPlayback        = "media.playback"
+	NotificationMediaLevels          = "media.levels"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -152,6 +153,7 @@ const (
 	MethodMediaBrowse                 = "media.browse"
 	MethodMediaBrowseIndex            = "media.browse.index"
 	MethodMediaControl                = "media.control"
+	MethodMediaLevelsSubscribe        = "media.levels.subscribe"
 	MethodMediaActiveUpdate           = "media.active.update"
 	MethodMediaActiveImage            = "media.active.image"
 	MethodPlaylistsUpdate             = "playlists.update"

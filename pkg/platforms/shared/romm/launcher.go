@@ -156,7 +156,7 @@ func LaunchExtensions(cfg *config.Instance, pl platforms.Platform, systemID stri
 	launchers := pl.Launchers(cfg)
 	for i := range launchers {
 		l := &launchers[i]
-		if l.SystemID != systemID || l.ID == LauncherID || len(l.Schemes) > 0 {
+		if l.SystemID != systemID || l.ID == LauncherID || l.ExplicitOnly {
 			continue
 		}
 		for _, ext := range l.Extensions {

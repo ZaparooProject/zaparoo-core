@@ -3660,6 +3660,49 @@ On MiSTer with the Zaparoo Main fork, cores also offer `cheat` and `save_ram`. `
 }
 ```
 
+### media.levels.subscribe
+
+**Access:** Localhost or any authenticated client. WebSocket only.
+
+Turn the [media.levels](notifications.md#medialevels) notification on or off for this WebSocket connection. Levels are only measured while at least one connection is subscribed, and only sent to subscribed connections. The subscription ends when the connection closes. Calling it again with the same value has no further effect.
+
+#### Parameters
+
+An object:
+
+| Key     | Type    | Required | Description                                          |
+| :------ | :------ | :------- | :--------------------------------------------------- |
+| enabled | boolean | Yes      | `true` to receive `media.levels`, `false` to stop.  |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "media.levels.subscribe",
+  "params": {
+    "enabled": true
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": null
+}
+```
+
 ### media.title.parse
 
 **Access:** All clients.

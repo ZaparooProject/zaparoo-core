@@ -21,6 +21,7 @@ package service
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -320,4 +321,37 @@ func TestPlaybackNotifier_SignalNeverBlocks(t *testing.T) {
 	}
 	var nilNotifier *playbackNotifier
 	nilNotifier.Signal(mediaslot.Primary)
+}
+
+func TestPlaybackNotifier_QueuedAfterMediaStarted(t *testing.T) {
+	t.Parallel()
+	st, ns := state.NewState(nil, "boot")
+	t.Cleanup(st.StopService)
+	pm := newChangeReportingPlayback()
+	notifier := newPlaybackNotifier(func(slot string) *models.ActiveMediaResponse {
+		reqEnv := requests.RequestEnv{State: st, PlaybackManager: pm}
+		return methods.ActiveMediaEntry(&reqEnv, slot)
+	}, pm, queueNotification(st.GetContext(), st.Notifications))
+	wirePlaybackNotifier(pm, st, notifier)
+	go notifier.run(st.GetContext())
+
+	const path = "/music/album.cue"
+	require.NoError(t, pm.Play(mediaslot.Primary, path, audio.PlaybackOptions{}))
+	st.SetActiveMedia(nativeAudioMedia(path))
+
+	// Both go through the one queue the broker reads, so a client that saw
+	// the media start sees its playback next, however busy the machine is.
+	var methodsSeen []string
+	timeout := time.After(2 * time.Second)
+	for !slices.Contains(methodsSeen, models.NotificationMediaPlayback) {
+		select {
+		case n := <-ns:
+			methodsSeen = append(methodsSeen, n.Method)
+		case <-timeout:
+			t.Fatalf("no media.playback queued; saw %v", methodsSeen)
+		}
+	}
+	started := slices.Index(methodsSeen, models.NotificationStarted)
+	require.GreaterOrEqual(t, started, 0, "saw %v", methodsSeen)
+	assert.Less(t, started, slices.Index(methodsSeen, models.NotificationMediaPlayback), "saw %v", methodsSeen)
 }

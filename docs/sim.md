@@ -260,6 +260,8 @@ Each behaviour launcher has system `PC`, folder `roms/<lowercase id>` (for examp
 | `SimPreflight` | | Its preflight always refuses. Journals `fault preflight`. |
 | `SimNoActive` | FireAndForget | Sets no active media. No child. |
 | `SimKill` | Tracked | Its Kill SIGTERMs its children and journals `kill`. With `failKill` it fails, so Core falls back to signalling the PID. |
+| `SimDisc` | Tracked | No folders; skips the filesystem scan. Scheme `physicaldisc`; plays `physicaldisc://srN/<System>`, as a MiSTer disc provider does. |
+| `SimCDPlayer` | Tracked | Explicit only, so it runs only when named, such as by `audio_cd_launcher`. Scheme `cdaudio`; plays `cdaudio://srN` and `cdaudio://srN/<track>`. |
 
 The `SimScanner` and `SimScheme` entries mean a fresh index always has 10 media more than the ROM files.
 
@@ -505,13 +507,13 @@ Use `harness.ScriptSetup` and `harness.ScriptCommands()` to add the commands to 
 
 | Command | Notes |
 | --- | --- |
-| `sim-start [flags]` | `-fakes a,b`, `-readers r1,r2` (`none` for no readers), `-scan-mode tap\|hold`, `-exit-delay SECONDS`, `-launch-guard`, `-guard-confirm`. Sets `$ROOT` and `$ROMS`. |
+| `sim-start [flags]` | `-fakes a,b`, `-readers r1,r2` (`none` for no readers), `-scan-mode tap\|hold`, `-exit-delay SECONDS`, `-launch-guard`, `-guard-confirm`, `-disc-order ORDER` and `-audio-cd-launcher ID` (the optical drive's `launch_order` and `audio_cd_launcher`). Sets `$ROOT` and `$ROMS`. |
 | `sim-stop` | Close the instance (also done when the script ends). |
-| `rom PATH...` | Create empty files under `$ROMS`. |
+| `rom [-size N] PATH...` | Create files under `$ROMS`: empty, or N zero bytes. |
 | `fixtures [flags]` | Same flags as `fixtures gen` with one dash. Prints `files N media M`. |
 | `index [SYSTEM,...]` | Run `media.generate` and wait. Prints `media N`. |
 | `idle` | Wait until no index, optimization or scrape runs. |
-| `tap [-reader R] [-uid U] [-data HEX] [-for MS] TEXT...` | The text is the remaining arguments joined by spaces, so `$ROMS/a b.sfc` works unquoted. `-for` removes the tag after MS; without it the tag stays. |
+| `tap [-reader R] [-uid U] [-data HEX] [-type T] [-prop NAME=VALUE]... [-for MS] TEXT...` | The text is the remaining arguments joined by spaces, so `$ROMS/a b.sfc` works unquoted. `-for` removes the tag after MS; without it the tag stays. `-prop` adds a scan property and repeats, so `-type disc -prop disc.kind=data -prop disc.system=PSX -prop disc.drive=sr0` inserts a disc the way the optical drive reports one. |
 | `remove [-reader R]` | Take the tag off. |
 | `api [-bg] METHOD [JSON...]` | Result as indented JSON on stdout. `! api` expects an error and prints it on stderr. `-bg` runs a blocking call such as `readers.write` in the background. |
 | `api-wait` | Wait for the `-bg` call and report it like `api`. |

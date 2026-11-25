@@ -237,3 +237,44 @@ token rather than a step in running it:
 - [ ] Under hold mode, removing the card that started a playlist clears it, so
       scanning that card again starts the playlist from its first item. Moving
       through a playlist by scanning its card again is tap-mode behavior.
+
+---
+
+## Optical drives: discs as tokens
+
+Inserting a disc is a scan, and ejecting it is a removal, so a disc follows the
+same tap and hold rules as a card. The drive is checked once a second by asking
+it whether the disc changed, without reading the disc; the disc is read once
+each time it changes.
+
+A mapping for the disc, or a `zaparoo.txt` on it, always wins. Otherwise the
+drive's settings decide what plays:
+
+```toml
+[readers.drivers.opticaldrive]
+# image_first (default): a matching image in the library, else the disc itself
+# disc_first: the disc itself, else a matching image
+# image_only, disc_only: never the other one
+launch_order = "image_first"
+# Launcher ID that plays audio CDs; empty means the platform default
+audio_cd_launcher = ""
+# Read the disc once a second while it is in the drive. Off by default:
+# reading can make a disc that is playing from the drive skip, in a disc
+# core or as an audio CD.
+keep_reading = false
+```
+
+- [ ] Inserting a disc with a mapping or a `zaparoo.txt` runs that, whatever
+      `launch_order` says.
+- [ ] With `image_first`, a disc whose game is in the library launches the
+      image; one whose game is not launches the disc from the drive.
+- [ ] With `disc_first`, the disc launches from the drive when something can
+      play it, and the library image otherwise.
+- [ ] `image_only` never launches the disc from the drive, and `disc_only`
+      never launches a library image.
+- [ ] An audio CD plays with `audio_cd_launcher` when it is set, and with the
+      platform default when it is empty. A launcher that is set but missing or
+      unavailable plays nothing.
+- [ ] With `keep_reading` off, a disc in the drive is not read again until it
+      changes.
+- [ ] When nothing can play the disc, Core logs it and shows no error.

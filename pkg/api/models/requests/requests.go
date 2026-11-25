@@ -68,8 +68,11 @@ type RequestEnv struct {
 	// It disables ZapScript until the connection closes and reports whether
 	// this call acquired a new hold.
 	ZapScriptHold func() (acquired bool)
-	ClientID      string
-	PlatformID    string
+	// LevelsSubscribe is non-nil only for WebSocket connections. It turns
+	// the media.levels notification on or off for the connection.
+	LevelsSubscribe func(enabled bool)
+	ClientID        string
+	PlatformID      string
 	// ClientRole is the paired client's permission role ("admin" or
 	// "member"), or "" when the request carries no paired identity (local
 	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.

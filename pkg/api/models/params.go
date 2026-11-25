@@ -696,6 +696,12 @@ type MediaControlParams struct {
 	Slot   string            `json:"slot,omitempty"`
 }
 
+// MediaLevelsSubscribeParams turns the media.levels notification on or off
+// for the calling connection.
+type MediaLevelsSubscribeParams struct {
+	Enabled *bool `json:"enabled" validate:"required"`
+}
+
 type DeleteInboxParams struct {
 	ID int64 `json:"id" validate:"gt=0"`
 }

@@ -2009,6 +2009,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		createMoonlightLauncher(p), createAudioScannerLauncher(),
 		createScriptsLauncher(p),
 	)
+	ls = append(ls, createDiscLaunchers(p)...)
 	ls = applyNoArchiveExtensions(ls)
 	setCoreAvailability(ls)
 

@@ -30,9 +30,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/cdrom"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -118,6 +120,16 @@ type LongformPlaybackManager struct {
 	failureCallbacks map[string]func()
 	onChange         atomic.Pointer[func(slot string)]
 	readMeta         func(path string, maxBytes int64) (*trackmeta.Meta, error)
+	// openDrive opens an optical drive for cdaudio:// paths; nil is the
+	// real drive. Tests replace it.
+	openDrive func(path string) (cdrom.Drive, error)
+	// levelClock drives level measurement; nil is the real clock. Tests
+	// replace it.
+	levelClock clockwork.Clock
+	// levelStop and levelDone run the level analyzer while a listener is
+	// set; both are guarded by levelMu.
+	levelStop chan struct{}
+	levelDone chan struct{}
 	// metaPending is the newest tag request of each slot, metaReaders how
 	// many workers are reading them; both are guarded by metaMu.
 	metaPending     map[string]*streamingSource
@@ -125,10 +137,15 @@ type LongformPlaybackManager struct {
 	normalize       atomic.Pointer[func() bool]
 	resampleQuality int
 	metaMaxBytes    atomic.Int64
-	lowPower        bool
-	mu              syncutil.Mutex
-	metaReaders     int
-	metaMu          syncutil.Mutex
+	// levelRuns counts level measurements, for tests.
+	levelRuns   atomic.Uint64
+	metaReaders int
+	mu          syncutil.Mutex
+	metaMu      syncutil.Mutex
+	levelMu     syncutil.Mutex
+	// levelsOn makes sources record what they play for level measurement.
+	levelsOn atomic.Bool
+	lowPower bool
 }
 
 // NewLongformPlaybackManager creates a new LongformPlaybackManager. lowPowerAudio
@@ -276,6 +293,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		onMeta:        onMeta,
 		midiSoundFont: m.midiSoundFontPath(),
 		lowPower:      m.lowPower,
+		openDrive:     m.openDrive,
 	})
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
@@ -289,6 +307,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	if fn := m.normalize.Load(); fn != nil {
 		src.normalize = *fn
 	}
+	src.levelsOn = &m.levelsOn
 
 	m.mu.Lock()
 	old := m.getSourceLocked(key)
@@ -607,14 +626,17 @@ type streamingSource struct {
 	// norm is owned by the prefetch goroutine.
 	normalize func() bool
 	norm      *normalizer
-	file      *os.File
-	wakeCh    chan struct{}
-	doneCh    chan struct{}
-	cancelFn  context.CancelFunc
-	meta      atomic.Pointer[trackmeta.Meta]
-	path      string
-	ring      [][2]float64
-	chunk     [][2]float64
+	// levelsOn, when set and true, has mixAdd record what it plays in
+	// levelTap.
+	levelsOn *atomic.Bool
+	file     *os.File
+	wakeCh   chan struct{}
+	doneCh   chan struct{}
+	cancelFn context.CancelFunc
+	meta     atomic.Pointer[trackmeta.Meta]
+	path     string
+	ring     [][2]float64
+	chunk    [][2]float64
 	// appliedVolume is the gain the last mixAdd ended on. Only mixAdd reads
 	// or writes it, on the audio thread.
 	appliedVolume float64
@@ -635,6 +657,7 @@ type streamingSource struct {
 	played         atomic.Int64
 	seekSrcFrame   atomic.Int64
 	underruns      atomic.Uint64
+	levelTap       levelTap
 	seekPending    atomic.Bool
 	consumerActive atomic.Bool
 	underrunActive atomic.Bool
@@ -1078,6 +1101,9 @@ func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
 	}
 	if written > 0 {
 		s.appliedVolume = target
+		if s.levelsOn != nil && s.levelsOn.Load() {
+			s.levelTap.add(s.ring, readPos, written)
+		}
 	}
 	if written > 0 {
 		readPos += uint64(written)
@@ -1286,11 +1312,17 @@ func (s *streamingSource) trackMeta(played int64) *trackmeta.Meta {
 	if len(starts) < 2 {
 		return meta
 	}
+	idx := trackAt(starts, played, s.sourceRate)
+	if per, ok := s.tracks.(trackMetaDecoder); ok {
+		if m := per.TrackMeta(idx); m != nil {
+			return m
+		}
+	}
 	numbered := trackmeta.Meta{}
 	if meta != nil {
 		numbered = *meta
 	}
-	numbered.TrackNumber = trackAt(starts, played, s.sourceRate) + 1
+	numbered.TrackNumber = idx + 1
 	numbered.TrackTotal = len(starts)
 	return &numbered
 }

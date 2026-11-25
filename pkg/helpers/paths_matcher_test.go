@@ -786,6 +786,9 @@ func TestDirLauncherMatcherBestLauncher(t *testing.T) {
 			Test: func(_ *config.Instance, path string) bool { return strings.HasSuffix(path, ".run") },
 		},
 		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+		// Explicit-only launchers run only when named, never by matching.
+		{ID: "Player", SystemID: "Audio", Folders: []string{"Music"}, Extensions: []string{".cue"}, ExplicitOnly: true},
+		{ID: "CDPlayer", SystemID: "Audio", Schemes: []string{"cdaudio"}, ExplicitOnly: true},
 	}
 	matcher := NewLauncherMatcherForLaunchers(&config.Instance{}, mockPlatform, launchers)
 
@@ -802,6 +805,8 @@ func TestDirLauncherMatcherBestLauncher(t *testing.T) {
 		{dir: filepath.Join(root, "_Chronological"), name: "notes.txt"},
 		{dir: filepath.Join(root, "_Chronological"), name: ".hidden.mgl"},
 		{dir: filepath.Join(root, "SNES-Hacks"), name: "Game.sfc"},
+		{dir: filepath.Join(root, "Music"), name: "Album.cue"},
+		{dir: "cdaudio://sr0", name: "1"},
 	}
 	for _, tt := range tests {
 		path := filepath.Join(tt.dir, tt.name)
@@ -816,7 +821,45 @@ func TestDirLauncherMatcherBestLauncher(t *testing.T) {
 		}
 		require.True(t, ok, path)
 		assert.Equal(t, tt.want, best.ID, path)
-		bestFull, _ := mostSpecificLauncher(full)
+		bestFull, _ := mostSpecificLauncher(full, path)
 		assert.Equal(t, full[bestFull].ID, best.ID, path)
 	}
+}
+
+// An explicit-only launcher is never matched to a path, so an alternative
+// audio player cannot take a file or link from the default one.
+func TestPathIsLauncher_ExplicitOnlyNeverMatches(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	alternative := platforms.Launcher{
+		ID:           "Alternative",
+		SystemID:     "Audio",
+		Extensions:   []string{".cue"},
+		Schemes:      []string{"cdaudio"},
+		ExplicitOnly: true,
+		Test:         func(*config.Instance, string) bool { return true },
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{alternative})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	for _, path := range []string{"cdaudio://sr0", "/music/Album.cue"} {
+		assert.False(t, PathIsLauncher(cfg, mockPlatform, &alternative, path), path)
+		assert.Empty(t, NewLauncherMatcher(cfg, mockPlatform).PathToLaunchers(path), path)
+	}
+	_, guessed := GuessLauncherForPath("/music/Audio/Album.cue")
+	assert.False(t, guessed)
 }

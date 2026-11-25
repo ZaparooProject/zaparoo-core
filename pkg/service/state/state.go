@@ -22,6 +22,7 @@ package state
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1357,13 +1358,25 @@ func (s *State) updateActiveMediaStateAs(
 
 // applyTokenMetadata labels media with the name, description and cover the
 // active token declares, such as an external drive's zaparoo.json. It applies
-// only to media stored under the token's own root, so a drive whose script
-// launches a game from the library cannot relabel that game.
+// only to media stored under the token's own root, or launched from the
+// token's own MediaPrefix, so a drive whose script launches a game from the
+// library cannot relabel that game.
 func applyTokenMetadata(media *models.ActiveMedia, token *tokens.Token) {
 	meta := token.Metadata
-	if meta == nil || token.PathRoot == "" || media.Path == "" ||
-		!helpers.PathHasPrefix(media.Path, token.PathRoot) {
+	if meta == nil || media.Path == "" {
 		return
+	}
+	switch {
+	case meta.MediaPrefix != "":
+		if !strings.HasPrefix(media.Path, meta.MediaPrefix) {
+			return
+		}
+	case token.PathRoot == "" || !helpers.PathHasPrefix(media.Path, token.PathRoot):
+		return
+	}
+	imageRoot := meta.ImageRoot
+	if imageRoot == "" {
+		imageRoot = token.PathRoot
 	}
 	if meta.Name != "" && meta.Name != media.Name {
 		media.LaunchedName = media.Name
@@ -1372,7 +1385,7 @@ func applyTokenMetadata(media *models.ActiveMedia, token *tokens.Token) {
 	media.Description = meta.Description
 	media.ImagePath = meta.ImagePath
 	if meta.ImagePath != "" {
-		media.ImageRoot = token.PathRoot
+		media.ImageRoot = imageRoot
 	}
 }
 

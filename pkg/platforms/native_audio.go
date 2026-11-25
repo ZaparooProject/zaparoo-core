@@ -37,9 +37,11 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/cdda"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/gme"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
 
 const NativeAudioLauncherID = "native-audio"
@@ -78,7 +80,11 @@ func NativeAudioLauncher(
 		// Playlist files are listed with audio so they can be browsed and
 		// picked; launching one runs it as a playlist instead.
 		Extensions: slices.Concat(audio.SupportedExtensions, audio.PlaylistExtensions),
-		// A single track of a multi-track chiptune file is <file>/<n>.
+		// An audio CD in a drive is cdaudio://srN, or cdaudio://srN/<n> for
+		// one track.
+		Schemes: []string{readers.CDAudioScheme},
+		// A single track of a multi-track chiptune file or cue sheet is
+		// <file>/<n>.
 		Test: func(_ *config.Instance, path string) bool {
 			return nativeAudioTrackExists(path)
 		},
@@ -224,8 +230,13 @@ func controlSeekDuration(args map[string]string, fallback time.Duration) time.Du
 }
 
 // nativeAudioTrackExists reports whether path names a track of a multi-track
-// chiptune file that exists.
+// chiptune file or cue sheet that exists, or an audio CD drive. A drive is
+// not opened here: whether it holds a disc is found out on launch.
 func nativeAudioTrackExists(path string) bool {
+	if cdda.IsCDAudioPath(path) {
+		_, _, err := cdda.ParseCDAudioPath(path)
+		return err == nil
+	}
 	file, track, ok := audio.SplitTrackPath(path)
 	if !ok {
 		return false
@@ -234,8 +245,31 @@ func nativeAudioTrackExists(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
+	if strings.EqualFold(filepath.Ext(file), ".cue") {
+		album, _, cueErr := cdda.ReadCue(nil, file)
+		if cueErr != nil {
+			return false
+		}
+		for i := range album.Tracks {
+			if album.Tracks[i].Number == track+1 {
+				return true
+			}
+		}
+		return false
+	}
 	count, err := gme.TrackCount(file)
 	return err == nil && track < count
+}
+
+// NativeAudioOwnsName reports whether native audio names the media at path
+// itself, rather than from the path's file or URL: a track of a multi-track
+// file, or an audio CD.
+func NativeAudioOwnsName(path string) bool {
+	if cdda.IsCDAudioPath(path) {
+		return true
+	}
+	_, _, ok := audio.SplitTrackPath(path)
+	return ok
 }
 
 func audioDisplayName(location string) string {
@@ -251,6 +285,16 @@ func audioDisplayName(location string) string {
 			return u.Hostname()
 		}
 		return filetitle.Parse(strings.TrimSuffix(base, pathpkg.Ext(base)), false, slugs.MediaTypeGame)
+	}
+	if cdda.IsCDAudioPath(location) {
+		drive, track, err := cdda.ParseCDAudioPath(location)
+		if err != nil {
+			return location
+		}
+		if track > 0 {
+			return fmt.Sprintf("%s - %d", cdda.AlbumName(drive), track)
+		}
+		return cdda.AlbumName(drive)
 	}
 	if file, track, ok := audio.SplitTrackPath(location); ok {
 		return fmt.Sprintf("%s - %d", audioDisplayName(file), track+1)

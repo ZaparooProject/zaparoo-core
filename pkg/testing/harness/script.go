@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/sim"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	simreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/sim"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/simfixtures"
 	"github.com/rogpeppe/go-internal/testscript"
@@ -83,16 +84,18 @@ func ScriptSetup(env *testscript.Env) error {
 //
 //	sim-start [flags]          boot an instance (see sim-start -h); sets $ROOT and $ROMS
 //	sim-stop                   close it (also done when the script ends)
-//	rom PATH...                create empty files under $ROMS
+//	rom [-size N] PATH...      create files under $ROMS, empty or N zero bytes
 //	fixtures [flags]           generate a ROM tree under $ROMS (see simfixtures);
 //	                           prints "files N media M"
 //	index [SYSTEM,...]         run media.generate and wait for it; prints
 //	                           "media N"
 //	idle                       wait until no index, optimization or scrape runs
-//	tap [-reader R] [-uid U] [-data HEX] [-for MS] TEXT...
+//	tap [-reader R] [-uid U] [-data HEX] [-type T] [-prop NAME=VALUE]... [-for MS] TEXT...
 //	                           present a tag whose text is the remaining
 //	                           arguments joined by spaces, so $ROMS/a b.sfc
-//	                           works unquoted; -for removes it after MS
+//	                           works unquoted; -for removes it after MS;
+//	                           -prop adds a scan property, as an optical
+//	                           drive reports disc.kind, disc.system, disc.drive
 //	remove [-reader R]         take the tag off the reader
 //	api [-bg] METHOD [JSON...] call the Core API; result as indented JSON on stdout.
 //	                           ! api expects an error, its message on stderr.
@@ -201,11 +204,13 @@ func cmdSimStart(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	fs := scriptFlags(ts, "sim-start")
 	fakes := fs.String("fakes", "", "comma-separated fakes")
-	readers := fs.String("readers", DefaultReader, "comma-separated sim readers; none for no readers")
+	readerNames := fs.String("readers", DefaultReader, "comma-separated sim readers; none for no readers")
 	scanMode := fs.String("scan-mode", "", "readers.scan.mode: tap or hold")
 	exitDelay := fs.Float64("exit-delay", 0, "readers.scan.exit_delay in seconds")
 	guard := fs.Bool("launch-guard", false, "enable the launch guard")
 	guardConfirm := fs.Bool("guard-confirm", false, "the launch guard needs an API confirm")
+	discOrder := fs.String("disc-order", "", "readers.drivers.opticaldrive.launch_order")
+	audioCD := fs.String("audio-cd-launcher", "", "readers.drivers.opticaldrive.audio_cd_launcher")
 	parse(ts, fs, args)
 	if fs.NArg() > 0 {
 		ts.Fatalf("sim-start: unexpected argument %q", fs.Arg(0))
@@ -213,8 +218,8 @@ func cmdSimStart(ts *testscript.TestScript, neg bool, args []string) {
 
 	opts := Options{Fakes: splitComma(*fakes)}
 	opts.Readers = []string{}
-	if *readers != "none" {
-		opts.Readers = splitComma(*readers)
+	if *readerNames != "none" {
+		opts.Readers = splitComma(*readerNames)
 	}
 	opts.Values = func(v *config.Values) {
 		if *scanMode != "" {
@@ -224,6 +229,15 @@ func cmdSimStart(ts *testscript.TestScript, neg bool, args []string) {
 		if *guard || *guardConfirm {
 			v.Readers.Scan.LaunchGuard.Enabled = true
 			v.Readers.Scan.LaunchGuard.RequireConfirm = *guardConfirm
+		}
+		if *discOrder != "" || *audioCD != "" {
+			if v.Readers.Drivers == nil {
+				v.Readers.Drivers = map[string]config.DriverConfig{}
+			}
+			v.Readers.Drivers["opticaldrive"] = config.DriverConfig{
+				LaunchOrder:     *discOrder,
+				AudioCDLauncher: *audioCD,
+			}
 		}
 	}
 	in, err := Start(context.Background(), &opts)
@@ -246,16 +260,21 @@ func cmdSimStop(ts *testscript.TestScript, neg bool, _ []string) {
 func cmdROM(ts *testscript.TestScript, neg bool, args []string) {
 	noNeg(ts, neg, "rom")
 	st := running(ts)
-	if len(args) == 0 {
-		ts.Fatalf("usage: rom PATH...")
+	fs := scriptFlags(ts, "rom")
+	size := fs.Int("size", 0, "bytes of zeros to write")
+	if err := fs.Parse(args); err != nil {
+		ts.Fatalf("rom: %v", err)
 	}
-	for _, rel := range args {
+	if fs.NArg() == 0 || *size < 0 {
+		ts.Fatalf("usage: rom [-size N] PATH...")
+	}
+	for _, rel := range fs.Args() {
 		if filepath.IsAbs(rel) || strings.HasPrefix(filepath.Clean(rel), "..") {
 			ts.Fatalf("rom: %s must be relative to $ROMS", rel)
 		}
 		path := filepath.Join(st.in.Layout.ROMs, rel)
 		ts.Check(os.MkdirAll(filepath.Dir(path), 0o750))
-		ts.Check(os.WriteFile(path, nil, 0o600))
+		ts.Check(os.WriteFile(path, make([]byte, *size), 0o600))
 	}
 }
 
@@ -326,14 +345,31 @@ func cmdTap(ts *testscript.TestScript, neg bool, args []string) {
 	reader := fs.String("reader", "", "sim reader (default: the first)")
 	uid := fs.String("uid", "", "tag UID (default: generated)")
 	data := fs.String("data", "", "tag data as hex")
+	tokenType := fs.String("type", "", "token type")
 	forMS := fs.Int("for", 0, "remove the tag again after this many ms")
+	var props scanProperties
+	fs.Var(&props, "prop", "scan property NAME=VALUE the reader reports; repeatable")
 	parse(ts, fs, args)
 	dev, err := st.in.Reader(*reader)
 	ts.Check(err)
 	text := strings.Join(fs.Args(), " ")
-	_, err = dev.Tap(simreader.Tag{UID: *uid, Text: text, Data: *data},
+	_, err = dev.Tap(&simreader.Tag{UID: *uid, Text: text, Data: *data, Type: *tokenType, Properties: props},
 		time.Duration(*forMS)*time.Millisecond)
 	ts.Check(err)
+}
+
+// scanProperties collects repeated -prop NAME=VALUE flags.
+type scanProperties []readers.ScanProperty
+
+func (p *scanProperties) String() string { return fmt.Sprint(*p) }
+
+func (p *scanProperties) Set(v string) error {
+	name, value, ok := strings.Cut(v, "=")
+	if !ok || name == "" {
+		return fmt.Errorf("want NAME=VALUE, got %q", v)
+	}
+	*p = append(*p, readers.ScanProperty{Name: name, Value: value})
+	return nil
 }
 
 func cmdRemove(ts *testscript.TestScript, neg bool, args []string) {

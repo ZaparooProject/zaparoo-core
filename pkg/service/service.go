@@ -820,7 +820,7 @@ func startServiceWithOptions(
 			PlaybackManager: playbackManager,
 		}
 		return methods.ActiveMediaEntry(&env, slot)
-	}, playbackManager, notifBroker.Publish)
+	}, playbackManager, queueNotification(st.GetContext(), st.Notifications))
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()

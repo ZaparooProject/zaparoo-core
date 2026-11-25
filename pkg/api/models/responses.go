@@ -789,6 +789,15 @@ type ScrapersResponse struct {
 	Scrapers []ScraperInfo `json:"scrapers"`
 }
 
+// MediaLevelsNotification is one level reading of what native audio plays
+// in a slot, for a visualizer. Peak and every band are in 0..1; the bands
+// are log-spaced from 40 Hz to 16 kHz.
+type MediaLevelsNotification struct {
+	Slot  string    `json:"slot"`
+	Bands []float64 `json:"bands"`
+	Peak  float64   `json:"peak"`
+}
+
 type MediaPlaybackState string
 
 const (

@@ -34,7 +34,6 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -288,13 +287,14 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 	}
 
-	if params.Options != nil && params.Options.AudioStream.Name() != "" {
+	switch {
+	case params.Options != nil && params.Options.AudioStream.Name() != "":
 		displayName = params.Options.AudioStream.Name()
-	} else if _, _, track := audio.SplitTrackPath(publishedPath); track {
+	case NativeAudioOwnsName(publishedPath):
 		// One track of a multi-track file is named for the file, not for
-		// its track number.
+		// its track number, and an audio CD for the disc.
 		displayName = audioDisplayName(publishedPath)
-	} else if displayName == "" {
+	case displayName == "":
 		displayName = urlHost(publishedPath)
 	}
 

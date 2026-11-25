@@ -294,6 +294,32 @@ An [ActiveMedia](methods.md#active-media-object) object, the same one [media.act
 }
 ```
 
+### media.levels
+
+Live levels of what native audio is playing in a slot, for drawing a visualizer. It is sent about 30 times a second per playing slot, and only to WebSocket connections that turned it on with [media.levels.subscribe](methods.md#medialevelssubscribe). Nothing is sent while a slot is paused or stopped. Levels are taken before the volume is applied.
+
+#### Parameters
+
+| Key   | Type     | Required | Description                                                                                         |
+| :---- | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| slot  | string   | Yes      | `"primary"` or `"background"`.                                                                      |
+| peak  | number   | Yes      | Smoothed peak sample level, from 0 to 1.                                                            |
+| bands | number[] | Yes      | 16 smoothed band levels from 0 to 1, log-spaced from 40 Hz to 16 kHz, lowest first. 0 is -60 dB and 1 is full scale. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.levels",
+  "params": {
+    "slot": "primary",
+    "peak": 0.82,
+    "bands": [0.41, 0.63, 0.77, 0.71, 0.66, 0.58, 0.6, 0.55, 0.49, 0.47, 0.42, 0.38, 0.31, 0.24, 0.15, 0.06]
+  }
+}
+```
+
 ### playlists.changed
 
 An open playlist changed: it was opened, closed, moved to another item, played, paused, or had its shuffle or repeat changed. The notification always carries every open playlist, in every slot, so the latest one is the whole state; bursts are merged for slow clients. It is only sent when what a client would see changed.
