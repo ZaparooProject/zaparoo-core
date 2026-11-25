@@ -505,17 +505,17 @@ func findFile(
 	statPath := lookupPath
 	var virtualParts []string
 
-	// if the file is inside a zip, a disk image or a virtual list, we just check
+	// if the file is inside an archive, a disk image or a virtual list, we just check
 	// that file exists
 	// TODO: both of these things are very specific to mister, it would be good to
 	//       have a more generic way of handling this for other platforms, or
 	//       implement them from zaparoo(?)
 	for i, p := range ps {
 		ext := filepath.Ext(strings.ToLower(p))
-		if ext == ".zip" || ext == ".txt" || ext == ".vhd" {
+		if ext == ".zip" || ext == ".7z" || ext == ".txt" || ext == ".vhd" {
 			statPath = virtualStatPath(lookupPath, ps, i+1)
 			virtualParts = ps[i+1:]
-			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
+			log.Debug().Msgf("found archive/txt, setting stat path: %s", statPath)
 			break
 		}
 	}

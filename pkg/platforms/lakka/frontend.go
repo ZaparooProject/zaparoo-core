@@ -107,8 +107,10 @@ func newFrontend(exec command.Executor, clock clockwork.Clock, addr string) *fro
 }
 
 // launch starts content in RetroArch. argv is a full "retroarch -L core path"
-// invocation; the core and content are taken from it for LOAD_CONTENT.
-func (f *frontend) launch(ctx context.Context, argv []string, contentPath string) error {
+// invocation; the core is taken from it for LOAD_CONTENT. contentPath is the
+// path RetroArch loads and mediaPath the one Core launched and tracks; they
+// differ for a file inside an archive.
+func (f *frontend) launch(ctx context.Context, argv []string, contentPath, mediaPath string) error {
 	corePath, err := corePathFromArgv(argv)
 	if err != nil {
 		return err
@@ -117,7 +119,7 @@ func (f *frontend) launch(ctx context.Context, argv []string, contentPath string
 		return fmt.Errorf("content path contains a control character: %q", contentPath)
 	}
 
-	loaded, err := f.loadOverNetwork(ctx, corePath, contentPath)
+	loaded, err := f.loadOverNetwork(ctx, corePath, contentPath, mediaPath)
 	if err != nil {
 		return err
 	}
@@ -128,7 +130,7 @@ func (f *frontend) launch(ctx context.Context, argv []string, contentPath string
 	}
 
 	f.mu.Lock()
-	f.launchedPath = contentPath
+	f.launchedPath = mediaPath
 	f.mu.Unlock()
 	return nil
 }
@@ -144,7 +146,7 @@ func corePathFromArgv(argv []string) (string, error) {
 
 // loadOverNetwork asks the running RetroArch to load content. It reports false
 // when the caller must fall back to a separate RetroArch instance.
-func (f *frontend) loadOverNetwork(ctx context.Context, corePath, contentPath string) (bool, error) {
+func (f *frontend) loadOverNetwork(ctx context.Context, corePath, contentPath, mediaPath string) (bool, error) {
 	f.mu.Lock()
 	capability := f.capability
 	f.mu.Unlock()
@@ -169,14 +171,14 @@ func (f *frontend) loadOverNetwork(ctx context.Context, corePath, contentPath st
 	if capability == loadSupported {
 		return true, nil
 	}
-	return f.probeLoad(ctx, before, contentPath)
+	return f.probeLoad(ctx, before, mediaPath)
 }
 
 // probeLoad decides whether RetroArch knew LOAD_CONTENT. A build without it
 // logs the line and keeps answering GET_STATUS as before. A build with it
 // blocks its main loop while loading, so it stops answering for a while, and
 // then either reports the new content or, when loading failed, the old status.
-func (f *frontend) probeLoad(ctx context.Context, before, contentPath string) (bool, error) {
+func (f *frontend) probeLoad(ctx context.Context, before, mediaPath string) (bool, error) {
 	start := f.clock.Now()
 	wentSilent := false
 	for {
@@ -185,12 +187,12 @@ func (f *frontend) probeLoad(ctx context.Context, before, contentPath string) (b
 		case err != nil:
 			wentSilent = true
 		case isLoaded(status) &&
-			(statusNamesContent(status, contentPath) || loadedContent(status) != loadedContent(before)):
+			(statusNamesContent(status, mediaPath) || loadedContent(status) != loadedContent(before)):
 			f.setCapability(loadSupported)
 			return true, nil
 		case wentSilent:
 			f.setCapability(loadSupported)
-			return false, fmt.Errorf("retroarch could not load %s", contentPath)
+			return false, fmt.Errorf("retroarch could not load %s", mediaPath)
 		case f.clock.Since(start) >= loadIgnoredWindow:
 			log.Info().Msg("retroarch does not support LOAD_CONTENT, launching games in a separate instance")
 			f.setCapability(loadUnsupported)
@@ -437,7 +439,9 @@ func loadedContent(status string) string {
 
 // statusNamesContent reports whether a GET_STATUS reply, shaped
 // "GET_STATUS PLAYING <system>,<content name>,crc32=<hex>", names the file at
-// path. RetroArch reports the file name without its extension.
+// path. RetroArch reports the file name without its extension. For a file
+// inside an archive it reports that file's name, unless the core opens
+// archives itself, when it reports the archive's.
 func statusNamesContent(status, path string) bool {
 	if path == "" {
 		return false
@@ -451,7 +455,23 @@ func statusNamesContent(status, path string) bool {
 	if i := strings.LastIndex(content, ",crc32="); i >= 0 {
 		content = content[:i]
 	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	if strings.EqualFold(content, fileStem(path)) {
+		return true
+	}
+	parts := strings.Split(path, "/")
+	for _, part := range parts[:len(parts)-1] {
+		if isArchiveName(part) {
+			return strings.EqualFold(content, fileStem(part))
+		}
+	}
+	return false
+}
+
+func fileStem(path string) string {
 	name := filepath.Base(path)
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	return name != "" && strings.EqualFold(strings.TrimSpace(content), name)
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }

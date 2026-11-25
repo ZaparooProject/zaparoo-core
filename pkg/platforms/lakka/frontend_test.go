@@ -60,7 +60,7 @@ func TestLaunchLoadsContentInRunningRetroArch(t *testing.T) {
 	f, _, clock := testFrontend(t, ra.addr())
 
 	var err error
-	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent) })
+	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent, testContent) })
 	require.NoError(t, err)
 	assert.Equal(t, 1, ra.count(loadMessage(testContent)))
 	assert.Equal(t, testContent, f.currentLaunch())
@@ -68,7 +68,8 @@ func TestLaunchLoadsContentInRunningRetroArch(t *testing.T) {
 	// Known support skips the probe: one status check, then the command.
 	before := ra.count(commandGetStatus)
 	other := "/storage/roms/snes/Other.sfc"
-	require.NoError(t, f.launch(context.Background(), []string{retroArchExecutable, "-L", testCore, other}, other))
+	otherArgv := []string{retroArchExecutable, "-L", testCore, other}
+	require.NoError(t, f.launch(context.Background(), otherArgv, other, other))
 	assert.Equal(t, before+1, ra.count(commandGetStatus))
 	// The command is fire and forget, so it may land after launch returns.
 	require.Eventually(t, func() bool { return ra.count(loadMessage(other)) == 1 }, time.Second, time.Millisecond)
@@ -83,14 +84,14 @@ func TestLaunchFallsBackWhenLoadContentIsIgnored(t *testing.T) {
 	expectTransientLaunch(exec, nil)
 
 	var err error
-	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent) })
+	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent, testContent) })
 	require.NoError(t, err)
 	assert.Equal(t, loadUnsupported, f.capability)
 	assert.Equal(t, testContent, f.currentLaunch())
 
 	// Once known to be unsupported, LOAD_CONTENT is not tried again.
 	expectTransientLaunch(exec, nil)
-	require.NoError(t, f.launch(context.Background(), testArgv, testContent))
+	require.NoError(t, f.launch(context.Background(), testArgv, testContent, testContent))
 	assert.Equal(t, 1, ra.count(loadMessage(testContent)))
 }
 
@@ -109,7 +110,7 @@ func TestLaunchFallsBackWhenOnlyPauseStateChanges(t *testing.T) {
 	expectTransientLaunch(exec, nil)
 
 	var err error
-	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent) })
+	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent, testContent) })
 	require.NoError(t, err)
 	assert.Equal(t, loadUnsupported, f.capability)
 }
@@ -125,7 +126,7 @@ func TestLaunchReportsFailedLoad(t *testing.T) {
 	f, _, clock := testFrontend(t, ra.addr())
 
 	var err error
-	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent) })
+	drive(t, clock, pollInterval, func() { err = f.launch(context.Background(), testArgv, testContent, testContent) })
 	require.ErrorContains(t, err, "could not load")
 	assert.Equal(t, loadSupported, f.capability)
 	assert.Empty(t, f.currentLaunch())
@@ -136,7 +137,7 @@ func TestLaunchUnreachableRetroArchStartsGameUnit(t *testing.T) {
 	f, exec, _ := testFrontend(t, closedAddr(t))
 	expectTransientLaunch(exec, nil)
 
-	require.NoError(t, f.launch(context.Background(), testArgv, testContent))
+	require.NoError(t, f.launch(context.Background(), testArgv, testContent, testContent))
 	// Unreachable says nothing about the build, so nothing is cached.
 	assert.Equal(t, loadUnknown, f.capability)
 }
@@ -147,7 +148,7 @@ func TestLaunchGameUnitFailureRestoresMenu(t *testing.T) {
 	expectTransientLaunch(exec, errors.New("boom"))
 	expectSystemctl(exec, nil, "--no-block", "start", retroArchService)
 
-	require.Error(t, f.launch(context.Background(), testArgv, testContent))
+	require.Error(t, f.launch(context.Background(), testArgv, testContent, testContent))
 	assert.Empty(t, f.currentLaunch())
 }
 
@@ -159,15 +160,16 @@ func TestLaunchReplacesRunningGameUnit(t *testing.T) {
 	expectSystemctl(exec, nil, "stop", retroArchService)
 	exec.On("Run", mock.Anything, "systemd-run", mock.Anything).Return(nil).Once()
 
-	require.NoError(t, f.launch(context.Background(), testArgv, testContent))
+	require.NoError(t, f.launch(context.Background(), testArgv, testContent, testContent))
 }
 
 func TestLaunchRejectsUnsafePaths(t *testing.T) {
 	t.Parallel()
 	f, _, _ := testFrontend(t, closedAddr(t))
 
-	require.Error(t, f.launch(context.Background(), testArgv, "/storage/roms/a\nQUIT"))
-	require.Error(t, f.launch(context.Background(), []string{retroArchExecutable, testContent}, testContent))
+	require.Error(t, f.launch(context.Background(), testArgv, "/storage/roms/a\nQUIT", "/storage/roms/a\nQUIT"))
+	noCore := []string{retroArchExecutable, testContent}
+	require.Error(t, f.launch(context.Background(), noCore, testContent, testContent))
 }
 
 func TestLaunchTooLongForNetworkCommandUsesGameUnit(t *testing.T) {
@@ -181,7 +183,7 @@ func TestLaunchTooLongForNetworkCommandUsesGameUnit(t *testing.T) {
 	expectSystemctl(exec, nil, "stop", retroArchService)
 	exec.On("Run", mock.Anything, "systemd-run", mock.Anything).Return(nil).Once()
 
-	require.NoError(t, f.launch(context.Background(), argv, long))
+	require.NoError(t, f.launch(context.Background(), argv, long, long))
 	assert.Empty(t, ra.sent())
 }
 
@@ -377,6 +379,23 @@ func TestStatusNamesContent(t *testing.T) {
 			name:   "comma prefix only",
 			status: "GET_STATUS PLAYING snes,Game, The,crc32=1",
 			path:   "/storage/roms/snes/Game.sfc",
+		},
+		{
+			name:   "file in archive",
+			status: "GET_STATUS PLAYING snes,B",
+			path:   "/storage/roms/snes/Pack.zip/B.sfc",
+			want:   true,
+		},
+		{
+			name:   "archive of a core that opens archives",
+			status: "GET_STATUS PLAYING fbneo,Pack",
+			path:   "/storage/roms/snes/Pack.7Z/disc/B.sfc",
+			want:   true,
+		},
+		{
+			name:   "other file in the archive",
+			status: "GET_STATUS PLAYING snes,A",
+			path:   "/storage/roms/snes/Pack.zip/B.sfc",
 		},
 	}
 	for _, tt := range tests {

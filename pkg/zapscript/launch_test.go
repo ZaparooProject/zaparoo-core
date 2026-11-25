@@ -2237,6 +2237,25 @@ func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestFindFile_ResolvesAbsolute7zMemberPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := launchTestAbsPath("games")
+	archive := filepath.Join(rootDir, "snes", "Pack.7z")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(archive), 0o700))
+	require.NoError(t, afero.WriteFile(fs, archive, []byte("test"), 0o600))
+
+	member := filepath.Join(archive, "B.sfc")
+	result, err := findFile(fs, mockPlatform, cfg, nil, member)
+
+	require.NoError(t, err)
+	assert.Equal(t, member, result)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	t.Parallel()
 

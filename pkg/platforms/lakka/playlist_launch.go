@@ -39,7 +39,8 @@ const playlistLauncherPrefix = "RetroArchPlaylist"
 
 // scanPlaylists adds a system's RetroArch playlist entries to the files the
 // folder scan found. Only files inside the index roots are added, and a file
-// already found is left as it is.
+// already found is left as it is. Each file inside an archive is added by its
+// own path, so games sharing an archive stay apart.
 func (p *Platform) scanPlaylists(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -62,14 +63,18 @@ func (p *Platform) scanPlaylists(
 			return nil, fmt.Errorf("scan retroarch playlists: %w", err)
 		}
 		item := &items[i]
-		if seen[item.Path] || (item.Inner != "" && seen[filepath.Join(item.Path, item.Inner)]) {
+		if seen[item.Path] {
 			continue
 		}
 		if !inAnyRoot(roots, item.Path) {
 			log.Debug().Str("path", item.Path).Msg("skipping retroarch playlist entry outside the index roots")
 			continue
 		}
-		if info, err := p.fs.Stat(item.Path); err != nil || info.IsDir() {
+		file := item.Path
+		if item.Archive != "" {
+			file = item.Archive
+		}
+		if info, err := p.fs.Stat(file); err != nil || info.IsDir() {
 			log.Debug().Str("path", item.Path).Msg("skipping missing retroarch playlist entry")
 			continue
 		}
@@ -79,6 +84,42 @@ func (p *Platform) scanPlaylists(
 	}
 	log.Debug().Str("system", systemID).Int("added", added).Msg("indexed retroarch playlist entries")
 	return results, nil
+}
+
+// retroArchContentPath turns a media path naming a file inside an archive,
+// "archive.zip/file", into the "archive.zip#file" RetroArch loads. A path
+// component counts as an archive only when it is a file, so a folder named
+// like one is left alone, as is every other path.
+func (p *Platform) retroArchContentPath(path string) string {
+	if !filepath.IsAbs(path) {
+		return path
+	}
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts)-1; i++ {
+		if !isArchiveName(parts[i]) {
+			continue
+		}
+		archive := strings.Join(parts[:i+1], "/")
+		info, err := p.fs.Stat(archive)
+		if err != nil {
+			return path
+		}
+		if info.IsDir() {
+			continue
+		}
+		return archive + "#" + strings.Join(parts[i+1:], "/")
+	}
+	return path
+}
+
+func isArchiveName(name string) bool {
+	ext := filepath.Ext(name)
+	for _, archiveExt := range archiveExtensions {
+		if strings.EqualFold(ext, archiveExt) {
+			return true
+		}
+	}
+	return false
 }
 
 func inAnyRoot(roots []string, path string) bool {
@@ -118,20 +159,29 @@ func (p *Platform) playlistLaunchers(systems map[string]bool) []platforms.Launch
 	return launchers
 }
 
+type commandBuilder = func(*config.Instance, string, *platforms.LaunchOptions) (*platforms.LaunchCommand, error)
+
+// archiveMemberCommand wraps a launcher's command builder so a file inside an
+// archive is handed to RetroArch in its "archive.zip#file" form.
+func (p *Platform) archiveMemberCommand(build commandBuilder) commandBuilder {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*platforms.LaunchCommand, error) {
+		return build(cfg, p.retroArchContentPath(path), opts)
+	}
+}
+
 // playlistCommand wraps a launcher's command builder so a playlist entry of
 // systemID starts with the core its playlist recorded. Entries without a
-// usable core, and everything else, use the launcher's own core.
-func (p *Platform) playlistCommand(
-	build func(*config.Instance, string, *platforms.LaunchOptions) (*platforms.LaunchCommand, error),
-	systemID string,
-) func(*config.Instance, string, *platforms.LaunchOptions) (*platforms.LaunchCommand, error) {
+// usable core, and everything else, use the launcher's own core. A file
+// inside an archive is handed to RetroArch in its "archive.zip#file" form.
+func (p *Platform) playlistCommand(build commandBuilder, systemID string) commandBuilder {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*platforms.LaunchCommand, error) {
+		content := p.retroArchContentPath(path)
 		if core, ok := p.playlistCore(path, systemID); ok {
-			spec := retroarch.BuildCommand(p.retroArchOptions(), retroarch.CoreLaunch{Core: core}, path)
-			log.Info().Str("path", path).Str("core", core).Msg("launching with the retroarch playlist core")
+			spec := retroarch.BuildCommand(p.retroArchOptions(), retroarch.CoreLaunch{Core: core}, content)
+			log.Info().Str("path", content).Str("core", core).Msg("launching with the retroarch playlist core")
 			return &platforms.LaunchCommand{Executable: spec.Name, Args: spec.Args, Env: spec.Env}, nil
 		}
-		return build(cfg, path, opts)
+		return build(cfg, content, opts)
 	}
 }
 

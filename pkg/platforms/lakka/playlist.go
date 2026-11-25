@@ -181,26 +181,53 @@ func cleanField(s string) string {
 	return s
 }
 
+// archiveExtensions are the archives RetroArch can name a file inside.
+var archiveExtensions = []string{".zip", ".7z"}
+
 // playlistTarget is the file a playlist entry plays. RetroArch names a file
-// inside an archive as "archive.zip#file"; the index holds the archive, which
-// RetroArch loads directly.
+// inside an archive as "archive.zip#file"; path is then the archive and inner
+// the file in it, as written. An inner path that could name anything outside
+// the archive once joined to it is refused.
 func playlistTarget(entryPath string) (path, inner string, ok bool) {
 	if entryPath == "" || !filepath.IsAbs(entryPath) {
 		return "", "", false
 	}
-	for _, ext := range []string{".zip#", ".7z#"} {
-		if i := indexASCIIFold(entryPath, ext); i >= 0 {
-			cut := i + len(ext) - 1
+	for _, ext := range archiveExtensions {
+		if i := indexASCIIFold(entryPath, ext+"#"); i >= 0 {
+			cut := i + len(ext)
 			inner = entryPath[cut+1:]
 			entryPath = entryPath[:cut]
 			break
 		}
 	}
 	path = filepath.Clean(entryPath)
-	if path == "/" {
+	if path == "/" || (inner != "" && !validArchiveMember(inner)) {
 		return "", "", false
 	}
 	return path, inner, true
+}
+
+// validArchiveMember reports whether inner is a relative path of plain names,
+// so joining it to its archive stays inside the archive.
+func validArchiveMember(inner string) bool {
+	if strings.Contains(inner, `\`) {
+		return false
+	}
+	for _, part := range strings.Split(inner, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// memberPath is the media path of a file inside an archive: the archive's path
+// followed by the file's, the form Core indexes archive contents in.
+func memberPath(archive, inner string) string {
+	if inner == "" {
+		return archive
+	}
+	return archive + "/" + inner
 }
 
 // indexASCIIFold returns the byte offset of the first match of substr in s,
@@ -219,10 +246,12 @@ func indexASCIIFold(s, substr string) int {
 // index holds for it.
 type playlistItem struct {
 	SystemID string
-	Path     string
-	// Inner is the file inside the archive at Path, if any.
-	Inner string
-	Name  string
+	// Path is the media path: the file itself, or for a file inside an
+	// archive, the archive's path followed by the file's.
+	Path string
+	// Archive is the archive Path is inside, if any.
+	Archive string
+	Name    string
 	// Core is the core path the playlist recorded, or empty when the entry
 	// leaves the choice to RetroArch.
 	Core string
@@ -231,6 +260,9 @@ type playlistItem struct {
 type playlistIndex struct {
 	bySystem map[string][]playlistItem
 	byPath   map[string]playlistItem
+	// byArchive holds the first entry inside each archive. Before each file
+	// in an archive had its own path, the archive's path stood for that entry.
+	byArchive map[string]playlistItem
 }
 
 type cachedPlaylist struct {
@@ -277,9 +309,13 @@ func (s *playlistStore) cached() *playlistIndex {
 	return s.load()
 }
 
-// lookup reports the playlist item indexed at path for systemID.
+// lookup reports the playlist item indexed at path for systemID. An archive's
+// own path finds its first entry, so a token written with it still launches.
 func (ix *playlistIndex) lookup(path, systemID string) (playlistItem, bool) {
 	item, ok := ix.byPath[path]
+	if !ok {
+		item, ok = ix.byArchive[path]
+	}
 	if !ok || item.SystemID != systemID {
 		return playlistItem{}, false
 	}
@@ -363,8 +399,9 @@ func (s *playlistStore) read(name string, size int64) playlistFile {
 // mixed playlist such as the history or favorites.
 func (s *playlistStore) build(names []string) *playlistIndex {
 	index := &playlistIndex{
-		bySystem: make(map[string][]playlistItem),
-		byPath:   make(map[string]playlistItem),
+		bySystem:  make(map[string][]playlistItem),
+		byPath:    make(map[string]playlistItem),
+		byArchive: make(map[string]playlistItem),
 	}
 	slices.Sort(names)
 	type ordered struct {
@@ -396,17 +433,23 @@ func (s *playlistStore) build(names []string) *playlistIndex {
 			if !ok {
 				continue
 			}
-			if _, seen := index.byPath[path]; seen {
+			media := memberPath(path, inner)
+			if _, seen := index.byPath[media]; seen {
 				continue
 			}
 			item := playlistItem{
 				SystemID: systemID,
-				Path:     path,
-				Inner:    inner,
+				Path:     media,
 				Name:     entryName(entry, path, inner),
 				Core:     entryCore(entry.CorePath, pl.DefaultCorePath),
 			}
-			index.byPath[path] = item
+			if inner != "" {
+				item.Archive = path
+				if _, seen := index.byArchive[path]; !seen {
+					index.byArchive[path] = item
+				}
+			}
+			index.byPath[media] = item
 			index.bySystem[systemID] = append(index.bySystem[systemID], item)
 		}
 		if unmapped > 0 {

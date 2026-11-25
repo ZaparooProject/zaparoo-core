@@ -132,6 +132,11 @@ func TestPlaylistTarget(t *testing.T) {
 		},
 		{in: "/\u023a\u023a\u023a\u023a.zip#", path: "/\u023a\u023a\u023a\u023a.zip", ok: true},
 		{in: "/\u212a\u212a\u212a\u212a.ZIP#a.sfc", path: "/\u212a\u212a\u212a\u212a.ZIP", inner: "a.sfc", ok: true},
+		{in: "/storage/roms/snes/Pack.zip#../../secret.sfc"},
+		{in: "/storage/roms/snes/Pack.zip#/etc/passwd"},
+		{in: "/storage/roms/snes/Pack.zip#a//b.sfc"},
+		{in: "/storage/roms/snes/Pack.zip#./b.sfc"},
+		{in: `/storage/roms/snes/Pack.zip#..\b.sfc`},
 		{in: "roms/Game.sfc"},
 		{in: ""},
 		{in: "/"},
@@ -168,9 +173,12 @@ func TestPlaylistStoreMapsSystems(t *testing.T) {
 	p, _, _ := testPlatform(t, closedAddr(t))
 	snesGame := filepath.Join(romsDir, "snes", "Game.sfc")
 	psxGame := filepath.Join(romsDir, "psx", "Game.cue")
+	pack := filepath.Join(romsDir, "snes", "Pack.zip")
 	writePlaylist(t, p.fs, snesPlaylistName, `{"items": [
 		{"path": "`+snesGame+`", "label": "SNES Game", "core_path": "DETECT"},
-		{"path": "`+filepath.Join(romsDir, "snes", "Pack.zip")+`#Inner.sfc"}
+		{"path": "`+pack+`#Inner.sfc"},
+		{"path": "`+pack+`#Second.sfc", "core_path": "/tmp/cores/snes9x2010_libretro.so"},
+		{"path": "`+pack+`#../Escape.sfc"}
 	]}`)
 	writePlaylist(t, p.fs, "content_history.lpl", `{"items": [
 		{"path": "`+snesGame+`", "label": "History name", "core_path": "/tmp/cores/snes9x2010_libretro.so",
@@ -184,23 +192,32 @@ func TestPlaylistStoreMapsSystems(t *testing.T) {
 
 	index := p.playlists.load()
 	snes := index.bySystem[systemdefs.SystemSNES]
-	require.Len(t, snes, 2)
+	require.Len(t, snes, 3)
 	// The system playlist wins over the history entry for the same file.
 	assert.Equal(t, playlistItem{SystemID: systemdefs.SystemSNES, Path: snesGame, Name: "SNES Game"}, snes[0])
+	// Each file in an archive is kept, under its own path.
+	inner := playlistItem{SystemID: systemdefs.SystemSNES, Path: pack + "/Inner.sfc", Archive: pack, Name: "Inner"}
+	assert.Equal(t, inner, snes[1])
 	assert.Equal(t, playlistItem{
 		SystemID: systemdefs.SystemSNES,
-		Path:     filepath.Join(romsDir, "snes", "Pack.zip"),
-		Inner:    "Inner.sfc",
-		Name:     "Inner",
-	}, snes[1])
+		Path:     pack + "/Second.sfc",
+		Archive:  pack,
+		Name:     "Second",
+		Core:     "/tmp/cores/snes9x2010_libretro.so",
+	}, snes[2])
+	// The archive's own path, which named the archive's first entry before
+	// each file had its own path, still finds that entry.
+	found, ok := index.lookup(pack, systemdefs.SystemSNES)
+	assert.True(t, ok)
+	assert.Equal(t, inner, found)
 	assert.Empty(t, index.bySystem[systemdefs.SystemGenesis])
 
 	psx := index.bySystem[systemdefs.SystemPSX]
 	require.Len(t, psx, 1)
 	assert.Equal(t, psxGame, psx[0].Path)
-	assert.Len(t, index.byPath, 3)
+	assert.Len(t, index.byPath, 4)
 
-	_, ok := index.lookup(psxGame, systemdefs.SystemPSX)
+	_, ok = index.lookup(psxGame, systemdefs.SystemPSX)
 	assert.True(t, ok)
 	_, ok = index.lookup(psxGame, systemdefs.SystemSNES)
 	assert.False(t, ok)
@@ -260,11 +277,15 @@ func TestScanPlaylistsMergesWithFolderResults(t *testing.T) {
 	for _, f := range []string{inFolder, elsewhere, archive, outside} {
 		writeFile(t, p.fs, f)
 	}
+	require.NoError(t, p.fs.MkdirAll(zipDir, 0o755))
 	writePlaylist(t, p.fs, snesPlaylistName, `{"items": [
 		{"path": "`+inFolder+`", "label": "Folder label"},
 		{"path": "`+elsewhere+`", "label": "Elsewhere (USA)"},
 		{"path": "`+archive+`#Game.sfc"},
+		{"path": "`+archive+`#Other Game.sfc", "label": "Other Game (USA)"},
+		{"path": "`+filepath.Join(romsDir, "snes", "Missing.zip")+`#Gone.sfc"},
 		{"path": "`+zipDir+`#Inside.sfc"},
+		{"path": "`+zipDir+`#NotThere.sfc"},
 		{"path": "`+outside+`"},
 		{"path": "`+filepath.Join(romsDir, "snes", "Missing.sfc")+`"}
 	]}`)
@@ -280,7 +301,8 @@ func TestScanPlaylistsMergesWithFolderResults(t *testing.T) {
 		{Path: inFolder},
 		{Path: filepath.Join(zipDir, "Inside.sfc")},
 		{Path: elsewhere, Name: "Elsewhere (USA)"},
-		{Path: archive, Name: "Game"},
+		{Path: archive + "/Game.sfc", Name: "Game"},
+		{Path: archive + "/Other Game.sfc", Name: "Other Game (USA)"},
 	}, results)
 
 	results, err = launcher.Scanner(context.Background(), cfg, systemdefs.SystemPSX, folder)
@@ -374,6 +396,88 @@ func TestPlaylistEntryLaunchesWithRecordedCore(t *testing.T) {
 	assert.Equal(t, want(systemCore, unlisted), launchArgs(t, &launcher, cfg, unlisted))
 }
 
+func TestArchiveEntriesLaunchTheirOwnFile(t *testing.T) {
+	t.Parallel()
+	p, _, _ := testPlatform(t, closedAddr(t))
+	cfg := testConfig(t)
+	require.NoError(t, afero.WriteFile(p.fs, retroArchExecutable, nil, 0o755))
+	systemCore := filepath.Join(retroArchCoresDir, snesCore(t))
+	recorded := filepath.Join(retroArchCoresDir, "snes9x2010_libretro.so")
+	writeFile(t, p.fs, systemCore)
+	writeFile(t, p.fs, recorded)
+
+	pack := filepath.Join(romsDir, "snes", "Pack.zip")
+	writeFile(t, p.fs, pack)
+	dirZip := filepath.Join(romsDir, "snes", "Dir.zip")
+	require.NoError(t, p.fs.MkdirAll(dirZip, 0o755))
+	writePlaylist(t, p.fs, snesPlaylistName, `{"items": [
+		{"path": "`+pack+`#A.sfc", "core_path": "DETECT"},
+		{"path": "`+pack+`#sub/B.sfc", "core_path": "/tmp/cores/snes9x2010_libretro.so"}
+	]}`)
+
+	launcher := primarySNESLauncher(t, p.Launchers(cfg))
+	want := func(core, path string) []string {
+		return []string{retroArchExecutable, "-L", core, path}
+	}
+	assert.Equal(t, want(systemCore, pack+"#A.sfc"), launchArgs(t, &launcher, cfg, pack+"/A.sfc"))
+	assert.Equal(t, want(recorded, pack+"#sub/B.sfc"), launchArgs(t, &launcher, cfg, pack+"/sub/B.sfc"),
+		"each file in the archive keeps the core its entry recorded")
+	assert.Equal(t, want(systemCore, pack+"#C.sfc"), launchArgs(t, &launcher, cfg, pack+"/C.sfc"),
+		"a file in an archive no playlist lists still loads from the archive")
+	assert.Equal(t, want(systemCore, pack), launchArgs(t, &launcher, cfg, pack),
+		"the archive's own path is handed over as it is")
+	inDir := filepath.Join(dirZip, "Game.sfc")
+	assert.Equal(t, want(systemCore, inDir), launchArgs(t, &launcher, cfg, inDir),
+		"a folder named like an archive is a folder")
+	missing := filepath.Join(romsDir, "snes", "Missing.zip", "Game.sfc")
+	assert.Equal(t, want(systemCore, missing), launchArgs(t, &launcher, cfg, missing))
+}
+
+func TestArchiveMemberCommandTranslatesPath(t *testing.T) {
+	t.Parallel()
+	p, _, _ := testPlatform(t, closedAddr(t))
+	pack := filepath.Join(romsDir, "snes", "Pack.7z")
+	writeFile(t, p.fs, pack)
+	var got string
+	build := p.archiveMemberCommand(func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (
+		*platforms.LaunchCommand, error,
+	) {
+		got = path
+		return &platforms.LaunchCommand{}, nil
+	})
+	_, err := build(testConfig(t), pack+"/Game.sfc", nil)
+	require.NoError(t, err)
+	assert.Equal(t, pack+"#Game.sfc", got)
+	assert.Equal(t, "roms/Pack.7z/Game.sfc", p.retroArchContentPath("roms/Pack.7z/Game.sfc"))
+}
+
+func TestArchiveEntryLoadsInRunningRetroArch(t *testing.T) {
+	t.Parallel()
+	state := &retroArchState{status: contentless}
+	ra := newFakeRetroArch(t, state.handle)
+	p, _, _ := testPlatform(t, ra.addr())
+	p.frontend.capability = loadSupported
+	cfg := testConfig(t)
+	require.NoError(t, afero.WriteFile(p.fs, retroArchExecutable, nil, 0o755))
+	recorded := filepath.Join(retroArchCoresDir, "snes9x2010_libretro.so")
+	writeFile(t, p.fs, recorded)
+	pack := filepath.Join(romsDir, "snes", "Pack.zip")
+	writeFile(t, p.fs, pack)
+	writePlaylist(t, p.fs, snesPlaylistName, `{"items": [
+		{"path": "`+pack+`#A.sfc", "core_path": "`+recorded+`"},
+		{"path": "`+pack+`#B.sfc", "core_path": "`+recorded+`"}
+	]}`)
+
+	launcher := primarySNESLauncher(t, p.Launchers(cfg))
+	member := pack + "/B.sfc"
+	_, err := launcher.Launch(cfg, member, &platforms.LaunchOptions{})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return ra.count(commandLoadContent+" "+recorded+"|"+pack+"#B.sfc") == 1
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, member, p.frontend.currentLaunch(), "the launch is tracked by its media path")
+}
+
 func TestPlaylistCoreMakesLauncherAvailableWithoutSystemCore(t *testing.T) {
 	t.Parallel()
 	p, _, _ := testPlatform(t, closedAddr(t))
@@ -449,6 +553,7 @@ func FuzzParsePlaylist(f *testing.F) {
 	f.Add([]byte(`{"items":[1,"x",null,{"path":7}]}`))
 	f.Add([]byte("\xef\xbb\xbf{"))
 	f.Add([]byte(`{"items":[{"path":"/\u023a\u023a\u023a\u023a.zip#"}]}`))
+	f.Add([]byte(`{"items":[{"path":"/storage/roms/a.7z#../../b.sfc"},{"path":"/storage/roms/a.zip#c/d.sfc"}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		pl, err := parsePlaylist(data)
 		if err != nil {
@@ -467,9 +572,12 @@ func FuzzParsePlaylist(f *testing.F) {
 					t.Fatalf("unclean field %q", field)
 				}
 			}
-			path, _, ok := playlistTarget(e.Path)
+			path, inner, ok := playlistTarget(e.Path)
 			if ok && (!filepath.IsAbs(path) || path != filepath.Clean(path)) {
 				t.Fatalf("target %q of %q is not a clean absolute path", path, e.Path)
+			}
+			if member := memberPath(path, inner); ok && member != filepath.Clean(member) {
+				t.Fatalf("member %q of %q leaves its archive", member, e.Path)
 			}
 			_ = entryName(e, path, "")
 			_ = entryCore(e.CorePath, pl.DefaultCorePath)
