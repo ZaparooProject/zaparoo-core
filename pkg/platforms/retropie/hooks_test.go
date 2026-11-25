@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -211,9 +212,16 @@ func requireBash(t *testing.T) string {
 	return bash
 }
 
+// writeHostFile writes a file a test may then run. It holds syscall.ForkLock
+// while the file is open for writing: a process another parallel test forks
+// in that window would inherit the write descriptor, and running the file
+// would fail with ETXTBSY until that process execs.
 func writeHostFile(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()
-	require.NoError(t, os.WriteFile(path, []byte(content), mode))
+	syscall.ForkLock.RLock() //nolint:forbidigo // the runtime's fork lock, not a lock of ours
+	err := os.WriteFile(path, []byte(content), mode)
+	syscall.ForkLock.RUnlock() //nolint:forbidigo // the runtime's fork lock, not a lock of ours
+	require.NoError(t, err)
 	require.NoError(t, os.Chmod(path, mode))
 }
 
