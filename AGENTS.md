@@ -105,4 +105,4 @@ For updater, signing, promotion, rollout, withdrawal or key changes, read `docs/
 
 ## Skills
 
-Shared agent skills live in `.agents/skills/`. Claude Code reads only `.claude/skills/`, which is gitignored; link it locally with `ln -s ../.agents/skills .claude/skills`, or link each skill directory if `.claude/skills/` already holds local skills.
+Shared agent skills live in `.agents/skills/`. Claude Code reads only `.claude/skills/`, which is gitignored; link it locally with `mkdir -p .claude && ln -s ../.agents/skills .claude/skills`, or link each skill directory if `.claude/skills/` already holds local skills.
