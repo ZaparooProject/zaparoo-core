@@ -286,7 +286,8 @@ func TestHandleDecksUpdate_CoverRefusedOnReadOnlyDecks(t *testing.T) {
 }
 
 // withBrowseRoot gives the deck test env a data directory and one browse
-// root that holds covers/metroid.png, beside a private image outside it.
+// root that holds covers/metroid.png, cover.png and " cover.png", beside a
+// private image outside it.
 func (e *decksTestEnv) withBrowseRoot(t *testing.T) (dataDir, rootID string) {
 	t.Helper()
 	dataDir = t.TempDir()
@@ -295,6 +296,8 @@ func (e *decksTestEnv) withBrowseRoot(t *testing.T) (dataDir, rootID string) {
 	games := filepath.Join(base, "games")
 	for path, side := range map[string]int{
 		filepath.Join(games, "covers", "metroid.png"): 12,
+		filepath.Join(games, "cover.png"):             18,
+		filepath.Join(games, " cover.png"):            20,
 		filepath.Join(base, "private", "secret.png"):  16,
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
@@ -342,6 +345,11 @@ func TestHandleDecksUpdate_CoverFromBrowse(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, got.HasImage)
 	assert.Equal(t, testPNG(t, 12), e.storedCover(t, dataDir, deckID))
+
+	// A browse path is used as files.browse listed it, spaces included.
+	e.call(t, HandleDecksUpdate, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"browse","root":%q,"path":" cover.png"}}`, deckID, rootID))
+	assert.Equal(t, testPNG(t, 20), e.storedCover(t, dataDir, deckID))
 
 	_, err := HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(
 		`{"deckId":%q,"cover":{"kind":"browse","root":%q,"path":"../private/secret.png"}}`, deckID, rootID)))

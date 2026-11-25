@@ -473,7 +473,11 @@ func trimmedCoverInput(cover *models.DeckCoverInput) *models.DeckCoverInput {
 	out := *cover
 	out.Kind = strings.TrimSpace(out.Kind)
 	out.System = strings.TrimSpace(out.System)
-	out.Path = strings.TrimSpace(out.Path)
+	// A browse path is the entry path files.browse returned, which keeps
+	// any space a file name starts or ends with.
+	if out.Kind != models.DeckCoverKindBrowse {
+		out.Path = strings.TrimSpace(out.Path)
+	}
 	out.Root = strings.TrimSpace(out.Root)
 	out.UploadID = strings.TrimSpace(out.UploadID)
 	return &out
