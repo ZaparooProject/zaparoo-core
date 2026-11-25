@@ -20,6 +20,7 @@
 package opticaldrive
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -69,6 +70,7 @@ const (
 var errISO9660IdentityNotFound = errors.New("iso9660 identity not found")
 
 type discIdentity struct {
+	Sidecar   *discSidecar
 	UUID      string
 	Label     string
 	TokenFile discTokenFile
@@ -93,17 +95,22 @@ type contextReaderAt interface {
 
 func readISO9660IdentityContext(ctx context.Context, r contextReaderAt) (discIdentity, bool, error) {
 	buf := make([]byte, iso9660DescriptorSize)
+	var primary []byte
+	var joliet *iso9660DirectoryRecord
 	for i := range iso9660MaxDescriptors {
 		offset := int64(iso9660SuperblockOffset + i*iso9660SectorSize)
 		n, err := r.ReadAtContext(ctx, buf, offset)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return discIdentity{}, false, nil
+				break
+			}
+			if primary != nil {
+				break
 			}
 			return discIdentity{}, false, fmt.Errorf("read iso9660 descriptor: %w", err)
 		}
 		if n < len(buf) {
-			return discIdentity{}, false, nil
+			break
 		}
 
 		if string(buf[1:6]) != "CD001" {
@@ -112,28 +119,51 @@ func readISO9660IdentityContext(ctx context.Context, r contextReaderAt) (discIde
 		if buf[0] == iso9660DescriptorTypeEnd {
 			break
 		}
-		if buf[0] != iso9660DescriptorTypePrimary {
-			continue
+		switch buf[0] {
+		case iso9660DescriptorTypePrimary:
+			if primary == nil {
+				primary = bytes.Clone(buf)
+			}
+		case iso9660DescriptorTypeSupplementary:
+			if joliet == nil && isJolietDescriptor(buf) {
+				root, rootErr := parseISO9660DirectoryRecord(buf[iso9660RootDirectoryRecordOffset:])
+				if rootErr == nil {
+					joliet = &root
+				}
+			}
 		}
-
-		label := trimISO9660String(buf[iso9660VolumeIDOffset : iso9660VolumeIDOffset+iso9660VolumeIDSize])
-		uuid := iso9660DateUUID(buf[iso9660ModifiedOffset : iso9660ModifiedOffset+iso9660DateSize])
-		if uuid == "" {
-			uuid = iso9660DateUUID(buf[iso9660CreatedOffset : iso9660CreatedOffset+iso9660DateSize])
-		}
-
-		tokenFile, tokenErr := readISO9660TokenFileContext(ctx, r, buf)
-		if tokenErr != nil {
-			log.Debug().
-				Err(tokenErr).
-				Str("uuid", uuid).
-				Str("label", label).
-				Msg("failed to read ISO9660 token file")
-			tokenFile = discTokenFile{State: discTokenFileUnknown}
-		}
-		return discIdentity{UUID: uuid, Label: label, TokenFile: tokenFile}, true, nil
 	}
-	return discIdentity{}, false, nil
+	if primary == nil {
+		return discIdentity{}, false, nil
+	}
+
+	label := trimISO9660String(primary[iso9660VolumeIDOffset : iso9660VolumeIDOffset+iso9660VolumeIDSize])
+	uuid := iso9660DateUUID(primary[iso9660ModifiedOffset : iso9660ModifiedOffset+iso9660DateSize])
+	if uuid == "" {
+		uuid = iso9660DateUUID(primary[iso9660CreatedOffset : iso9660CreatedOffset+iso9660DateSize])
+	}
+
+	tokenFile, tokenErr := readISO9660TokenFileContext(ctx, r, primary)
+	if tokenErr != nil {
+		log.Debug().
+			Err(tokenErr).
+			Str("uuid", uuid).
+			Str("label", label).
+			Msg("failed to read ISO9660 token file")
+		tokenFile = discTokenFile{State: discTokenFileUnknown}
+	}
+
+	identity := discIdentity{UUID: uuid, Label: label, TokenFile: tokenFile}
+	tree := iso9660Tree{joliet: joliet != nil}
+	if joliet != nil {
+		tree.root = *joliet
+	} else if root, rootErr := parseISO9660DirectoryRecord(primary[iso9660RootDirectoryRecordOffset:]); rootErr == nil {
+		tree.root = root
+	}
+	if tree.root.Flags&iso9660DirectoryFlag != 0 {
+		identity.Sidecar = readISO9660Sidecar(ctx, r, tree)
+	}
+	return identity, true, nil
 }
 
 func readISO9660TokenFileContext(

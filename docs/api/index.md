@@ -357,6 +357,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.scrape.cancel             | Cancel active metadata scraping.                                                      | All clients |
 | media.scrape.resume             | Resume paused metadata scraping.                                                      | All clients |
 | media.control                   | Send control action to active media launcher.                                         | All clients |
+| media.levels.subscribe          | Turn the media.levels visualizer feed on or off for this WebSocket connection.        | All clients |
 | playlists.update                | Change shuffle and repeat of the playlist open in a slot.                             | All clients |
 | media.title.parse               | Preview media title and slug parsing.                                                  | All clients |
 | settings                        | List current configuration settings.                                                  | Tiered |
@@ -460,6 +461,7 @@ Notifications let a server or client know an event has occurred. See the [API No
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.playback         | Native audio in a slot started, paused, resumed, seeked or had its tags read.     |
+| media.levels           | Live audio levels of native audio playback, for subscribed connections only.      |
 | media.history.changed  | Play history was recorded outside the media started and stopped lifecycle.        |
 | media.tags.changed     | An item's user flags (favorite, liked, disliked, play later, hidden) changed.     |
 | playlists.changed      | An open playlist changed; carries every open playlist.                            |

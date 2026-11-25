@@ -39,7 +39,23 @@ type DriverConfig struct {
 	Enabled    *bool  `toml:"enabled,omitempty"`
 	AutoDetect *bool  `toml:"auto_detect,omitempty"`
 	ScanMode   string `toml:"scan_mode,omitempty"`
+	// KeepReading, LaunchOrder and AudioCDLauncher apply to the optical
+	// drive reader only.
+	KeepReading     *bool  `toml:"keep_reading,omitempty"`
+	LaunchOrder     string `toml:"launch_order,omitempty"`
+	AudioCDLauncher string `toml:"audio_cd_launcher,omitempty"`
 }
+
+// Optical drive launch orders. They decide between a library image the disc
+// matched and launching the disc itself.
+const (
+	DiscLaunchImageFirst = "image_first"
+	DiscLaunchDiscFirst  = "disc_first"
+	DiscLaunchImageOnly  = "image_only"
+	DiscLaunchDiscOnly   = "disc_only"
+)
+
+const opticalDriveDriverID = "opticaldrive"
 
 type ReadersScan struct {
 	Mode            string          `toml:"mode"`
@@ -435,6 +451,58 @@ func (c *Instance) driverSettingLocked(driverID string, pick func(DriverConfig) 
 		}
 	}
 	return nil
+}
+
+// driverStringSettingLocked is driverSettingLocked for string settings,
+// where empty means unset. Caller must hold c.mu.
+func (c *Instance) driverStringSettingLocked(driverID string, pick func(DriverConfig) string) string {
+	for _, id := range driverConfigIDs(driverID) {
+		matched := ""
+		for key, cfg := range c.vals.Readers.Drivers {
+			if normalizeDriverID(key) == id && pick(cfg) != "" && (matched == "" || key < matched) {
+				matched = key
+			}
+		}
+		if matched != "" {
+			return pick(c.vals.Readers.Drivers[matched])
+		}
+	}
+	return ""
+}
+
+// OpticalDriveKeepReading reports whether the optical drive reader reads the
+// disc every poll instead of only asking the drive for its state. Reading
+// keeps the drive audibly busy, which can cause skips during disc playback.
+func (c *Instance) OpticalDriveKeepReading() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v := c.driverSettingLocked(opticalDriveDriverID, func(cfg DriverConfig) *bool { return cfg.KeepReading })
+	return v != nil && *v
+}
+
+// OpticalDriveLaunchOrder returns how a scanned disc chooses between a
+// matching library image and the disc itself. Unknown values fall back to
+// DiscLaunchImageFirst.
+func (c *Instance) OpticalDriveLaunchOrder() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v := strings.ToLower(strings.TrimSpace(
+		c.driverStringSettingLocked(opticalDriveDriverID, func(cfg DriverConfig) string { return cfg.LaunchOrder })))
+	switch v {
+	case DiscLaunchImageFirst, DiscLaunchDiscFirst, DiscLaunchImageOnly, DiscLaunchDiscOnly:
+		return v
+	default:
+		return DiscLaunchImageFirst
+	}
+}
+
+// OpticalDriveAudioCDLauncher returns the launcher ID that plays audio CDs
+// from the drive, or "" for the platform default.
+func (c *Instance) OpticalDriveAudioCDLauncher() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return strings.TrimSpace(
+		c.driverStringSettingLocked(opticalDriveDriverID, func(cfg DriverConfig) string { return cfg.AudioCDLauncher }))
 }
 
 func (c *Instance) isDriverEnabledLocked(driverID string, defaultEnabled bool) bool {

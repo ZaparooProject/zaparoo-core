@@ -25,12 +25,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/sidecar"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,52 +41,6 @@ func writeDriveFile(t *testing.T, root, name string, data []byte) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	return path
-}
-
-func TestParseSidecar(t *testing.T) {
-	t.Parallel()
-	fields, err := parseSidecar([]byte(`{
-		"name": "  Tetris  ",
-		"description": "Line one\r\nLine two\tend",
-		"image": "art/cover.png",
-		"future": {"nested": true}
-	}`))
-	require.NoError(t, err)
-	assert.Equal(t, "Tetris", fields.Name)
-	assert.Equal(t, "Line one\nLine two end", fields.Description)
-	assert.Equal(t, "art/cover.png", fields.Image)
-}
-
-func TestParseSidecarDropsBadFieldsOnly(t *testing.T) {
-	t.Parallel()
-	fields, err := parseSidecar([]byte(`{
-		"name": 42,
-		"description": "` + strings.Repeat("d", maxSidecarDescriptionRunes+1) + `",
-		"image": "` + strings.Repeat("i", maxSidecarImagePathBytes+1) + `"
-	}`))
-	require.NoError(t, err)
-	assert.Equal(t, sidecarFields{}, fields)
-
-	fields, err = parseSidecar([]byte(`{"name": "` + strings.Repeat("n", maxSidecarNameRunes) + `", "image": null}`))
-	require.NoError(t, err)
-	assert.Len(t, fields.Name, maxSidecarNameRunes, "a name at the limit is kept")
-	assert.Empty(t, fields.Image)
-}
-
-func TestParseSidecarStripsControlCharacters(t *testing.T) {
-	t.Parallel()
-	fields, err := parseSidecar([]byte(`{"name": "Te\u0000tr\u001bis\u202e\nGame", "description": "a\u0007b\u2066c"}`))
-	require.NoError(t, err)
-	assert.Equal(t, "Tetris Game", fields.Name, "a name stays on one line")
-	assert.Equal(t, "abc", fields.Description)
-}
-
-func TestParseSidecarRejectsNonObjects(t *testing.T) {
-	t.Parallel()
-	for _, data := range []string{``, `not json`, `[]`, `"name"`, `null`, `{"name": "x"`} {
-		_, err := parseSidecar([]byte(data))
-		assert.Error(t, err, "input %q", data)
-	}
 }
 
 func TestLoadSidecar(t *testing.T) {
@@ -107,23 +60,23 @@ func TestLoadSidecarMissingOrEmpty(t *testing.T) {
 	assert.Nil(t, loadSidecar(t.TempDir()), "no file")
 
 	root := t.TempDir()
-	writeDriveFile(t, root, sidecarFileName, []byte(`{"unknown": "only"}`))
+	writeDriveFile(t, root, sidecar.FileName, []byte(`{"unknown": "only"}`))
 	assert.Nil(t, loadSidecar(root), "nothing usable in the file")
 
 	root = t.TempDir()
-	writeDriveFile(t, root, sidecarFileName, []byte(`{"name": `))
+	writeDriveFile(t, root, sidecar.FileName, []byte(`{"name": `))
 	assert.Nil(t, loadSidecar(root), "malformed JSON")
 
 	root = t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, sidecarFileName), 0o750))
+	require.NoError(t, os.Mkdir(filepath.Join(root, sidecar.FileName), 0o750))
 	assert.Nil(t, loadSidecar(root), "a directory with the file's name")
 }
 
 func TestLoadSidecarOversized(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	padding := strings.Repeat(" ", maxSidecarBytes)
-	writeDriveFile(t, root, sidecarFileName, []byte(`{"name":"Tetris"}`+padding))
+	padding := strings.Repeat(" ", sidecar.MaxBytes)
+	writeDriveFile(t, root, sidecar.FileName, []byte(`{"name":"Tetris"}`+padding))
 	assert.Nil(t, loadSidecar(root))
 }
 
@@ -156,7 +109,7 @@ func TestLoadSidecarRejectsBadImages(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t, root)
 			}
-			writeDriveFile(t, root, sidecarFileName, []byte(`{"name":"Tetris","image":"`+tt.image+`"}`))
+			writeDriveFile(t, root, sidecar.FileName, []byte(`{"name":"Tetris","image":"`+tt.image+`"}`))
 
 			meta := loadSidecar(root)
 			require.NotNil(t, meta, "a bad image drops only the image")
@@ -176,14 +129,14 @@ func TestLoadSidecarRejectsSymlinks(t *testing.T) {
 	writeDriveFile(t, outsideDir, "cover.png", []byte("png"))
 
 	root := t.TempDir()
-	require.NoError(t, os.Symlink(target, filepath.Join(root, sidecarFileName)))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, sidecar.FileName)))
 	assert.Nil(t, loadSidecar(root), "a linked zaparoo.json is skipped")
 
 	root = t.TempDir()
 	require.NoError(t, os.Symlink(filepath.Join(outsideDir, "cover.png"), filepath.Join(root, "cover.png")))
 	require.NoError(t, os.Symlink(outsideDir, filepath.Join(root, "art")))
 	for _, image := range []string{"cover.png", "art/cover.png"} {
-		writeDriveFile(t, root, sidecarFileName, []byte(`{"name":"Tetris","image":"`+image+`"}`))
+		writeDriveFile(t, root, sidecar.FileName, []byte(`{"name":"Tetris","image":"`+image+`"}`))
 		meta := loadSidecar(root)
 		require.NotNil(t, meta)
 		assert.Empty(t, meta.ImagePath, "image %q reached through a link", image)
@@ -194,7 +147,7 @@ func TestHandleMountEvent_AttachesSidecar(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeDriveFile(t, root, tokenFileName, []byte("game.sfc"))
-	writeDriveFile(t, root, sidecarFileName, []byte(`{"name":"Tetris","description":"Falling blocks."}`))
+	writeDriveFile(t, root, sidecar.FileName, []byte(`{"name":"Tetris","description":"Falling blocks."}`))
 
 	reader := NewReader(&config.Instance{})
 	scanChan := make(chan readers.Scan, 1)
@@ -217,7 +170,7 @@ func TestHandleMountEvent_BadSidecarStillScans(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeDriveFile(t, root, tokenFileName, []byte("game.sfc"))
-	writeDriveFile(t, root, sidecarFileName, []byte(`{not json`))
+	writeDriveFile(t, root, sidecar.FileName, []byte(`{not json`))
 
 	reader := NewReader(&config.Instance{})
 	scanChan := make(chan readers.Scan, 1)
@@ -232,30 +185,4 @@ func TestHandleMountEvent_BadSidecarStillScans(t *testing.T) {
 	require.NotNil(t, scan.Token)
 	assert.Equal(t, "game.sfc", scan.Token.Text)
 	assert.Nil(t, scan.Token.Metadata)
-}
-
-func FuzzParseSidecar(f *testing.F) {
-	f.Add([]byte(`{"name":"Tetris","description":"Falling blocks.","image":"cover.png"}`))
-	f.Add([]byte(`{"name":42,"image":null,"extra":[1,2,3]}`))
-	f.Add([]byte(`{"name":"\u202eevil\u0000","description":"a\r\nb"}`))
-	f.Add([]byte(`[]`))
-	f.Add([]byte(`{"name":`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		fields, err := parseSidecar(data)
-		if err != nil {
-			assert.Equal(t, sidecarFields{}, fields)
-			return
-		}
-		assert.LessOrEqual(t, utf8.RuneCountInString(fields.Name), maxSidecarNameRunes)
-		assert.LessOrEqual(t, utf8.RuneCountInString(fields.Description), maxSidecarDescriptionRunes)
-		assert.LessOrEqual(t, len(fields.Image), maxSidecarImagePathBytes)
-		for _, r := range fields.Name {
-			assert.False(t, unicode.IsControl(r) || isBidiControl(r), "name keeps %U", r)
-		}
-		for _, r := range fields.Description {
-			assert.False(t, (unicode.IsControl(r) && r != '\n') || isBidiControl(r), "description keeps %U", r)
-		}
-		assert.Equal(t, strings.TrimSpace(fields.Name), fields.Name)
-		assert.Equal(t, strings.TrimSpace(fields.Description), fields.Description)
-	})
 }

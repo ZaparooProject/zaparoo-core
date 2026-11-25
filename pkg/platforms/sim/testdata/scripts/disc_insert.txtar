@@ -1,0 +1,48 @@
+# An inserted disc launches like a card. With no library image to match, the
+# default image_first order falls back to the disc in the drive.
+
+sim-start
+rom snes/Alpha.sfc
+
+tap -type disc -prop disc.kind=data -prop disc.system=PSX -prop disc.drive=sr0
+event launch launcher=SimDisc path=physicaldisc://sr0/PSX
+notification media.started
+
+# zaparoo.txt on the disc is the token text, and it wins over the disc.
+tap -type disc -prop disc.kind=data -prop disc.system=PSX -prop disc.drive=sr0 $ROMS/snes/Alpha.sfc
+event launch launcher=SimSNES
+notification media.started systemId=SNES
+
+# A drive name the reader could not have produced never reaches a launcher.
+tap -type disc -prop disc.kind=data -prop disc.system=PSX -prop disc.drive=../sr0
+! event launch
+
+# A disc whose system is unknown has nothing to play it from the drive.
+tap -type disc -prop disc.kind=data -prop disc.drive=sr0
+! event launch
+
+# image_only never plays the disc itself.
+sim-stop
+sim-start -disc-order image_only
+tap -type disc -prop disc.kind=data -prop disc.system=PSX -prop disc.drive=sr0
+! event launch
+
+# disc_only plays it straight from the drive.
+sim-stop
+sim-start -disc-order disc_only
+tap -type disc -prop disc.kind=data -prop disc.system=Saturn -prop disc.drive=sr1
+event launch launcher=SimDisc path=physicaldisc://sr1/Saturn
+
+# An audio CD plays with the configured launcher, even one that only runs
+# when named.
+sim-stop
+sim-start -audio-cd-launcher SimCDPlayer
+tap -type disc -prop disc.kind=audio -prop disc.drive=sr0
+event launch launcher=SimCDPlayer path=cdaudio://sr0
+notification media.started
+
+# A configured launcher that does not exist plays nothing.
+sim-stop
+sim-start -audio-cd-launcher NoSuchPlayer
+tap -type disc -prop disc.kind=audio -prop disc.drive=sr0
+! event launch

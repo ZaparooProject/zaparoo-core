@@ -310,7 +310,7 @@ func tap(ctx context.Context, g globals, name string, args []string, stdout io.W
 	if keep {
 		hold = 0
 	}
-	got, err := in.client.Tap(ctx, r, tag, hold)
+	got, err := in.client.Tap(ctx, r, &tag, hold)
 	if err != nil {
 		return fmt.Errorf("tap: %w", err)
 	}

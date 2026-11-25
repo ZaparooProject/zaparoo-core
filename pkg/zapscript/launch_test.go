@@ -623,6 +623,43 @@ func TestDropLauncherForOtherScheme_KeepsTheLinksOwnLauncher(t *testing.T) {
 	assert.Equal(t, "LaunchBox", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), "a file is not a link")
 }
 
+// A preferred launcher that names the file types it plays gives way on a
+// file it cannot play, so an Audio default of a CD player leaves mp3s to
+// native audio. One that names no file types, or accepts the file through its
+// test, stays.
+func TestDropLauncherForOtherFileType(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{
+			ID: "PSXCDPlayer", SystemID: "Audio", Extensions: []string{".cue"},
+			Test: func(_ *config.Instance, path string) bool { return strings.HasSuffix(path, ".cue/3") },
+		},
+		{ID: "Generic", SystemID: "Audio"},
+	})
+	tests := []struct {
+		launcher string
+		path     string
+		want     string
+	}{
+		{launcher: "PSXCDPlayer", path: "/media/fat/Music/Song.mp3", want: ""},
+		{launcher: "PSXCDPlayer", path: "/media/fat/Music/Album.CUE", want: "PSXCDPlayer"},
+		{launcher: "PSXCDPlayer", path: "/media/fat/Music/Album.cue/3", want: "PSXCDPlayer"},
+		{launcher: "PSXCDPlayer", path: "cdaudio://sr0", want: "PSXCDPlayer"},
+		{launcher: "Generic", path: "/media/fat/Music/Song.mp3", want: "Generic"},
+		{launcher: "Unknown", path: "/media/fat/Music/Song.mp3", want: "Unknown"},
+	}
+	for _, tt := range tests {
+		env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{string(zapscript.KeyLauncher): tt.launcher}),
+		}}
+		dropLauncherForOtherFileType(mockPlatform, &env, tt.path)
+		assert.Equal(t, tt.want, env.Cmd.AdvArgs.Get(zapscript.KeyLauncher), tt.launcher+" "+tt.path)
+	}
+}
+
 func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing.T) {
 	t.Parallel()
 
@@ -1420,14 +1457,15 @@ launcher = "Native"
 	}
 	path := filepath.Join("games", "game.sfc")
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", cfg).Twice().Return([]platforms.Launcher{launcher})
+	mockPlatform.On("Launchers", cfg).Once().Return([]platforms.Launcher{launcher})
 	mockPlatform.On("LaunchMedia", cfg, path,
 		mock.MatchedBy(func(selected *platforms.Launcher) bool {
 			return selected != nil && selected.ID == launcher.ID
 		}), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
 	env := platforms.CmdEnv{
-		Cfg: cfg,
-		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		Cfg:       cfg,
+		Cmd:       zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		Launchers: &platforms.LauncherSnapshot{},
 	}
 
 	launch := getLaunchClosure(mockPlatform, &env, false)

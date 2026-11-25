@@ -33,7 +33,7 @@ media.meta media.image media.asset media.artwork.random
 uploads.begin uploads.chunk uploads.status uploads.finish uploads.cancel
 files.browse files.image
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
-media.browse media.browse.index media.control media.active.update media.clean.orphans
+media.browse media.browse.index media.control media.levels.subscribe media.active.update media.clean.orphans
 media.active.image playlists.update
 settings settings.update settings.zapscript.hold settings.reload settings.logs.download
 settings.backup settings.backup.list settings.backup.inspect settings.backup.delete

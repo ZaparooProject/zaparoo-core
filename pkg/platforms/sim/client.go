@@ -199,10 +199,12 @@ func (c *Client) RemoveReader(ctx context.Context, name string) error {
 }
 
 // Tap presents a tag. A zero hold leaves it on the reader.
-func (c *Client) Tap(ctx context.Context, reader string, tag simreader.Tag, hold time.Duration) (simreader.Tag, error) {
+func (c *Client) Tap(
+	ctx context.Context, reader string, tag *simreader.Tag, hold time.Duration,
+) (simreader.Tag, error) {
 	var out simreader.Tag
 	err := c.do(ctx, http.MethodPost, readerPath(reader, "tap"),
-		TapRequest{Tag: tag, HoldMS: int(hold / time.Millisecond)}, &out)
+		TapRequest{Tag: *tag, HoldMS: int(hold / time.Millisecond)}, &out)
 	return out, err
 }
 

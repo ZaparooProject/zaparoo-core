@@ -312,7 +312,7 @@ func (p *Platform) handleTap(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
-	tag, err := d.Tap(req.Tag, ms(req.HoldMS))
+	tag, err := d.Tap(&req.Tag, ms(req.HoldMS))
 	respond(w, tag, err)
 }
 

@@ -228,7 +228,7 @@ func TestControlReadersAndFaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
-	_, err = c.Tap(ctx, "r1", simreader.Tag{Text: "x"}, 0)
+	_, err = c.Tap(ctx, "r1", &simreader.Tag{Text: "x"}, 0)
 	require.ErrorContains(t, err, "not connected", "no Core reader has opened the device")
 	require.Error(t, c.Remove(ctx, "missing"))
 	require.NoError(t, c.Unplug(ctx, "r1"))

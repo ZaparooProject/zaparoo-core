@@ -101,7 +101,7 @@ func TestTapAndRemove(t *testing.T) {
 	require.NoError(t, err)
 	r, iq := newTestReader(t, hub, "r")
 
-	tag, err := d.Tap(Tag{Text: "**launch.random:snes"}, 0)
+	tag, err := d.Tap(&Tag{Text: "**launch.random:snes"}, 0)
 	require.NoError(t, err)
 	assert.NotEmpty(t, tag.UID, "a UID is generated")
 	assert.NotEmpty(t, tag.Type)
@@ -128,7 +128,7 @@ func TestTapHoldRemovesAfterDelay(t *testing.T) {
 	require.NoError(t, err)
 	_, iq := newTestReader(t, hub, "r")
 
-	_, err = d.Tap(Tag{UID: "04aa", Text: "x"}, 20*time.Millisecond)
+	_, err = d.Tap(&Tag{UID: "04aa", Text: "x"}, 20*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, nextScan(t, iq).Token)
 	assert.Nil(t, nextScan(t, iq).Token, "auto-removed")
@@ -139,7 +139,7 @@ func TestTapNeedsOpenReader(t *testing.T) {
 	hub := NewHub()
 	d, err := hub.Add("r", DeviceOptions{})
 	require.NoError(t, err)
-	_, err = d.Tap(Tag{Text: "x"}, 0)
+	_, err = d.Tap(&Tag{Text: "x"}, 0)
 	require.ErrorIs(t, err, ErrNotOpen)
 }
 
@@ -150,7 +150,7 @@ func TestNotRemovableReader(t *testing.T) {
 	require.NoError(t, err)
 	r, iq := newTestReader(t, hub, "r")
 	assert.NotContains(t, r.Capabilities(), readers.CapabilityRemovable)
-	_, err = d.Tap(Tag{Text: "x"}, 0)
+	_, err = d.Tap(&Tag{Text: "x"}, 0)
 	require.NoError(t, err)
 	nextScan(t, iq)
 	require.ErrorIs(t, d.RemoveTag(), ErrNotRemovable)
@@ -162,7 +162,7 @@ func TestUnplugReportsErrorAndPlugRestores(t *testing.T) {
 	d, err := hub.Add("r", DeviceOptions{})
 	require.NoError(t, err)
 	r, iq := newTestReader(t, hub, "r")
-	_, err = d.Tap(Tag{Text: "x"}, 0)
+	_, err = d.Tap(&Tag{Text: "x"}, 0)
 	require.NoError(t, err)
 	nextScan(t, iq)
 
@@ -199,7 +199,7 @@ func TestWriteToPresentTag(t *testing.T) {
 	d, err := hub.Add("r", DeviceOptions{})
 	require.NoError(t, err)
 	r, iq := newTestReader(t, hub, "r")
-	_, err = d.Tap(Tag{UID: "04bb"}, 0)
+	_, err = d.Tap(&Tag{UID: "04bb"}, 0)
 	require.NoError(t, err)
 	nextScan(t, iq)
 
@@ -267,7 +267,7 @@ func TestWriteFailures(t *testing.T) {
 			d, err := hub.Add("r", DeviceOptions{})
 			require.NoError(t, err)
 			r, iq := newTestReader(t, hub, "r")
-			_, err = d.Tap(Tag{UID: "04dd"}, 0)
+			_, err = d.Tap(&Tag{UID: "04dd"}, 0)
 			require.NoError(t, err)
 			nextScan(t, iq)
 
@@ -281,7 +281,7 @@ func TestWriteFailures(t *testing.T) {
 			assert.NotEmpty(t, d.Status().Writes[0].Error)
 			if tt.mode == WriteFailRemoved {
 				assert.Nil(t, d.Status().Present, "the tag left mid-write")
-				_, err = d.Tap(Tag{UID: "04dd"}, 0)
+				_, err = d.Tap(&Tag{UID: "04dd"}, 0)
 				require.NoError(t, err)
 				nextScan(t, iq)
 			}
@@ -298,7 +298,7 @@ func TestWriteRefusesExcludedAndWrongTags(t *testing.T) {
 	d, err := hub.Add("r", DeviceOptions{})
 	require.NoError(t, err)
 	r, iq := newTestReader(t, hub, "r")
-	_, err = d.Tap(Tag{UID: "04ee"}, 0)
+	_, err = d.Tap(&Tag{UID: "04ee"}, 0)
 	require.NoError(t, err)
 	nextScan(t, iq)
 

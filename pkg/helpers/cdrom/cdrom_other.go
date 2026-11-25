@@ -19,10 +19,17 @@
 
 //go:build !linux
 
-package opticaldrive
+package cdrom
 
 import "errors"
 
-func openDiscDevice(_ string) (contextReaderAtCloser, error) {
-	return nil, errors.New("optical disc identity probing is not implemented on this platform")
+// Open is unsupported on this platform.
+func Open(_ string) (Drive, error) {
+	return nil, ErrUnsupported
+}
+
+// IsUnsupportedRequest reports whether err means the drive does not support
+// the request.
+func IsUnsupportedRequest(err error) bool {
+	return errors.Is(err, ErrUnsupported)
 }

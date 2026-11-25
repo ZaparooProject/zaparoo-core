@@ -24,11 +24,9 @@ package opticaldrive
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -42,7 +40,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -69,7 +66,7 @@ func TestMetadata(t *testing.T) {
 	assert.Equal(t, "opticaldrive", metadata.ID)
 	assert.Equal(t, "Optical drive CD/DVD reader", metadata.Description)
 	assert.True(t, metadata.DefaultEnabled)
-	assert.False(t, metadata.DefaultAutoDetect)
+	assert.True(t, metadata.DefaultAutoDetect)
 }
 
 func TestIDs(t *testing.T) {
@@ -500,41 +497,6 @@ func addTestISO9660TokenFile(
 	copy(image[testISO9660TokenExtent*iso9660SectorSize:], contents)
 }
 
-func writeTestISO9660DirectoryRecord(
-	destination []byte,
-	extentLocation uint32,
-	dataLength uint32,
-	flags uint8,
-	identifier []byte,
-) int {
-	if len(identifier) > int(^uint8(0)) {
-		panic("test ISO9660 identifier exceeds byte-sized field")
-	}
-	identifierLength := byte(len(identifier)) //nolint:gosec // Length is bounds-checked above.
-
-	recordLength := iso9660FileIdentifierOffset + len(identifier)
-	if recordLength%2 != 0 {
-		recordLength++
-	}
-	if recordLength > int(^uint8(0)) {
-		panic("test ISO9660 directory record exceeds byte-sized field")
-	}
-	recordLengthByte := byte(recordLength)
-
-	record := destination[:recordLength]
-	record[0] = recordLengthByte
-	binary.LittleEndian.PutUint32(record[2:6], extentLocation)
-	binary.BigEndian.PutUint32(record[6:10], extentLocation)
-	binary.LittleEndian.PutUint32(record[10:14], dataLength)
-	binary.BigEndian.PutUint32(record[14:18], dataLength)
-	record[iso9660FileFlagsOffset] = flags
-	binary.LittleEndian.PutUint16(record[28:30], 1)
-	binary.BigEndian.PutUint16(record[30:32], 1)
-	record[iso9660FileIdentifierLengthOffset] = identifierLength
-	copy(record[iso9660FileIdentifierOffset:], identifier)
-	return recordLength
-}
-
 type mockFSChecker struct {
 	statFunc    func(path string) (os.FileInfo, error)
 	readDirFunc func(path string) ([]os.DirEntry, error)
@@ -606,108 +568,31 @@ func (r *blockingContextReader) Close() error {
 func newTestReader(cfg *config.Instance) *FileReader {
 	reader := NewReader(cfg)
 	reader.gameIDProbe = func(string) []readers.ScanProperty { return nil }
+	reader.watcher = unsupportedWatcher{}
+	reader.inspector = &staticInspector{}
 	return reader
 }
 
-func overrideUnixDiscIO(
-	t *testing.T,
-	pread func(int, []byte, int64) (int, error),
-	closeFn func(int) error,
-) {
-	t.Helper()
-	oldPread := unixPread
-	oldClose := unixClose
-	oldDelay := discReadRetryDelay
-	unixPread = pread
-	unixClose = closeFn
-	discReadRetryDelay = time.Millisecond
-	t.Cleanup(func() {
-		unixPread = oldPread
-		unixClose = oldClose
-		discReadRetryDelay = oldDelay
-	})
+// unsupportedWatcher is a drive that does not report its status, so the
+// reader reads the disc every tick.
+type unsupportedWatcher struct{}
+
+func (unsupportedWatcher) Check(string) (driveCheck, error) {
+	return driveCheck{}, errDriveStatusUnsupported
 }
 
-func TestUnixDiscDeviceReaderReadAtContext_PartialReads(t *testing.T) {
-	calls := 0
-	offsets := make([]int64, 0, 2)
-	overrideUnixDiscIO(t, func(_ int, p []byte, off int64) (int, error) {
-		calls++
-		offsets = append(offsets, off)
-		if calls == 1 {
-			return copy(p, "ab"), nil
-		}
-		return copy(p, "cd"), nil
-	}, unix.Close)
+func (unsupportedWatcher) Touch(context.Context, string) error { return nil }
 
-	buf := make([]byte, 4)
-	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), buf, 10)
-
-	require.NoError(t, err)
-	assert.Equal(t, 4, n)
-	assert.Equal(t, "abcd", string(buf))
-	assert.Equal(t, []int64{10, 12}, offsets)
+type staticInspector struct {
+	media discMedia
 }
 
-func TestUnixDiscDeviceReaderReadAtContext_RetriesTemporaryErrors(t *testing.T) {
-	calls := 0
-	overrideUnixDiscIO(t, func(_ int, p []byte, _ int64) (int, error) {
-		calls++
-		switch calls {
-		case 1:
-			return 0, unix.EAGAIN
-		case 2:
-			return 0, unix.EINTR
-		default:
-			return copy(p, "ok"), nil
-		}
-	}, unix.Close)
-
-	buf := make([]byte, 2)
-	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), buf, 0)
-
-	require.NoError(t, err)
-	assert.Equal(t, 2, n)
-	assert.Equal(t, "ok", string(buf))
-	assert.Equal(t, 3, calls)
-}
-
-func TestUnixDiscDeviceReaderReadAtContext_ZeroReadIsEOF(t *testing.T) {
-	overrideUnixDiscIO(t, func(_ int, _ []byte, _ int64) (int, error) {
-		return 0, nil
-	}, unix.Close)
-
-	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), make([]byte, 1), 0)
-
-	assert.Equal(t, 0, n)
-	require.ErrorIs(t, err, io.EOF)
-}
-
-func TestUnixDiscDeviceReaderReadAtContext_CancelDuringRetry(t *testing.T) {
-	calls := 0
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	overrideUnixDiscIO(t, func(_ int, _ []byte, _ int64) (int, error) {
-		calls++
-		cancel()
-		return 0, unix.EAGAIN
-	}, unix.Close)
-
-	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(ctx, make([]byte, 1), 0)
-
-	assert.Equal(t, 0, n)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, 1, calls)
-}
-
-func TestUnixDiscDeviceReaderClose_ReturnsCloseError(t *testing.T) {
-	overrideUnixDiscIO(t, unix.Pread, func(int) error {
-		return unix.EBADF
-	})
-
-	err := (&unixDiscDeviceReader{fd: -1}).Close()
-
-	require.ErrorIs(t, err, unix.EBADF)
+func (s *staticInspector) Inspect(context.Context, string) discMedia {
+	media := s.media
+	if media.Kind == "" {
+		media.Complete = true
+	}
+	return media
 }
 
 func TestDefaultDiscIdentifierIdentify_TimeoutDoesNotLeakGoroutine(t *testing.T) {
@@ -737,7 +622,7 @@ func TestDefaultDiscIdentifierIdentify_TimeoutDoesNotLeakGoroutine(t *testing.T)
 func TestOpen_InvalidPath_NotAbsolute(t *testing.T) {
 	t.Parallel()
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	scanQueue := testutils.CreateTestScanChannel(t)
 
 	device := config.ReadersConnect{
@@ -760,7 +645,7 @@ func TestOpen_ParentDirectoryDoesNotExist(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	scanQueue := testutils.CreateTestScanChannel(t)
 
@@ -1239,7 +1124,7 @@ func TestOpen_InvalidDevicePath_NotUnderDev(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	scanQueue := testutils.CreateTestScanChannel(t)
 
@@ -1311,7 +1196,7 @@ func TestOpen_NoRepeatedGameIDProbeForUnchangedUnidentifiedDisc(t *testing.T) {
 	}
 
 	var probeCount atomic.Int32
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.discIdentifier = mockIdentifier
 	reader.gameIDProbe = func(_ string) []readers.ScanProperty {
@@ -1353,7 +1238,7 @@ func TestOpen_GameIDPropertyDoesNotBecomeTokenID(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.discIdentifier = mockIdentifier
 	reader.gameIDProbe = func(_ string) []readers.ScanProperty {
@@ -1399,7 +1284,7 @@ func TestOpen_GameIDPropertyKeepsInitialTokenIDStable(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.discIdentifier = mockIdentifier
 	reader.gameIDProbe = func(_ string) []readers.ScanProperty {
@@ -1450,7 +1335,7 @@ func TestOpen_KeepsExistingTokenWhenStableIDTemporarilyUnavailable(t *testing.T)
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.discIdentifier = mockIdentifier
 	reader.gameIDProbe = func(_ string) []readers.ScanProperty {

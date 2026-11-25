@@ -186,3 +186,59 @@ func TestTokenMetadataSurvivesRepublishAfterRemoval(t *testing.T) {
 	assert.Equal(t, "game", media.TitleName())
 	assert.Equal(t, "A game on a stick.", media.Description)
 }
+
+func discToken(coverDir string) tokens.Token {
+	return tokens.Token{
+		Type:     "disc",
+		UID:      "disc-uid",
+		ScanTime: time.Now(),
+		Metadata: &tokens.Metadata{
+			Name:        "Disc Game",
+			ImagePath:   filepath.Join(coverDir, "cover.png"),
+			ImageRoot:   coverDir,
+			MediaPrefix: "physicaldisc://sr0/",
+		},
+	}
+}
+
+func TestTokenMetadataLabelsTheDiscInTheDrive(t *testing.T) {
+	t.Parallel()
+	st := newMetadataState(t)
+	coverDir := t.TempDir()
+	st.SetActiveCard(discToken(coverDir))
+
+	st.SetActiveMedia(models.NewActiveMedia("PSX", "PlayStation", "physicaldisc://sr0/PSX", "PlayStation disc", "PSX"))
+
+	media := st.ActiveMedia()
+	require.NotNil(t, media)
+	assert.Equal(t, "Disc Game", media.Name)
+	assert.Equal(t, filepath.Join(coverDir, "cover.png"), media.ImagePath)
+	assert.Equal(t, coverDir, media.ImageRoot, "the cover is opened through its own root")
+}
+
+func TestTokenMetadataIgnoredForMediaOffTheDisc(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "library image of the same game", path: "/media/fat/games/PSX/Game.chd"},
+		{name: "another drive", path: "physicaldisc://sr1/PSX"},
+		{name: "drive name prefix", path: "physicaldisc://sr01/PSX"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			st := newMetadataState(t)
+			st.SetActiveCard(discToken(t.TempDir()))
+
+			st.SetActiveMedia(models.NewActiveMedia("PSX", "PlayStation", tt.path, "game", "PSX"))
+
+			media := st.ActiveMedia()
+			require.NotNil(t, media)
+			assert.Equal(t, "game", media.Name)
+			assert.Empty(t, media.ImagePath)
+			assert.Empty(t, media.ImageRoot)
+		})
+	}
+}

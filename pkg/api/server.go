@@ -347,7 +347,8 @@ var kioskAllowedMethods = map[string]bool{
 	models.MethodMediaLookupCandidates: true, models.MethodMediaMeta: true,
 	models.MethodMediaImage: true, models.MethodMediaAsset: true,
 	models.MethodMediaScrapeStatus: true, models.MethodMediaControl: true,
-	models.MethodMediaTitleParse: true, models.MethodPlaylistsUpdate: true,
+	models.MethodMediaLevelsSubscribe: true,
+	models.MethodMediaTitleParse:      true, models.MethodPlaylistsUpdate: true,
 	models.MethodMediaVersions: true, models.MethodMediaSimilar: true,
 	models.MethodMediaRecommended: true, models.MethodMediaArtworkRandom: true,
 	models.MethodInbox: true, models.MethodSettingsBackupStatus: true,
@@ -497,6 +498,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaScrapeCancel:     methods.HandleMediaScrapeCancel,
 		models.MethodMediaScrapeResume:     methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:          methods.HandleMediaControl,
+		models.MethodMediaLevelsSubscribe:  methods.HandleMediaLevelsSubscribe,
 		models.MethodMediaActiveImage:      methods.HandleMediaActiveImage,
 		models.MethodPlaylistsUpdate:       methods.HandlePlaylistsUpdate,
 		models.MethodMediaTitleParse:       methods.HandleMediaTitleParse,
@@ -1781,6 +1783,9 @@ func handleWSMessage(
 		env.ZapScriptHold = func() bool {
 			return dispatcher.holdZapScript(st.AcquireZapScriptHold)
 		}
+		if levels := getLevelsHub(session); levels != nil {
+			env.LevelsSubscribe = func(enabled bool) { levels.subscribe(session, enabled) }
+		}
 		if cs != nil {
 			env.ClientRole = cs.ClientRole()
 			env.PairedClientID = cs.PairedClientID()
@@ -2680,7 +2685,9 @@ func StartWithListener(
 	// this errorHandler in an infinite recursion. Closing the underlying
 	// conn directly causes writePump to fail on its next write, exit, and
 	// run the normal session close path.
+	levels := newLevelsHub(playbackManager)
 	session.HandleConnect(func(s *melody.Session) {
+		levels.attach(s)
 		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
 		startWebSocketSettleGrace(s, webSocketSettleGrace)
 		notificationClientConnected(st)
@@ -2689,6 +2696,7 @@ func StartWithListener(
 		stopWebSocketAuthDeadline(s)
 		stopWebSocketSettleGrace(s)
 		closeWSDispatcher(s)
+		levels.remove(s)
 		notificationClientDisconnected(st)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {

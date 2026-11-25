@@ -121,7 +121,7 @@ func PathIsLauncher(
 	l *platforms.Launcher,
 	path string,
 ) bool {
-	if path == "" {
+	if path == "" || l.ExplicitOnly {
 		return false
 	}
 
@@ -901,11 +901,22 @@ func scanExcludePatternMatches(trimmedPath, base, pattern string) bool {
 	return false
 }
 
+// launcherSchemeMatches reports whether the lowercased path lp uses one of
+// l's schemes.
+func launcherSchemeMatches(l *platforms.Launcher, lp string) bool {
+	for _, scheme := range l.Schemes {
+		if strings.HasPrefix(lp, scheme+":") {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *LauncherMatcher) pathIsLauncher(
 	l *platforms.Launcher,
 	path, lp, normPath string,
 ) bool {
-	if path == "" {
+	if path == "" || l.ExplicitOnly {
 		return false
 	}
 
@@ -914,13 +925,11 @@ func (m *LauncherMatcher) pathIsLauncher(
 		return false
 	}
 
-	for _, scheme := range l.Schemes {
-		if strings.HasPrefix(lp, scheme+":") {
-			if l.Test != nil {
-				return l.Test(m.cfg, path)
-			}
-			return true
+	if launcherSchemeMatches(l, lp) {
+		if l.Test != nil {
+			return l.Test(m.cfg, path)
 		}
+		return true
 	}
 
 	lc := m.launcherPaths(l)
@@ -1092,7 +1101,7 @@ func (d *DirLauncherMatcher) BestLauncher(path string) (platforms.Launcher, bool
 	if len(matches) == 0 {
 		return platforms.Launcher{}, false
 	}
-	best, _ := mostSpecificLauncher(matches)
+	best, _ := mostSpecificLauncher(matches, path)
 	return matches[best], true
 }
 
@@ -1139,7 +1148,7 @@ func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) 
 		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 	}
 
-	best, bestScore := mostSpecificLauncher(launchers)
+	best, bestScore := mostSpecificLauncher(launchers, path)
 	launcher := launchers[best]
 
 	log.Debug().
@@ -1328,11 +1337,13 @@ func getPathExt(path string) string {
 	return base[lastDot:]
 }
 
-// launcherSpecificity scores how specific a launcher's matching criteria are.
-// Higher scores indicate more specific matches which should take priority.
-func launcherSpecificity(l *platforms.Launcher) int {
+// LauncherSpecificity scores how specific a launcher's matching criteria are
+// for path. Higher scores indicate more specific matches which should take
+// priority. Schemes only count when path uses one of them, so a launcher that
+// plays both files and a scheme does not outrank file launchers for files.
+func LauncherSpecificity(l *platforms.Launcher, path string) int {
 	score := 0
-	if len(l.Schemes) > 0 {
+	if launcherSchemeMatches(l, strings.ToLower(path)) {
 		score += 1000
 	}
 	if len(l.Folders) > 0 {
@@ -1348,12 +1359,12 @@ func launcherSpecificity(l *platforms.Launcher) int {
 // list of matches. The highest specificity wins and registration order breaks
 // ties, but a launcher known to be missing is only chosen when
 // every match is: it still explains what to install.
-func mostSpecificLauncher(launchers []platforms.Launcher) (best, bestScore int) {
+func mostSpecificLauncher(launchers []platforms.Launcher, path string) (best, bestScore int) {
 	best, bestScore = -1, -1
 	bestMissing := true
 	for i := range launchers {
 		missing := LauncherKnownMissing(&launchers[i])
-		score := launcherSpecificity(&launchers[i])
+		score := LauncherSpecificity(&launchers[i], path)
 		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
 			best, bestScore, bestMissing = i, score, missing
 		}
@@ -1395,7 +1406,7 @@ func guessLauncherFromCandidates(
 
 	candidates := make([]platforms.Launcher, 0, len(launchers))
 	for i := range launchers {
-		if launchers[i].SystemID != "" && launcherHasExtension(&launchers[i], ext) {
+		if launchers[i].SystemID != "" && !launchers[i].ExplicitOnly && launcherHasExtension(&launchers[i], ext) {
 			candidates = append(candidates, launchers[i])
 		}
 	}
@@ -1508,7 +1519,7 @@ func ResolveLaunchableLauncher(
 		// An extension match beats every structural signal: it is the only
 		// evidence that this launcher handles this kind of file, rather than
 		// merely belonging to the same system.
-		score := launcherSpecificity(candidate)
+		score := LauncherSpecificity(candidate, path)
 		if ext != "" && launcherHasExtension(candidate, ext) {
 			score += 10000
 		}
@@ -1549,7 +1560,7 @@ func FindLauncher(
 			return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 		}
 	} else {
-		best, bestScore := mostSpecificLauncher(launchers)
+		best, bestScore := mostSpecificLauncher(launchers, path)
 		launcher = launchers[best]
 		log.Debug().
 			Str("path", path).

@@ -34,19 +34,23 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/cdrom"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/imagefiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
-	TokenType         = "disc"
-	IDSourceUUID      = "uuid"
-	IDSourceLabel     = "label"
-	IDSourceMerged    = "merged"
-	MergedIDSeparator = "/"
+	TokenType           = "disc"
+	IDSourceUUID        = "uuid"
+	IDSourceLabel       = "label"
+	IDSourceMerged      = "merged"
+	MergedIDSeparator   = "/"
+	defaultPollInterval = time.Second
 )
 
 // FSChecker checks filesystem paths used by the optical drive reader.
@@ -110,6 +114,9 @@ type FileReader struct {
 	fsChecker         FSChecker
 	discIdentifier    discIdentifier
 	gameIDProbe       func(path string) []readers.ScanProperty
+	watcher           driveWatcher
+	inspector         discInspector
+	fs                afero.Fs
 	cfg               *config.Instance
 	device            config.ReadersConnect
 	path              string
@@ -117,13 +124,14 @@ type FileReader struct {
 	devPath           string
 	wg                sync.WaitGroup
 	mu                syncutil.RWMutex
+	pollInterval      time.Duration
 	defaultEnabled    bool
 	defaultAutoDetect bool
 	polling           bool
 }
 
 func NewReader(cfg *config.Instance) *FileReader {
-	return NewReaderWithDefaults(cfg, true, false)
+	return NewReaderWithDefaults(cfg, true, true)
 }
 
 func NewReaderWithDefaults(cfg *config.Instance, defaultEnabled, defaultAutoDetect bool) *FileReader {
@@ -134,6 +142,9 @@ func NewReaderWithDefaults(cfg *config.Instance, defaultEnabled, defaultAutoDete
 		fsChecker:         DefaultFSChecker{},
 		discIdentifier:    defaultDiscIdentifier{},
 		gameIDProbe:       identifyGameIDProperties,
+		watcher:           cdromWatcher{},
+		inspector:         cdromInspector{},
+		fs:                afero.NewOsFs(),
 		sysBlockPath:      filepath.Join(string(filepath.Separator), "sys", "block"),
 		devPath:           filepath.Join(string(filepath.Separator), "dev"),
 	}
@@ -242,14 +253,16 @@ func (r *FileReader) Open(
 	r.polling = true
 	r.mu.Unlock()
 
+	interval := r.pollInterval
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
+
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		var token *tokens.Token
-		var tokenProperties []readers.ScanProperty
-		var activeTokenFile, lastTokenFile discTokenFile
-		var lastUUID, lastLabel, lastIdentityErr string
-		hasProbed := false
+		st := &pollState{}
+		defer r.removeCover(st)
 
 		for {
 			r.mu.RLock()
@@ -258,122 +271,344 @@ func (r *FileReader) Open(
 			if !polling {
 				break
 			}
-			time.Sleep(1 * time.Second)
-
-			// Validate device path to prevent command injection
-			if !strings.HasPrefix(r.path, "/dev/") {
-				log.Warn().Str("path", r.path).Msg("invalid optical drive device path")
-				continue
-			}
-
-			// Check if device still exists (distinguish hardware error from disc removal)
-			if _, err := r.fsChecker.Stat(r.path); err != nil {
-				if token != nil {
-					log.Warn().Err(err).Msg("optical drive device no longer exists - " +
-						"sending error signal to keep media running")
-					token = nil
-					activeTokenFile = discTokenFile{}
-					hasProbed = false
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						ReaderID:    r.ReaderID(),
-						Token:       nil,
-						ReaderError: true,
-					}
-					continue
-				}
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			identity, identityErr := r.discIdentifier.Identify(ctx, r.path)
-			cancel()
-
-			uuid := strings.TrimSpace(identity.UUID)
-			label := strings.TrimSpace(identity.Label)
-			identityErrStr := errString(identityErr)
-			probeTokenFile := effectiveDiscTokenFile(identity.TokenFile, lastTokenFile, hasProbed, identityErr)
-
-			probeChanged := !hasProbed || uuid != lastUUID || label != lastLabel ||
-				identityErrStr != lastIdentityErr || !discTokenFilesEqual(probeTokenFile, lastTokenFile)
-			lastUUID, lastLabel, lastIdentityErr = uuid, label, identityErrStr
-			lastTokenFile = cloneDiscTokenFile(probeTokenFile)
-			hasProbed = true
-			if !probeChanged {
-				continue
-			}
-
-			id := resolveTokenID(uuid, label, r.device.IDSource)
-			tokenText := ""
-			tokenData := ""
-			if probeTokenFile.State == discTokenFilePresent {
-				tokenText = strings.TrimSpace(string(probeTokenFile.Data))
-				if tokenText != "" {
-					tokenData = hex.EncodeToString(probeTokenFile.Data)
-				}
-			}
-			scanProperties := r.gameIDProbe(r.path)
-			log.Debug().
-				Str("path", r.path).
-				Str("uuid", uuid).
-				Str("label", label).
-				Str("identityErr", identityErrStr).
-				Uint8("tokenFileState", uint8(probeTokenFile.State)).
-				Int("tokenFileBytes", len(probeTokenFile.Data)).
-				Int("properties", len(scanProperties)).
-				Msg("optical media identification probe changed")
-
-			if token != nil && len(scanProperties) > 0 && scanPropertiesEqual(scanProperties, tokenProperties) &&
-				(identityErr != nil || discTokenFilesEqual(probeTokenFile, activeTokenFile)) {
-				if id == "" || token.UID == "" || token.UID == id {
-					continue
-				}
-			}
-
-			if id == "" && len(scanProperties) == 0 && tokenText == "" {
-				if token != nil {
-					log.Debug().
-						Err(identityErr).
-						Msg("error identifying optical media, removing token")
-					token = nil
-					tokenProperties = nil
-					activeTokenFile = discTokenFile{}
-					iq <- readers.Scan{
-						Source:   tokens.SourceReader,
-						ReaderID: r.ReaderID(),
-						Token:    nil,
-					}
-				}
-				continue
-			}
-
-			if token != nil && token.UID == id && scanPropertiesEqual(scanProperties, tokenProperties) &&
-				discTokenFilesEqual(probeTokenFile, activeTokenFile) {
-				continue
-			}
-
-			token = &tokens.Token{
-				Type:     TokenType,
-				ScanTime: time.Now(),
-				UID:      id,
-				Text:     tokenText,
-				Data:     tokenData,
-				Source:   tokens.SourceReader,
-				ReaderID: r.ReaderID(),
-			}
-			tokenProperties = append(tokenProperties[:0], scanProperties...)
-			activeTokenFile = cloneDiscTokenFile(probeTokenFile)
-
-			log.Debug().Msgf("new token: %s", token.UID)
-			iq <- readers.Scan{
-				Source:     tokens.SourceReader,
-				ReaderID:   r.ReaderID(),
-				Token:      token,
-				Properties: scanProperties,
-			}
+			time.Sleep(interval)
+			r.poll(st, iq)
 		}
 	}()
 
 	return nil
+}
+
+// pollState is what the poll loop remembers between ticks.
+type pollState struct {
+	token                *tokens.Token
+	tokenProperties      []readers.ScanProperty
+	lastUUID             string
+	lastLabel            string
+	lastIdentityErr      string
+	coverDir             string
+	activeTokenFile      discTokenFile
+	lastTokenFile        discTokenFile
+	probeAttempts        int
+	hasProbed            bool
+	discProbed           bool
+	statusUnsupportedLog bool
+}
+
+// forget drops what was learnt about the disc, so the next probe treats
+// whatever is in the drive as newly inserted.
+func (st *pollState) forget() {
+	st.lastTokenFile = discTokenFile{}
+	st.lastUUID, st.lastLabel, st.lastIdentityErr = "", "", ""
+	st.hasProbed = false
+	st.discProbed = false
+	st.probeAttempts = 0
+}
+
+func (r *FileReader) poll(st *pollState, iq chan<- readers.Scan) {
+	// Validate device path to prevent command injection
+	if !strings.HasPrefix(r.path, "/dev/") {
+		log.Warn().Str("path", r.path).Msg("invalid optical drive device path")
+		return
+	}
+
+	// Check if device still exists (distinguish hardware error from disc removal)
+	if _, err := r.fsChecker.Stat(r.path); err != nil {
+		if st.token != nil {
+			log.Warn().Err(err).Msg("optical drive device no longer exists - " +
+				"sending error signal to keep media running")
+			st.token = nil
+			st.tokenProperties = nil
+			st.activeTokenFile = discTokenFile{}
+			st.forget()
+			r.removeCover(st)
+			iq <- readers.Scan{
+				Source:      tokens.SourceReader,
+				ReaderID:    r.ReaderID(),
+				Token:       nil,
+				ReaderError: true,
+			}
+		}
+		return
+	}
+
+	check, err := r.watcher.Check(r.path)
+	if errors.Is(err, errDriveStatusUnsupported) {
+		// Without status reports the disc has to be read every tick to
+		// notice it change.
+		if !st.statusUnsupportedLog {
+			st.statusUnsupportedLog = true
+			log.Info().Str("path", r.path).Msg("optical drive does not report status, reading the disc to watch it")
+		}
+		r.probe(st, iq)
+		return
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("path", r.path).Msg("optical drive status check failed")
+		return
+	}
+
+	switch check.Status {
+	case cdrom.StatusNoDisc, cdrom.StatusTrayOpen:
+		if st.token != nil {
+			r.sendRemoval(st, iq)
+		}
+		st.forget()
+		return
+	case cdrom.StatusDiscOK:
+	default:
+		return
+	}
+
+	if check.Changed && st.discProbed {
+		log.Debug().Str("path", r.path).Msg("optical drive reports a new disc")
+		if st.token != nil {
+			r.sendRemoval(st, iq)
+		}
+		st.forget()
+	}
+
+	if !st.discProbed {
+		st.probeAttempts++
+		complete := r.probe(st, iq)
+		if complete || st.probeAttempts >= maxProbeRetries {
+			st.discProbed = true
+		}
+		return
+	}
+
+	if r.cfg != nil && r.cfg.OpticalDriveKeepReading() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if touchErr := r.watcher.Touch(ctx, r.path); touchErr != nil {
+			log.Debug().Err(touchErr).Str("path", r.path).Msg("optical drive keep_reading read failed")
+		}
+		cancel()
+	}
+}
+
+func (r *FileReader) sendRemoval(st *pollState, iq chan<- readers.Scan) {
+	st.token = nil
+	st.tokenProperties = nil
+	st.activeTokenFile = discTokenFile{}
+	r.removeCover(st)
+	iq <- readers.Scan{
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    nil,
+	}
+}
+
+// probe reads the disc and sends a scan when what it holds changed. It
+// reports false when a read failed and the disc should be probed again.
+func (r *FileReader) probe(st *pollState, iq chan<- readers.Scan) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	media := r.inspector.Inspect(ctx, r.path)
+	cancel()
+
+	// An audio CD has no filesystem or game ID to read, and reading for
+	// them only fails after the drive seeks.
+	audio := media.Kind == readers.DiscKindAudio
+	var identity discIdentity
+	var identityErr error
+	if !audio {
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		identity, identityErr = r.discIdentifier.Identify(ctx, r.path)
+		cancel()
+	}
+
+	complete := media.Complete &&
+		(identityErr == nil || errors.Is(identityErr, errISO9660IdentityNotFound))
+
+	uuid := strings.TrimSpace(identity.UUID)
+	label := strings.TrimSpace(identity.Label)
+	identityErrStr := errString(identityErr)
+	probeTokenFile := effectiveDiscTokenFile(identity.TokenFile, st.lastTokenFile, st.hasProbed, identityErr)
+
+	probeChanged := !st.hasProbed || uuid != st.lastUUID || label != st.lastLabel ||
+		identityErrStr != st.lastIdentityErr || !discTokenFilesEqual(probeTokenFile, st.lastTokenFile)
+	st.lastUUID, st.lastLabel, st.lastIdentityErr = uuid, label, identityErrStr
+	st.lastTokenFile = cloneDiscTokenFile(probeTokenFile)
+	st.hasProbed = true
+	if !probeChanged {
+		return complete
+	}
+
+	drive := driveName(r.path)
+	id := resolveTokenID(uuid, label, r.device.IDSource)
+	if id == "" {
+		id = fallbackTokenID(&media, drive)
+	}
+	tokenText := ""
+	tokenData := ""
+	if probeTokenFile.State == discTokenFilePresent {
+		tokenText = strings.TrimSpace(string(probeTokenFile.Data))
+		if tokenText != "" {
+			tokenData = hex.EncodeToString(probeTokenFile.Data)
+		}
+	}
+	var scanProperties []readers.ScanProperty
+	if !audio {
+		scanProperties = r.gameIDProbe(r.path)
+	}
+	scanProperties = append(scanProperties, discProperties(&media, drive)...)
+	log.Debug().
+		Str("path", r.path).
+		Str("uuid", uuid).
+		Str("label", label).
+		Str("kind", media.Kind).
+		Str("system", media.System).
+		Str("identityErr", identityErrStr).
+		Uint8("tokenFileState", uint8(probeTokenFile.State)).
+		Int("tokenFileBytes", len(probeTokenFile.Data)).
+		Int("properties", len(scanProperties)).
+		Msg("optical media identification probe changed")
+
+	if st.token != nil && len(scanProperties) > 0 && scanPropertiesEqual(scanProperties, st.tokenProperties) &&
+		(identityErr != nil || discTokenFilesEqual(probeTokenFile, st.activeTokenFile)) {
+		if id == "" || st.token.UID == "" || st.token.UID == id {
+			return complete
+		}
+	}
+
+	if id == "" && tokenText == "" && !identifiesDisc(scanProperties) {
+		if st.token != nil {
+			log.Debug().
+				Err(identityErr).
+				Msg("error identifying optical media, removing token")
+			r.sendRemoval(st, iq)
+		}
+		return complete
+	}
+
+	if st.token != nil && st.token.UID == id && scanPropertiesEqual(scanProperties, st.tokenProperties) &&
+		discTokenFilesEqual(probeTokenFile, st.activeTokenFile) {
+		return complete
+	}
+
+	r.removeCover(st)
+	st.token = &tokens.Token{
+		Type:     TokenType,
+		ScanTime: time.Now(),
+		UID:      id,
+		Text:     tokenText,
+		Data:     tokenData,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Metadata: r.discMetadata(st, identity.Sidecar, drive),
+	}
+	st.tokenProperties = append(st.tokenProperties[:0], scanProperties...)
+	st.activeTokenFile = cloneDiscTokenFile(probeTokenFile)
+
+	log.Debug().Msgf("new token: %s", st.token.UID)
+	iq <- readers.Scan{
+		Source:     tokens.SourceReader,
+		ReaderID:   r.ReaderID(),
+		Token:      st.token,
+		Properties: scanProperties,
+	}
+	return complete
+}
+
+// identifiesDisc reports whether properties say anything about which disc
+// is in the drive. The disc's kind and drive alone do not: an unreadable or
+// still-settling disc has those too.
+func identifiesDisc(properties []readers.ScanProperty) bool {
+	for _, p := range properties {
+		if p.Name != readers.PropertyDiscKind && p.Name != readers.PropertyDiscDrive {
+			return true
+		}
+	}
+	return false
+}
+
+// fallbackTokenID names a disc with no ISO9660 identity: an audio CD by its
+// table of contents, and a DVD by the drive it is in.
+func fallbackTokenID(media *discMedia, drive string) string {
+	switch media.Kind {
+	case readers.DiscKindAudio:
+		if fingerprint := media.TOC.Fingerprint(); fingerprint != "" {
+			return "cdda:" + fingerprint
+		}
+	case readers.DiscKindDVD:
+		if drive != "" {
+			return "dvd:" + drive
+		}
+	}
+	return ""
+}
+
+func discProperties(media *discMedia, drive string) []readers.ScanProperty {
+	if media.Kind == "" {
+		return nil
+	}
+	props := []readers.ScanProperty{{Name: readers.PropertyDiscKind, Value: media.Kind}}
+	if media.System != "" {
+		props = append(props, readers.ScanProperty{Name: readers.PropertyDiscSystem, Value: media.System})
+	}
+	if drive != "" {
+		props = append(props, readers.ScanProperty{Name: readers.PropertyDiscDrive, Value: drive})
+	}
+	return props
+}
+
+// discMetadata turns the disc's zaparoo.json into token metadata scoped to
+// launches of the disc itself. Its cover is copied to a temporary directory
+// that lives until the disc leaves the drive.
+func (r *FileReader) discMetadata(st *pollState, sc *discSidecar, drive string) *tokens.Metadata {
+	if sc == nil || drive == "" {
+		return nil
+	}
+	meta := &tokens.Metadata{
+		Name:        sc.Fields.Name,
+		Description: sc.Fields.Description,
+		MediaPrefix: readers.PhysicalDiscScheme + "://" + drive + "/",
+	}
+	if len(sc.Image) > 0 {
+		if _, err := imagefiles.ContentType(sc.Image); err != nil {
+			log.Warn().Err(err).Msg("ignoring disc zaparoo.json image")
+		} else if imagePath, dir, err := r.writeCover(sc.Image, sc.ImageExt); err != nil {
+			log.Warn().Err(err).Msg("failed to copy disc cover")
+		} else {
+			st.coverDir = dir
+			meta.ImagePath = imagePath
+			meta.ImageRoot = dir
+		}
+	}
+	if meta.Name == "" && meta.Description == "" && meta.ImagePath == "" {
+		return nil
+	}
+	return meta
+}
+
+func (r *FileReader) writeCover(data []byte, ext string) (imagePath, dir string, err error) {
+	fs := r.fs
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	dir, err = afero.TempDir(fs, "", "zaparoo-disc-")
+	if err != nil {
+		return "", "", fmt.Errorf("create cover dir: %w", err)
+	}
+	imagePath = filepath.Join(dir, "cover"+ext)
+	if err := afero.WriteFile(fs, imagePath, data, 0o600); err != nil {
+		_ = fs.RemoveAll(dir)
+		return "", "", fmt.Errorf("write cover: %w", err)
+	}
+	return imagePath, dir, nil
+}
+
+func (r *FileReader) removeCover(st *pollState) {
+	if st.coverDir == "" {
+		return
+	}
+	fs := r.fs
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	if err := fs.RemoveAll(st.coverDir); err != nil {
+		log.Warn().Err(err).Str("dir", st.coverDir).Msg("failed to remove disc cover")
+	}
+	st.coverDir = ""
 }
 
 func (r *FileReader) Close() error {

@@ -21,11 +21,15 @@ package service
 
 import (
 	"context"
+	"regexp"
+	"slices"
 	"strings"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -74,6 +78,46 @@ func resolveTokenProperties(
 		return
 	}
 
+	disc := discFromProperties(properties)
+	if disc.kind == "" {
+		resolveImageMatch(ctx, svc, token, properties)
+		return
+	}
+
+	if disc.kind == readers.DiscKindAudio {
+		resolveAudioDisc(svc, token, disc)
+		return
+	}
+
+	physical := func() bool { return resolvePhysicalDisc(svc, token, disc) }
+	image := func() bool { return resolveImageMatch(ctx, svc, token, properties) }
+	order := svc.Config.OpticalDriveLaunchOrder()
+	var resolved bool
+	switch order {
+	case config.DiscLaunchDiscFirst:
+		resolved = physical() || image()
+	case config.DiscLaunchDiscOnly:
+		resolved = physical()
+	case config.DiscLaunchImageOnly:
+		resolved = image()
+	default:
+		resolved = image() || physical()
+	}
+	if !resolved {
+		log.Info().Str("order", order).Str("system", disc.system).Str("drive", disc.drive).
+			Msg("nothing can launch the scanned disc")
+	}
+}
+
+// resolveImageMatch launches the indexed media a scan property identifies,
+// such as a library image of the game on a disc, and reports whether it set
+// one.
+func resolveImageMatch(
+	ctx context.Context,
+	svc *ServiceContext,
+	token *tokens.Token,
+	properties []readers.ScanProperty,
+) bool {
 	matches := make([]database.SearchResult, 0, 1)
 	seen := make(map[int64]struct{})
 	attempted := false
@@ -101,12 +145,12 @@ func resolveTokenProperties(
 		}
 	}
 	if !attempted {
-		return
+		return false
 	}
 
 	if len(matches) == 0 {
 		log.Info().Any("properties", properties).Msg("no indexed media matched scanned properties")
-		return
+		return false
 	}
 
 	selected := matches[0]
@@ -129,6 +173,108 @@ func resolveTokenProperties(
 	}.String()
 	log.Info().Str("system", selected.SystemID).Str("path", selected.Path).
 		Msg("resolved scan by property match")
+	return true
+}
+
+// scannedDisc is what an optical drive reported about the disc it read.
+type scannedDisc struct {
+	kind   string
+	system string
+	drive  string
+}
+
+var discDrivePattern = regexp.MustCompile(`^sr\d{1,3}$`)
+
+func discFromProperties(properties []readers.ScanProperty) scannedDisc {
+	var disc scannedDisc
+	for _, property := range properties {
+		switch property.Name {
+		case readers.PropertyDiscKind:
+			disc.kind = property.Value
+		case readers.PropertyDiscSystem:
+			disc.system = property.Value
+		case readers.PropertyDiscDrive:
+			if discDrivePattern.MatchString(property.Value) {
+				disc.drive = property.Value
+			}
+		}
+	}
+	return disc
+}
+
+// launcherForPath reports whether an available launcher would play path. A
+// launcher that only runs when named counts only as the one named.
+func launcherForPath(svc *ServiceContext, scheme, path, named string) bool {
+	all, ok := svc.LauncherCache.(interface{ GetAllLaunchers() []platforms.Launcher })
+	if !ok {
+		return false
+	}
+	launchers := all.GetAllLaunchers()
+	for i := range launchers {
+		launcher := &launchers[i]
+		if named != "" && !strings.EqualFold(launcher.ID, named) {
+			continue
+		}
+		if named == "" && launcher.ExplicitOnly {
+			continue
+		}
+		if !slices.ContainsFunc(launcher.Schemes, func(s string) bool { return strings.EqualFold(s, scheme) }) {
+			continue
+		}
+		if launcher.Test != nil && !launcher.Test(svc.Config, path) {
+			continue
+		}
+		if launcher.Availability != nil {
+			if err := launcher.Availability(svc.Config); err != nil {
+				log.Debug().Err(err).Str("launcher", launcher.ID).Msg("launcher for the disc is unavailable")
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// resolvePhysicalDisc launches the disc in the drive itself, when the disc's
+// system is known and a launcher can play discs from a drive.
+func resolvePhysicalDisc(svc *ServiceContext, token *tokens.Token, disc scannedDisc) bool {
+	if disc.system == "" || disc.drive == "" {
+		return false
+	}
+	path := readers.PhysicalDiscScheme + "://" + disc.drive + "/" + disc.system
+	if !launcherForPath(svc, readers.PhysicalDiscScheme, path, "") {
+		log.Info().Str("path", path).Msg("nothing can play the disc from the drive")
+		return false
+	}
+	token.Text = gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdLaunch,
+		Args: []string{path},
+	}.String()
+	log.Info().Str("path", path).Msg("resolved scan to the disc in the drive")
+	return true
+}
+
+// resolveAudioDisc plays an audio CD from the drive with the configured
+// audio CD launcher, or whichever launcher handles CD audio.
+func resolveAudioDisc(svc *ServiceContext, token *tokens.Token, disc scannedDisc) {
+	if disc.drive == "" {
+		return
+	}
+	path := readers.CDAudioScheme + "://" + disc.drive
+	named := svc.Config.OpticalDriveAudioCDLauncher()
+	if !launcherForPath(svc, readers.CDAudioScheme, path, named) {
+		log.Info().Str("drive", disc.drive).Str("launcher", named).Msg("nothing can play the audio CD")
+		return
+	}
+	cmd := gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdLaunch,
+		Args: []string{path},
+	}
+	if named != "" {
+		cmd.AdvArgs = cmd.AdvArgs.With(gozapscript.KeyLauncher, named)
+	}
+	token.Text = cmd.String()
+	log.Info().Str("drive", disc.drive).Msg("resolved scan to the audio CD in the drive")
 }
 
 func selectPreferredPropertyMatch(

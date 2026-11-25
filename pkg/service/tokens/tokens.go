@@ -47,13 +47,20 @@ const (
 )
 
 // Metadata is the display information a token carries for the media it
-// launches. Every field is optional. ImagePath is an absolute path under the
-// token's PathRoot, already checked to be a regular file reached without a
-// link.
+// launches. Every field is optional. ImagePath is an absolute path under
+// ImageRoot, or under the token's PathRoot when ImageRoot is empty, already
+// checked to be a regular file reached without a link.
 type Metadata struct {
 	Name        string
 	Description string
 	ImagePath   string
+	// ImageRoot is the directory holding ImagePath when the image does not
+	// live under the token's PathRoot, such as a cover copied off a disc.
+	ImageRoot string
+	// MediaPrefix scopes the metadata to media whose path starts with it,
+	// such as the launch path of the disc in a drive. When empty the
+	// metadata applies to media under the token's PathRoot.
+	MediaPrefix string
 }
 
 //nolint:govet // Field order groups token identity and structural command source.

@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,6 +60,10 @@ const (
 	LauncherPreflight       = "SimPreflight"
 	LauncherNoActive        = "SimNoActive"
 	LauncherKill            = "SimKill"
+	// LauncherDisc plays the disc in a drive, as a MiSTer disc provider does.
+	LauncherDisc = "SimDisc"
+	// LauncherCDPlayer plays an audio CD in a drive, and only when named.
+	LauncherCDPlayer = "SimCDPlayer"
 
 	// BehaviourExtension is the file extension behaviour launchers index.
 	BehaviourExtension = ".sim"
@@ -520,7 +526,59 @@ func (p *Platform) behaviourLaunchers() []platforms.Launcher {
 	}
 	ls = append(ls, kill)
 
-	return ls
+	return append(ls, p.discLaunchers()...)
+}
+
+// simDrivePattern matches the sim's drive names, the way Linux names them.
+var simDrivePattern = regexp.MustCompile(`^sr\d{1,3}$`)
+
+// discPath reports whether path is scheme://srN, optionally followed by
+// /rest.
+func discPath(path, scheme string) bool {
+	rest, ok := strings.CutPrefix(path, scheme+"://")
+	if !ok {
+		return false
+	}
+	drive, _, _ := strings.Cut(rest, "/")
+	return simDrivePattern.MatchString(drive)
+}
+
+// discLaunchers play a disc from a drive: SimDisc takes any physical disc,
+// SimCDPlayer takes an audio CD but only when named, like a console's CD
+// player.
+func (p *Platform) discLaunchers() []platforms.Launcher {
+	disc := platforms.Launcher{
+		ID:                 LauncherDisc,
+		SystemID:           BehaviourSystem,
+		Schemes:            []string{readers.PhysicalDiscScheme},
+		SkipFilesystemScan: true,
+		Lifecycle:          platforms.LifecycleTracked,
+		Controls:           p.controls(LauncherDisc),
+	}
+	p.guard(&disc)
+	p.systemStyle(&disc)
+	disc.Test = func(_ *config.Instance, path string) bool {
+		return discPath(path, readers.PhysicalDiscScheme)
+	}
+	disc.VirtualPathExists = disc.Test
+
+	player := platforms.Launcher{
+		ID:                 LauncherCDPlayer,
+		SystemID:           systemdefs.SystemAudio,
+		Schemes:            []string{readers.CDAudioScheme},
+		SkipFilesystemScan: true,
+		ExplicitOnly:       true,
+		Lifecycle:          platforms.LifecycleTracked,
+		Controls:           p.controls(LauncherCDPlayer),
+	}
+	p.guard(&player)
+	p.systemStyle(&player)
+	player.Test = func(_ *config.Instance, path string) bool {
+		return discPath(path, readers.CDAudioScheme)
+	}
+	player.VirtualPathExists = player.Test
+
+	return []platforms.Launcher{disc, player}
 }
 
 // systemStyle gives a behaviour launcher the per-system Tracked launch.

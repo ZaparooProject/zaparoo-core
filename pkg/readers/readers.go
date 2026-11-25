@@ -61,12 +61,34 @@ type DriverMetadata struct {
 	DefaultAutoDetect bool
 }
 
+// Scan properties an optical drive reports about the disc in it. They are
+// unscoped and never stored.
+const (
+	// PropertyDiscKind is "data", "audio" or "dvd".
+	PropertyDiscKind = "disc.kind"
+	// PropertyDiscSystem is the system ID the disc's boot sectors name.
+	PropertyDiscSystem = "disc.system"
+	// PropertyDiscDrive is the drive's device name, such as "sr0".
+	PropertyDiscDrive = "disc.drive"
+
+	DiscKindData  = "data"
+	DiscKindAudio = "audio"
+	DiscKindDVD   = "dvd"
+
+	// PhysicalDiscScheme is the launch path scheme for the disc in a drive,
+	// as in physicaldisc://sr0/PSX.
+	PhysicalDiscScheme = "physicaldisc"
+	// CDAudioScheme is the launch path scheme for an audio CD in a drive,
+	// as in cdaudio://sr0 or cdaudio://sr0/3 for one track.
+	CDAudioScheme = "cdaudio"
+)
+
 // ScanProperty is typed metadata a reader identified about a scanned object.
 // It has the same key/value shape as a stored media property.
 type ScanProperty struct {
-	System string // optional scope; empty means unscoped
-	Name   string
-	Value  string
+	System string `json:"system,omitempty"` // optional scope; empty means unscoped
+	Name   string `json:"name"`
+	Value  string `json:"value"`
 }
 
 type Scan struct {

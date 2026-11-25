@@ -81,6 +81,9 @@ type Tag struct {
 	Text string `json:"text,omitempty"`
 	Data string `json:"data,omitempty"`
 	Type string `json:"type,omitempty"`
+	// Properties are what the reader identified about the object, as an
+	// optical drive reports a disc's kind, system and drive.
+	Properties []readers.ScanProperty `json:"properties,omitempty"`
 }
 
 // DeviceOptions configures a virtual reader device.
@@ -288,8 +291,8 @@ func (d *Device) Status() DeviceStatus {
 // Tap presents a tag. A tag already on the reader is replaced. If a write is
 // waiting, the tag is offered to the write instead of being scanned. A
 // positive hold removes the tag again after that long.
-func (d *Device) Tap(tag Tag, hold time.Duration) (Tag, error) {
-	tag = normalizeTag(tag)
+func (d *Device) Tap(in *Tag, hold time.Duration) (Tag, error) {
+	tag := normalizeTag(in)
 	d.mu.Lock()
 	if d.attached == nil {
 		d.mu.Unlock()
@@ -313,7 +316,12 @@ func (d *Device) Tap(tag Tag, hold time.Duration) (Tag, error) {
 	d.suppress = false
 	r := d.attached
 	d.mu.Unlock()
-	r.send(&readers.Scan{Source: tokens.SourceReader, ReaderID: r.ReaderID(), Token: r.token(tag)})
+	r.send(&readers.Scan{
+		Source:     tokens.SourceReader,
+		ReaderID:   r.ReaderID(),
+		Token:      r.token(&tag),
+		Properties: tag.Properties,
+	})
 	d.scheduleRemove(tag.UID, hold)
 	return tag, nil
 }
@@ -436,7 +444,7 @@ func (d *Device) CompleteWrite(uid string) (Tag, error) {
 	if !waiting {
 		return Tag{}, ErrNoWrite
 	}
-	return d.Tap(Tag{UID: uid}, 0)
+	return d.Tap(&Tag{UID: uid}, 0)
 }
 
 func (d *Device) attach(r *Reader) error {
@@ -468,7 +476,8 @@ func (d *Device) isPlugged() bool {
 	return d.plugged
 }
 
-func normalizeTag(t Tag) Tag {
+func normalizeTag(in *Tag) Tag {
+	t := *in
 	if t.UID == "" {
 		t.UID = randomUID()
 	}
@@ -724,7 +733,7 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 	d.mu.Unlock()
 	_ = d.record(text, tag.UID, nil)
 	log.Info().Str("reader", d.name).Str("uid", tag.UID).Msg("sim reader wrote tag")
-	return r.token(tag), nil
+	return r.token(&tag), nil
 }
 
 // CancelWrite implements readers.Reader.
@@ -757,7 +766,7 @@ func (d *Device) record(text, uid string, err error) error {
 	return err
 }
 
-func (r *Reader) token(t Tag) *tokens.Token {
+func (r *Reader) token(t *Tag) *tokens.Token {
 	return &tokens.Token{
 		Type:     t.Type,
 		UID:      t.UID,

@@ -601,6 +601,10 @@ type Launcher struct {
 	ScanSkipInternalSymlinks bool
 	ScanOnly                 bool
 	Available                bool
+	// ExplicitOnly marks an alternative launcher that is never picked for a
+	// path by matching it. It runs only when named: by ?launcher=, a system
+	// default, a launcher preference or a media override.
+	ExplicitOnly bool
 	// NoActiveMedia marks a launcher that runs an action instead of starting
 	// media, so Core publishes no active media for its launches.
 	NoActiveMedia bool

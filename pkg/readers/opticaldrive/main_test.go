@@ -22,9 +22,12 @@ package opticaldrive
 import (
 	"testing"
 
+	"github.com/rs/zerolog"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
+	// Disc parsing logs every malformed input, which buries test output.
+	zerolog.SetGlobalLevel(zerolog.Disabled)
 	goleak.VerifyTestMain(m)
 }

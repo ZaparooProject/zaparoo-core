@@ -465,26 +465,31 @@ func TestLauncherSpecificity(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		path     string
 		launcher platforms.Launcher
 		want     int
 	}{
 		{
 			name:     "generic: no schemes, folders, or system",
+			path:     "game.sh",
 			launcher: platforms.Launcher{ID: "Generic", Extensions: []string{".sh"}},
 			want:     0,
 		},
 		{
 			name:     "system only",
+			path:     "game.sfc",
 			launcher: platforms.Launcher{ID: "SNES", SystemID: "SNES", Extensions: []string{".sfc"}},
 			want:     10,
 		},
 		{
 			name:     "folders only",
+			path:     "roms/game",
 			launcher: platforms.Launcher{ID: "FolderOnly", Folders: []string{"roms"}},
 			want:     100,
 		},
 		{
 			name: "folders and system",
+			path: "ports/game.sh",
 			launcher: platforms.Launcher{
 				ID: "Ports", SystemID: "Ports",
 				Folders: []string{"ports"}, Extensions: []string{".sh"},
@@ -493,28 +498,71 @@ func TestLauncherSpecificity(t *testing.T) {
 		},
 		{
 			name:     "scheme only",
+			path:     "custom://thing",
 			launcher: platforms.Launcher{ID: "SchemeOnly", Schemes: []string{"custom"}},
 			want:     1000,
 		},
 		{
 			name:     "scheme and system",
+			path:     "STEAM://rungameid/1",
 			launcher: platforms.Launcher{ID: "Steam", SystemID: "Steam", Schemes: []string{"steam"}},
 			want:     1010,
 		},
 		{
 			name:     "all criteria",
+			path:     "x://thing",
 			launcher: platforms.Launcher{ID: "Full", SystemID: "X", Folders: []string{"x"}, Schemes: []string{"x"}},
 			want:     1110,
+		},
+		{
+			name: "scheme launcher playing a file",
+			path: "Music/song.vgm",
+			launcher: platforms.Launcher{
+				ID: "Player", SystemID: "Audio",
+				Schemes: []string{"cdaudio"}, Extensions: []string{".vgm"},
+			},
+			want: 10,
+		},
+		{
+			name:     "other scheme",
+			path:     "steam://rungameid/1",
+			launcher: platforms.Launcher{ID: "Player", Schemes: []string{"cdaudio"}},
+			want:     0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := launcherSpecificity(&tt.launcher)
+			got := LauncherSpecificity(&tt.launcher, tt.path)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// A launcher that plays a scheme as well as files must not outrank a more
+// specific file launcher for files, while still winning its own scheme.
+func TestMostSpecificLauncher_SchemeCountsOnlyForItsPaths(t *testing.T) {
+	t.Parallel()
+	player := platforms.Launcher{
+		ID:         "Player",
+		SystemID:   "Audio",
+		Schemes:    []string{"cdaudio"},
+		Extensions: []string{".vgm"},
+	}
+	vgm := platforms.Launcher{
+		ID:         "VGMCore",
+		SystemID:   "Audio",
+		Folders:    []string{"VGM"},
+		Extensions: []string{".vgm"},
+	}
+	launchers := []platforms.Launcher{player, vgm}
+
+	best, _ := mostSpecificLauncher(launchers, "/media/fat/games/VGM/song.vgm")
+	assert.Equal(t, "VGMCore", launchers[best].ID)
+
+	best, _ = mostSpecificLauncher(launchers, "cdaudio://sr0")
+	assert.Equal(t, "Player", launchers[best].ID)
 }
 
 func TestPathIsLauncher_SchemeUsesTestFunction(t *testing.T) {
