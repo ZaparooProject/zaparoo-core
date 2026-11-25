@@ -209,6 +209,14 @@ type loadedState struct {
 // getFs returns the instance's filesystem, defaulting to the OS filesystem
 // if none was set. This allows Instance structs created without NewConfigWithFs
 // to still function correctly.
+// String keeps fmt from walking the config. Its fields are guarded by mu,
+// which fmt does not take, and they include credentials. Mocks hit this: a
+// testify call that receives the config formats it while matching, which
+// raced with any config change made while the call was in flight.
+func (*Instance) String() string {
+	return "config.Instance"
+}
+
 func (c *Instance) getFs() afero.Fs {
 	if c.fs != nil {
 		return c.fs

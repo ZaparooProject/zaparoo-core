@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -305,4 +306,53 @@ func TestNotifyUserDBRecovery_WithoutInboxOrWhenAddFails(t *testing.T) {
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 	require.NoError(t, db.UserDB.Close())
 	notifyUserDBRecovery(st, recovery) // the write fails: must be reported, not returned
+}
+
+// TestMakeDatabase_LeavesUserDBBackupToIdleWork guards the startup time on
+// MiSTer: checking or writing the backup took seconds there, so opening the
+// databases must not do it, and the idle task does.
+func TestMakeDatabase_LeavesUserDBBackupToIdleWork(t *testing.T) {
+	ctx := context.Background()
+	pl, _ := newMediaDBPlatform(t)
+	seedUserDB(ctx, t, pl, false)
+
+	db, _, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err)
+
+	backups, err := db.UserDB.ListBackups()
+	require.NoError(t, err)
+	assert.Empty(t, backups, "opening the databases must not take a backup")
+
+	ensureUserDBBackup(db)
+	backups, err = db.UserDB.ListBackups()
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.True(t, backups[0].Valid)
+
+	ensureUserDBBackup(db)
+	backups, err = db.UserDB.ListBackups()
+	require.NoError(t, err)
+	assert.Len(t, backups, 1, "a fresh backup must be reused")
+}
+
+func TestEnsureUserDBBackup_SkipsRecoveredDatabase(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	db := &database.Database{UserDB: mockUserDB, UserDBRecovery: &database.UserDBRecovery{}}
+
+	ensureUserDBBackup(db)
+	mockUserDB.AssertNotCalled(t, "EnsureRecentBackup", userDBBackupMaxAge)
+}
+
+func TestEnsureUserDBBackup_ErrorIsNotFatal(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("EnsureRecentBackup", userDBBackupMaxAge).
+		Return(database.BackupInfo{}, false, errors.New("disk full")).Once()
+	db := &database.Database{UserDB: mockUserDB}
+
+	ensureUserDBBackup(db)
+	ensureUserDBBackup(nil)
+	mockUserDB.AssertExpectations(t)
 }

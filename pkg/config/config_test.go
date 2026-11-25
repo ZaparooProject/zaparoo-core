@@ -1960,3 +1960,12 @@ func TestMidiSoundFont(t *testing.T) {
 		assert.Empty(t, cfg.MidiSoundFontPath(dataDir))
 	})
 }
+
+// TestInstanceFormatDoesNotWalkFields guards the race fix: formatting the
+// config must not read its fields, which only mu protects.
+func TestInstanceFormatDoesNotWalkFields(t *testing.T) {
+	t.Parallel()
+	cfg := &Instance{vals: Values{Readers: Readers{AutoDetect: true}}}
+	assert.Equal(t, "config.Instance", cfg.String())
+	assert.Equal(t, "(*config.Instance=config.Instance)", fmt.Sprintf("(%[1]T=%[1]v)", cfg))
+}

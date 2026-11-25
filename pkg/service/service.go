@@ -1074,6 +1074,7 @@ func startServiceWithOptions(
 	// These all write to the user database, so they run one after another in a
 	// single task: started together they queued on its one write lock along
 	// with token history, and the losers failed with "database is locked".
+	// The backup goes first so it is taken before retention prunes anything.
 	// Pre-warming goes last because it first waits on the network.
 	//
 	// Retention then repeats daily so devices that stay up for weeks don't
@@ -1083,6 +1084,9 @@ func startServiceWithOptions(
 		userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
 		func(ctx context.Context) {
 			runInSequence(ctx,
+				func(context.Context) {
+					ensureUserDBBackup(db)
+				},
 				func(ctx context.Context) {
 					runUserDBRetention(ctx, cfg, pl, db)
 				},

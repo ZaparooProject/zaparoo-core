@@ -114,14 +114,18 @@ const (
 	// time left before the caller's deadline, so waiting for an answer cannot
 	// outlast the release timeout it belongs to; the floor keeps a probe long
 	// enough to come back with a real answer rather than only ever timing out.
-	apiPortProbeTimeout        = time.Second
-	apiPortMinProbeTimeout     = 25 * time.Millisecond
-	daemonReadyTimeout         = 3 * time.Second
-	serviceManifestName        = "service_manifest.json"
-	serviceHashLength          = 16
-	serviceCopiesToKeep        = 2
-	startGateLockFile          = "zaparoo.start.lock"
-	servicePidFileWaitTimeout  = 5 * time.Second
+	apiPortProbeTimeout    = time.Second
+	apiPortMinProbeTimeout = 25 * time.Millisecond
+	daemonReadyTimeout     = 3 * time.Second
+	serviceManifestName    = "service_manifest.json"
+	serviceHashLength      = 16
+	serviceCopiesToKeep    = 2
+	startGateLockFile      = "zaparoo.start.lock"
+	// servicePidFileWaitTimeout only bounds a child that is still running:
+	// waitForServicePidFile returns as soon as the child exits. At MiSTer boot
+	// a healthy child took over 5s to write its pidfile, and giving up then
+	// released the start gate to a second caller, which spawned a duplicate.
+	servicePidFileWaitTimeout  = 30 * time.Second
 	servicePidFilePollInterval = 50 * time.Millisecond
 )
 
@@ -424,7 +428,7 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 		Msg("hashed service source binary")
 	servicePath := serviceCachePath(dataDir, binPath, sourceHash)
 
-	if _, statErr := fs.Stat(servicePath); statErr != nil {
+	if existingInfo, statErr := fs.Stat(servicePath); statErr != nil {
 		if !errors.Is(statErr, os.ErrNotExist) {
 			return "", fmt.Errorf("error checking service binary: %w", statErr)
 		}
@@ -432,6 +436,14 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 		if copyErr != nil {
 			return "", copyErr
 		}
+	} else if manifest.describesCachedCopy(sourceHash, servicePath, existingInfo) {
+		// The source changed on disk but not in content, and the copy is the
+		// one the manifest recorded. Hashing it again only costs the time a
+		// launch from cache would have saved.
+		if chmodErr := ensureServiceBinaryExecutable(fs, servicePath); chmodErr != nil {
+			return "", chmodErr
+		}
+		log.Debug().Str("path", servicePath).Msg("using existing hashed service binary recorded in manifest")
 	} else {
 		cachedHash, hashErr := hashFileContent(fs, servicePath)
 		if hashErr != nil {
@@ -635,9 +647,34 @@ func (m *serviceBinaryManifest) matchesSourceMetadata(binPath string, info os.Fi
 		m.SourceSize == info.Size() &&
 		m.SourceModTimeNS == info.ModTime().UnixNano() &&
 		m.SourceChangeTimeNS != 0 &&
-		m.SourceChangeTimeNS == changeTimeNS &&
+		sourceChangeTimeMatches(m.SourceChangeTimeNS, info.ModTime().UnixNano(), changeTimeNS) &&
 		m.SourceHash != "" &&
 		m.ServicePath != ""
+}
+
+// sourceChangeTimeMatches compares the recorded change time with the one seen
+// now. exFAT and FAT store no change time: while the inode is cached the
+// kernel tracks one, but once it is read back from disk, after a remount or a
+// reboot, ctime is set to mtime. The manifest written on the first start after
+// an update holds the cached value, so a strict comparison misses on every
+// boot that follows. A change time equal to the matching mtime is what such a
+// filesystem reports. A filesystem that does store it cannot be made to show
+// that for a replaced file: setting the old mtime on it moves ctime to now.
+func sourceChangeTimeMatches(recordedNS, modTimeNS, observedNS int64) bool {
+	return recordedNS == observedNS || (observedNS != 0 && observedNS == modTimeNS)
+}
+
+// describesCachedCopy reports whether the manifest was written for the cached
+// copy at servicePath of a source with this content hash, and the copy still
+// has the size and mtime recorded then. That is the same check a launch from
+// the manifest relies on.
+func (m *serviceBinaryManifest) describesCachedCopy(sourceHash, servicePath string, info os.FileInfo) bool {
+	return m != nil &&
+		m.SourceHash != "" &&
+		m.SourceHash == sourceHash &&
+		m.ServiceModTimeNS != 0 &&
+		filepath.Clean(m.ServicePath) == filepath.Clean(servicePath) &&
+		m.matchesServiceMetadataForLaunch(info)
 }
 
 func (m *serviceBinaryManifest) matchesServiceMetadata(info os.FileInfo) bool {

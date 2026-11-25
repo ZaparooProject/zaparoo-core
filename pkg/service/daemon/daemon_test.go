@@ -1845,3 +1845,150 @@ func TestEnsurePrivateDir_Checks(t *testing.T) {
 	require.ErrorIs(t, err, errUntrustedBinaryDir)
 	require.ErrorContains(t, err, "is not a directory")
 }
+
+// TestServicePidFileWaitTimeoutCoversSlowBoot guards the start wait. A
+// healthy child at MiSTer boot, competing for the SD card, took more than 5s to
+// write its pidfile; timing out then released the start gate and a second
+// caller spawned a duplicate daemon. A dead child still fails at once.
+func TestServicePidFileWaitTimeoutCoversSlowBoot(t *testing.T) {
+	t.Parallel()
+	assert.GreaterOrEqual(t, servicePidFileWaitTimeout, 30*time.Second)
+}
+
+// reloadedInodeFs reports file metadata the way exFAT and FAT do once an
+// inode has been read back from disk: there is no stored change time, so the
+// kernel reports ctime equal to mtime. It also counts opens per path, which is
+// how the tests below tell whether a file was hashed.
+type reloadedInodeFs struct {
+	afero.Fs
+	opens map[string]*atomic.Int32
+}
+
+func newReloadedInodeFs(paths ...string) *reloadedInodeFs {
+	fsys := &reloadedInodeFs{Fs: afero.NewOsFs(), opens: make(map[string]*atomic.Int32)}
+	for _, path := range paths {
+		fsys.opens[filepath.Clean(path)] = &atomic.Int32{}
+	}
+	return fsys
+}
+
+func (f *reloadedInodeFs) openCount(path string) int32 {
+	return f.opens[filepath.Clean(path)].Load()
+}
+
+func (f *reloadedInodeFs) Open(name string) (afero.File, error) {
+	if counter, ok := f.opens[filepath.Clean(name)]; ok {
+		counter.Add(1)
+	}
+	file, err := f.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	return file, nil
+}
+
+func (f *reloadedInodeFs) Stat(name string) (os.FileInfo, error) {
+	info, err := f.Fs.Stat(name)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	return reloadedInodeInfo{FileInfo: info}, nil
+}
+
+type reloadedInodeInfo struct {
+	os.FileInfo
+}
+
+type fakeTimespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+type fakeStat struct {
+	Ctim fakeTimespec
+}
+
+func (i reloadedInodeInfo) Sys() any {
+	mtime := i.ModTime().UnixNano()
+	return &fakeStat{Ctim: fakeTimespec{Sec: mtime / int64(time.Second), Nsec: mtime % int64(time.Second)}}
+}
+
+// TestPrepareBinary_UsesManifestAfterExFATReload covers the first boot after
+// an update on MiSTer. The manifest was written while the new zaparoo.sh was
+// still cached, with a change time that differs from its mtime; after the
+// reboot exFAT reports ctime equal to mtime. That must still be a cache hit,
+// not another 47 MB hash.
+func TestPrepareBinary_UsesManifestAfterExFATReload(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcPath := filepath.Join(t.TempDir(), "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	dataDir := svc.pl.Settings().DataDir
+	manifest, err := readServiceBinaryManifest(afero.NewOsFs(), dataDir)
+	require.NoError(t, err)
+	manifest.SourceChangeTimeNS = manifest.SourceModTimeNS + int64(17*time.Minute)
+	require.NoError(t, writeServiceBinaryManifest(afero.NewOsFs(), dataDir, manifest))
+
+	fsys := newReloadedInodeFs(srcPath, cachedPath)
+	svc.fs = fsys
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.Zero(t, fsys.openCount(srcPath), "source must not be hashed on a manifest hit")
+	assert.Zero(t, fsys.openCount(cachedPath), "cached copy must not be hashed on a manifest hit")
+}
+
+// TestPrepareBinary_SkipsCachedCopyHashWhenManifestDescribesIt covers a
+// source whose metadata changed but whose content did not. The source has to
+// be hashed to learn that; the cached copy, still as the manifest recorded it,
+// does not.
+func TestPrepareBinary_SkipsCachedCopyHashWhenManifestDescribesIt(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcPath := filepath.Join(t.TempDir(), "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	touched := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
+	require.NoError(t, os.Chtimes(srcPath, touched, touched))
+
+	fsys := newReloadedInodeFs(srcPath, cachedPath)
+	svc.fs = &countingOnlyFs{reloadedInodeFs: fsys}
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.Equal(t, int32(1), fsys.openCount(srcPath), "changed source is hashed once")
+	assert.Zero(t, fsys.openCount(cachedPath), "cached copy recorded in the manifest is not re-hashed")
+
+	manifest, err := readServiceBinaryManifest(afero.NewOsFs(), svc.pl.Settings().DataDir)
+	require.NoError(t, err)
+	assert.Equal(t, touched.UnixNano(), manifest.SourceModTimeNS, "manifest records the new source metadata")
+}
+
+// countingOnlyFs counts opens like reloadedInodeFs but reports real metadata.
+type countingOnlyFs struct {
+	*reloadedInodeFs
+}
+
+func (f *countingOnlyFs) Stat(name string) (os.FileInfo, error) {
+	info, err := f.Fs.Stat(name)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	return info, nil
+}
+
+func TestSourceChangeTimeMatches(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, sourceChangeTimeMatches(5, 3, 5), "exact match")
+	assert.True(t, sourceChangeTimeMatches(5, 3, 3), "ctime reported as mtime after an exFAT reload")
+	assert.False(t, sourceChangeTimeMatches(5, 3, 4), "ctime moved by a metadata change")
+	assert.False(t, sourceChangeTimeMatches(5, 0, 0), "no ctime available")
+}

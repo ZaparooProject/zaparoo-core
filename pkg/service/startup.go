@@ -514,13 +514,29 @@ func openAndRecoverUserDB(
 		}
 		return userDB, nil, fmt.Errorf("error migrating userdb: %w", err)
 	}
+	return userDB, nil, nil
+}
 
-	if backup, created, backupErr := userDB.EnsureRecentBackup(userDBBackupMaxAge); backupErr != nil {
-		log.Warn().Err(backupErr).Msg("failed to ensure recent user database backup")
-	} else if created {
+// ensureUserDBBackup keeps a user database backup no older than
+// userDBBackupMaxAge. It runs in the first idle window rather than while the
+// databases are opened: checking the newest backup, or writing a new one, took
+// about 6 s of MiSTer startup on its SD card. A database that was just
+// recovered is not backed up, as before.
+func ensureUserDBBackup(db *database.Database) {
+	if db == nil || db.UserDB == nil || db.UserDBRecovery != nil {
+		return
+	}
+	start := time.Now()
+	backup, created, err := db.UserDB.EnsureRecentBackup(userDBBackupMaxAge)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to ensure recent user database backup")
+		return
+	}
+	if created {
 		log.Info().Str("path", backup.Path).Msg("created scheduled user database backup")
 	}
-	return userDB, nil, nil
+	log.Debug().Bool("created", created).Dur("duration", time.Since(start)).
+		Msg("checked user database backup")
 }
 
 // userDBRecoverer is the part of the user database that replaces a damaged one.

@@ -88,6 +88,20 @@ func setupReaderManagerWithRenderer(
 	opts ...func(*config.Instance),
 ) *readerManagerEnv {
 	t.Helper()
+	return setupReaderManagerBeforeStart(t, clk, renderer, nil, opts...)
+}
+
+// setupReaderManagerBeforeStart runs beforeStart on the state before the
+// reader manager goroutine starts, for tests that need readers in place from
+// its first pass.
+func setupReaderManagerBeforeStart(
+	t *testing.T,
+	clk clockwork.Clock,
+	renderer uievents.Renderer,
+	beforeStart func(*state.State),
+	opts ...func(*config.Instance),
+) *readerManagerEnv {
+	t.Helper()
 
 	fs := testhelpers.NewMemoryFS()
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
@@ -148,6 +162,9 @@ func setupReaderManagerWithRenderer(
 		}
 	})
 
+	if beforeStart != nil {
+		beforeStart(st)
+	}
 	go readerManager(svc, itq, scanQueue, mockPlayer, clk)
 
 	t.Cleanup(func() {
@@ -272,6 +289,35 @@ func (env *readerManagerEnv) expectUIState(
 			return models.UIStateResponse{}
 		}
 	}
+}
+
+// TestReaderManager_FirstPassRunsWithoutWaitingForTick covers startup time:
+// the first connection pass used to wait for the first 1 s tick. A reader that
+// has dropped is pruned by that pass, so seeing it gone well inside the first
+// second shows the pass ran straight away.
+func TestReaderManager_FirstPassRunsWithoutWaitingForTick(t *testing.T) {
+	t.Parallel()
+	const readerID = "dropped-reader"
+	dropped := mocks.NewMockReader()
+	dropped.On("ReaderID").Return(readerID)
+	dropped.On("Connected").Return(false)
+	dropped.On("Path").Return("/dev/dropped")
+	dropped.On("Info").Return("Dropped Reader")
+	dropped.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	dropped.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	dropped.On("Capabilities").Return([]readers.Capability{}).Maybe()
+
+	started := time.Now()
+	env := setupReaderManagerBeforeStart(t, nil, nil, func(st *state.State) {
+		st.SetReader(dropped)
+	})
+
+	require.Eventually(t, func() bool {
+		_, ok := env.st.GetReader(readerID)
+		return !ok
+	}, 5*time.Second, 5*time.Millisecond)
+	assert.Less(t, time.Since(started), 900*time.Millisecond,
+		"the first pass must not wait for the 1 s ticker")
 }
 
 func TestReaderManager_NormalScanFlow(t *testing.T) {
