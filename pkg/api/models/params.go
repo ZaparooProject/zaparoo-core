@@ -370,17 +370,22 @@ type DecksImageParams struct {
 
 // Deck cover kinds for decks.update.
 const (
-	DeckCoverKindMedia = "media"
-	DeckCoverKindFile  = "file"
-	DeckCoverKindNone  = "none"
+	DeckCoverKindMedia  = "media"
+	DeckCoverKindFile   = "file"
+	DeckCoverKindBrowse = "browse"
+	DeckCoverKindUpload = "upload"
+	DeckCoverKindNone   = "none"
 )
 
 // DeckCoverInput sets or removes a deck's cover: a game's art (system and
-// path), an image file on the Core host (path), or none.
+// path), an image file on the Core host (path), an image picked with
+// files.browse (root and path), a finished upload (uploadId), or none.
 type DeckCoverInput struct {
-	Kind   string `json:"kind" validate:"required,oneof=media file none"`
-	System string `json:"system,omitempty"`
-	Path   string `json:"path,omitempty"`
+	Kind     string `json:"kind" validate:"required,oneof=media file browse upload none"`
+	System   string `json:"system,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Root     string `json:"root,omitempty"`
+	UploadID string `json:"uploadId,omitempty"`
 }
 
 type DecksGetParams struct {

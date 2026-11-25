@@ -347,13 +347,43 @@ func fetchRemoteImage(
 	return data, contentType, nil
 }
 
-// deckCoverBytes reads the image a decks.update cover names.
+// checkDeckCoverFields accepts a cover that gives exactly the fields its
+// kind takes.
+func checkDeckCoverFields(cover *models.DeckCoverInput) error {
+	hasSystem, hasPath := cover.System != "", cover.Path != ""
+	hasRoot, hasUpload := cover.Root != "", cover.UploadID != ""
+	switch cover.Kind {
+	case models.DeckCoverKindMedia:
+		if !hasSystem || !hasPath || hasRoot || hasUpload {
+			return models.ClientErrf("invalid params: a media cover needs a system and a path and nothing else")
+		}
+	case models.DeckCoverKindFile:
+		if !filepath.IsAbs(cover.Path) || hasSystem || hasRoot || hasUpload {
+			return models.ClientErrf("invalid params: a file cover needs an absolute path and nothing else")
+		}
+	case models.DeckCoverKindBrowse:
+		if !hasRoot || !hasPath || hasSystem || hasUpload {
+			return models.ClientErrf("invalid params: a browse cover needs a root and a path and nothing else")
+		}
+	case models.DeckCoverKindUpload:
+		if !hasUpload || hasSystem || hasPath || hasRoot {
+			return models.ClientErrf("invalid params: an upload cover needs an uploadId and nothing else")
+		}
+	case models.DeckCoverKindNone:
+		if hasSystem || hasPath || hasRoot || hasUpload {
+			return models.ClientErrf("invalid params: a none cover takes nothing else")
+		}
+	default:
+		return models.ClientErrf("invalid params: unknown cover kind %q", cover.Kind)
+	}
+	return nil
+}
+
+// deckCoverBytes reads and checks the image a media, file or browse cover
+// names. Its fields were checked by checkDeckCoverFields.
 func deckCoverBytes(env *requests.RequestEnv, cover *models.DeckCoverInput) ([]byte, error) {
 	switch cover.Kind {
 	case models.DeckCoverKindMedia:
-		if cover.System == "" || cover.Path == "" {
-			return nil, models.ClientErrf("invalid params: a media cover needs system and path")
-		}
 		if env.Database == nil || env.Database.MediaDB == nil {
 			return nil, errors.New("media database is not available")
 		}
@@ -369,9 +399,6 @@ func deckCoverBytes(env *requests.RequestEnv, cover *models.DeckCoverInput) ([]b
 		if !isLocalOrAdmin(env) {
 			return nil, models.ClientErrf("%w", ErrForbidden)
 		}
-		if cover.System != "" || cover.Path == "" || !filepath.IsAbs(cover.Path) {
-			return nil, models.ClientErrf("invalid params: a file cover needs an absolute path and no system")
-		}
 		info, err := os.Stat(cover.Path)
 		if err != nil || !info.Mode().IsRegular() {
 			return nil, models.ClientErrf("cover file not found: %s", cover.Path)
@@ -384,8 +411,16 @@ func deckCoverBytes(env *requests.RequestEnv, cover *models.DeckCoverInput) ([]b
 			return nil, models.ClientErrf("cover file cannot be read: %w", err)
 		}
 		return validCoverImage(data)
+	case models.DeckCoverKindBrowse:
+		data, err := readBrowsedMediaImage(env, &models.MediaImageInput{
+			Kind: models.MediaImageKindBrowse, Root: cover.Root, Path: cover.Path,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return validCoverImage(data)
 	default:
-		return nil, models.ClientErrf("invalid params: unknown cover kind %q", cover.Kind)
+		return nil, models.ClientErrf("invalid params: cover kind %q has no image to read", cover.Kind)
 	}
 }
 
@@ -438,6 +473,12 @@ func trimmedCoverInput(cover *models.DeckCoverInput) *models.DeckCoverInput {
 	out := *cover
 	out.Kind = strings.TrimSpace(out.Kind)
 	out.System = strings.TrimSpace(out.System)
-	out.Path = strings.TrimSpace(out.Path)
+	// A browse path is the entry path files.browse returned, which keeps
+	// any space a file name starts or ends with.
+	if out.Kind != models.DeckCoverKindBrowse {
+		out.Path = strings.TrimSpace(out.Path)
+	}
+	out.Root = strings.TrimSpace(out.Root)
+	out.UploadID = strings.TrimSpace(out.UploadID)
 	return &out
 }

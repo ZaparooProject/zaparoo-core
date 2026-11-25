@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -200,32 +201,35 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 	// Stored last, so a request that fails validation leaves no file behind.
-	coverFile, err := storeDeckCover(&env, deck.DeckID, cover)
-	if err != nil {
-		return nil, err
-	}
-
-	updated, err := env.Database.UserDB.UpdateDeck(deck.DeckID, func(stored *database.Deck) error {
-		if !stored.Owned {
-			return database.ErrDeckReadOnly
-		}
-		if name != nil {
-			stored.Name = *name
-		}
-		if description != nil {
-			stored.Description = *description
-		}
-		items, editErr := editedDeckItems(stored.Items, &params, replaced, added)
-		if editErr != nil {
-			return editErr
-		}
-		stored.Items = items
-		if cover != nil {
-			stored.CoverFile = coverFile
-			stored.CoverPending = database.DeckCoverPendingSet
-			if cover.Kind == models.DeckCoverKindNone {
-				stored.CoverPending = database.DeckCoverPendingRemove
+	var updated *database.Deck
+	err = storeDeckCover(&env, deck.DeckID, cover, func(coverFile string) error {
+		var updateErr error
+		updated, updateErr = env.Database.UserDB.UpdateDeck(deck.DeckID, func(stored *database.Deck) error {
+			if !stored.Owned {
+				return database.ErrDeckReadOnly
 			}
+			if name != nil {
+				stored.Name = *name
+			}
+			if description != nil {
+				stored.Description = *description
+			}
+			items, editErr := editedDeckItems(stored.Items, &params, replaced, added)
+			if editErr != nil {
+				return editErr
+			}
+			stored.Items = items
+			if cover != nil {
+				stored.CoverFile = coverFile
+				stored.CoverPending = database.DeckCoverPendingSet
+				if cover.Kind == models.DeckCoverKindNone {
+					stored.CoverPending = database.DeckCoverPendingRemove
+				}
+			}
+			return nil
+		})
+		if updateErr != nil {
+			return deckError(updateErr)
 		}
 		return nil
 	})
@@ -233,7 +237,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 		pruneDeckCovers(&env)
 	}
 	if err != nil {
-		return nil, deckError(err)
+		return nil, err
 	}
 	env.Database.QueueDeckTags(updated.DeckID)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
@@ -298,31 +302,78 @@ func HandleDecksOpen(env requests.RequestEnv) (any, error) {
 	return HandleRun(env)
 }
 
-// storeDeckCover reads and stores the image a decks.update cover names, and
-// returns the file name the deck keeps: empty for a removal or no cover
-// change. A locked deck is refused before anything is read or written.
-func storeDeckCover(env *requests.RequestEnv, deckID string, cover *models.DeckCoverInput) (string, error) {
+// storeDeckCover stores the image a decks.update cover names and hands
+// commit the file name the deck keeps: empty for a removal or no cover
+// change. A locked deck is refused before anything is read or written. An
+// upload is used up only once commit succeeds, so a failed update can be
+// retried with the same upload.
+func storeDeckCover(
+	env *requests.RequestEnv, deckID string, cover *models.DeckCoverInput, commit func(name string) error,
+) error {
 	if cover == nil {
-		return "", nil
+		return commit("")
 	}
-	if cover.Kind == models.DeckCoverKindNone && (cover.System != "" || cover.Path != "") {
-		return "", models.ClientErrf("invalid params: a none cover takes no system or path")
+	if err := checkDeckCoverFields(cover); err != nil {
+		return err
+	}
+	if cover.Kind == models.DeckCoverKindUpload {
+		if err := uploadEnv(env); err != nil {
+			return err
+		}
 	}
 	locked, err := isDeckLocked(env, deckID)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if locked {
-		return "", models.ClientErr(database.ErrDeckReadOnly)
+		return models.ClientErr(database.ErrDeckReadOnly)
 	}
 	if cover.Kind == models.DeckCoverKindNone {
-		return "", nil
-	}
-	data, err := deckCoverBytes(env, cover)
-	if err != nil {
-		return "", err
+		return commit("")
 	}
 	covers, err := deckCovers(env)
+	if err != nil {
+		return err
+	}
+
+	if cover.Kind == models.DeckCoverKindUpload {
+		var commitErr error
+		takeErr := uploadManager(env).Take(cover.UploadID, uploadOwner(env), UploadPurposeMediaImage,
+			func(path string) error {
+				data, readErr := readMediaBinaryFile(afero.NewOsFs(), path, decks.CoverMaxBytes)
+				if readErr != nil {
+					return fmt.Errorf("read uploaded cover: %w", readErr)
+				}
+				name, saveErr := saveDeckCover(covers, deckID, data)
+				if saveErr != nil {
+					return saveErr
+				}
+				commitErr = commit(name)
+				return commitErr
+			})
+		switch {
+		case commitErr != nil:
+			return commitErr
+		case takeErr != nil:
+			return uploadClientError(takeErr)
+		}
+		return nil
+	}
+
+	data, err := deckCoverBytes(env, cover)
+	if err != nil {
+		return err
+	}
+	name, err := saveDeckCover(covers, deckID, data)
+	if err != nil {
+		return err
+	}
+	return commit(name)
+}
+
+// saveDeckCover checks data as a cover image and stores it for a deck.
+func saveDeckCover(covers *decks.Covers, deckID string, data []byte) (string, error) {
+	data, err := validCoverImage(data)
 	if err != nil {
 		return "", err
 	}

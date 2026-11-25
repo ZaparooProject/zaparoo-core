@@ -269,8 +269,15 @@ func TestHandleMediaMetaUpdate_UnusableImageWritesNothing(t *testing.T) {
 // and returns the finished upload's ID.
 func (e *userFieldsTestEnv) uploadImage(t *testing.T, data []byte, chunkSize int) string {
 	t.Helper()
+	return uploadTestImage(t, &e.env, data, chunkSize)
+}
+
+// uploadTestImage sends data as a finished media-image upload of env's
+// caller and returns its ID.
+func uploadTestImage(t *testing.T, env *requests.RequestEnv, data []byte, chunkSize int) string {
+	t.Helper()
 	sum := sha256.Sum256(data)
-	result, err := HandleUploadsBegin(withParams(&e.env, fmt.Sprintf(
+	result, err := HandleUploadsBegin(withParams(env, fmt.Sprintf(
 		`{"purpose":"media-image","size":%d,"sha256":%q}`, len(data), hex.EncodeToString(sum[:]),
 	)))
 	require.NoError(t, err)
@@ -285,13 +292,13 @@ func (e *userFieldsTestEnv) uploadImage(t *testing.T, data []byte, chunkSize int
 			"data": base64.StdEncoding.EncodeToString(data[offset:end]),
 		})
 		require.NoError(t, marshalErr)
-		result, err = HandleUploadsChunk(withParams(&e.env, string(params)))
+		result, err = HandleUploadsChunk(withParams(env, string(params)))
 		require.NoError(t, err)
 		chunk, isUpload := result.(models.UploadResponse)
 		require.True(t, isUpload)
 		assert.Equal(t, int64(end), chunk.Received)
 	}
-	result, err = HandleUploadsFinish(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)))
+	result, err = HandleUploadsFinish(withParams(env, fmt.Sprintf(`{"uploadId":%q}`, begun.UploadID)))
 	require.NoError(t, err)
 	finished, ok := result.(models.UploadResponse)
 	require.True(t, ok)
