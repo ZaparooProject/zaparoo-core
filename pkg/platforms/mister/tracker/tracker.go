@@ -488,7 +488,8 @@ func (tr *Tracker) LoadCore() {
 	// core immediately, then only restore ACTIVEGAME if it belongs to this
 	// new core. This prevents a stale MiSTer selection signal from reviving
 	// the previous game's media and history after launch.system or stop.
-	if active := tr.activeMedia(); active != nil && !tr.coreOwnsMedia(coreName, active.SystemID, active.Path) {
+	if active := tr.activeMedia(); active != nil && !processMediaOwnsCore(active, coreName) &&
+		!tr.coreOwnsMedia(coreName, active.SystemID, active.Path) {
 		tr.stopGame()
 	}
 	// ACTIVEGAME may arrive before CORENAME during a manual launch. Retry a
@@ -628,12 +629,33 @@ func (tr *Tracker) resetGameState() {
 // owns. They never write ACTIVEGAME, so an empty ACTIVEGAME says nothing about
 // them; the process exit and Core's own stop are what end their media.
 const (
-	VideoLauncherID   = "GenericVideo"
-	ScummVMLauncherID = "ScummVM"
+	VideoLauncherID       = "GenericVideo"
+	ScummVMLauncherID     = "ScummVM"
+	MediaCenterLauncherID = "MediaCenter"
+	MoonlightLauncherID   = "Moonlight"
 )
 
+// MoonlightCoreName is the CORENAME of the H264 core the Moonlight client
+// loads for itself while it streams.
+const MoonlightCoreName = "H264"
+
 func isProcessTrackedMedia(media *models.ActiveMedia) bool {
-	return media != nil && (media.LauncherID == VideoLauncherID || media.LauncherID == ScummVMLauncherID)
+	if media == nil {
+		return false
+	}
+	switch media.LauncherID {
+	case VideoLauncherID, ScummVMLauncherID, MediaCenterLauncherID, MoonlightLauncherID:
+		return true
+	default:
+		return false
+	}
+}
+
+// processMediaOwnsCore reports whether coreName is the core a process-owned
+// launcher loads for its own media, so loading it does not end that media.
+func processMediaOwnsCore(media *models.ActiveMedia, coreName string) bool {
+	return media != nil && media.LauncherID == MoonlightLauncherID &&
+		strings.EqualFold(coreName, MoonlightCoreName)
 }
 
 // notDescribedByActiveGame reports whether media is something ACTIVEGAME never

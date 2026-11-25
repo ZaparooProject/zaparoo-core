@@ -44,6 +44,7 @@ const (
 	SchemePlaynite   = "playnite"
 	SchemeAndroid    = "android"
 	SchemeRomM       = "romm"
+	SchemeMoonlight  = "moonlight"
 )
 
 // SchemeSource is media in a folder a host application granted to Core. Its
@@ -101,6 +102,7 @@ var customSchemes = []string{
 	SchemePlaynite,
 	SchemeAndroid,
 	SchemeRomM,
+	SchemeMoonlight,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,

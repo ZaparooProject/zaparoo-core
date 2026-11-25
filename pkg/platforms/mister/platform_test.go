@@ -1212,6 +1212,39 @@ func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "tracked console process survived ReturnToMenu")
 }
 
+// A tracked launcher that loads its own core, such as Moonlight, can be
+// stopped for the menu before that core is up. Main drops the menu request
+// then, so the stop must be kept for the core to be stopped once it loads.
+func TestStopActiveLauncher_MenuStopKeptForLoadingCore(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		intent platforms.StopIntent
+		want   bool
+	}{
+		{name: "menu", intent: platforms.StopForMenu, want: true},
+		{name: "preemption", intent: platforms.StopForPreemption, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := exec.CommandContext(context.Background(), "sleep", "10")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+			p := NewPlatform()
+			p.launcherManager = &mockLauncherManager{}
+			p.setActiveMedia = func(_ *models.ActiveMedia) {}
+			_, err := runTrackedProcess(p, cmd, func() {}, "core-load-stop-test", trackedExit{})
+			require.NoError(t, err)
+			p.coreLoads.launched(time.Now())
+
+			require.NoError(t, p.StopActiveLauncher(tc.intent))
+			assert.Equal(t, tc.want, p.coreLoads.coreChanged("H264", time.Now()))
+		})
+	}
+}
+
 func processExited(pid int) bool {
 	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 		return true

@@ -1452,7 +1452,10 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 func TestLoadGameEmptyActiveGameKeepsMediaItDoesNotDescribe(t *testing.T) {
 	t.Parallel()
 
-	for _, launcherID := range []string{VideoLauncherID, ScummVMLauncherID, platforms.NativeAudioLauncherID} {
+	for _, launcherID := range []string{
+		VideoLauncherID, ScummVMLauncherID, MediaCenterLauncherID, MoonlightLauncherID,
+		platforms.NativeAudioLauncherID,
+	} {
 		t.Run(launcherID, func(t *testing.T) {
 			t.Parallel()
 			current := models.NewActiveMedia(
@@ -1495,6 +1498,50 @@ func TestLoadGameEmptyActiveGameClearsCoreMedia(t *testing.T) {
 
 	assert.Nil(t, current, "a core game quit through the OSD must still clear")
 	assert.Empty(t, tr.ActiveGameID)
+}
+
+// The Moonlight client loads the H264 core for itself while it streams. That
+// core change must not retire its media, while any other core still does.
+func TestLoadCoreH264KeepsMoonlightMedia(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		core     string
+		launcher string
+		wantKept bool
+	}{
+		{core: "H264", launcher: MoonlightLauncherID, wantKept: true},
+		{core: "h264", launcher: MoonlightLauncherID, wantKept: true},
+		{core: "SNES", launcher: MoonlightLauncherID},
+		{core: "H264", launcher: VideoLauncherID},
+	} {
+		t.Run(tt.core+"/"+tt.launcher, func(t *testing.T) {
+			t.Parallel()
+			coreFile := filepath.Join(t.TempDir(), "CORENAME")
+			require.NoError(t, os.WriteFile(coreFile, []byte(tt.core), 0o600))
+			current := models.NewActiveMedia(
+				systemdefs.SystemPC, "PC", "moonlight://pc/Desktop", "Desktop", tt.launcher,
+			)
+			tr := &Tracker{
+				pl:             mocks.NewMockPlatform(),
+				coreNameFile:   coreFile,
+				ActiveCore:     misterconfig.MenuCore,
+				readActiveGame: func() (string, error) { return "", nil },
+				activeMedia:    func() *models.ActiveMedia { return current },
+				setActiveMedia: func(m *models.ActiveMedia) { current = m },
+				setActiveGame:  func(string) error { return nil },
+			}
+
+			tr.LoadCore()
+
+			assert.Equal(t, tt.core, tr.ActiveCore)
+			if tt.wantKept {
+				assert.NotNil(t, current)
+			} else {
+				assert.Nil(t, current)
+			}
+		})
+	}
 }
 
 // coreLoadStopPlatform implements the optional platformWithCoreLoadStops
