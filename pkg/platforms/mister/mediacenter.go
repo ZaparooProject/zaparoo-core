@@ -190,20 +190,17 @@ func launchMediaCenter(pl *Platform) func(*config.Instance, string, *platforms.L
 
 		log.Info().Str("path", path).Msg("launching video with MediaCenter")
 
-		var finished func()
-		if opts != nil {
-			finished = opts.MediaFinished
-		}
-
 		consoleRestore := createConsoleRestoreFunc(cm)
 		restore := func() {
 			restoreMediaCenterConsole()
 			consoleRestore()
 		}
 
+		// No mediaFinished: the player exits with status 0 after both a
+		// natural end and a quit from its own controls, so its exit only
+		// clears the media.
 		return runTrackedProcess(pl, buildMediaCenterCommand(launcherCtx, path), restore, "mediacenter", trackedExit{
-			launcherID:    tracker.MediaCenterLauncherID,
-			mediaFinished: finished,
+			launcherID: tracker.MediaCenterLauncherID,
 		})
 	}
 }

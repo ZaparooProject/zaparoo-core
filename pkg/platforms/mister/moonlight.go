@@ -349,15 +349,12 @@ func moonlightBinary() string {
 	return filepath.Join(moonlightDir, moonlightBinaryName)
 }
 
-// isH264Core reports whether name is an H264 core file, such as
-// "H264_20260101.rbf".
+// isH264Core reports whether name is a dated H264 core file, such as
+// "H264_20260101.rbf". The client looks only for H264_*.rbf, so an undated
+// H264.rbf would not start.
 func isH264Core(name string) bool {
 	lower := strings.ToLower(name)
-	if !strings.HasSuffix(lower, ".rbf") {
-		return false
-	}
-	base := strings.TrimSuffix(lower, ".rbf")
-	return base == "h264" || strings.HasPrefix(base, "h264_")
+	return strings.HasPrefix(lower, "h264_") && strings.HasSuffix(lower, ".rbf")
 }
 
 func h264CoreIn(dir string) bool {
@@ -410,6 +407,7 @@ func createMoonlightLauncher(pl *Platform) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleTracked,
 		Detected:           &detected,
 		Availability:       func(*config.Instance) error { return moonlightInstalled() },
+		Preflight:          moonlightPreflight,
 		Scanner:            scanMoonlight,
 		Launch:             launchMoonlight(pl),
 	}
@@ -432,6 +430,13 @@ func scanMoonlight(
 		Name:  moonlightMenuName,
 		NoExt: true,
 	}), nil
+}
+
+// moonlightPreflight refuses a path whose PC resolves to no usable address
+// before Core stops the running media for it.
+func moonlightPreflight(_ *config.Instance, path string, _ *platforms.LaunchOptions) error {
+	_, err := moonlightArgs(path)
+	return err
 }
 
 // moonlightArgs turns a path into the client's arguments.

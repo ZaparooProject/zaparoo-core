@@ -173,6 +173,12 @@ func TestMoonlightStreamArgs(t *testing.T) {
 			"-60hz", "-pcres", "1024x768",
 		},
 		moonlightStreamArgs("pc", "-Steam", &all))
+
+	lowLatency := defaultMoonlightSettings()
+	lowLatency.sync = moonlightSyncGenlockLow
+	assert.Equal(t,
+		[]string{"stream", "pc", "-app", "Desktop", "-genlock-low"},
+		moonlightStreamArgs("pc", "Desktop", &lowLatency))
 }
 
 func TestResolveMoonlightHost(t *testing.T) {
@@ -209,8 +215,9 @@ func TestIsH264Core(t *testing.T) {
 
 	for name, want := range map[string]bool{
 		"H264_20260801.rbf": true,
-		"h264.rbf":          true,
-		"H264.RBF":          true,
+		"h264_1.RBF":        true,
+		"h264.rbf":          false,
+		"H264.RBF":          false,
 		"H264_20260801.mra": false,
 		"H2640.rbf":         false,
 		"MyH264_1.rbf":      false,
@@ -233,6 +240,13 @@ func TestMoonlightInstalled(t *testing.T) {
 	assert.Empty(t, results, "nothing is indexed without the client")
 
 	writeFile(t, filepath.Join(clientDir, moonlightBinaryName), 0o700)
+	require.ErrorAs(t, moonlightInstalled(), &repair)
+	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
+
+	// A core folder holding other cores, or an undated H264.rbf the client
+	// never loads, is still missing the H264 core.
+	writeFile(t, filepath.Join(otherDir, "NES_20250101.rbf"), 0o600)
+	writeFile(t, filepath.Join(otherDir, "H264.rbf"), 0o600)
 	require.ErrorAs(t, moonlightInstalled(), &repair)
 	assert.Equal(t, platforms.LaunchRepairLauncherComponentMissing, repair.Reason())
 
@@ -292,6 +306,14 @@ func TestMoonlightArgsUsesMenuConfig(t *testing.T) {
 
 	_, err = moonlightArgs("moonlight://pc")
 	require.Error(t, err)
+
+	// An unreadable menu.cfg falls back to the menu's defaults rather than
+	// refusing the launch.
+	require.NoError(t, os.Remove(filepath.Join(clientDir, "menu.cfg")))
+	require.NoError(t, os.Mkdir(filepath.Join(clientDir, "menu.cfg"), 0o700))
+	args, err = moonlightArgs("moonlight://10.0.0.5/Desktop")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"stream", "10.0.0.5", "-app", "Desktop", "-genlock"}, args)
 }
 
 func TestLaunchMoonlightNotInstalled(t *testing.T) {
@@ -476,4 +498,16 @@ func TestLaunchMoonlightRefusals(t *testing.T) {
 	require.Error(t, err, "a malformed path is refused")
 	_, err = launchMoonlight(NewPlatform())(nil, "moonlight://bad%20host!/Desktop", nil)
 	require.Error(t, err, "an unknown PC that is not an address is refused")
+}
+
+// The coordinator runs Preflight before it stops the running media, so a
+// path the launch would refuse must fail here.
+func TestMoonlightPreflight(t *testing.T) {
+	installMoonlight(t)
+
+	require.NoError(t, moonlightPreflight(nil, "moonlight://", nil))
+	require.NoError(t, moonlightPreflight(nil, "moonlight://192.168.1.20/Desktop", nil))
+	require.Error(t, moonlightPreflight(nil, "moonlight://-genlock/Desktop", nil),
+		"a PC that is neither listed nor an address is refused")
+	require.Error(t, moonlightPreflight(nil, "moonlight://pc", nil))
 }

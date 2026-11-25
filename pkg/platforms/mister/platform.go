@@ -874,6 +874,13 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.platformMu.Unlock()
 
 	if proc != nil {
+		if intent == platforms.StopForMenu {
+			// A tracked launcher can load its own core, as Moonlight loads
+			// H264. Main drops a menu request sent while that core loads, so
+			// record the stop for the core to be stopped once it is up. Done
+			// before the process stops so a core arriving meanwhile is caught.
+			p.coreLoads.stopWhenLoaded(time.Now())
+		}
 		var gracefulStop func() error
 		if customKill != nil {
 			gracefulStop = func() error {
