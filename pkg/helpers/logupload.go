@@ -29,11 +29,13 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -67,24 +69,45 @@ func UploadLog(pl platforms.Platform) (string, error) {
 	return uploadLogTo(pl, logUploadTarget(), newUploadClient())
 }
 
-// logUploadURL overrides where UploadLog sends logs; nil means
-// config.LogUploadURL.
-var logUploadURL atomic.Pointer[string]
+// logUploadOverrides holds the active SetLogUploadURL targets, oldest first.
+// UploadLog uses the newest; with none it uses config.LogUploadURL.
+var (
+	logUploadMu        syncutil.Mutex
+	logUploadOverrides []*string
+)
 
 func logUploadTarget() string {
-	if u := logUploadURL.Load(); u != nil {
-		return *u
+	logUploadMu.Lock()
+	defer logUploadMu.Unlock()
+	if n := len(logUploadOverrides); n > 0 {
+		return *logUploadOverrides[n-1]
 	}
 	return config.LogUploadURL
 }
 
 // SetLogUploadURL points UploadLog at another log service, such as a local
-// fake, until the returned func restores the previous target. It is not a
-// config setting: it exists for tests and the simulator. Safe for concurrent
-// use, though concurrent overrides of one process share a single target.
+// fake, until the returned func removes this override. It is not a config
+// setting: it exists for tests and the simulator. Overrides may be set and
+// restored concurrently and in any order; the newest one still active wins,
+// and once all are restored UploadLog uses config.LogUploadURL again.
 func SetLogUploadURL(url string) (restore func()) {
-	prev := logUploadURL.Swap(&url)
-	return func() { logUploadURL.Store(prev) }
+	entry := &url
+	logUploadMu.Lock()
+	logUploadOverrides = append(logUploadOverrides, entry)
+	logUploadMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			logUploadMu.Lock()
+			defer logUploadMu.Unlock()
+			for i, e := range logUploadOverrides {
+				if e == entry {
+					logUploadOverrides = slices.Delete(logUploadOverrides, i, i+1)
+					return
+				}
+			}
+		})
+	}
 }
 
 func newUploadClient() *http.Client {
