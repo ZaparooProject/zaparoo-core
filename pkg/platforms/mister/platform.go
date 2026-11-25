@@ -534,6 +534,14 @@ func (p *Platform) processStoppedByCore(proc *os.Process) bool {
 	return p.stopRequestedProc == proc
 }
 
+// processPreempted reports whether Core stopped proc so another launch could
+// start, which then sets up the screen it needs itself.
+func (p *Platform) processPreempted(proc *os.Process) bool {
+	p.processMu.RLock()
+	defer p.processMu.RUnlock()
+	return p.stopRequestedProc == proc && p.stopIntent == platforms.StopForPreemption
+}
+
 func (p *Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
@@ -1990,7 +1998,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls = append(ls, withCoreReadiness(p, withCoreControls(p, []platforms.Launcher{amiga, neogeo, neogeoMVS}))...)
 	ls = append(
 		ls,
-		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
+		createMediaCenterLauncher(p), createVideoLauncher(p), createScummVMLauncher(p),
+		createMoonlightLauncher(p), createAudioScannerLauncher(),
 		createScriptsLauncher(p),
 	)
 	ls = applyNoArchiveExtensions(ls)

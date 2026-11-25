@@ -70,6 +70,7 @@ var kitrinxNGPCCore = cores.Core{
 
 var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"GenericVideo":             {},
+	"MediaCenter":              {},
 	"ScummVM":                  {},
 	"KitrinxNeoGeoPocketColor": {},
 	scriptsLauncherID:          {},
@@ -1023,49 +1024,58 @@ func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
 
 func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(_ *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		if path == "" {
-			return nil, errors.New("no path specified")
-		}
-
-		framebuffer, err := resolveFramebufferMode(opts, videoRenderScale, "")
-		if err != nil {
-			return nil, fmt.Errorf("resolve video render size: %w", err)
-		}
-
-		log.Info().Str("path", path).Msg("video playback starting")
-
-		// Capture launcher context for staleness detection and cancellation
-		launcherCtx := pl.launcherManager.GetContext()
-
-		// Setup console environment (FPGA check, console switch, cleanup)
-		cm, err := setupConsoleEnvironment(launcherCtx, pl)
-		if err != nil {
-			return nil, err
-		}
-
-		if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB32); modeErr != nil {
-			_ = cm.Close()
-			return nil, fmt.Errorf("failed to set video render size: %w", modeErr)
-		}
-
-		log.Info().Str("path", path).Msg("launching video with fvp")
-
-		var finished func()
-		if opts != nil {
-			finished = opts.MediaFinished
-		}
-
-		cmd := buildFvpCommand(launcherCtx, path)
-
-		// Build cleanup function that will be called on completion/crash
-		restoreFunc := createConsoleRestoreFunc(cm)
-
-		// Start process and manage lifecycle
-		return runTrackedProcess(pl, cmd, restoreFunc, "fvp", trackedExit{
-			launcherID:    tracker.VideoLauncherID,
-			mediaFinished: finished,
-		})
+		return playWithFvp(pl, path, opts, tracker.VideoLauncherID)
 	}
+}
+
+// playWithFvp plays path with fvp. launcherID is the launcher the active
+// media was recorded under, so the process exit clears the right media when
+// MediaCenter hands a file to fvp.
+func playWithFvp(
+	pl *Platform, path string, opts *platforms.LaunchOptions, launcherID string,
+) (*os.Process, error) {
+	if path == "" {
+		return nil, errors.New("no path specified")
+	}
+
+	framebuffer, err := resolveFramebufferMode(opts, videoRenderScale, "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve video render size: %w", err)
+	}
+
+	log.Info().Str("path", path).Msg("video playback starting")
+
+	// Capture launcher context for staleness detection and cancellation
+	launcherCtx := pl.launcherManager.GetContext()
+
+	// Setup console environment (FPGA check, console switch, cleanup)
+	cm, err := setupConsoleEnvironment(launcherCtx, pl)
+	if err != nil {
+		return nil, err
+	}
+
+	if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB32); modeErr != nil {
+		_ = cm.Close()
+		return nil, fmt.Errorf("failed to set video render size: %w", modeErr)
+	}
+
+	log.Info().Str("path", path).Msg("launching video with fvp")
+
+	var finished func()
+	if opts != nil {
+		finished = opts.MediaFinished
+	}
+
+	cmd := buildFvpCommand(launcherCtx, path)
+
+	// Build cleanup function that will be called on completion/crash
+	restoreFunc := createConsoleRestoreFunc(cm)
+
+	// Start process and manage lifecycle
+	return runTrackedProcess(pl, cmd, restoreFunc, "fvp", trackedExit{
+		launcherID:    launcherID,
+		mediaFinished: finished,
+	})
 }
 
 // buildScummVMCommand constructs the command for launching ScummVM.
@@ -1196,12 +1206,15 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 }
 
 // createVideoLauncher creates a Launcher definition for fvp video playback.
+// fvpExtensions are the video files fvp plays.
+var fvpExtensions = []string{".mp4", ".mkv", ".avi", ".mov", ".webm"}
+
 func createVideoLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
 		ID:         tracker.VideoLauncherID,
 		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
-		Extensions: []string{".mp4", ".mkv", ".avi", ".mov", ".webm"},
+		Extensions: fvpExtensions,
 		Lifecycle:  platforms.LifecycleTracked,
 		Launch:     launchVideo(pl),
 	}
