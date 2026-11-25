@@ -146,10 +146,14 @@ func remountFlags(stFlags int64, readOnly bool) uintptr {
 // out of date. Failure only costs the early start, so it is logged and
 // startup carries on.
 func installInitScript(ctx context.Context) {
+	installInitScriptWith(ctx, afero.NewOsFs(), sysRootMount{}, initScriptContent(initScriptSource()))
+}
+
+func installInitScriptWith(ctx context.Context, fs afero.Fs, mount rootMount, content string) {
 	if ctx.Err() != nil {
 		return
 	}
-	written, err := ensureInitScript(afero.NewOsFs(), sysRootMount{}, initScriptContent(initScriptSource()))
+	written, err := ensureInitScript(fs, mount, content)
 	switch {
 	case err != nil:
 		log.Warn().Err(err).Str("path", initScriptPath).Msg("could not install early start init script")
