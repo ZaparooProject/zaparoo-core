@@ -154,11 +154,12 @@ func scanSignatureRoot(ctx context.Context, base int, read sectorReader) (signat
 		return out, nil
 	}
 	extent := int(binary.LittleEndian.Uint32(rootRecord[iso9660ExtentLocationOffset:]))
-	size := int(binary.LittleEndian.Uint32(rootRecord[iso9660DataLengthOffset:]))
+	// The length is capped before it becomes an int, which is 32 bits wide
+	// on some builds.
+	size := int(min(binary.LittleEndian.Uint32(rootRecord[iso9660DataLengthOffset:]), maxSignatureRootBytes))
 	if extent == 0 || size == 0 {
 		return out, nil
 	}
-	size = min(size, maxSignatureRootBytes)
 
 	mdNames := make(map[string]struct{})
 	cueNames := make(map[string]struct{})

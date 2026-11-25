@@ -1043,6 +1043,9 @@ func (m *LauncherMatcher) ForDirectory(dir string) *DirLauncherMatcher {
 	d := &DirLauncherMatcher{m: m}
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
+		if l.ExplicitOnly {
+			continue
+		}
 		decided, matched := true, false
 		for _, scheme := range l.Schemes {
 			prefix := scheme + ":"
@@ -1513,7 +1516,7 @@ func ResolveLaunchableLauncher(
 	bestScore := -1
 	for i := range candidates {
 		candidate := &candidates[i]
-		if candidate.ScanOnly || !LauncherCanLaunch(candidate) {
+		if candidate.ScanOnly || candidate.ExplicitOnly || !LauncherCanLaunch(candidate) {
 			continue
 		}
 		// An extension match beats every structural signal: it is the only

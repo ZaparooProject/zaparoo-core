@@ -269,6 +269,14 @@ func TestIdentifyDiscSystem(t *testing.T) {
 			want: systemdefs.SystemGenesisPlus,
 		},
 		{
+			name: "root with the largest recorded length",
+			toc:  dataTOC(base),
+			setup: func(_ *testing.T, d *fakeSectorDisc) {
+				d.writeSignatureRoot(base, 22, 0xFFFFFFFF, "GAME.MD;1", "GAME.CUE;1")
+			},
+			want: systemdefs.SystemGenesisPlus,
+		},
+		{
 			name: "snes msu-1 sfc",
 			toc:  dataTOC(base),
 			setup: func(_ *testing.T, d *fakeSectorDisc) {

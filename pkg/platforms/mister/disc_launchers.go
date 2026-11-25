@@ -19,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -256,6 +257,23 @@ func resolveDVDCore(fs afero.Fs, root string) (string, error) {
 	return "", errNoDVDCore
 }
 
+// dvdCoreListed reports whether the core list holds a DVD core. The list is
+// kept up to date without walking the SD card, which finding the core to
+// load does. A DVD core that only the walk finds, below a second level of
+// _ folders, is missed here. Before the list's first scan every core counts
+// as installed, as it does for the other cores.
+func dvdCoreListed() error {
+	if _, rbfs := cores.GlobalRBFCache.Count(); rbfs == 0 {
+		return nil
+	}
+	for _, name := range []string{"DVD", strings.TrimSuffix(dvdPlayerRBF, ".rbf")} {
+		if _, ok := cores.GlobalRBFCache.GetByShortName(name); ok {
+			return nil
+		}
+	}
+	return errNoDVDCore
+}
+
 // resolvePhysicalDiscTarget returns the file MiSTer loads to play a disc of
 // system from a drive.
 func resolvePhysicalDiscTarget(fs afero.Fs, root, system string) (string, error) {
@@ -296,11 +314,11 @@ func createPhysicalDiscLaunchers(pl *Platform) []platforms.Launcher {
 				return ok && strings.EqualFold(pathSystem, system) && driveExists(pl.filesystem(), drive)
 			},
 			// Launch resolution checks every launcher's availability, so a
-			// DVD core is looked for only when a DVD is played: finding one
-			// walks the SD card.
+			// DVD core is checked against the core list here and only
+			// looked for on the SD card when a DVD is played.
 			Availability: func(_ *config.Instance) error {
 				if system == systemdefs.SystemDVDPlayer {
-					return nil
+					return dvdCoreListed()
 				}
 				_, err := resolvePhysicalDiscTarget(pl.filesystem(), misterconfig.SDRootDir, system)
 				return err

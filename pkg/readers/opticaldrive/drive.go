@@ -113,8 +113,13 @@ func (cdromWatcher) Check(path string) (driveCheck, error) {
 	check := driveCheck{Status: status}
 	if status == cdrom.StatusDiscOK {
 		changed, changedErr := drive.MediaChanged()
-		if changedErr == nil {
+		switch {
+		case changedErr == nil:
 			check.Changed = changed
+		case !cdrom.IsUnsupportedRequest(changedErr):
+			// Reading it as no change would miss a disc swapped since the
+			// last poll; the next poll asks again.
+			return driveCheck{}, fmt.Errorf("drive media changed: %w", changedErr)
 		}
 	}
 	return check, nil

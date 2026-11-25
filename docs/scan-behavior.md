@@ -272,9 +272,9 @@ keep_reading = false
       play it, and the library image otherwise.
 - [ ] `image_only` never launches the disc from the drive, and `disc_only`
       never launches a library image.
-- [ ] An audio CD plays with `audio_cd_launcher` when it is set and available,
-      and with the platform default otherwise. A launcher that is set but
-      missing or unavailable plays nothing.
+- [ ] An audio CD plays with `audio_cd_launcher` when it is set, and with the
+      platform default when it is empty. A launcher that is set but missing or
+      unavailable plays nothing.
 - [ ] With `keep_reading` off, a disc in the drive is not read again until it
       changes.
 - [ ] When nothing can play the disc, Core logs it and shows no error.

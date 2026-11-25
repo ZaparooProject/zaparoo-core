@@ -66,11 +66,12 @@ type LevelSource interface {
 	SetLevelListener(fn func(slot string, levels *Levels))
 }
 
-// levelTap holds the newest mono samples a source played, before volume.
-// The audio thread writes them; the analyzer reads them. Each sample is an
-// atomic so a read racing a write sees either value, never a torn one.
+// levelTap holds the newest stereo frames a source played, before volume.
+// The audio thread writes them; the analyzer reads them. Each frame is one
+// atomic, left in the high half and right in the low, so a read racing a
+// write sees either frame, never a torn one.
 type levelTap struct {
-	samples [levelTapSize]atomic.Uint32
+	samples [levelTapSize]atomic.Uint64
 	written atomic.Uint64
 }
 
@@ -84,17 +85,22 @@ func (t *levelTap) add(ring [][2]float64, readPos uint64, n int) {
 	size := uint64(len(ring))
 	for i := range n {
 		f := ring[(readPos+uint64(i))%size]
-		t.samples[(w+uint64(i))%levelTapSize].Store(math.Float32bits(float32((f[0] + f[1]) * 0.5)))
+		frame := uint64(math.Float32bits(float32(f[0])))<<32 | uint64(math.Float32bits(float32(f[1])))
+		t.samples[(w+uint64(i))%levelTapSize].Store(frame)
 	}
 	t.written.Store(w + uint64(n))
 }
 
-// snapshot copies the newest levelTapSize samples into dst, oldest first.
-func (t *levelTap) snapshot(dst []float64) uint64 {
+// snapshot copies the newest levelTapSize frames into dst, oldest first, as
+// left + right·i.
+func (t *levelTap) snapshot(dst []complex128) uint64 {
 	w := t.written.Load()
 	for i := range dst {
 		idx := (w + uint64(i)) % levelTapSize
-		dst[i] = float64(math.Float32frombits(t.samples[idx].Load()))
+		frame := t.samples[idx].Load()
+		l := float64(math.Float32frombits(uint32(frame >> 32)))
+		r := float64(math.Float32frombits(uint32(frame))) //nolint:gosec // low half by design
+		dst[i] = complex(l, r)
 	}
 	return w
 }
@@ -104,7 +110,7 @@ func (t *levelTap) snapshot(dst []float64) uint64 {
 type levelAnalyzer struct {
 	state   map[string]*slotLevels
 	window  []float64
-	samples []float64
+	samples []complex128
 	spec    []complex128
 	twiddle []complex128
 	rev     []int
@@ -124,7 +130,7 @@ func newLevelAnalyzer() *levelAnalyzer {
 	const n = levelTapSize
 	a := &levelAnalyzer{
 		window:  make([]float64, n),
-		samples: make([]float64, n),
+		samples: make([]complex128, n),
 		spec:    make([]complex128, n),
 		twiddle: make([]complex128, n/2),
 		rev:     make([]int, n),
@@ -187,25 +193,33 @@ func (a *levelAnalyzer) fft() {
 	}
 }
 
-// measure reads a source's newest samples into unsmoothed levels.
+// measure reads a source's newest frames into unsmoothed levels. Each
+// channel is measured on its own, so a signal that is out of phase between
+// them does not cancel as it would in a mono mix.
 func (a *levelAnalyzer) measure(tap *levelTap) Levels {
 	var out Levels
 	tap.snapshot(a.samples)
 	n := len(a.samples)
 	for i, v := range a.samples {
 		if i >= n-levelPeakWindow {
-			out.Peak = max(out.Peak, math.Abs(v))
+			out.Peak = max(out.Peak, math.Abs(real(v)), math.Abs(imag(v)))
 		}
-		a.spec[i] = complex(v*a.window[i], 0)
+		a.spec[i] = v * complex(a.window[i], 0)
 	}
 	out.Peak = min(out.Peak, 1)
+	// Both channels go through one transform, left as the real part and
+	// right as the imaginary. Bins k and n-k then hold their combined
+	// power: |L[k]|² + |R[k]|² = (|Z[k]|² + |Z[n-k]|²) / 2.
 	a.fft()
 	// A full-scale sine under a Hann window peaks at n/4.
 	scale := 4.0 / float64(n)
 	for b := range LevelBands {
 		peak := 0.0
 		for k := a.bandLo[b]; k < a.bandHi[b]; k++ {
-			peak = max(peak, cmplx.Abs(a.spec[k]))
+			z, mirror := a.spec[k], a.spec[n-k]
+			power := real(z)*real(z) + imag(z)*imag(z) + real(mirror)*real(mirror) + imag(mirror)*imag(mirror)
+			// The mean of the two channels' powers, as an amplitude.
+			peak = max(peak, math.Sqrt(power/4))
 		}
 		out.Bands[b] = dbLevel(peak * scale)
 	}

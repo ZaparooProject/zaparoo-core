@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/trackmeta"
@@ -33,14 +35,18 @@ import (
 // playback as if the album had finished.
 var errMediaGone = errors.New("disc removed")
 
+// errDecoderClosed is returned by a seek on a closed decoder.
+var errDecoderClosed = errors.New("decoder closed")
+
 // readChunkFrames is how many frames one read pulls from a source.
 const readChunkFrames = 27 * FramesPerSector
 
 // frameReader reads PCM from an album's sources.
 type frameReader interface {
 	// readFrames fills p, a whole number of frames, with the frames of
-	// track t starting at frame off within its source.
-	readFrames(t *Track, off int64, p []byte) error
+	// track t starting at frame off within its source. On an error it
+	// returns how many bytes of whole frames it filled first.
+	readFrames(t *Track, off int64, p []byte) (int, error)
 	close() error
 }
 
@@ -57,14 +63,29 @@ type Decoder struct {
 	starts []int
 	buf    []byte
 	pos    int
-	ended  bool
+	// ended is set when a rip file ended early; a seek clears it, as the
+	// file may still hold what the seek asks for.
+	ended bool
+	// gone is set when the disc was removed, which no seek undoes.
+	gone   bool
+	closed bool
 }
 
-func newDecoder(album *Album, r frameReader) *Decoder {
+// trackStarts lays an album's tracks out one after another, failing when the
+// stream would be too long to address, as an 8 GiB rip is on 32-bit builds.
+func trackStarts(album *Album) ([]int, error) {
 	starts := make([]int, len(album.Tracks)+1)
 	for i := range album.Tracks {
-		starts[i+1] = starts[i] + int(album.Tracks[i].Frames())
+		frames := album.Tracks[i].Frames()
+		if frames < 0 || frames > int64(math.MaxInt-starts[i]) {
+			return nil, fmt.Errorf("album is too long: track %d", album.Tracks[i].Number)
+		}
+		starts[i+1] = starts[i] + int(frames)
 	}
+	return starts, nil
+}
+
+func newDecoder(album *Album, starts []int, r frameReader) *Decoder {
 	return &Decoder{
 		reader: r,
 		album:  album,
@@ -77,7 +98,7 @@ func newDecoder(album *Album, r frameReader) *Decoder {
 func (d *Decoder) Album() *Album { return d.album }
 
 // TrackStarts is the stream frame each track begins at.
-func (d *Decoder) TrackStarts() []int { return d.starts[:len(d.starts)-1] }
+func (d *Decoder) TrackStarts() []int { return slices.Clone(d.starts[:len(d.starts)-1]) }
 
 // TrackMeta is the tags of track i.
 func (d *Decoder) TrackMeta(i int) *trackmeta.Meta { return d.album.TrackMeta(i) }
@@ -89,28 +110,35 @@ func (*Decoder) SampleRate() int { return SampleRate }
 func (d *Decoder) Stream(samples [][2]float64) (int, bool) {
 	total := d.Len()
 	n := 0
-	for n < len(samples) && d.pos < total && !d.ended && d.err == nil {
+	for n < len(samples) && d.pos < total && !d.ended && !d.gone && !d.closed && d.err == nil {
 		i := sort.SearchInts(d.starts, d.pos+1) - 1
 		t := &d.album.Tracks[i]
 		off := int64(d.pos - d.starts[i])
 		want := min(len(samples)-n, d.starts[i+1]-d.pos, readChunkFrames)
 		p := d.buf[:want*bytesPerFrame]
-		if err := d.reader.readFrames(t, t.Start+off, p); err != nil {
-			if errors.Is(err, errMediaGone) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				log.Warn().Err(err).Int("track", t.Number).Msg("cd audio ended early")
-				d.ended = true
-				break
-			}
-			d.err = fmt.Errorf("read track %d: %w", t.Number, err)
-			break
+		filled, err := d.reader.readFrames(t, t.Start+off, p)
+		got := want
+		if err != nil {
+			got = min(filled/bytesPerFrame, want)
 		}
-		for j := range want {
+		for j := range got {
 			b := p[j*bytesPerFrame:]
 			samples[n+j][0] = pcmSample(b[0], b[1])
 			samples[n+j][1] = pcmSample(b[2], b[3])
 		}
-		n += want
-		d.pos += want
+		n += got
+		d.pos += got
+		switch {
+		case err == nil:
+		case errors.Is(err, errMediaGone):
+			log.Warn().Err(err).Int("track", t.Number).Msg("cd audio ended early")
+			d.gone = true
+		case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+			log.Warn().Err(err).Int("track", t.Number).Msg("cd audio ended early")
+			d.ended = true
+		default:
+			d.err = fmt.Errorf("read track %d: %w", t.Number, err)
+		}
 	}
 	return n, n > 0
 }
@@ -135,14 +163,20 @@ func (d *Decoder) Position() int { return d.pos }
 
 // Seek implements beep.StreamSeeker.
 func (d *Decoder) Seek(p int) error {
+	if d.closed {
+		return errDecoderClosed
+	}
 	if p < 0 || p > d.Len() {
 		return fmt.Errorf("seek %d out of range [0, %d]", p, d.Len())
 	}
 	d.pos = p
+	d.ended = false
 	return nil
 }
 
-// Close releases the decoder's files or drive.
+// Close releases the decoder's files or drive. A closed decoder streams
+// nothing more.
 func (d *Decoder) Close() error {
+	d.closed = true
 	return d.reader.close()
 }

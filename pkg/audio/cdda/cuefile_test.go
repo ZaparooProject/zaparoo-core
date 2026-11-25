@@ -20,6 +20,7 @@
 package cdda
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -294,5 +295,64 @@ func TestDecoderTruncatedFileEndsCleanly(t *testing.T) {
 	require.NoError(t, fsys.Remove(filepath.Join(cueDir, "a.bin")))
 	require.NoError(t, afero.WriteFile(fsys, filepath.Join(cueDir, "a.bin"), pcm(0, 588), 0o644))
 	out := streamAll(t, d)
-	assert.Less(t, len(out), 4*FramesPerSector)
+	require.Len(t, out, FramesPerSector, "the frames before the end of the file still play")
+	assert.InDelta(t, leftAt(FramesPerSector-1), out[FramesPerSector-1][0], 1e-9)
+
+	require.NoError(t, d.Seek(0))
+	assert.Len(t, streamAll(t, d), FramesPerSector, "a seek back plays what the file still holds")
+}
+
+func TestOpenCueCaseFoldInSubfolder(t *testing.T) {
+	t.Parallel()
+	fsys := afero.NewMemMapFs()
+	cuePath := writeRip(t, fsys, `FILE "Disc 1/Track.BIN" BINARY
+  TRACK 01 AUDIO
+    INDEX 01 00:00:00
+`, nil)
+	require.NoError(t, afero.WriteFile(fsys, filepath.Join(cueDir, "disc 1", "track.bin"), pcm(0, 588), 0o644))
+	d, err := OpenCue(cuePath, CueOptions{Fs: fsys})
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	assert.Equal(t, FramesPerSector, d.Len())
+}
+
+func TestDecoderClosedStreamsNothing(t *testing.T) {
+	t.Parallel()
+	fsys := afero.NewMemMapFs()
+	cue := "FILE \"a.bin\" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n"
+	cuePath := writeRip(t, fsys, cue, map[string]int{"a.bin": 2})
+	d, err := OpenCue(cuePath, CueOptions{Fs: fsys})
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	n, ok := d.Stream(make([][2]float64, 10))
+	assert.Zero(t, n)
+	assert.False(t, ok)
+	require.ErrorIs(t, d.Seek(0), errDecoderClosed)
+}
+
+func TestDecoderTrackStartsIsACopy(t *testing.T) {
+	t.Parallel()
+	fsys := afero.NewMemMapFs()
+	cuePath := writeRip(t, fsys, `FILE "a.bin" BINARY
+  TRACK 01 AUDIO
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    INDEX 01 00:00:01
+`, map[string]int{"a.bin": 3})
+	d, err := OpenCue(cuePath, CueOptions{Fs: fsys})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Close()) }()
+	starts := d.TrackStarts()
+	require.Equal(t, []int{0, FramesPerSector}, starts)
+	_ = append(starts, 7)
+	assert.Equal(t, 3*FramesPerSector, d.Len())
+}
+
+func TestTrackStartsRejectsAnUnaddressableAlbum(t *testing.T) {
+	t.Parallel()
+	_, err := trackStarts(&Album{Tracks: []Track{
+		{Number: 1, End: math.MaxInt},
+		{Number: 2, End: 1},
+	}})
+	require.Error(t, err)
 }

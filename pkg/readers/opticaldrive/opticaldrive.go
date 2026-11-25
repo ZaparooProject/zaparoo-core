@@ -286,6 +286,9 @@ type pollState struct {
 	lastUUID             string
 	lastLabel            string
 	lastIdentityErr      string
+	lastKind             string
+	lastSystem           string
+	lastTOC              string
 	coverDir             string
 	activeTokenFile      discTokenFile
 	lastTokenFile        discTokenFile
@@ -300,6 +303,7 @@ type pollState struct {
 func (st *pollState) forget() {
 	st.lastTokenFile = discTokenFile{}
 	st.lastUUID, st.lastLabel, st.lastIdentityErr = "", "", ""
+	st.lastKind, st.lastSystem, st.lastTOC = "", "", ""
 	st.hasProbed = false
 	st.discProbed = false
 	st.probeAttempts = 0
@@ -340,7 +344,7 @@ func (r *FileReader) poll(st *pollState, iq chan<- readers.Scan) {
 			st.statusUnsupportedLog = true
 			log.Info().Str("path", r.path).Msg("optical drive does not report status, reading the disc to watch it")
 		}
-		r.probe(st, iq)
+		r.probe(st, iq, true)
 		return
 	}
 	if err != nil {
@@ -360,7 +364,9 @@ func (r *FileReader) poll(st *pollState, iq chan<- readers.Scan) {
 		return
 	}
 
-	if check.Changed && st.discProbed {
+	// A change while a probe is still being retried is a new disc too: it
+	// starts with its own retries, not what the last disc left.
+	if check.Changed && (st.discProbed || st.probeAttempts > 0) {
 		log.Debug().Str("path", r.path).Msg("optical drive reports a new disc")
 		if st.token != nil {
 			r.sendRemoval(st, iq)
@@ -370,7 +376,7 @@ func (r *FileReader) poll(st *pollState, iq chan<- readers.Scan) {
 
 	if !st.discProbed {
 		st.probeAttempts++
-		complete := r.probe(st, iq)
+		complete := r.probe(st, iq, st.probeAttempts >= maxProbeRetries)
 		if complete || st.probeAttempts >= maxProbeRetries {
 			st.discProbed = true
 		}
@@ -399,8 +405,10 @@ func (r *FileReader) sendRemoval(st *pollState, iq chan<- readers.Scan) {
 }
 
 // probe reads the disc and sends a scan when what it holds changed. It
-// reports false when a read failed and the disc should be probed again.
-func (r *FileReader) probe(st *pollState, iq chan<- readers.Scan) bool {
+// reports false when a read failed and the disc should be probed again. Such
+// a partial read is only sent on the last try: a second scan of the same disc
+// is dropped as a duplicate, so what the first one missed could never follow.
+func (r *FileReader) probe(st *pollState, iq chan<- readers.Scan, lastTry bool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	media := r.inspector.Inspect(ctx, r.path)
 	cancel()
@@ -416,17 +424,26 @@ func (r *FileReader) probe(st *pollState, iq chan<- readers.Scan) bool {
 		cancel()
 	}
 
+	// A filesystem whose zaparoo.txt could not be looked up is read again,
+	// or a disc that carries one would launch as if it had none.
 	complete := media.Complete &&
-		(identityErr == nil || errors.Is(identityErr, errISO9660IdentityNotFound))
+		(identityErr == nil || errors.Is(identityErr, errISO9660IdentityNotFound)) &&
+		(audio || identityErr != nil || identity.TokenFile.State != discTokenFileUnknown)
+	if !complete && !lastTry {
+		return false
+	}
 
 	uuid := strings.TrimSpace(identity.UUID)
 	label := strings.TrimSpace(identity.Label)
 	identityErrStr := errString(identityErr)
 	probeTokenFile := effectiveDiscTokenFile(identity.TokenFile, st.lastTokenFile, st.hasProbed, identityErr)
 
+	toc := media.TOC.Fingerprint()
 	probeChanged := !st.hasProbed || uuid != st.lastUUID || label != st.lastLabel ||
-		identityErrStr != st.lastIdentityErr || !discTokenFilesEqual(probeTokenFile, st.lastTokenFile)
+		identityErrStr != st.lastIdentityErr || !discTokenFilesEqual(probeTokenFile, st.lastTokenFile) ||
+		media.Kind != st.lastKind || media.System != st.lastSystem || toc != st.lastTOC
 	st.lastUUID, st.lastLabel, st.lastIdentityErr = uuid, label, identityErrStr
+	st.lastKind, st.lastSystem, st.lastTOC = media.Kind, media.System, toc
 	st.lastTokenFile = cloneDiscTokenFile(probeTokenFile)
 	st.hasProbed = true
 	if !probeChanged {

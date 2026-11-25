@@ -87,11 +87,15 @@ func OpenCue(cuePath string, opts CueOptions) (*Decoder, error) {
 		return nil, err
 	}
 	if opts.Track > 0 {
-		if err := album.only(opts.Track); err != nil {
-			return nil, err
+		if onlyErr := album.only(opts.Track); onlyErr != nil {
+			return nil, onlyErr
 		}
 	}
-	return newDecoder(album, &cueReader{fs: fsys, files: files, open: make([]afero.File, len(files))}), nil
+	starts, err := trackStarts(album)
+	if err != nil {
+		return nil, err
+	}
+	return newDecoder(album, starts, &cueReader{fs: fsys, files: files, open: make([]afero.File, len(files))}), nil
 }
 
 // cueReader reads frames from a rip's files, opening each the first time it
@@ -102,24 +106,24 @@ type cueReader struct {
 	open  []afero.File
 }
 
-func (r *cueReader) readFrames(t *Track, off int64, p []byte) error {
+func (r *cueReader) readFrames(t *Track, off int64, p []byte) (int, error) {
 	f := r.open[t.source]
 	if f == nil {
 		var err error
 		f, err = r.fs.Open(r.files[t.source].path)
 		if err != nil {
-			return fmt.Errorf("open %s: %w", r.files[t.source].path, err)
+			return 0, fmt.Errorf("open %s: %w", r.files[t.source].path, err)
 		}
 		r.open[t.source] = f
 	}
 	n, err := f.ReadAt(p, off*bytesPerFrame)
 	if n == len(p) {
-		return nil
+		return n, nil
 	}
 	if err == nil {
 		err = io.ErrUnexpectedEOF
 	}
-	return fmt.Errorf("read %s: %w", r.files[t.source].path, err)
+	return n - n%bytesPerFrame, fmt.Errorf("read %s: %w", r.files[t.source].path, err)
 }
 
 func (r *cueReader) close() error {

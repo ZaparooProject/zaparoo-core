@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/cdrom"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -278,4 +279,43 @@ func TestOpenDiscUnsupported(t *testing.T) {
 	open := func(string) (cdrom.Drive, error) { return nil, cdrom.ErrUnsupported }
 	_, err := OpenDisc("cdaudio://sr0", DiscOptions{Open: open})
 	require.ErrorIs(t, err, cdrom.ErrUnsupported)
+}
+
+func TestDiscSeekPastTheReadAheadWakesTheProducer(t *testing.T) {
+	t.Parallel()
+	fd := &fakeDrive{status: cdrom.StatusDiscOK, toc: cdrom.TOC{
+		Tracks: []cdrom.Track{{Number: 1, Start: 0, End: 400}}, LeadOut: 400,
+	}}
+	d, err := OpenDisc("cdaudio://sr14", DiscOptions{Open: fd.open})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Close()) }()
+	r, ok := d.reader.(*discReader)
+	require.True(t, ok)
+
+	buf := make([][2]float64, 1)
+	_, ok = d.Stream(buf)
+	require.True(t, ok)
+	full := func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.queue) == readAheadChunks
+	}
+	require.Eventually(t, full, 5*time.Second, time.Millisecond, "the read-ahead fills")
+
+	// The next read starts exactly where read-ahead stopped, so the seek
+	// drops every queued chunk without restarting the producer.
+	next := readAheadChunks * readAheadSectors
+	require.NoError(t, d.Seek(next*FramesPerSector))
+	got := make(chan int, 1)
+	go func() {
+		n, _ := d.Stream(buf)
+		got <- n
+	}()
+	select {
+	case n := <-got:
+		assert.Equal(t, 1, n)
+		assert.InDelta(t, leftAt(next*FramesPerSector), buf[0][0], 1e-9)
+	case <-time.After(5 * time.Second):
+		t.Fatal("playback stalled after the seek")
+	}
 }

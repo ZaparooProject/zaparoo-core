@@ -1036,12 +1036,23 @@ func TestResolveLaunchableLauncher(t *testing.T) {
 		Extensions: []string{".nes"},
 		ScanOnly:   true,
 	}
+	// More specific than the system launcher, but it runs only when named.
+	explicitOnly := platforms.Launcher{
+		ID:           "NESAlt",
+		SystemID:     systemdefs.SystemNES,
+		Folders:      []string{tmpDir},
+		Extensions:   []string{".nes"},
+		ExplicitOnly: true,
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
-		[]platforms.Launcher{scanOnly, realLauncher, musicLauncher})
+		[]platforms.Launcher{scanOnly, explicitOnly, realLauncher, musicLauncher})
 
 	cfg := &config.Instance{}
 

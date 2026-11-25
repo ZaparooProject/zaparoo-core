@@ -195,17 +195,17 @@ func hasAudio(tracks []CueTrack) bool {
 	return false
 }
 
-// statCueFile finds a FILE entry beside the sheet. A name that differs from
-// the file on disk only in case, as sheets written on Windows often do, is
-// matched too.
+// statCueFile finds a FILE entry beside the sheet or in a folder below it. A
+// name that differs from the files on disk only in case, as sheets written on
+// Windows often do, is matched too.
 func statCueFile(fsys afero.Fs, dir, name string) (resolved string, size int64, err error) {
 	if nameErr := ValidateFileName(name); nameErr != nil {
 		return "", 0, nameErr
 	}
 	resolved = filepath.Join(dir, filepath.FromSlash(name))
 	info, err := fsys.Stat(resolved)
-	if err != nil && errors.Is(err, fs.ErrNotExist) && !strings.Contains(name, "/") {
-		if found, ok := matchFold(fsys, dir, name); ok {
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		if found, ok := matchFoldPath(fsys, dir, name); ok {
 			resolved = found
 			info, err = fsys.Stat(resolved)
 		}
@@ -217,6 +217,25 @@ func statCueFile(fsys afero.Fs, dir, name string) (resolved string, size int64, 
 		return "", 0, fmt.Errorf("cue FILE %q: not a regular file", name)
 	}
 	return resolved, info.Size(), nil
+}
+
+// matchFoldPath resolves a validated relative name below dir one part at a
+// time, taking an exact match for a part when there is one.
+func matchFoldPath(fsys afero.Fs, dir, name string) (string, bool) {
+	cur := dir
+	for _, part := range strings.Split(name, "/") {
+		exact := filepath.Join(cur, part)
+		if _, err := fsys.Stat(exact); err == nil {
+			cur = exact
+			continue
+		}
+		found, ok := matchFold(fsys, cur, part)
+		if !ok {
+			return "", false
+		}
+		cur = found
+	}
+	return cur, true
 }
 
 func matchFold(fsys afero.Fs, dir, name string) (string, bool) {

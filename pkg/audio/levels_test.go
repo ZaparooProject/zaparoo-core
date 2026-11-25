@@ -75,6 +75,33 @@ func TestLevelAnalyzerPutsSineInItsBand(t *testing.T) {
 	}
 }
 
+func TestLevelAnalyzerMeasuresEachChannel(t *testing.T) {
+	t.Parallel()
+	const hz = 1000.0
+	want := expectedBand(hz)
+	inverted := sineRing(hz, 0.5, levelTapSize)
+	for i := range inverted {
+		inverted[i][1] = -inverted[i][0]
+	}
+	leftOnly := sineRing(hz, 0.5, levelTapSize)
+	for i := range leftOnly {
+		leftOnly[i][1] = 0
+	}
+
+	a := newLevelAnalyzer()
+	var tap levelTap
+	tap.add(inverted, 0, len(inverted))
+	l := a.measure(&tap)
+	assert.InDelta(t, 0.5, l.Peak, 0.01, "out-of-phase channels do not cancel")
+	assert.InDelta(t, 0.9, l.Bands[want], 0.03)
+
+	tap.add(leftOnly, 0, len(leftOnly))
+	l = a.measure(&tap)
+	assert.InDelta(t, 0.5, l.Peak, 0.01)
+	// One channel at -6 dB averages to -9 dB across two.
+	assert.InDelta(t, 0.85, l.Bands[want], 0.03)
+}
+
 func TestLevelAnalyzerSilenceIsZero(t *testing.T) {
 	t.Parallel()
 	a := newLevelAnalyzer()

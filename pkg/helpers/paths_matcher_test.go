@@ -786,6 +786,9 @@ func TestDirLauncherMatcherBestLauncher(t *testing.T) {
 			Test: func(_ *config.Instance, path string) bool { return strings.HasSuffix(path, ".run") },
 		},
 		{ID: "Steam", SystemID: "PC", Schemes: []string{"steam"}},
+		// Explicit-only launchers run only when named, never by matching.
+		{ID: "Player", SystemID: "Audio", Folders: []string{"Music"}, Extensions: []string{".cue"}, ExplicitOnly: true},
+		{ID: "CDPlayer", SystemID: "Audio", Schemes: []string{"cdaudio"}, ExplicitOnly: true},
 	}
 	matcher := NewLauncherMatcherForLaunchers(&config.Instance{}, mockPlatform, launchers)
 
@@ -802,6 +805,8 @@ func TestDirLauncherMatcherBestLauncher(t *testing.T) {
 		{dir: filepath.Join(root, "_Chronological"), name: "notes.txt"},
 		{dir: filepath.Join(root, "_Chronological"), name: ".hidden.mgl"},
 		{dir: filepath.Join(root, "SNES-Hacks"), name: "Game.sfc"},
+		{dir: filepath.Join(root, "Music"), name: "Album.cue"},
+		{dir: "cdaudio://sr0", name: "1"},
 	}
 	for _, tt := range tests {
 		path := filepath.Join(tt.dir, tt.name)

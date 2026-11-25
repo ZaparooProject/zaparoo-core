@@ -12,6 +12,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,6 +247,35 @@ func TestPhysicalDiscLauncher_DVD(t *testing.T) {
 	_, err := dvd.Launch(cfg, "physicaldisc://sr0/DVDPlayer", nil)
 	require.NoError(t, err)
 	assert.Equal(t, sdRoot+"/_Other/DVD_20250101.rbf", launched)
+}
+
+// Not parallel: swaps the global core list.
+func TestPhysicalDiscLauncher_DVDAvailability(t *testing.T) {
+	cfg := &config.Instance{}
+	dvd := physicalDiscLauncher(t, &Platform{fs: afero.NewMemMapFs()}, systemdefs.SystemDVDPlayer)
+	snes := cores.RBFInfo{
+		Path: sdRoot + "/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+		ShortName: "SNES", MglName: "_Console/SNES",
+	}
+
+	withRBFCache(t, nil)
+	require.NoError(t, dvd.Availability(cfg), "before the first core scan every core counts")
+
+	withRBFCache(t, []cores.RBFInfo{snes})
+	require.ErrorIs(t, dvd.Availability(cfg), errNoDVDCore,
+		"disc_first falls through to the library image")
+
+	withRBFCache(t, []cores.RBFInfo{snes, {
+		Path: sdRoot + "/_Other/DVD_20250101.rbf", Filename: "DVD_20250101.rbf",
+		ShortName: "DVD", MglName: "_Other/DVD",
+	}})
+	require.NoError(t, dvd.Availability(cfg))
+
+	withRBFCache(t, []cores.RBFInfo{snes, {
+		Path: sdRoot + "/_Other/DVD_Player.rbf", Filename: "DVD_Player.rbf",
+		ShortName: "DVD_Player", MglName: "_Other/DVD_Player",
+	}})
+	require.NoError(t, dvd.Availability(cfg))
 }
 
 type openCountingFs struct {

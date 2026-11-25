@@ -154,12 +154,17 @@ func OpenDisc(path string, opts DiscOptions) (*Decoder, error) {
 	}
 	rememberAlbum(drive, album.Title)
 	if track > 0 {
-		if err := album.only(track); err != nil {
+		if onlyErr := album.only(track); onlyErr != nil {
 			_ = d.Close()
-			return nil, err
+			return nil, onlyErr
 		}
 	}
-	return newDecoder(album, newDiscReader(d, album)), nil
+	starts, err := trackStarts(album)
+	if err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	return newDecoder(album, starts, newDiscReader(d, album)), nil
 }
 
 // discAlbum lays out a disc's audio tracks from its TOC and names them from
@@ -344,27 +349,35 @@ func (r *discReader) ejected() bool {
 
 // readFrames copies frames from the read-ahead queue, waiting for the
 // producer when it is behind and restarting it after a seek.
-func (r *discReader) readFrames(_ *Track, off int64, p []byte) error {
-	for len(p) > 0 {
+func (r *discReader) readFrames(_ *Track, off int64, p []byte) (int, error) {
+	filled := 0
+	for filled < len(p) {
 		lba := int(off / FramesPerSector)
 		within := int(off%FramesPerSector) * bytesPerFrame
-		n, err := r.take(lba, within, p)
+		n, err := r.take(lba, within, p[filled:])
 		if err != nil {
-			return err
+			return filled, err
 		}
-		p = p[n:]
+		filled += n
 		off += int64(n / bytesPerFrame)
 	}
-	return nil
+	return filled, nil
 }
 
 // take copies what it can of sector lba, from byte within, into p.
 func (r *discReader) take(lba, within int, p []byte) (int, error) {
 	for {
 		r.mu.Lock()
+		dropped := false
 		for len(r.queue) > 0 && r.queue[0].lba+r.queue[0].count <= lba {
 			r.free = append(r.free, r.queue[0].data)
 			r.queue = r.queue[1:]
+			dropped = true
+		}
+		if dropped {
+			// A producer waiting on a full queue has room again, which a
+			// seek past everything read ahead would otherwise never tell it.
+			wake(r.producerWake)
 		}
 		if len(r.queue) > 0 && r.queue[0].lba <= lba {
 			c := &r.queue[0]
