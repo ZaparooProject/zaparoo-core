@@ -3805,7 +3805,7 @@ A purpose sets what may be uploaded. The one purpose today:
 
 | Purpose       | Largest file | Content                    | Used by |
 | :------------ | :----------- | :------------------------- | :------ |
-| `media-image` | 10 MiB       | JPEG, PNG, GIF or WebP     | [`media.meta.update`](#mediametaupdate) `images` |
+| `media-image` | 10 MiB       | JPEG, PNG, GIF or WebP     | [`media.meta.update`](#mediametaupdate) `images`, [`decks.update`](#decksupdate) `cover` |
 
 A session belongs to the client that began it and lives in Core's memory: it ends after 10 minutes without a request, and when Core restarts. A client that lost its connection asks [`uploads.status`](#uploadsstatus) where the upload is and carries on from there. Core holds at most four uploads at once.
 
@@ -5620,7 +5620,7 @@ The created [Deck](#deck-object) with `items`.
 
 ### decks.update
 
-**Access:** All clients.
+**Access:** All clients. A `file` cover needs localhost or admin; a `browse` or `upload` cover needs localhost or any authenticated client.
 
 Edit an owned deck. A cached copy of somebody else's deck, and a deck the account locked, are read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items. The whole edit is applied at once, to the deck as it is at that moment: if any part fails, nothing changes. A request with no changes returns the deck as it is and sends no notification.
 
@@ -5641,8 +5641,12 @@ Edit an owned deck. A cached copy of somebody else's deck, and a deck the accoun
 | Value                                              | Effect                                                                                       |
 | :------------------------------------------------- | :------------------------------------------------------------------------------------------- |
 | `{"kind": "media", "system": "…", "path": "…"}`    | The game's art, chosen the way `media.image` chooses it by default.                         |
-| `{"kind": "file", "path": "…"}`                    | An image file on the Core host, by absolute path. It must be a JPEG, PNG, GIF or WebP image of at most 10 MiB that decodes. |
+| `{"kind": "file", "path": "…"}`                    | An image file on the Core host, by absolute path. Needs localhost or admin.                 |
+| `{"kind": "browse", "root": "…", "path": "…"}`     | An image picked with [`files.browse`](#filesbrowse): the root's ID and the entry's `path` under it. Needs localhost or any authenticated client. |
+| `{"kind": "upload", "uploadId": "…"}`              | A finished [upload](#uploads) of purpose `media-image`. Needs localhost or any authenticated client. The upload is used up only when the update succeeds. |
 | `{"kind": "none"}`                                 | Removes the cover.                                                                           |
+
+Each kind takes only the fields shown. A `file`, `browse` or `upload` image must be a JPEG, PNG, GIF or WebP image of at most 10 MiB that decodes.
 
 A cover change works with no account and updates `updatedAt`. With Library sync on it is sent to the account; `none` removes the account's image.
 

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -38,6 +39,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/hostfiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/uploads"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -230,10 +233,19 @@ func TestHandleDecksUpdate_CoverKinds(t *testing.T) {
 		fmt.Sprintf(`{"kind":"file","path":%q}`, filepath.Join(t.TempDir(), "missing.png")),
 		`{"kind":"media","system":"NES"}`,
 		`{"kind":"none","path":"/x"}`,
+		`{"kind":"none","uploadId":"u"}`,
+		`{"kind":"media","system":"NES","path":"p","root":"r"}`,
+		fmt.Sprintf(`{"kind":"file","path":%q,"uploadId":"u"}`, coverPath),
+		`{"kind":"browse","root":"r"}`,
+		`{"kind":"browse","path":"covers/a.png"}`,
+		`{"kind":"browse","root":"r","path":"covers/a.png","uploadId":"u"}`,
+		`{"kind":"upload"}`,
+		`{"kind":"upload","uploadId":"u","path":"/x"}`,
 		`{"kind":"other"}`,
 	} {
 		_, err = HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(`{"deckId":%q,"cover":%s}`, deckID, cover)))
 		require.Error(t, err, cover)
+		assert.True(t, isClientErr(err), "%s: want a client error, got %v", cover, err)
 	}
 
 	notImage := filepath.Join(t.TempDir(), "notes.png")
@@ -258,12 +270,160 @@ func TestHandleDecksUpdate_CoverRefusedOnReadOnlyDecks(t *testing.T) {
 	require.NoError(t, e.env.Database.UserDB.UpsertDeckSync([]database.DeckSyncRow{
 		{DeckID: "abcdefghjkmn", Revision: 2, Locked: true},
 	}))
+	uploadID := uploadTestImage(t, &e.env, testPNG(t, 4), 1024)
 	for _, deckID := range []string{"0123456789ab", "abcdefghjkmn"} {
-		for _, cover := range []string{fmt.Sprintf(`{"kind":"file","path":%q}`, coverPath), `{"kind":"none"}`} {
+		for _, cover := range []string{
+			fmt.Sprintf(`{"kind":"file","path":%q}`, coverPath),
+			fmt.Sprintf(`{"kind":"upload","uploadId":%q}`, uploadID),
+			`{"kind":"none"}`,
+		} {
 			_, err = HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(`{"deckId":%q,"cover":%s}`, deckID, cover)))
 			require.ErrorIs(t, err, database.ErrDeckReadOnly, deckID)
 		}
 	}
+	_, err = HandleUploadsStatus(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, uploadID)))
+	require.NoError(t, err, "a refused cover leaves the upload for another try")
+}
+
+// withBrowseRoot gives the deck test env a data directory and one browse
+// root that holds covers/metroid.png, beside a private image outside it.
+func (e *decksTestEnv) withBrowseRoot(t *testing.T) (dataDir, rootID string) {
+	t.Helper()
+	dataDir = t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	games := filepath.Join(base, "games")
+	for path, side := range map[string]int{
+		filepath.Join(games, "covers", "metroid.png"): 12,
+		filepath.Join(base, "private", "secret.png"):  16,
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, testPNG(t, side), 0o600))
+	}
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir, HostManagedPaths: true}).Maybe()
+	pl.On("RootDirs", mock.Anything).Return([]string{games}).Maybe()
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	e.env.Platform, e.env.Config = pl, cfg
+
+	result, err := HandleFilesBrowse(withParams(&e.env, `{"purpose":"image"}`))
+	require.NoError(t, err)
+	roots, ok := result.(models.FilesBrowseResponse)
+	require.True(t, ok)
+	require.Len(t, roots.Roots, 1)
+	return dataDir, roots.Roots[0].ID
+}
+
+func (e *decksTestEnv) storedCover(t *testing.T, dataDir, deckID string) []byte {
+	t.Helper()
+	stored, err := e.env.Database.UserDB.GetDeck(deckID)
+	require.NoError(t, err)
+	require.NotEmpty(t, stored.CoverFile)
+	assert.Equal(t, database.DeckCoverPendingSet, stored.CoverPending)
+	data, err := os.ReadFile(filepath.Join(dataDir, "decks", "covers", stored.CoverFile)) //nolint:gosec // test path
+	require.NoError(t, err)
+	return data
+}
+
+// A paired client may not name a host path, but it may pick a cover it
+// browsed to.
+func TestHandleDecksUpdate_CoverFromBrowse(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	dataDir, rootID := e.withBrowseRoot(t)
+	deckID := e.newDeck(t, "Covered", `{"kind":"script","name":"S","zapscript":"**a"}`)
+	e.env.IsLocal = false
+	e.env.ClientRole = "member"
+
+	got, ok := e.call(t, HandleDecksUpdate, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"browse","root":%q,"path":"covers/metroid.png"}}`, deckID, rootID,
+	)).(models.DeckResponse)
+	require.True(t, ok)
+	assert.True(t, got.HasImage)
+	assert.Equal(t, testPNG(t, 12), e.storedCover(t, dataDir, deckID))
+
+	_, err := HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"browse","root":%q,"path":"../private/secret.png"}}`, deckID, rootID)))
+	require.ErrorIs(t, err, hostfiles.ErrInvalidPath)
+	_, err = HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"browse","root":"nope","path":"covers/metroid.png"}}`, deckID)))
+	require.ErrorIs(t, err, hostfiles.ErrUnknownRoot)
+
+	e.env.ClientRole = ""
+	_, err = HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(
+		`{"deckId":%q,"cover":{"kind":"browse","root":%q,"path":"covers/metroid.png"}}`, deckID, rootID)))
+	require.ErrorIs(t, err, ErrForbidden)
+}
+
+func TestHandleDecksUpdate_CoverFromUpload(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	dataDir := e.withDataDir(t)
+	deckID := e.newDeck(t, "Covered", `{"kind":"script","name":"S","zapscript":"**a"}`)
+	e.env.IsLocal = false
+	e.env.ClientRole = "member"
+	e.env.ClientID = "phone"
+	data := testPNG(t, 40)
+	uploadID := uploadTestImage(t, &e.env, data, 1024)
+	params := fmt.Sprintf(`{"deckId":%q,"cover":{"kind":"upload","uploadId":%q}}`, deckID, uploadID)
+
+	// Another caller cannot use it.
+	other := e.env
+	other.ClientID = "tablet"
+	_, err := HandleDecksUpdate(withParams(&other, params))
+	require.ErrorIs(t, err, uploads.ErrNotFound)
+	other.ClientID, other.ClientRole = "phone", ""
+	_, err = HandleDecksUpdate(withParams(&other, params))
+	require.ErrorIs(t, err, ErrForbidden)
+
+	got, ok := e.call(t, HandleDecksUpdate, params).(models.DeckResponse)
+	require.True(t, ok)
+	assert.True(t, got.HasImage)
+	assert.Equal(t, data, e.storedCover(t, dataDir, deckID))
+
+	// The upload is used up.
+	_, err = HandleUploadsStatus(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, uploadID)))
+	require.ErrorIs(t, err, uploads.ErrNotFound)
+	_, err = HandleDecksUpdate(withParams(&e.env, params))
+	require.ErrorIs(t, err, uploads.ErrNotFound)
+	assert.True(t, isClientErr(err))
+}
+
+type failingDeckUserDB struct {
+	database.UserDBI
+	fail bool
+}
+
+func (f *failingDeckUserDB) UpdateDeck(deckID string, edit func(deck *database.Deck) error) (*database.Deck, error) {
+	if f.fail {
+		return nil, errors.New("disk full")
+	}
+	return f.UserDBI.UpdateDeck(deckID, edit) //nolint:wrapcheck // test passthrough
+}
+
+// An upload whose deck update fails stays available, so the client can retry
+// it.
+func TestHandleDecksUpdate_UploadCoverSurvivesAFailedUpdate(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	dataDir := e.withDataDir(t)
+	deckID := e.newDeck(t, "Covered", `{"kind":"script","name":"S","zapscript":"**a"}`)
+	userDB := &failingDeckUserDB{UserDBI: e.env.Database.UserDB, fail: true}
+	e.env.Database.UserDB = userDB
+	data := testPNG(t, 24)
+	uploadID := uploadTestImage(t, &e.env, data, 1024)
+	params := fmt.Sprintf(`{"deckId":%q,"cover":{"kind":"upload","uploadId":%q}}`, deckID, uploadID)
+
+	_, err := HandleDecksUpdate(withParams(&e.env, params))
+	require.Error(t, err)
+	assert.False(t, isClientErr(err), "a failed write is the device's fault: %v", err)
+	_, err = HandleUploadsStatus(withParams(&e.env, fmt.Sprintf(`{"uploadId":%q}`, uploadID)))
+	require.NoError(t, err, "the upload must outlive the failed update")
+
+	userDB.fail = false
+	e.call(t, HandleDecksUpdate, params)
+	assert.Equal(t, data, e.storedCover(t, dataDir, deckID))
 }
 
 // The remote image tests swap the package's HTTP client and thumbnail cache,
