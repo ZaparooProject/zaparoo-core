@@ -142,3 +142,16 @@ func (n *playbackNotifier) publishSlot(slot string) {
 		n.publish(notification)
 	}, *entry)
 }
+
+// queueNotification returns a publish function that sends through the
+// notification queue media.started also goes through, so a client never sees
+// a track's playback before the start of its media. It waits for room in the
+// queue instead of dropping, which only holds up the notifier's own goroutine.
+func queueNotification(ctx context.Context, queue chan<- models.Notification) func(models.Notification) {
+	return func(notification models.Notification) {
+		select {
+		case queue <- notification:
+		case <-ctx.Done():
+		}
+	}
+}

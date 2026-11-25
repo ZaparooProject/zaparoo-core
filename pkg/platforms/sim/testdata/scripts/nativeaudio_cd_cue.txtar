@@ -1,22 +1,25 @@
 # A cue/bin rip of an audio CD plays through native audio: the sheet as an
 # album, or one of its tracks as <sheet>/<n>. The data track keeps its number.
-# The bin is silence: one data sector, then a second of audio per track, long
-# enough for each track's tags to be reported before it ends.
+# The bin is silence: one data sector, then 30 seconds of audio per track, so
+# a track is still playing when its tags are reported however slow the
+# machine is. Each launch is stopped once its track is reported.
 
 sim-start
-rom -size 355152 Audio/album.bin
+rom -size 10586352 Audio/album.bin
 cp album.cue $ROMS/Audio/album.cue
 
 tap -uid 01 $ROMS/Audio/album.cue
 notification media.started systemId=Audio mediaPath=$ROMS/Audio/album.cue
 notification media.playback relativePath=Audio/album.cue track.title=Second track.album='Sim Album' track.trackNumber=2 track.trackTotal=3
-notification media.stopped launcherId=native-audio reason=finished
+api stop
+notification media.stopped launcherId=native-audio
 
 mark
 tap -uid 02 $ROMS/Audio/album.cue/3
 notification media.started systemId=Audio mediaPath=$ROMS/Audio/album.cue/3 mediaName='album - 3'
 notification media.playback track.title=Third track.trackNumber=3
-notification media.stopped launcherId=native-audio reason=finished
+api stop
+notification media.stopped launcherId=native-audio
 
 # Track 1 is data, so there is nothing to play.
 mark
@@ -35,4 +38,4 @@ FILE "album.bin" BINARY
     INDEX 01 00:00:01
   TRACK 03 AUDIO
     TITLE "Third"
-    INDEX 01 00:01:01
+    INDEX 01 00:30:01
