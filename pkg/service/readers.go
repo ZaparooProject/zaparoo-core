@@ -661,68 +661,77 @@ func readerManager(
 		readerConnectAttempts := 0
 		opened := manualReaders{}
 		lastReaderCount := 0
+		// One pass of connection management: wake handling, pruning and
+		// connecting. The first pass runs straight away rather than a tick
+		// later, so a reader present at startup is open a second sooner.
+		managePass := func() {
+			// Check for wake from sleep and reconnect all readers if detected
+			if sleepMonitor.Check() {
+				log.Info().Msg("detected wake from sleep, reconnecting all readers")
+				for _, r := range svc.State.ListReaders() {
+					if r != nil {
+						svc.State.RemoveReader(r.ReaderID())
+					}
+				}
+				lastReaderCount = 0
+			}
+
+			autoDetector = resolveAutoDetector(svc.Config, autoDetector, clock)
+
+			readerConnectAttempts++
+			rs := svc.State.ListReaders()
+
+			if len(rs) != lastReaderCount {
+				if len(rs) == 0 {
+					log.Info().Msg("all readers disconnected")
+				} else {
+					log.Info().Msgf("reader count changed: %d connected", len(rs))
+				}
+				lastReaderCount = len(rs)
+			} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
+				// Only log if no readers for 2 minutes
+				log.Debug().
+					Int("attempts", readerConnectAttempts).
+					Bool("autoDetect", svc.Config.AutoDetect()).
+					Msg("no readers connected")
+			}
+
+			for _, r := range rs {
+				if r != nil && !r.Connected() {
+					readerID := r.ReaderID()
+					log.Info().
+						Str("readerID", readerID).
+						Str("path", r.Path()).
+						Str("info", r.Info()).
+						Msg("pruning disconnected reader")
+					svc.State.RemoveReader(readerID)
+					if autoDetector != nil {
+						autoDetector.ClearPath(r.Path())
+						autoDetector.ClearFailedPath(r.Path())
+					}
+				}
+			}
+
+			connectErr := connectReaders(
+				svc.Platform, svc.Config, svc.State, scanQueue, autoDetector, opened,
+			)
+			if connectErr != nil {
+				log.Warn().Msgf("error connecting rs: %s", connectErr)
+			}
+			// Reset monitor after potentially blocking operations to avoid
+			// counting USB enumeration/connection time as sleep
+			sleepMonitor.Reset()
+		}
+		if svc.State.GetContext().Err() == nil {
+			managePass()
+		}
 		for {
 			select {
 			case <-svc.State.GetContext().Done():
 				log.Info().Msg("reader manager shutting down via context cancellation")
 				return
 			case <-readerTicker.C:
-				// Check for wake from sleep and reconnect all readers if detected
-				if sleepMonitor.Check() {
-					log.Info().Msg("detected wake from sleep, reconnecting all readers")
-					for _, r := range svc.State.ListReaders() {
-						if r != nil {
-							svc.State.RemoveReader(r.ReaderID())
-						}
-					}
-					lastReaderCount = 0
-				}
-
-				autoDetector = resolveAutoDetector(svc.Config, autoDetector, clock)
-
-				readerConnectAttempts++
-				rs := svc.State.ListReaders()
-
-				if len(rs) != lastReaderCount {
-					if len(rs) == 0 {
-						log.Info().Msg("all readers disconnected")
-					} else {
-						log.Info().Msgf("reader count changed: %d connected", len(rs))
-					}
-					lastReaderCount = len(rs)
-				} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
-					// Only log if no readers for 2 minutes
-					log.Debug().
-						Int("attempts", readerConnectAttempts).
-						Bool("autoDetect", svc.Config.AutoDetect()).
-						Msg("no readers connected")
-				}
-
-				for _, r := range rs {
-					if r != nil && !r.Connected() {
-						readerID := r.ReaderID()
-						log.Info().
-							Str("readerID", readerID).
-							Str("path", r.Path()).
-							Str("info", r.Info()).
-							Msg("pruning disconnected reader")
-						svc.State.RemoveReader(readerID)
-						if autoDetector != nil {
-							autoDetector.ClearPath(r.Path())
-							autoDetector.ClearFailedPath(r.Path())
-						}
-					}
-				}
-
-				connectErr := connectReaders(
-					svc.Platform, svc.Config, svc.State, scanQueue, autoDetector, opened,
-				)
-				if connectErr != nil {
-					log.Warn().Msgf("error connecting rs: %s", connectErr)
-				}
-				// Reset monitor after potentially blocking operations to avoid
-				// counting USB enumeration/connection time as sleep
-				sleepMonitor.Reset()
+				managePass()
 			}
 		}
 	}()

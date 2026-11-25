@@ -395,6 +395,17 @@ func (p *Platform) StartPost(
 		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
 	}
 
+	// Keep the early start init script in place. It needs a remount of the
+	// root filesystem, so it waits for the idle scheduler like the other
+	// background work rather than adding to startup.
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "mister-init-script",
+			5*time.Second, 300*time.Second,
+			installInitScript,
+		)
+	}
+
 	// One-time cleanup: resolve legacy MediaHistory rows recorded under a
 	// bare arcade set name (from before the tracker could canonicalize
 	// externally detected arcade launches) to their real .mra path and

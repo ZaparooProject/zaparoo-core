@@ -113,7 +113,7 @@ func TestMinReliableYear(t *testing.T) {
 func TestSleepWakeMonitor_NoWake(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// First check establishes baseline - should not trigger
 	assert.False(t, monitor.Check(), "first check should not trigger wake detection")
@@ -125,7 +125,7 @@ func TestSleepWakeMonitor_NoWake(t *testing.T) {
 func TestSleepWakeMonitor_WakeDetected(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// First check establishes baseline
 	assert.False(t, monitor.Check())
@@ -143,7 +143,7 @@ func TestSleepWakeMonitor_WakeDetected(t *testing.T) {
 func TestSleepWakeMonitor_Reset(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// First check establishes baseline
 	assert.False(t, monitor.Check())
@@ -162,7 +162,7 @@ func TestSleepWakeMonitor_ThresholdBoundary(t *testing.T) {
 	t.Parallel()
 
 	threshold := 5 * time.Second
-	monitor := NewSleepWakeMonitor(threshold)
+	monitor := newSleepWakeMonitorWithSource(threshold, nil)
 
 	// First check establishes baseline
 	assert.False(t, monitor.Check())
@@ -217,7 +217,7 @@ func TestSleepWakeMonitor_Concurrent(t *testing.T) {
 func TestSleepWakeMonitor_MultipleSleepCycles(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// First check establishes baseline
 	assert.False(t, monitor.Check())
@@ -264,7 +264,7 @@ func TestSleepWakeMonitor_UsesWallClockNotMonotonic(t *testing.T) {
 	// Our monitor needs wall clock to detect sleep (monotonic pauses during sleep).
 
 	// Create monitor and verify its internal time lacks monotonic reading
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// The monitor's lastCheck should NOT have monotonic (we use Round(0))
 	// We can't directly inspect lastCheck, but we can verify the behavior:
@@ -287,7 +287,7 @@ func TestSleepWakeMonitor_UsesWallClockNotMonotonic(t *testing.T) {
 func TestSleepWakeMonitor_NTPSyncFromEpoch(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// Simulate MiSTer boot: clock is at epoch (1970-01-01)
 	epochTime := time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC)
@@ -308,7 +308,7 @@ func TestSleepWakeMonitor_NTPSyncFromEpoch(t *testing.T) {
 func TestSleepWakeMonitor_RealSleepWakeStillDetected(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// Set lastCheck to a reliable time 10 seconds ago (simulating sleep)
 	reliablePast := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -324,7 +324,7 @@ func TestSleepWakeMonitor_RealSleepWakeStillDetected(t *testing.T) {
 func TestSleepWakeMonitor_UnreliableToUnreliable(t *testing.T) {
 	t.Parallel()
 
-	monitor := NewSleepWakeMonitor(5 * time.Second)
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, nil)
 
 	// Set lastCheck to epoch
 	epoch1 := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -372,9 +372,79 @@ func TestSleepWakeMonitor_MonotonicVsWallClock(t *testing.T) {
 		"wall clock diff (%v) should exceed threshold (%v)", wallDiff, threshold)
 
 	// Now verify our monitor correctly uses this wall clock behavior
-	monitor := NewSleepWakeMonitor(threshold)
+	monitor := newSleepWakeMonitorWithSource(threshold, nil)
 	monitor.SetLastCheckForTesting(simulatedBeforeSleep)
 
 	assert.True(t, monitor.Check(),
 		"monitor should detect the 10-second wall clock jump as wake event")
+}
+
+// fakeSuspendClock stands in for CLOCK_BOOTTIME - CLOCK_MONOTONIC.
+type fakeSuspendClock struct {
+	total time.Duration
+	ok    bool
+}
+
+func (c *fakeSuspendClock) read() (time.Duration, bool) {
+	return c.total, c.ok
+}
+
+// TestSleepWakeMonitor_SuspendClockIgnoresWallClockStep covers the MiSTer boot
+// case: the image restores the clock from the last shutdown, which passes
+// IsClockReliable, and NTP then steps it hours forward. No time was spent
+// suspended, so no wake may be reported.
+func TestSleepWakeMonitor_SuspendClockIgnoresWallClockStep(t *testing.T) {
+	t.Parallel()
+
+	suspend := &fakeSuspendClock{ok: true}
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, suspend.read)
+
+	monitor.SetLastCheckForTesting(time.Now().Add(-13 * time.Hour))
+	assert.False(t, monitor.Check(), "a wall clock step without suspend must not count as a wake")
+}
+
+func TestSleepWakeMonitor_SuspendClockDetectsSuspend(t *testing.T) {
+	t.Parallel()
+
+	suspend := &fakeSuspendClock{total: time.Minute, ok: true}
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, suspend.read)
+
+	assert.False(t, monitor.Check(), "no suspend since the baseline")
+
+	suspend.total += 4 * time.Second
+	assert.False(t, monitor.Check(), "suspend under the threshold is not a wake")
+
+	suspend.total += 10 * time.Second
+	assert.True(t, monitor.Check(), "suspend over the threshold is a wake")
+	assert.False(t, monitor.Check(), "the same suspend is reported once")
+
+	suspend.total += 10 * time.Second
+	monitor.Reset()
+	assert.False(t, monitor.Check(), "reset moves the suspend baseline")
+}
+
+func TestSleepWakeMonitor_SuspendClockUnavailableFallsBackToWallClock(t *testing.T) {
+	t.Parallel()
+
+	suspend := &fakeSuspendClock{ok: false}
+	monitor := newSleepWakeMonitorWithSource(5*time.Second, suspend.read)
+
+	monitor.SetLastCheckForTesting(time.Now().Add(-10 * time.Second))
+	assert.True(t, monitor.Check(), "without a suspend clock the wall clock jump is used")
+}
+
+// TestPlatformSuspendedTime checks the real clock source where one exists: it
+// must read without error and never go backwards between reads.
+func TestPlatformSuspendedTime(t *testing.T) {
+	t.Parallel()
+
+	if platformSuspendedTime == nil {
+		t.Skip("no suspend-aware clock on this platform")
+	}
+	first, ok := platformSuspendedTime()
+	assert.True(t, ok)
+	assert.GreaterOrEqual(t, first, -time.Millisecond)
+	second, ok := platformSuspendedTime()
+	assert.True(t, ok)
+	assert.GreaterOrEqual(t, second, first-time.Millisecond)
 }

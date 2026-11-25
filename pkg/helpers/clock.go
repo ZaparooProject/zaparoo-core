@@ -54,9 +54,14 @@ func IsClockReliable(t time.Time) bool {
 	return t.Year() >= MinReliableYear
 }
 
-// SleepWakeMonitor detects system sleep/wake events by monitoring wall clock jumps.
-// When the system sleeps, the monotonic clock pauses but wall clock continues.
-// On wake, the wall clock will have jumped forward significantly more than expected.
+// SleepWakeMonitor detects system sleep/wake events.
+//
+// On Linux it watches how far CLOCK_BOOTTIME has pulled ahead of
+// CLOCK_MONOTONIC. The two only drift apart while the system is suspended, so
+// a wall clock step (NTP correcting a clock restored from the last shutdown at
+// boot, or a user changing the time) is never mistaken for a wake. Elsewhere it
+// falls back to watching the wall clock: the monotonic clock pauses during
+// sleep, so on wake the wall clock has jumped further than expected.
 //
 // Usage:
 //
@@ -69,19 +74,28 @@ func IsClockReliable(t time.Time) bool {
 //	}
 type SleepWakeMonitor struct {
 	lastCheck time.Time
-	threshold time.Duration
-	mu        syncutil.Mutex
+	// suspended reports the total time the system has spent suspended since
+	// boot, or false when the platform cannot tell. Nil means wall clock only.
+	suspended     func() (time.Duration, bool)
+	lastSuspended time.Duration
+	threshold     time.Duration
+	mu            syncutil.Mutex
 }
 
-// NewSleepWakeMonitor creates a monitor that detects time jumps exceeding threshold.
+// NewSleepWakeMonitor creates a monitor that detects sleeps longer than threshold.
 // Recommended threshold: 5 seconds for fast polling loops (allows for normal
 // scheduling delays), or match the polling interval for slower loops.
 func NewSleepWakeMonitor(threshold time.Duration) *SleepWakeMonitor {
-	return &SleepWakeMonitor{
-		// Round(0) strips monotonic clock reading, forcing wall clock comparison
-		lastCheck: time.Now().Round(0),
+	return newSleepWakeMonitorWithSource(threshold, platformSuspendedTime)
+}
+
+func newSleepWakeMonitorWithSource(threshold time.Duration, suspended func() (time.Duration, bool)) *SleepWakeMonitor {
+	m := &SleepWakeMonitor{
 		threshold: threshold,
+		suspended: suspended,
 	}
+	m.resetLocked()
+	return m
 }
 
 // Check returns true if a wake-from-sleep was likely detected since last check.
@@ -100,6 +114,14 @@ func (m *SleepWakeMonitor) Check() bool {
 	elapsed := now.Sub(m.lastCheck)
 	m.lastCheck = now
 
+	if m.suspended != nil {
+		if total, ok := m.suspended(); ok {
+			slept := total - m.lastSuspended
+			m.lastSuspended = total
+			return slept > m.threshold
+		}
+	}
+
 	// If the previous check was from an unreliable clock (e.g. epoch on MiSTer
 	// before NTP sync), the elapsed time is meaningless — an NTP clock jump
 	// from 1970 to 2025 is not a wake-from-sleep event.
@@ -111,17 +133,27 @@ func (m *SleepWakeMonitor) Check() bool {
 	return elapsed > m.threshold
 }
 
-// Reset resets the monitor's last check time to now.
+// Reset resets the monitor's baseline to now.
 // Useful after handling a wake event to prevent false positives,
 // or when resuming monitoring after a pause.
 func (m *SleepWakeMonitor) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.resetLocked()
+}
+
+func (m *SleepWakeMonitor) resetLocked() {
 	m.lastCheck = time.Now().Round(0)
+	if m.suspended != nil {
+		if total, ok := m.suspended(); ok {
+			m.lastSuspended = total
+		}
+	}
 }
 
 // SetLastCheckForTesting sets the last check time for testing purposes.
-// This allows tests to simulate time jumps without accessing private fields.
+// This allows tests to simulate wall clock jumps without accessing private
+// fields. It only affects monitors using the wall clock fallback.
 func (m *SleepWakeMonitor) SetLastCheckForTesting(t time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
