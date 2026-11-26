@@ -22,12 +22,14 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -542,11 +544,88 @@ func TestMediaBrowseFilteredCollapsesDiscSets(t *testing.T) {
 	quest = browseEntryNamed(t, entries, f.folder("Quest"))
 	assert.Equal(t, []string{"favorite", "liked"}, userTagValues(quest.Tags))
 
-	// Browse lists every folder whatever the filter, so a set none of
-	// whose discs match is still the same one entry.
+	// Browse lists every folder whatever the filter, but a disc set whose
+	// tags do not match the filter stays a plain folder instead of
+	// collapsing into a game entry.
 	entries = f.browse(t, map[string]any{"tags": []string{"user:disliked"}})
 	saga = browseEntryNamed(t, entries, f.folder("Saga"))
-	assert.True(t, saga.MultiDisc)
-	assert.Equal(t, f.ids["saga2"], saga.MediaID)
-	assert.Equal(t, []string{"favorite"}, userTagValues(saga.Tags))
+	assert.False(t, saga.MultiDisc)
+	assert.Zero(t, saga.MediaID)
+}
+
+// TestMediaBrowseFilteredDiscSetsMatchLikeFiles pins that a filtered browse
+// collapses a disc set exactly when the folder holds a disc the same filter
+// matches, the way search and file listings read it.
+func TestMediaBrowseFilteredDiscSetsMatchLikeFiles(t *testing.T) {
+	t.Parallel()
+	f := newDiscSetFixture(t)
+	seedFavorites(t, f)
+	mediaDB := f.env.Database.MediaDB
+	rows, err := mediaDB.GetMediaBySystemID("PSX")
+	require.NoError(t, err)
+	var sagaTitle int64
+	for _, row := range rows {
+		if row.DBID == f.ids["saga1"] {
+			sagaTitle = row.MediaTitleDBID
+		}
+	}
+	require.NotZero(t, sagaTitle)
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(f.env.Context, sagaTitle, []database.TagInfo{
+		{Type: "genre", Tag: "rpg"},
+		{Type: "developer", Tag: "squaresoft"},
+		{Type: "distribution", Tag: "virtual-console"},
+	}))
+
+	tests := []struct {
+		name  string
+		tags  []string
+		saga  bool
+		quest bool
+	}{
+		{name: "title tag", tags: []string{"genre:rpg"}, saga: true},
+		{name: "credit filter", tags: []string{"credit:squaresoft"}, saga: true},
+		{name: "deprecated spelling", tags: []string{"distribution:virtualconsole"}, saga: true},
+		{name: "flags on different discs", tags: []string{"user:favorite", "user:liked"}},
+		{name: "not a favorite", tags: []string{"-user:favorite"}, saga: true, quest: true},
+		{name: "not the title tag", tags: []string{"-genre:rpg"}, quest: true},
+		{name: "either flag", tags: []string{"~user:liked", "~user:disliked"}, quest: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entries := f.browse(t, map[string]any{"tags": tt.tags})
+			saga := browseEntryNamed(t, entries, f.folder("Saga"))
+			quest := browseEntryNamed(t, entries, f.folder("Quest"))
+			assert.Equal(t, tt.saga, saga.MultiDisc, "Saga")
+			assert.Equal(t, tt.quest, quest.MultiDisc, "Quest")
+			if !tt.saga {
+				assert.Zero(t, saga.MediaID)
+			}
+		})
+	}
+}
+
+type failingTagMatchMediaDB struct {
+	database.MediaDBI
+}
+
+func (failingTagMatchMediaDB) MatchMediaTagFilters(
+	context.Context, []int64, []zapscript.TagFilter,
+) (map[int64]struct{}, error) {
+	return nil, errors.New("match failed")
+}
+
+func TestMediaBrowseFilteredDiscSetMatchFailureLeavesFolders(t *testing.T) {
+	t.Parallel()
+	f := newDiscSetFixture(t)
+	seedFavorites(t, f)
+	f.env.Database = &database.Database{
+		MediaDB: failingTagMatchMediaDB{MediaDBI: f.env.Database.MediaDB},
+		UserDB:  f.env.Database.UserDB,
+	}
+
+	entries := f.browse(t, map[string]any{"tags": []string{"user:favorite"}})
+	saga := browseEntryNamed(t, entries, f.folder("Saga"))
+	assert.False(t, saga.MultiDisc)
+	assert.Zero(t, saga.MediaID)
 }

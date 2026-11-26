@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -271,4 +272,105 @@ func TestResolveSingletonContainerAliases_DiscSetShowsEveryDiscsFlags(t *testing
 	playlist := byDir[aliasTestDir(parent, "Playlist")]
 	assert.False(t, playlist.MultiDisc)
 	assert.Empty(t, userTagNames(playlist.Tags), "a playlist folder shows the playlist's own flags")
+}
+
+func TestMatchMediaTagFilters(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	ids := seedDiscSetRows(t, mediaDB,
+		discSetSeed{path: "roms/PSX/A/A.chd", title: "a"},
+		discSetSeed{path: "roms/PSX/B/B.chd", title: "b"},
+		discSetSeed{path: "roms/PSX/C/C.chd", title: "c"},
+	)
+	a, b, c := ids["roms/PSX/A/A.chd"], ids["roms/PSX/B/B.chd"], ids["roms/PSX/C/C.chd"]
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, a, []database.TagInfo{{Type: "genre", Tag: "rpg"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, c, []database.TagInfo{{Type: "genre", Tag: "puzzle"}}))
+	var titleB int64
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
+		`SELECT MediaTitleDBID FROM Media WHERE DBID = ?`, b).Scan(&titleB))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, titleB, []database.TagInfo{
+		{Type: "developer", Tag: "squaresoft"},
+		{Type: "distribution", Tag: "virtual-console"},
+	}))
+
+	match := func(filters ...zapscript.TagFilter) []int64 {
+		t.Helper()
+		matched, err := mediaDB.MatchMediaTagFilters(ctx, []int64{a, b, c, a}, filters)
+		require.NoError(t, err)
+		out := make([]int64, 0, len(matched))
+		for id := range matched {
+			out = append(out, id)
+		}
+		return out
+	}
+	and := func(typ, val string) zapscript.TagFilter {
+		return zapscript.TagFilter{Type: typ, Value: val, Operator: zapscript.TagOperatorAND}
+	}
+
+	assert.ElementsMatch(t, []int64{a}, match(and("genre", "rpg")), "a media tag")
+	assert.ElementsMatch(t, []int64{b}, match(and("credit", "squaresoft")), "a credit filter on a title tag")
+	assert.ElementsMatch(t, []int64{b}, match(and("distribution", "virtualconsole")), "a deprecated spelling")
+	assert.ElementsMatch(t, []int64{b, c}, match(zapscript.TagFilter{
+		Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorNOT,
+	}))
+	assert.ElementsMatch(t, []int64{a, c}, match(
+		zapscript.TagFilter{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
+		zapscript.TagFilter{Type: "genre", Value: "puzzle", Operator: zapscript.TagOperatorOR},
+	))
+	assert.Empty(t, match(and("genre", "rpg"), and("developer", "squaresoft")))
+
+	matched, err := mediaDB.MatchMediaTagFilters(ctx, nil, []zapscript.TagFilter{and("genre", "rpg")})
+	require.NoError(t, err)
+	assert.Empty(t, matched)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = mediaDB.MatchMediaTagFilters(cancelled, []int64{a}, []zapscript.TagFilter{and("genre", "rpg")})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestMatchMediaTagFiltersSpansChunks(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	seeds := make([]discSetSeed, 0, batchLookupIDsPerQuery+1)
+	for i := range batchLookupIDsPerQuery + 1 {
+		seeds = append(seeds, discSetSeed{path: fmt.Sprintf("roms/PSX/G%03d/G.chd", i), title: fmt.Sprintf("g%d", i)})
+	}
+	ids := seedDiscSetRows(t, mediaDB, seeds...)
+	all := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		all = append(all, id)
+	}
+	last := ids[seeds[len(seeds)-1].path]
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, last, []database.TagInfo{{Type: "genre", Tag: "rpg"}}))
+
+	matched, err := mediaDB.MatchMediaTagFilters(ctx, all, []zapscript.TagFilter{
+		{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorAND},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{last: {}}, matched)
+}
+
+func TestMatchMediaTagFiltersNullSQL(t *testing.T) {
+	t.Parallel()
+	_, err := (&MediaDB{}).MatchMediaTagFilters(context.Background(), []int64{1}, nil)
+	require.ErrorIs(t, err, ErrNullSQL)
+}
+
+func TestMatchMediaTagFiltersQueryError(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	require.NoError(t, mediaDB.sql.Load().Close())
+
+	_, err := mediaDB.MatchMediaTagFilters(context.Background(), []int64{1}, []zapscript.TagFilter{
+		{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorAND},
+	})
+	require.Error(t, err)
 }

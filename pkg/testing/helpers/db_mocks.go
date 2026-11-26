@@ -4171,6 +4171,19 @@ func (m *MockMediaDBI) FindDiscSets(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) MatchMediaTagFilters(
+	ctx context.Context, mediaDBIDs []int64, filters []zapscript.TagFilter,
+) (map[int64]struct{}, error) {
+	if !m.hasExpectedCall("MatchMediaTagFilters") {
+		return map[int64]struct{}{}, nil
+	}
+	args := m.Called(ctx, mediaDBIDs, filters)
+	if result, ok := args.Get(0).(map[int64]struct{}); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) AttachSearchTags(ctx context.Context, results []database.SearchResultWithCursor) error {
 	if !m.hasExpectedCall("AttachSearchTags") {
 		return nil
