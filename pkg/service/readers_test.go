@@ -971,6 +971,73 @@ mode = "unrestricted"`))
 	}
 }
 
+// A held playlist that advances during the exit delay keeps the removed card
+// as its owner, so the exit stops the successor rather than leaving it running.
+func TestTimedExit_StopsSuccessorWithSameOwner(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID:      "game-card",
+		Text:     "game.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "other.nes", "Other", "test-launcher"))
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-stopCalled:
+	case <-time.After(behaviorTimeout):
+		t.Fatal("exit did not stop the successor media")
+	}
+	select {
+	case update := <-svc.LaunchSoftwareQueue:
+		assert.Nil(t, update.token)
+		assert.False(t, update.release)
+	case <-time.After(behaviorTimeout):
+		t.Fatal("exit did not clear the hold owner")
+	}
+}
+
 // A system on the hold-mode ignore list never auto-exits, so there is nothing
 // for before_exit to run before.
 func TestTimedExit_IgnoredSystemSkipsBeforeExit(t *testing.T) {

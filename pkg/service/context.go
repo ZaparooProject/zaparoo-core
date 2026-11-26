@@ -37,12 +37,20 @@ import (
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
-// softwareTokenUpdate publishes a launch owner, or conditionally clears the
-// owner after a timed exit. A nil token is scoped to both captured generations.
+// softwareTokenUpdate publishes a launch owner, or clears it. A nil token
+// from a timed exit is scoped to both captured generations. A release clears
+// the owner because media no hold token owns replaced the primary media.
+//
+// Owner publications and releases carry launchSeq, the order their launch
+// began in. Playlist and token runs launch on separate goroutines, so their
+// updates can arrive out of order; one from an older launch than the last
+// applied is dropped. A zero launchSeq is unordered.
 type softwareTokenUpdate struct {
 	token           *tokens.Token
 	ownerGeneration uint64
 	exitGeneration  uint64
+	launchSeq       uint64
+	release         bool
 }
 
 // ServiceContext holds the shared dependencies threaded through all
@@ -80,4 +88,7 @@ type ServiceContext struct {
 	// scans is the generation of the scripts queued tokens started, so a
 	// newer scan can cut short the delays an earlier one left pending.
 	scans scanGeneration
+	// launchSeq numbers media launches in the order they took the launch
+	// gate. See softwareTokenUpdate.
+	launchSeq atomic.Uint64
 }

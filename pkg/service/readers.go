@@ -616,6 +616,7 @@ func readerManager(
 	var exitTimer clockwork.Timer
 	var exitGeneration atomic.Uint64
 	var ownerGeneration uint64
+	var ownerLaunchSeq uint64
 	var removalHookGeneration uint64
 	var activeRemovalHook *pendingRemovalHook
 
@@ -911,12 +912,20 @@ preprocessing:
 			continue preprocessing
 		case update := <-svc.LaunchSoftwareQueue:
 			stoken := update.token
-			if stoken == nil && (update.ownerGeneration != ownerGeneration ||
+			if stoken == nil && !update.release && (update.ownerGeneration != ownerGeneration ||
 				update.exitGeneration != exitGeneration.Load()) {
 				log.Debug().Msg("ignoring stale hold-owner clear")
 				continue preprocessing
 			}
-			// A token has launched primary software and now owns hold-mode exit.
+			if update.launchSeq != 0 {
+				if update.launchSeq < ownerLaunchSeq {
+					log.Debug().Msg("ignoring hold-owner update from an older launch")
+					continue preprocessing
+				}
+				ownerLaunchSeq = update.launchSeq
+			}
+			// A token has launched primary software and now owns hold-mode exit,
+			// or the primary media is no longer owned by any token.
 			log.Debug().Msgf("new software token: %v", stoken)
 			if activeRemovalHook != nil && !helpers.TokensEqual(stoken, &activeRemovalHook.token) {
 				activeRemovalHook.cancel()

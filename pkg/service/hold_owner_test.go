@@ -71,9 +71,13 @@ func TestReaderManager_SoftwareTokenClearGenerations(t *testing.T) {
 		name           string
 		replacementUID string
 		exitGeneration uint64
+		release        bool
 		wantClear      bool
 	}{
 		{name: "current_exit", exitGeneration: 1, wantClear: true},
+		// Media no hold token owns replaced the primary media, so the owner
+		// goes regardless of which launch or exit it came from.
+		{name: "release_new_owner", replacementUID: "new-card", release: true, wantClear: true},
 		{name: "different_owner", replacementUID: "new-card", exitGeneration: 1},
 		{name: "same_card_new_launch", replacementUID: "card", exitGeneration: 1},
 		{name: "stale_exit_generation", exitGeneration: 0},
@@ -96,6 +100,7 @@ func TestReaderManager_SoftwareTokenClearGenerations(t *testing.T) {
 			applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{
 				ownerGeneration: 1,
 				exitGeneration:  tt.exitGeneration,
+				release:         tt.release,
 			})
 			if tt.wantClear {
 				assert.Nil(t, env.st.GetSoftwareToken())
@@ -219,4 +224,24 @@ func TestTimedExit_ClearKeepsCapturedGenerationsWhilePlaylistBlocked(t *testing.
 	case <-time.After(behaviorTimeout):
 		t.Fatal("exit did not publish its conditional owner clear")
 	}
+}
+
+// Playlist and token runs launch on separate goroutines, so an update from an
+// older launch can arrive after a newer launch's owner was applied.
+func TestReaderManager_SoftwareTokenLaunchOrder(t *testing.T) {
+	t.Parallel()
+
+	env := setupReaderManager(t)
+	newer := &tokens.Token{UID: "newer-card", Text: "newer.nes", ReaderID: "reader"}
+	older := &tokens.Token{UID: "older-card", Text: "older.nes", ReaderID: "reader"}
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{token: newer, launchSeq: 2})
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{release: true, launchSeq: 1})
+	assert.Same(t, newer, env.st.GetSoftwareToken(), "older release cleared a newer owner")
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{token: older, launchSeq: 1})
+	assert.Same(t, newer, env.st.GetSoftwareToken(), "older owner replaced a newer one")
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{release: true, launchSeq: 3})
+	assert.Nil(t, env.st.GetSoftwareToken())
 }

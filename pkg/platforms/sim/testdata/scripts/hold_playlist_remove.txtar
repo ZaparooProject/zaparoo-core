@@ -1,0 +1,41 @@
+# A card that starts a playlist in hold mode owns every item the playlist plays
+# by itself, so taking the card off stops the item playing when the exit delay
+# ends, even one that started during the delay.
+
+sim-start -scan-mode hold -exit-delay 3
+rom snes/Alpha.sfc snes/Beta.sfc snes/Gamma.sfc
+
+tap -uid 04bb11 **playlist.play:$ROMS/snes?advance=2s&countdown=0
+notification tokens.added uid=04bb11
+notification media.started systemId=SNES mediaName=Alpha
+mark
+
+remove
+notification tokens.removed
+notification media.started systemId=SNES mediaName=Beta
+event stop intent=menu path=$ROMS/snes/Beta.sfc
+notification media.stopped systemId=SNES mediaName=Beta
+api media.active
+! stdout systemId
+
+# Moving the playlist from the API takes it over, the way an API launch takes
+# over a game, so the card no longer owns what plays next.
+sim-stop
+sim-start -scan-mode hold
+rom snes/Alpha.sfc snes/Beta.sfc snes/Gamma.sfc
+tap -uid 04bb22 **playlist.play:$ROMS/snes
+notification tokens.added uid=04bb22
+notification media.started systemId=SNES mediaName=Alpha
+# The playlist holds its launch until the item is in play history; next from
+# the app before that is refused as busy.
+played $ROMS/snes/Alpha.sfc
+
+api run {"text":"**playlist.next"}
+notification media.started systemId=SNES mediaName=Beta
+mark
+
+remove
+notification tokens.removed
+! event stop
+api media.active
+stdout '"mediaName": "Beta"'

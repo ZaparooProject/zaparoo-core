@@ -1024,6 +1024,38 @@ func TestRunTokenZapScript_PrimaryPlaylistLaunchPublishesPhysicalOwner(t *testin
 	assert.Equal(t, owner.ReaderID, softwareToken.ReaderID)
 }
 
+// A primary launch from a token no removable reader holds releases the hold
+// owner, ordered by when the launch began.
+func TestRunTokenZapScript_APILaunchReleasesHoldOwnerInLaunchOrder(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Twice()
+
+	seqs := make([]uint64, 0, 2)
+	for range 2 {
+		err := runTokenZapScript(svc, tokens.Token{
+			Text:     "**launch:" + path,
+			Source:   tokens.SourceAPI,
+			ScanTime: time.Now(),
+		}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}, nil, false)
+		require.NoError(t, err)
+
+		update := <-svc.LaunchSoftwareQueue
+		assert.True(t, update.release)
+		assert.Nil(t, update.token)
+		seqs = append(seqs, update.launchSeq)
+	}
+	assert.NotZero(t, seqs[0])
+	assert.Greater(t, seqs[1], seqs[0])
+}
+
 // statefulPlaybackStub tracks per-slot playing state so tests can observe the
 // pause/resume ordering of the launch path.
 type statefulPlaybackStub struct {

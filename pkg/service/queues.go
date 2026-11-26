@@ -391,6 +391,18 @@ func executeTokenZapScript(
 				return access, nil
 			}
 		}
+		// The launch's place in launch order, taken with the gate held, so
+		// the hold owner it publishes cannot be overwritten by an update
+		// from a launch that began before it.
+		var launchSeq atomic.Uint64
+		gatedAcquire := acquireLaunch
+		acquireLaunch = func() (platforms.MediaLaunchAccess, error) {
+			access, err := gatedAcquire()
+			if err == nil {
+				launchSeq.Store(svc.launchSeq.Add(1))
+			}
+			return access, err
+		}
 		releaseStopGate := func() {}
 		if !inHookContext && commandStopsPrimaryNow(cmd) {
 			// A stop waits for a launch in flight, the way the stop API does,
@@ -494,23 +506,43 @@ func executeTokenZapScript(
 			if token.Source == tokens.SourcePlaylist {
 				holdToken = plsc.HoldToken
 			}
+			var update softwareTokenUpdate
+			publish := false
 			if holdToken != nil && holdToken.ReaderID != "" {
 				r, ok := svc.State.GetReader(holdToken.ReaderID)
 				if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 					softwareToken := *holdToken
 					log.Debug().Msg("media changed, updating hold owner")
+					update = softwareTokenUpdate{token: &softwareToken}
+					publish = true
+				}
+			}
+			// Media launched from the API or a tap-only reader replaces
+			// whatever a held token was running, so that token no longer owns
+			// it and removing it must not stop it. Hooks run inside another
+			// token's run and leave ownership to it.
+			if !publish && !inHookContext {
+				log.Debug().Msg("media changed, releasing hold owner")
+				update = softwareTokenUpdate{release: true}
+				publish = true
+			}
+			if publish {
+				update.launchSeq = launchSeq.Load()
+				if update.launchSeq == 0 {
+					// The media changed without taking the launch gate.
+					update.launchSeq = svc.launchSeq.Add(1)
+				}
+				select {
+				case svc.LaunchSoftwareQueue <- update:
+				case <-runCtx.Done():
 					select {
-					case svc.LaunchSoftwareQueue <- softwareTokenUpdate{token: &softwareToken}:
-					case <-runCtx.Done():
-						select {
-						case <-svc.State.GetContext().Done():
-							return errors.New("service shutting down")
-						default:
-							return runCtx.Err()
-						}
 					case <-svc.State.GetContext().Done():
 						return errors.New("service shutting down")
+					default:
+						return runCtx.Err()
 					}
+				case <-svc.State.GetContext().Done():
+					return errors.New("service shutting down")
 				}
 			}
 		}
