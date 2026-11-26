@@ -50,3 +50,15 @@ api media.active
 stdout '"systemId": "SNES"'
 api stop
 notification media.stopped systemId=SNES
+
+# A launcher whose Availability check fails says so, even when its error is
+# a plain one rather than a repair message.
+fault clear
+remove
+api stop
+mark
+fault {"launcher":"SimSNES","unavailable":true}
+tap -uid 05 $ROMS/snes/Alpha.sfc
+event fault launcher=SimSNES detail=unavailable
+notification run.failed category=execution_failed 'message=the launcher is unavailable'
+! notification media.started

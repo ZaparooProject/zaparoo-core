@@ -454,7 +454,12 @@ func createMiSTerHiFiLauncher(pl *Platform) platforms.Launcher {
 		},
 		Availability: func(_ *config.Instance) error {
 			if !fileExists(pl.filesystem(), hiFiScriptPath()) {
-				return errors.New("MiSTer Hi-Fi is not installed")
+				//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
+				return platforms.NewLaunchRepairErrorWithReason(
+					platforms.LaunchRepairLauncherNotInstalled,
+					map[string]string{platforms.LaunchRepairParamLauncher: MiSTerHiFiLauncherID},
+					"MiSTer Hi-Fi is not installed",
+				)
 			}
 			return nil
 		},
