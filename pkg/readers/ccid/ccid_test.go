@@ -47,6 +47,8 @@ func TestReader_Metadata(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "USB CCID NFC readers",
+		PathKind:          readers.PathKindNone,
+		CanAutoDetect:     true,
 	}, r.Metadata())
 	assert.Equal(t, []string{"ccid", "acr122pcsc", "acr122_pcsc"}, r.IDs(),
 		"connection entries written for the driver this replaced must keep working")

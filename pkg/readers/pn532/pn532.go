@@ -455,6 +455,8 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "PN532 NFC reader (UART/I2C/SPI)",
+		PathKind:          readers.PathKindSerial,
+		CanAutoDetect:     true,
 	}
 }
 

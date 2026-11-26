@@ -59,6 +59,7 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		Description:       "MQTT client reader",
 		DefaultEnabled:    true,
 		DefaultAutoDetect: false,
+		PathKind:          readers.PathKindText,
 	}
 }
 

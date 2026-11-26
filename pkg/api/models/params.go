@@ -183,6 +183,17 @@ type ReaderWriteCancelParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 }
 
+// ReadersPortsParams names the driver to list candidate paths for.
+type ReadersPortsParams struct {
+	Driver string `json:"driver" validate:"required,min=1"`
+}
+
+// TokensResolveParams optionally limits tokens.resolve to the last token
+// read on one reader.
+type TokensResolveParams struct {
+	ReaderID *string `json:"readerId,omitempty"`
+}
+
 type ReaderConnection struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
 	Driver   string `json:"driver" validate:"required,min=1"`
@@ -432,12 +443,14 @@ type SwitchProfileParams struct {
 }
 
 // VerifyProfileParams verifies a profile credential without switching.
-// Exactly one of ProfileID (with PIN when the profile has one) or SwitchID
-// (a bearer credential) must be given.
+// Exactly one of ProfileID (with PIN when the profile has one), SwitchID
+// (a bearer credential) or Scan must be given. Scan waits for the next card
+// a reader scans and verifies the switch ID on it; the card does not run.
 type VerifyProfileParams struct {
 	ProfileID *string `json:"profileId"`
 	SwitchID  *string `json:"switchId"`
 	PIN       *string `json:"pin"`
+	Scan      bool    `json:"scan,omitempty"`
 }
 
 type MediaStartedParams struct {

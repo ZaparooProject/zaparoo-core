@@ -22,15 +22,19 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -449,4 +453,158 @@ func TestHandleProfilesVerify_SharesRateLimiterWithSwitch(t *testing.T) {
 	_, err := HandleProfilesSwitch(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too many PIN attempts")
+}
+
+// verifyByScan runs profiles.verify with scan in the background and hands
+// it the token once the claim is open.
+func verifyByScan(t *testing.T, env *requests.RequestEnv, st *state.State, scanned *tokens.Token) (any, error) {
+	t.Helper()
+	type result struct {
+		value any
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, err := HandleProfilesVerify(*env)
+		done <- result{v, err}
+	}()
+	require.Eventually(t, st.HasScanClaims, time.Second, time.Millisecond)
+	if scanned != nil {
+		require.True(t, st.DeliverScanToClaims(*scanned))
+	}
+	select {
+	case r := <-done:
+		return r.value, r.err
+	case <-time.After(time.Second):
+		t.Fatal("profiles.verify did not return")
+		return nil, errors.New("profiles.verify did not return")
+	}
+}
+
+func TestHandleProfilesVerify_Scan(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, st := newProfilesEnv(t)
+	env.ClientID = "client-1"
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	mockUserDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(testProfileRow(t, "1234"), nil)
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	result, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "**profile:corn-arm-truck"})
+	require.NoError(t, err)
+	resp, ok := result.(models.ProfileVerifyResponse)
+	require.True(t, ok)
+	assert.Equal(t, "profile-1", resp.ProfileID)
+	assert.True(t, resp.HasPIN)
+	assert.Nil(t, st.ActiveProfile(), "verifying by scan switches nothing")
+	assert.False(t, st.HasScanClaims(), "the claim is released")
+}
+
+func TestHandleProfilesVerify_ScanMappedCard(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, st := newProfilesEnv(t)
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{{
+		Type: userdb.MappingTypeID, Match: userdb.MatchTypeExact,
+		Pattern: "04a1", Override: "**profile:corn-arm-truck", Enabled: true,
+	}}, nil)
+	mockUserDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(testProfileRow(t, ""), nil)
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	result, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04A1"})
+	require.NoError(t, err)
+	resp, ok := result.(models.ProfileVerifyResponse)
+	require.True(t, ok)
+	assert.Equal(t, "profile-1", resp.ProfileID)
+}
+
+func TestHandleProfilesVerify_ScanNotASwitchCard(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, st := newProfilesEnv(t)
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	_, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "snes/smw.sfc"})
+	require.ErrorIs(t, err, errNotSwitchCard)
+	var clientErr *models.ClientError
+	assert.ErrorAs(t, err, &clientErr)
+}
+
+func TestHandleProfilesVerify_ScanUnknownSwitchID(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, st := newProfilesEnv(t)
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	mockUserDB.On("GetProfileBySwitchID", "no-such-card").Return(nil, userdb.ErrProfileNotFound)
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	_, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "**profile:no-such-card"})
+	require.ErrorIs(t, err, profiles.ErrNotFound)
+}
+
+func TestHandleProfilesVerify_ScanCancelled(t *testing.T) {
+	t.Parallel()
+	env, _, st := newProfilesEnv(t)
+	env.ClientID = "client-1"
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := HandleProfilesVerify(env)
+		done <- result{err}
+	}()
+	require.Eventually(t, st.HasScanClaims, time.Second, time.Millisecond)
+
+	other := env
+	other.ClientID = "client-2"
+	_, err := HandleProfilesVerifyCancel(other)
+	require.Error(t, err, "another connection cannot cancel the scan")
+	assert.True(t, st.HasScanClaims())
+
+	result2, err := HandleProfilesVerifyCancel(env)
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, result2)
+
+	select {
+	case r := <-done:
+		require.Error(t, r.err)
+		assert.Contains(t, r.err.Error(), "cancelled")
+	case <-time.After(time.Second):
+		t.Fatal("profiles.verify did not return after cancel")
+	}
+	assert.False(t, st.HasScanClaims())
+}
+
+func TestHandleProfilesVerify_ScanTimesOut(t *testing.T) {
+	t.Parallel()
+	env, _, st := newProfilesEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	env.Context = ctx
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := HandleProfilesVerify(env)
+		done <- err
+	}()
+	require.Eventually(t, st.HasScanClaims, time.Second, time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no card scanned")
+	case <-time.After(time.Second):
+		t.Fatal("profiles.verify did not return after the request ended")
+	}
+	assert.False(t, st.HasScanClaims(), "an ended request leaves no claim behind")
+}
+
+func TestHandleProfilesVerify_ScanRejectsOtherSelectors(t *testing.T) {
+	t.Parallel()
+	env, _, st := newProfilesEnv(t)
+	env.Params = json.RawMessage(`{"scan": true, "switchId": "corn-arm-truck"}`)
+
+	_, err := HandleProfilesVerify(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one")
+	assert.False(t, st.HasScanClaims())
 }

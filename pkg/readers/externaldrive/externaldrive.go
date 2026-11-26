@@ -187,6 +187,8 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    false, // Opt-in only
 		DefaultAutoDetect: true,  // Automatically detects mounted devices
 		Description:       "External drive reader (USB sticks, SD cards, external HDDs)",
+		PathKind:          readers.PathKindNone,
+		CanAutoDetect:     true,
 	}
 }
 

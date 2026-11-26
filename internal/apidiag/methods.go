@@ -42,11 +42,13 @@ settings.backup.remote.list settings.backup.remote.restore
 settings.playtime.limits settings.playtime.limits.update playtime playtime.extend
 clients clients.current clients.delete clients.pair.start clients.pair.cancel
 profiles profiles.new profiles.update profiles.delete profiles.active profiles.switch profiles.verify
+profiles.verify.cancel
 profiles.content profiles.content.update
 kiosk kiosk.enable kiosk.disable kiosk.unlock kiosk.lock kiosk.update kiosk.allow
 decks decks.get decks.new decks.update decks.delete decks.open decks.image
 systems launchers launchers.refresh tokens.history mappings mappings.new mappings.delete
-mappings.update mappings.reload readers readers.write readers.write.cancel version health
+mappings.update mappings.reload readers readers.write readers.write.cancel readers.drivers readers.ports
+tokens.resolve version health
 inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings.auth.unlink
 settings.auth.link settings.auth.link.status settings.auth.link.cancel
 update.check update.status update.apply input.keyboard input.gamepad screenshot media.title.parse remote.activity

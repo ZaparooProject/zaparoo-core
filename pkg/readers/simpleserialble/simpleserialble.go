@@ -126,6 +126,7 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: false,
 		Description:       "Simple serial protocol over Bluetooth LE (Nordic UART Service)",
+		PathKind:          readers.PathKindText,
 	}
 }
 

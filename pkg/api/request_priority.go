@@ -95,6 +95,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodInboxClear,
 		models.MethodReadersWrite,
 		models.MethodReadersWriteCancel,
+		models.MethodProfilesVerifyCancel,
 		models.MethodMediaActiveUpdate,
 		models.MethodMediaControl,
 		models.MethodPlaylistsUpdate,

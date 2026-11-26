@@ -104,6 +104,35 @@ func TestDetect(t *testing.T) {
 	assert.Equal(t, "opticaldrive:"+path, reader.Detect(nil))
 }
 
+func TestListPorts(t *testing.T) {
+	t.Parallel()
+
+	const devPath = "/fake/dev"
+	reader := &FileReader{
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(string) ([]os.DirEntry, error) {
+				return []os.DirEntry{
+					mockDirEntry{name: "sda"},
+					mockDirEntry{name: "sr0"},
+					mockDirEntry{name: "sr1"},
+				}, nil
+			},
+			statFunc: func(path string) (os.FileInfo, error) {
+				if path == devPath+"/sr1" {
+					return nil, os.ErrNotExist
+				}
+				return &mockFileInfo{}, nil
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
+		devPath:      devPath,
+	}
+
+	ports, err := reader.ListPorts()
+	require.NoError(t, err)
+	assert.Equal(t, []readers.Port{{Path: devPath + "/sr0"}}, ports)
+}
+
 func TestOpticalPathExcluded(t *testing.T) {
 	t.Parallel()
 

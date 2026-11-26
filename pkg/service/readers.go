@@ -210,6 +210,7 @@ func connectReaders(
 				"device path %s configured for multiple readers (%s and %s) - ignoring %s",
 				device.device.Path, firstConn, device.connectionString, device.connectionString,
 			)
+			st.SetReaderConnectError(device.connectionString, "path already used by "+firstConn)
 			continue
 		}
 		pathSeen[device.device.Path] = device.connectionString
@@ -218,62 +219,72 @@ func connectReaders(
 
 	// user defined readers
 	for _, device := range validToConnect {
-		if !isPathConnected(st.ListReaders(), device.device.Path) {
-			rt := readers.NormalizeDriverID(device.device.Driver)
-			// SupportedReaders creates new instances; close every reader we don't keep.
-			connected := false
-			for _, r := range pl.SupportedReaders(cfg) {
-				if connected {
-					if closeErr := r.Close(); closeErr != nil {
-						log.Debug().Err(closeErr).Msg("error closing unused reader")
-					}
-					continue
-				}
-
-				metadata := r.Metadata()
-				driver := config.DriverInfo{
-					ID:                metadata.ID,
-					DefaultEnabled:    metadata.DefaultEnabled,
-					DefaultAutoDetect: metadata.DefaultAutoDetect,
-				}
-
-				if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextManualConnect) {
-					if closeErr := r.Close(); closeErr != nil {
-						log.Debug().Err(closeErr).Msg("error closing unused reader")
-					}
-					continue
-				}
-
-				// Normalize IDs for comparison
-				ids := r.IDs()
-				normalizedIDs := make([]string, len(ids))
-				for i, id := range ids {
-					normalizedIDs[i] = readers.NormalizeDriverID(id)
-				}
-				if !helpers.Contains(normalizedIDs, rt) {
-					if closeErr := r.Close(); closeErr != nil {
-						log.Debug().Err(closeErr).Msg("error closing unused reader")
-					}
-					continue
-				}
-
-				log.Debug().Msgf("connecting to reader: %s", device.connectionString)
-				err := r.Open(device.device, iq, readers.OpenOpts{})
-				if err != nil {
-					log.Warn().Msgf("error opening reader: %s", err)
-					if closeErr := r.Close(); closeErr != nil {
-						log.Debug().Err(closeErr).Msg("error closing reader after failed open")
-					}
-					continue
-				}
-				st.SetReader(r)
-				if opened != nil {
-					opened[device.device.Path] = r
-				}
-				log.Info().Msgf("opened reader: %s", device.connectionString)
-				connected = true
-			}
+		if isPathConnected(st.ListReaders(), device.device.Path) {
+			continue
 		}
+		rt := readers.NormalizeDriverID(device.device.Driver)
+		// SupportedReaders creates new instances; close every reader we don't keep.
+		connected := false
+		// Why the entry did not open, kept for the readers API. It stays
+		// "driver not available" unless a matching driver is found.
+		failure := "driver not available"
+		for _, r := range pl.SupportedReaders(cfg) {
+			if connected {
+				if closeErr := r.Close(); closeErr != nil {
+					log.Debug().Err(closeErr).Msg("error closing unused reader")
+				}
+				continue
+			}
+
+			metadata := r.Metadata()
+			driver := config.DriverInfo{
+				ID:                metadata.ID,
+				DefaultEnabled:    metadata.DefaultEnabled,
+				DefaultAutoDetect: metadata.DefaultAutoDetect,
+			}
+
+			// Normalize IDs for comparison
+			ids := r.IDs()
+			normalizedIDs := make([]string, len(ids))
+			for i, id := range ids {
+				normalizedIDs[i] = readers.NormalizeDriverID(id)
+			}
+			if !helpers.Contains(normalizedIDs, rt) {
+				if closeErr := r.Close(); closeErr != nil {
+					log.Debug().Err(closeErr).Msg("error closing unused reader")
+				}
+				continue
+			}
+
+			if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextManualConnect) {
+				failure = "driver disabled"
+				if closeErr := r.Close(); closeErr != nil {
+					log.Debug().Err(closeErr).Msg("error closing unused reader")
+				}
+				continue
+			}
+
+			log.Debug().Msgf("connecting to reader: %s", device.connectionString)
+			err := r.Open(device.device, iq, readers.OpenOpts{})
+			if err != nil {
+				log.Warn().Msgf("error opening reader: %s", err)
+				failure = err.Error()
+				if closeErr := r.Close(); closeErr != nil {
+					log.Debug().Err(closeErr).Msg("error closing reader after failed open")
+				}
+				continue
+			}
+			st.SetReader(r)
+			if opened != nil {
+				opened[device.device.Path] = r
+			}
+			log.Info().Msgf("opened reader: %s", device.connectionString)
+			connected = true
+		}
+		if connected {
+			failure = ""
+		}
+		st.SetReaderConnectError(device.connectionString, failure)
 	}
 
 	// auto-detect readers
@@ -1072,6 +1083,13 @@ preprocessing:
 			svc.State.SetActiveCard(*scan)
 
 			if reinsertedDuringRemovalHook {
+				continue preprocessing
+			}
+
+			// A client waiting for a card, such as profiles.verify with
+			// scan, takes this token instead of it running.
+			if svc.State.DeliverScanToClaims(*scan) {
+				log.Info().Str("readerID", scanReaderID).Msg("scan claimed by an API request, not running it")
 				continue preprocessing
 			}
 

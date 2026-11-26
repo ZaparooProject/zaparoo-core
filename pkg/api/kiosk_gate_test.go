@@ -75,6 +75,10 @@ var kioskDeniedMethods = map[string]bool{
 	models.MethodMappings:         true, models.MethodMappingsNew: true, models.MethodMappingsDelete: true,
 	models.MethodMappingsUpdate: true, models.MethodMappingsReload: true,
 	models.MethodReadersWrite: true, models.MethodReadersWriteCancel: true,
+	// Reader setup and the token inspector only feed settings.update and the
+	// mappings methods.
+	models.MethodReadersDrivers: true, models.MethodReadersPorts: true,
+	models.MethodTokensResolve: true, models.MethodProfilesVerifyCancel: true,
 	models.MethodInputKeyboard: true, models.MethodInputGamepad: true, models.MethodScreenshot: true,
 	models.MethodInboxDelete: true, models.MethodInboxClear: true,
 	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthUnlink: true,

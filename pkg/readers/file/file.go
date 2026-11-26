@@ -44,8 +44,8 @@ const TokenType = "file"
 type ReaderOptions struct {
 	IsAvailable    func() bool
 	AutoDetectPath string
-	Metadata       readers.DriverMetadata
 	IDs            []string
+	Metadata       readers.DriverMetadata
 }
 
 type Reader struct {
@@ -54,8 +54,8 @@ type Reader struct {
 	device         config.ReadersConnect
 	path           string
 	autoDetectPath string
-	metadata       readers.DriverMetadata
 	ids            []string
+	metadata       readers.DriverMetadata
 	wg             sync.WaitGroup
 	mu             syncutil.RWMutex
 	polling        bool
@@ -67,6 +67,7 @@ func defaultMetadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "File-based token reader",
+		PathKind:          readers.PathKindText,
 	}
 }
 
@@ -89,10 +90,16 @@ func NewReaderWithOptions(cfg *config.Instance, options *ReaderOptions) *Reader 
 }
 
 func (r *Reader) Metadata() readers.DriverMetadata {
-	if r.metadata.ID == "" {
-		return defaultMetadata()
+	metadata := r.metadata
+	if metadata.ID == "" {
+		metadata = defaultMetadata()
 	}
-	return r.metadata
+	if metadata.PathKind == "" {
+		metadata.PathKind = readers.PathKindText
+	}
+	// Detect only ever finds the one path it was built to watch.
+	metadata.CanAutoDetect = r.autoDetectPath != ""
+	return metadata
 }
 
 func (r *Reader) IDs() []string {

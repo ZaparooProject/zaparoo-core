@@ -156,6 +156,9 @@ func (r *FileReader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    r.defaultEnabled,
 		DefaultAutoDetect: r.defaultAutoDetect,
 		Description:       "Optical drive CD/DVD reader",
+		PathKind:          readers.PathKindDevice,
+		IDSources:         []string{IDSourceUUID, IDSourceLabel, IDSourceMerged},
+		CanAutoDetect:     true,
 	}
 }
 
@@ -637,6 +640,27 @@ func (r *FileReader) Close() error {
 }
 
 func (r *FileReader) Detect(exclude []string) string {
+	for _, path := range r.drivePaths() {
+		if !opticalPathExcluded(path, exclude) {
+			return "opticaldrive:" + path
+		}
+	}
+	return ""
+}
+
+// ListPorts lists every optical drive's device node, for a manual
+// connection.
+func (r *FileReader) ListPorts() ([]readers.Port, error) {
+	paths := r.drivePaths()
+	ports := make([]readers.Port, 0, len(paths))
+	for _, path := range paths {
+		ports = append(ports, readers.Port{Path: path})
+	}
+	return ports, nil
+}
+
+// drivePaths lists the device node of each sr* block device that exists.
+func (r *FileReader) drivePaths() []string {
 	sysBlockPath := r.sysBlockPath
 	if sysBlockPath == "" {
 		sysBlockPath = filepath.Join(string(filepath.Separator), "sys", "block")
@@ -653,25 +677,22 @@ func (r *FileReader) Detect(exclude []string) string {
 
 	entries, err := fsChecker.ReadDir(sysBlockPath)
 	if err != nil {
-		return ""
+		return nil
 	}
 
+	var paths []string
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, "sr") {
 			continue
 		}
 		path := filepath.Join(devPath, name)
-		if opticalPathExcluded(path, exclude) {
-			continue
-		}
 		if _, statErr := fsChecker.Stat(path); statErr != nil {
 			continue
 		}
-		return "opticaldrive:" + path
+		paths = append(paths, path)
 	}
-
-	return ""
+	return paths
 }
 
 func opticalPathExcluded(path string, exclude []string) bool {

@@ -21,13 +21,17 @@ package methods
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -220,18 +224,24 @@ func HandleProfilesVerify(env requests.RequestEnv) (any, error) {
 		pin = *params.PIN
 	}
 
+	hasProfileID := params.ProfileID != nil && *params.ProfileID != ""
+	hasSwitchID := params.SwitchID != nil && *params.SwitchID != ""
+
 	var p *database.Profile
 	var err error
 	switch {
-	case params.ProfileID != nil && *params.ProfileID != "" &&
-		params.SwitchID != nil && *params.SwitchID != "":
+	case params.Scan && (hasProfileID || hasSwitchID):
+		return nil, models.ClientErrf("provide exactly one of profileId, switchId or scan")
+	case params.Scan:
+		p, err = verifyProfileByScan(&env)
+	case hasProfileID && hasSwitchID:
 		return nil, models.ClientErrf("provide exactly one of profileId or switchId")
-	case params.ProfileID != nil && *params.ProfileID != "":
+	case hasProfileID:
 		p, err = env.Profiles.VerifyByID(*params.ProfileID, pin)
-	case params.SwitchID != nil && *params.SwitchID != "":
+	case hasSwitchID:
 		p, err = env.Profiles.VerifyBySwitchID(*params.SwitchID)
 	default:
-		return nil, models.ClientErrf("either profileId or switchId is required")
+		return nil, models.ClientErrf("one of profileId, switchId or scan is required")
 	}
 	if err != nil {
 		return nil, profileError(err)
@@ -295,4 +305,70 @@ func HandleProfilesSwitch(env requests.RequestEnv) (any, error) {
 		}
 		return (*models.ActiveProfile)(nil), nil
 	}
+}
+
+// errNotSwitchCard is a scanned card that does not switch profile.
+var errNotSwitchCard = errors.New("not a profile switch card")
+
+// verifyProfileByScan waits for the next card a reader scans and verifies
+// the switch ID on it. The card is claimed, so it does not run. The wait
+// ends with the request: when it times out, when the connection closes or
+// when profiles.verify.cancel is called from the same connection.
+func verifyProfileByScan(env *requests.RequestEnv) (*database.Profile, error) {
+	claim, release := env.State.ClaimNextScan(env.ClientID)
+	defer release()
+
+	var t tokens.Token
+	select {
+	case scanned, ok := <-claim.Scans():
+		if !ok {
+			//nolint:wrapcheck // QuietClientError is the intentional API boundary error.
+			return nil, models.QuietClientErrf("scan cancelled")
+		}
+		t = scanned
+	case <-env.Context.Done():
+		//nolint:wrapcheck // QuietClientError is the intentional API boundary error.
+		return nil, models.QuietClientErrf("no card scanned: %w", env.Context.Err())
+	}
+
+	script, _ := resolveTokenScript(env, &t)
+	switchID, ok := profileSwitchID(script)
+	if !ok {
+		return nil, models.ClientErr(errNotSwitchCard)
+	}
+	p, err := env.Profiles.VerifyBySwitchID(switchID)
+	if err != nil {
+		return nil, fmt.Errorf("verify scanned card: %w", err)
+	}
+	return p, nil
+}
+
+// profileSwitchID returns the switch ID of a script's profile command.
+func profileSwitchID(script string) (string, bool) {
+	if strings.TrimSpace(script) == "" {
+		return "", false
+	}
+	parsed, err := gozapscript.NewParser(script).ParseScript()
+	if err != nil {
+		return "", false
+	}
+	for _, cmd := range parsed.Cmds {
+		if cmd.Name == gozapscript.ZapScriptCmdProfile && len(cmd.Args) > 0 && cmd.Args[0] != "" {
+			return cmd.Args[0], true
+		}
+	}
+	return "", false
+}
+
+// HandleProfilesVerifyCancel ends a profiles.verify scan the same connection
+// is waiting on.
+//
+//nolint:gocritic // single-use parameter in API handler
+func HandleProfilesVerifyCancel(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received profiles verify cancel request")
+	if env.State.CancelScanClaims(env.ClientID) == 0 {
+		//nolint:wrapcheck // QuietClientError is the intentional API boundary error.
+		return nil, models.QuietClientErrf("no scan in progress")
+	}
+	return NoContent{}, nil
 }

@@ -552,6 +552,9 @@ func NewMethodMap() *MethodMap {
 				env.State.ListReaders(),
 			)
 		},
+		models.MethodReadersDrivers: methods.HandleReadersDrivers,
+		models.MethodReadersPorts:   methods.HandleReadersPorts,
+		models.MethodTokensResolve:  methods.HandleTokensResolve,
 		// input
 		models.MethodInputKeyboard: methods.HandleInputKeyboard,
 		models.MethodInputGamepad:  methods.HandleInputGamepad,
@@ -576,6 +579,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodProfilesActive:        methods.HandleProfilesActive,
 		models.MethodProfilesSwitch:        methods.HandleProfilesSwitch,
 		models.MethodProfilesVerify:        methods.HandleProfilesVerify,
+		models.MethodProfilesVerifyCancel:  methods.HandleProfilesVerifyCancel,
 		models.MethodKiosk:                 methods.HandleKiosk,
 		models.MethodKioskEnable:           methods.HandleKioskEnable,
 		models.MethodKioskDisable:          methods.HandleKioskDisable,

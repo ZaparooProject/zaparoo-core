@@ -109,6 +109,8 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    false,
 		DefaultAutoDetect: true,
 		Description:       "TTY2OLED serial display device",
+		PathKind:          readers.PathKindSerial,
+		CanAutoDetect:     true,
 	}
 }
 
