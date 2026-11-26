@@ -57,12 +57,13 @@ const (
 	reasonGroovy    = "the GMC proxy listens unauthenticated on every interface and turns packets into tokens"
 	reasonInput     = "input mode and command blocks bound what a token may type or run; " +
 		"opening them remotely is close to running code"
-	reasonExecDir = "Core runs programs found in this folder"
-	reasonLogins  = "saved logins are sent to this server"
-	reasonRoots   = "widens what media.asset, browse and launch accept"
-	reasonWrites  = "Core writes files into this folder"
-	reasonHost    = "scans would be sent to a host the caller picks; shown, never written"
-	reasonCustom  = "custom launcher commands run on the host; launchers.custom shows them read-only"
+	reasonExecDir        = "Core runs programs found in this folder"
+	reasonDriverFeatures = "a driver-wide default; clients set features per reader through readersConnect"
+	reasonLogins         = "saved logins are sent to this server"
+	reasonRoots          = "widens what media.asset, browse and launch accept"
+	reasonWrites         = "Core writes files into this folder"
+	reasonHost           = "scans would be sent to a host the caller picks; shown, never written"
+	reasonCustom         = "custom launcher commands run on the host; launchers.custom shows them read-only"
 )
 
 // configKeyAPI classifies every config.toml key. A new key fails
@@ -151,12 +152,14 @@ var configKeyAPI = map[string]any{
 	"readers.auto_detect":                       settingsField("readersAutoDetect"),
 	"readers.connect.driver":                    settingsField("readersConnect"),
 	"readers.connect.enabled":                   settingsField("readersConnect"),
+	"readers.connect.features":                  settingsField("readersConnect"),
 	"readers.connect.id_source":                 settingsField("readersConnect"),
 	"readers.connect.path":                      settingsField("readersConnect"),
 	"readers.connect.scan_mode":                 settingsField("readersConnect"),
 	"readers.drivers.audio_cd_launcher":         adminField("readersDrivers"),
 	"readers.drivers.auto_detect":               adminField("readersDrivers"),
 	"readers.drivers.enabled":                   adminField("readersDrivers"),
+	"readers.drivers.features":                  fileOnly(reasonDriverFeatures),
 	"readers.drivers.keep_reading":              adminField("readersDrivers"),
 	"readers.drivers.launch_order":              adminField("readersDrivers"),
 	"readers.drivers.scan_mode":                 adminField("readersDrivers"),
