@@ -971,6 +971,69 @@ mode = "unrestricted"`))
 	}
 }
 
+// Media launched while the exit timer runs, before its owner update reaches
+// the reader manager, is not the removed token's to stop.
+func TestTimedExit_DoesNotStopMediaLaunchedAfterRemoval(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID:      "game-card",
+		Text:     "game.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "other.nes", "Other", "test-launcher"))
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-stopCalled:
+		t.Fatal("exit stopped media launched after the removal")
+	case <-svc.LaunchSoftwareQueue:
+		t.Fatal("exit cleared the hold owner")
+	case <-time.After(500 * time.Millisecond):
+	}
+	assert.Equal(t, "Other", st.ActiveMedia().Name)
+}
+
 // A system on the hold-mode ignore list never auto-exits, so there is nothing
 // for before_exit to run before.
 func TestTimedExit_IgnoredSystemSkipsBeforeExit(t *testing.T) {

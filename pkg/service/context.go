@@ -37,12 +37,14 @@ import (
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
-// softwareTokenUpdate publishes a launch owner, or conditionally clears the
-// owner after a timed exit. A nil token is scoped to both captured generations.
+// softwareTokenUpdate publishes a launch owner, or clears it. A nil token
+// from a timed exit is scoped to both captured generations. A release is
+// unconditional: media no hold token owns has replaced the primary media.
 type softwareTokenUpdate struct {
 	token           *tokens.Token
 	ownerGeneration uint64
 	exitGeneration  uint64
+	release         bool
 }
 
 // ServiceContext holds the shared dependencies threaded through all

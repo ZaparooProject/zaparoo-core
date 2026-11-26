@@ -71,9 +71,13 @@ func TestReaderManager_SoftwareTokenClearGenerations(t *testing.T) {
 		name           string
 		replacementUID string
 		exitGeneration uint64
+		release        bool
 		wantClear      bool
 	}{
 		{name: "current_exit", exitGeneration: 1, wantClear: true},
+		// Media no hold token owns replaced the primary media, so the owner
+		// goes regardless of which launch or exit it came from.
+		{name: "release_new_owner", replacementUID: "new-card", release: true, wantClear: true},
 		{name: "different_owner", replacementUID: "new-card", exitGeneration: 1},
 		{name: "same_card_new_launch", replacementUID: "card", exitGeneration: 1},
 		{name: "stale_exit_generation", exitGeneration: 0},
@@ -96,6 +100,7 @@ func TestReaderManager_SoftwareTokenClearGenerations(t *testing.T) {
 			applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{
 				ownerGeneration: 1,
 				exitGeneration:  tt.exitGeneration,
+				release:         tt.release,
 			})
 			if tt.wantClear {
 				assert.Nil(t, env.st.GetSoftwareToken())

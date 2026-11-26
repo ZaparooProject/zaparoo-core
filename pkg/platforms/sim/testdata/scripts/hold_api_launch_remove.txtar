@@ -1,0 +1,32 @@
+# In hold mode, a launch from the API takes over the running media, so taking
+# the card that launched the previous game off no longer stops anything.
+
+sim-start -scan-mode hold
+rom snes/Alpha.sfc snes/Beta.sfc
+
+tap -uid 04aa11 $ROMS/snes/Alpha.sfc
+notification tokens.added uid=04aa11
+notification media.started systemId=SNES mediaName=Alpha
+
+api run {"text":"$ROMS/snes/Beta.sfc"}
+notification media.started systemId=SNES mediaName=Beta
+mark
+
+remove
+notification tokens.removed
+! event stop
+api media.active
+stdout '"mediaName": "Beta"'
+
+# A card launch still owns its media: taking it off stops it.
+tap -uid 04aa22 $ROMS/snes/Alpha.sfc
+notification tokens.added uid=04aa22
+notification media.started systemId=SNES mediaName=Alpha
+mark
+
+remove
+notification tokens.removed
+event stop intent=menu
+notification media.stopped systemId=SNES
+api media.active
+! stdout systemId

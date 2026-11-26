@@ -494,23 +494,38 @@ func executeTokenZapScript(
 			if token.Source == tokens.SourcePlaylist {
 				holdToken = plsc.HoldToken
 			}
+			var update softwareTokenUpdate
+			publish := false
 			if holdToken != nil && holdToken.ReaderID != "" {
 				r, ok := svc.State.GetReader(holdToken.ReaderID)
 				if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 					softwareToken := *holdToken
 					log.Debug().Msg("media changed, updating hold owner")
+					update = softwareTokenUpdate{token: &softwareToken}
+					publish = true
+				}
+			}
+			// Media launched from the API or a tap-only reader replaces
+			// whatever a held token was running, so that token no longer owns
+			// it and removing it must not stop it. Hooks run inside another
+			// token's run and leave ownership to it.
+			if !publish && !inHookContext {
+				log.Debug().Msg("media changed, releasing hold owner")
+				update = softwareTokenUpdate{release: true}
+				publish = true
+			}
+			if publish {
+				select {
+				case svc.LaunchSoftwareQueue <- update:
+				case <-runCtx.Done():
 					select {
-					case svc.LaunchSoftwareQueue <- softwareTokenUpdate{token: &softwareToken}:
-					case <-runCtx.Done():
-						select {
-						case <-svc.State.GetContext().Done():
-							return errors.New("service shutting down")
-						default:
-							return runCtx.Err()
-						}
 					case <-svc.State.GetContext().Done():
 						return errors.New("service shutting down")
+					default:
+						return runCtx.Err()
 					}
+				case <-svc.State.GetContext().Done():
+					return errors.New("service shutting down")
 				}
 			}
 		}
