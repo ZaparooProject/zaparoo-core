@@ -118,8 +118,10 @@ func resolveDiscSetOf(
 // resolveFilteredDiscSetAliases collapses the disc set folders of a
 // tag-filtered browse page. The page's folder counts are of matching files
 // only, so unlike an unfiltered page they cannot rule out nested media and
-// every candidate is checked as a disc set instead. Other folders stay
-// folders, as they always have on a filtered page.
+// every candidate is checked as a disc set instead. A set collapses only when
+// at least one of its discs matches the filter, the files the folder would
+// list if opened; other folders stay folders, as they always have on a
+// filtered page.
 func resolveFilteredDiscSetAliases(
 	env *requests.RequestEnv,
 	path string,
@@ -146,6 +148,9 @@ func resolveFilteredDiscSetAliases(
 			childDirs = append(childDirs, candidate.ChildDir)
 		}
 		sets, err := resolveDiscSets(env, systemID, system.DBID, childDirs)
+		if err == nil && len(sets) > 0 {
+			sets, err = filterDiscSetsByTags(env, sets, tags)
+		}
 		if err != nil {
 			// One system failing leaves the rest of the page resolvable.
 			log.Debug().Err(err).Str("path", path).Str("system", systemID).
@@ -153,9 +158,6 @@ func resolveFilteredDiscSetAliases(
 			continue
 		}
 		for dir, set := range sets {
-			if !tagsMatchFilters(set.alias.Tags, tags) {
-				continue
-			}
 			if aliases == nil {
 				aliases = make(map[string]database.SingletonContainerAlias, len(sets))
 			}
@@ -165,30 +167,26 @@ func resolveFilteredDiscSetAliases(
 	return aliases
 }
 
-func tagsMatchFilters(mediaTags []database.TagInfo, filters []zapscript.TagFilter) bool {
-	if len(filters) == 0 {
-		return true
+// filterDiscSetsByTags keeps the sets with a disc that matches tags.
+func filterDiscSetsByTags(
+	env *requests.RequestEnv, sets map[string]*discSet, tags []zapscript.TagFilter,
+) (map[string]*discSet, error) {
+	var ids []int64
+	for _, set := range sets {
+		ids = append(ids, set.mediaDBIDs()...)
 	}
-	hasTag := func(f zapscript.TagFilter) bool {
-		return slices.ContainsFunc(mediaTags, func(t database.TagInfo) bool {
-			return t.Type == f.Type && t.Tag == f.Value
-		})
+	matched, err := env.Database.MediaDB.MatchMediaTagFilters(env.Context, ids, tags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to match disc set tags: %w", err)
 	}
-	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
-	for _, f := range andFilters {
-		if !hasTag(f) {
-			return false
+	kept := make(map[string]*discSet, len(sets))
+	for dir, set := range sets {
+		if slices.ContainsFunc(set.discs, func(m database.Media) bool {
+			_, ok := matched[m.DBID]
+			return ok
+		}) {
+			kept[dir] = set
 		}
 	}
-	for _, f := range notFilters {
-		if hasTag(f) {
-			return false
-		}
-	}
-	for _, group := range database.GroupORFiltersByType(orFilters) {
-		if !slices.ContainsFunc(group, hasTag) {
-			return false
-		}
-	}
-	return true
+	return kept, nil
 }

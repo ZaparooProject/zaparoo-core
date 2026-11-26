@@ -22,10 +22,12 @@ package mediadb
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 )
@@ -92,4 +94,61 @@ func (db *MediaDB) FindDiscSets(
 		sets[dir] = rows
 	}
 	return sets, nil
+}
+
+// MatchMediaTagFilters implements MediaDBI. It applies the same tag filter
+// SQL as search and browse, so title tags, credit filters and deprecated tag
+// spellings match here exactly as they do there.
+func (db *MediaDB) MatchMediaTagFilters(
+	ctx context.Context, mediaDBIDs []int64, filters []zapscript.TagFilter,
+) (map[int64]struct{}, error) {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return nil, ErrNullSQL
+	}
+	ids := dedupeInt64s(mediaDBIDs)
+	matched := make(map[int64]struct{}, len(ids))
+	if len(ids) == 0 {
+		return matched, nil
+	}
+	tagClauses, tagArgs := buildCandidateTagFilterSQL(filters)
+	for chunk := range slices.Chunk(ids, batchLookupIDsPerQuery) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("match media tag filters interrupted: %w", ctxErr)
+		}
+		if err := matchMediaTagFiltersChunk(ctx, sqlDB, chunk, tagClauses, tagArgs, matched); err != nil {
+			return nil, err
+		}
+	}
+	return matched, nil
+}
+
+func matchMediaTagFiltersChunk(
+	ctx context.Context, sqlDB *sql.DB, ids []int64, tagClauses []string, tagArgs []any,
+	matched map[int64]struct{},
+) error {
+	clauses := make([]string, 0, len(tagClauses)+1)
+	clauses = append(clauses, "Media.DBID IN ("+prepareVariadic("?", ",", len(ids))+")")
+	clauses = append(clauses, tagClauses...)
+	args := make([]any, 0, len(ids)+len(tagArgs))
+	args = append(args, int64Args(ids)...)
+	args = append(args, tagArgs...)
+	//nolint:gosec // Safe: clauses hold only placeholders and fixed SQL.
+	rows, err := sqlDB.QueryContext(ctx,
+		"SELECT Media.DBID FROM Media WHERE "+strings.Join(clauses, " AND "), args...)
+	if err != nil {
+		return fmt.Errorf("failed to match media tag filters: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("failed to scan matched media: %w", scanErr)
+		}
+		matched[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read matched media: %w", err)
+	}
+	return nil
 }

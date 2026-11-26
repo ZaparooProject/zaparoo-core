@@ -2065,6 +2065,11 @@ type MediaDBI interface {
 	// keyed by the folder with a trailing slash and holds its discs in path
 	// order. Folders that are not disc sets are absent.
 	FindDiscSets(ctx context.Context, systemDBID int64, dirs []string) (map[string][]Media, error)
+	// MatchMediaTagFilters returns which of mediaDBIDs satisfy filters, read
+	// the way search and browse filter media.
+	MatchMediaTagFilters(
+		ctx context.Context, mediaDBIDs []int64, filters []zapscript.TagFilter,
+	) (map[int64]struct{}, error)
 	// AttachSearchTags reads the tags and disambiguating tags of results
 	// read with SearchFilters.SkipTags, as a search would have attached them.
 	AttachSearchTags(ctx context.Context, results []SearchResultWithCursor) error
