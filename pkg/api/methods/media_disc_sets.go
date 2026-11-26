@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
@@ -124,6 +125,7 @@ func resolveFilteredDiscSetAliases(
 	path string,
 	dirs []database.BrowseDirectoryResult,
 	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
 ) map[string]database.SingletonContainerAlias {
 	if len(dirs) == 0 || env.Database == nil || env.Database.MediaDB == nil {
 		return nil
@@ -151,6 +153,9 @@ func resolveFilteredDiscSetAliases(
 			continue
 		}
 		for dir, set := range sets {
+			if !tagsMatchFilters(set.alias.Tags, tags) {
+				continue
+			}
 			if aliases == nil {
 				aliases = make(map[string]database.SingletonContainerAlias, len(sets))
 			}
@@ -158,4 +163,32 @@ func resolveFilteredDiscSetAliases(
 		}
 	}
 	return aliases
+}
+
+func tagsMatchFilters(mediaTags []database.TagInfo, filters []zapscript.TagFilter) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	hasTag := func(f zapscript.TagFilter) bool {
+		return slices.ContainsFunc(mediaTags, func(t database.TagInfo) bool {
+			return t.Type == f.Type && t.Tag == f.Value
+		})
+	}
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	for _, f := range andFilters {
+		if !hasTag(f) {
+			return false
+		}
+	}
+	for _, f := range notFilters {
+		if hasTag(f) {
+			return false
+		}
+	}
+	for _, group := range database.GroupORFiltersByType(orFilters) {
+		if !slices.ContainsFunc(group, hasTag) {
+			return false
+		}
+	}
+	return true
 }

@@ -542,11 +542,11 @@ func TestMediaBrowseFilteredCollapsesDiscSets(t *testing.T) {
 	quest = browseEntryNamed(t, entries, f.folder("Quest"))
 	assert.Equal(t, []string{"favorite", "liked"}, userTagValues(quest.Tags))
 
-	// Browse lists every folder whatever the filter, so a set none of
-	// whose discs match is still the same one entry.
+	// Browse lists every folder whatever the filter, but a disc set whose
+	// tags do not match the filter stays a plain folder instead of
+	// collapsing into a game entry.
 	entries = f.browse(t, map[string]any{"tags": []string{"user:disliked"}})
 	saga = browseEntryNamed(t, entries, f.folder("Saga"))
-	assert.True(t, saga.MultiDisc)
-	assert.Equal(t, f.ids["saga2"], saga.MediaID)
-	assert.Equal(t, []string{"favorite"}, userTagValues(saga.Tags))
+	assert.False(t, saga.MultiDisc)
+	assert.Zero(t, saga.MediaID)
 }
