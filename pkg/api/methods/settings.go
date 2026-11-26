@@ -54,6 +54,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
 			ScanMode: rc.ScanMode,
+			Features: rc.Features,
 		})
 	}
 
@@ -647,15 +648,42 @@ func buildReaderConnections(in []models.ReaderConnection) ([]config.ReadersConne
 				rc.ScanMode, rc.ConnectionLabel(), config.ScanModeTap, config.ScanModeHold,
 			)
 		}
+		features, err := buildReaderFeatures(&rc)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, config.ReadersConnect{
 			Enabled:  rc.Enabled,
 			Driver:   rc.Driver,
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
 			ScanMode: scanMode,
+			Features: features,
 		})
 	}
 	return out, nil
+}
+
+// buildReaderFeatures validates a reader connection's features the way
+// buildReaderConnections does its scan mode: an unknown name is an error, and
+// accepted names are stored canonically.
+func buildReaderFeatures(rc *models.ReaderConnection) (*[]string, error) {
+	if rc.Features == nil {
+		return nil, nil //nolint:nilnil // no features keeps the driver's
+	}
+	features := make([]string, 0, len(*rc.Features))
+	for _, feature := range *rc.Features {
+		canonical := config.NormalizeReaderFeature(feature)
+		if canonical == "" {
+			return nil, models.ClientErrf(
+				"invalid params: unknown feature %q for reader %q", feature, rc.ConnectionLabel(),
+			)
+		}
+		if !slices.Contains(features, canonical) {
+			features = append(features, canonical)
+		}
+	}
+	return &features, nil
 }
 
 // buildSystemDefaults validates the API system-defaults payload and converts

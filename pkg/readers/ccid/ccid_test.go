@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/nfctag/tagsim"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -231,6 +232,52 @@ func TestReader_UnreadableContactlessCardIsReportedByUID(t *testing.T) {
 	assert.Equal(t, "04112233445566", scans[0].Token.UID)
 	assert.Empty(t, scans[0].Token.Text)
 	assert.Empty(t, scans[0].Token.Data)
+}
+
+// An arcade access card, such as a Banapass or Aime, is a MIFARE Classic
+// with its own keys on every sector. It cannot be read, but its UID is
+// reported so it can be used through a mapping.
+func TestReader_ArcadeClassicCardIsReportedByUID(t *testing.T) {
+	t.Parallel()
+	for _, profile := range simProfiles {
+		t.Run(profile.name, func(t *testing.T) {
+			t.Parallel()
+			dev := newSimDevice(profile)
+			tag := tagsim.NewClassic(16)
+			tag.SetAllKeys(nfctag.Key{0x57, 0x43, 0x43, 0x46, 0x76, 0x32})
+			dev.place(tag)
+			r, iq := attach(t, dev, &testInfo)
+
+			ticks(t, r, iq, 2)
+
+			scans := drain(iq)
+			require.Len(t, scans, 1)
+			require.NotNil(t, scans[0].Token)
+			assert.Equal(t, tokens.TypeMifare, scans[0].Token.Type)
+			assert.Equal(t, hex.EncodeToString(tag.UID()), scans[0].Token.UID)
+			assert.Empty(t, scans[0].Token.Text)
+			assert.Empty(t, scans[0].Token.Data)
+		})
+	}
+}
+
+func TestReader_FeliCaCardIsReportedByUID(t *testing.T) {
+	t.Parallel()
+	dev := newSimDevice(profileACR122U)
+	dev.placeCard(atrFeliCa, true)
+	r, iq := attach(t, dev, &testInfo)
+
+	ticks(t, r, iq, 2)
+
+	scans := drain(iq)
+	require.Len(t, scans, 1)
+	require.NotNil(t, scans[0].Token)
+	assert.Equal(t, tokens.TypeFeliCa, scans[0].Token.Type)
+	assert.Equal(t, "04112233445566", scans[0].Token.UID)
+	assert.Empty(t, scans[0].Token.Text)
+	for _, apdu := range dev.transmits {
+		assert.Equal(t, byte(insGetData), apdu[1], "nothing but the UID is asked of a FeliCa card")
+	}
 }
 
 func TestReader_ReadFailureStillReportsTheTag(t *testing.T) {

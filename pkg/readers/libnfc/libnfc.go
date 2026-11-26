@@ -244,7 +244,11 @@ func NewLegacyI2CReader(cfg *config.Instance) *Reader {
 	}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	connStr := device.ConnectionString()
 	if connStr == autoConnStr {
 		connStr = ""

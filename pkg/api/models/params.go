@@ -184,10 +184,14 @@ type ReaderWriteCancelParams struct {
 }
 
 type ReaderConnection struct {
-	Enabled  *bool  `json:"enabled,omitempty"`
-	Driver   string `json:"driver" validate:"required,min=1"`
-	Path     string `json:"path"`
-	IDSource string `json:"idSource,omitempty"`
+	Enabled *bool `json:"enabled,omitempty"`
+	// Features replaces the driver's reader features for this reader. Absent
+	// keeps the driver's; an empty list turns them all off. See
+	// config.ReaderFeatures.
+	Features *[]string `json:"features,omitempty"`
+	Driver   string    `json:"driver" validate:"required,min=1"`
+	Path     string    `json:"path"`
+	IDSource string    `json:"idSource,omitempty"`
 	// ScanMode is validated by the handler rather than by a tag, so it accepts
 	// the same spellings a config file does ("HOLD", " hold ") and stores the
 	// canonical one. See config.NormalizeScanMode.
@@ -202,13 +206,13 @@ type SystemDefault struct {
 
 // IsEnabled returns whether this connection is enabled.
 // nil (omitted) and true both mean enabled; only explicit false disables.
-func (r ReaderConnection) IsEnabled() bool {
+func (r ReaderConnection) IsEnabled() bool { //nolint:gocritic // hugeParam
 	return r.Enabled == nil || *r.Enabled
 }
 
 // ConnectionLabel names this connection for an error message, in the same
 // driver:path form the config file and logs use.
-func (r ReaderConnection) ConnectionLabel() string {
+func (r ReaderConnection) ConnectionLabel() string { //nolint:gocritic // hugeParam
 	return r.Driver + ":" + r.Path
 }
 

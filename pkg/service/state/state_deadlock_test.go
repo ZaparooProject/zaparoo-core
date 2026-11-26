@@ -287,7 +287,11 @@ func (*mockPanicReader) Metadata() readers.DriverMetadata {
 }
 
 func (*mockPanicReader) IDs() []string { return []string{"mock"} }
-func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+func (*mockPanicReader) Open(
+	_ config.ReadersConnect, //nolint:gocritic // hugeParam
+	_ chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	return nil
 }
 func (m *mockPanicReader) Close() error           { m.closed.Store(true); return nil }
@@ -357,7 +361,11 @@ func (*mockRacyReader) Metadata() readers.DriverMetadata {
 }
 
 func (*mockRacyReader) IDs() []string { return []string{"mock"} }
-func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+func (*mockRacyReader) Open(
+	_ config.ReadersConnect, //nolint:gocritic // hugeParam
+	_ chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	return nil
 }
 func (*mockRacyReader) Close() error             { return nil }
@@ -425,7 +433,11 @@ func (*mockClosableReader) Metadata() readers.DriverMetadata {
 }
 
 func (*mockClosableReader) IDs() []string { return []string{"closable"} }
-func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+func (*mockClosableReader) Open(
+	_ config.ReadersConnect, //nolint:gocritic // hugeParam
+	_ chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	return nil
 }
 

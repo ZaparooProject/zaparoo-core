@@ -54,7 +54,7 @@ func (m *MockReader) IDs() []string {
 
 // Open any necessary connections to the device and start polling
 func (m *MockReader) Open(
-	readerConfig config.ReadersConnect,
+	readerConfig config.ReadersConnect, //nolint:gocritic // hugeParam
 	scanChan chan<- readers.Scan,
 	opts readers.OpenOpts,
 ) error {

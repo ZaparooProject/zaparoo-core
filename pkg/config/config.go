@@ -426,6 +426,7 @@ func (c *Instance) applyTOML(data string) error {
 		log.Warn().Err(problem).Msg("invalid systems category entry in config.toml")
 	}
 	c.loaded.categoryResolver = categoryResolver
+	warnUnknownReaderFeatures(&c.vals.Readers)
 	c.loaded.customLaunchersInline = validateCustomLaunchers(
 		c.vals.Launchers.Custom,
 		nil,

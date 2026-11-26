@@ -536,7 +536,11 @@ func (*Reader) Metadata() readers.DriverMetadata {
 func (*Reader) IDs() []string { return []string{DriverID} }
 
 // Open implements readers.Reader.
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

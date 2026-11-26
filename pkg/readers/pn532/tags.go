@@ -53,6 +53,11 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 // token here as on any other reader.
 func (r *Reader) readTag(ctx context.Context, detectedTag *pn532.DetectedTag) (tokenType, text string, data []byte) {
 	tokenType = r.convertTagType(detectedTag.Type)
+	if detectedTag.Type == pn532.TagTypeFeliCa {
+		// FeliCa cards, such as arcade access cards, are mapped by their IDm.
+		// go-pn532 cannot read NDEF from them.
+		return tokenType, "", nil
+	}
 	if r.tagOps == nil {
 		log.Debug().Str("uid", detectedTag.UID).Msg("tagOps not available, reporting tag by UID")
 		return tokenType, "", nil

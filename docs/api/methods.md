@@ -4156,6 +4156,7 @@ None.
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
 | scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
+| features | string[] | No     | Reader features for this reader, replacing the driver's `[readers.drivers.<id>] features`. Omitted means inherit; an empty list turns them all off. The only feature is `"felica"`, which makes a PN532 reader poll for FeliCa cards too. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
 
 ##### System default object
 
