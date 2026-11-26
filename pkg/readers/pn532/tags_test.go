@@ -383,6 +383,26 @@ func TestReadTag_Classic(t *testing.T) {
 		assert.Zero(t, ops.blockReads)
 	})
 
+	// An arcade access card, such as a Banapass or Aime, has its own keys on
+	// every sector, so go-pn532 cannot open it. Its UID is still reported so
+	// it can be used through a mapping.
+	t.Run("arcade card with its own keys", func(t *testing.T) {
+		t.Parallel()
+		sim := tagsim.NewClassic(16)
+		sim.SetAllKeys(nfctag.Key{0x57, 0x43, 0x43, 0x46, 0x76, 0x32})
+		ops := &fakeTagOps{
+			blockReader: &classicTag{sim: sim},
+			ndefErr:     errors.New("authentication failed for sector 1"),
+		}
+		reader := &Reader{tagOps: ops}
+
+		tokenType, text, data := reader.readTag(context.Background(), classicDetected(sim))
+
+		assert.Equal(t, tokens.TypeMifare, tokenType)
+		assert.Empty(t, text)
+		assert.Empty(t, data)
+	})
+
 	t.Run("tag info unavailable is read as 1K", func(t *testing.T) {
 		t.Parallel()
 		sim := tagsim.NewClassic(16)
@@ -513,4 +533,35 @@ func TestReadTag_UnsupportedTagIsNotAnError(t *testing.T) {
 	}
 	assert.Contains(t, output, "failed to initialize tag for NDEF reading")
 	assert.Contains(t, output, "wire_trace")
+}
+
+// initCountingTagOps fails nothing but records whether go-pn532 was asked to
+// read the tag.
+type initCountingTagOps struct {
+	fakeTagOps
+	inits int
+}
+
+func (c *initCountingTagOps) InitFromDetectedTag(ctx context.Context, tag *pn532.DetectedTag) error {
+	c.inits++
+	return c.fakeTagOps.InitFromDetectedTag(ctx, tag)
+}
+
+// A FeliCa card, such as an arcade access card, is reported by its IDm with
+// no attempt to read NDEF from it.
+func TestReadTag_FeliCaIsUIDOnly(t *testing.T) {
+	t.Parallel()
+	ops := &initCountingTagOps{}
+	reader := &Reader{tagOps: ops}
+	idm := []byte{0x01, 0x2E, 0x4C, 0xD3, 0x8A, 0x1B, 0x66, 0x07}
+
+	tokenType, text, data := reader.readTag(context.Background(), &pn532.DetectedTag{
+		UID: hex.EncodeToString(idm), UIDBytes: idm, Type: pn532.TagTypeFeliCa,
+	})
+
+	assert.Equal(t, tokens.TypeFeliCa, tokenType)
+	assert.Empty(t, text)
+	assert.Empty(t, data)
+	assert.Zero(t, ops.inits)
+	assert.Zero(t, ops.blockReads)
 }

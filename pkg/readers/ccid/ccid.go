@@ -336,7 +336,11 @@ func (r *Reader) find(ctx context.Context, path string) (backend, *readerInfo, e
 	return nil, nil, fmt.Errorf("%w: %q", errReaderMissing, path)
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	opts readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
@@ -543,6 +547,9 @@ func (r *Reader) readToken(ctx context.Context, dev device, atr, uid []byte) *to
 		log.Warn().Err(err).Str("path", r.Path()).Msg("ccid: could not read tag, reporting it by UID")
 	}
 	r.diagnose(atr, uid, res, err)
+	if res.Type == tokens.TypeUnknown && isFeliCaATR(atr) {
+		res.Type = tokens.TypeFeliCa
+	}
 
 	log.Info().Msgf("ccid: detected %s tag: %s", res.Type, hex.EncodeToString(uid))
 	return &tokens.Token{

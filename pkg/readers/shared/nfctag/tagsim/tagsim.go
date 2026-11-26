@@ -214,6 +214,14 @@ func (c *Classic) SetKeys(sector int, key nfctag.Key) {
 	c.keysB[sector] = key
 }
 
+// SetAllKeys gives every sector the same keys, as on a card issued with its
+// own keys, such as an arcade access card.
+func (c *Classic) SetAllKeys(key nfctag.Key) {
+	for sector := range c.sectors {
+		c.SetKeys(sector, key)
+	}
+}
+
 // KeyA returns a sector's key A.
 func (c *Classic) KeyA(sector int) nfctag.Key {
 	return c.keysA[sector]

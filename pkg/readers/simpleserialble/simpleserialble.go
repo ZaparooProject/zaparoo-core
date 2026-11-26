@@ -139,7 +139,11 @@ func (*Reader) IDs() []string {
 // adapter, an adapter that cannot act as a central. Whether the device is
 // in range is the background loop's business, so the reader manager, which
 // calls Open on its own tick, is never held up by a device that is off.
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

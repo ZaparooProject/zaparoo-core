@@ -49,8 +49,8 @@ import (
 var ErrNoStagedToken = errors.New("no staged token to confirm")
 
 type toConnectDevice struct {
-	connectionString string
 	device           config.ReadersConnect
+	connectionString string
 }
 
 // manualReaders holds the readers connectReaders opened from a
