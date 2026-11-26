@@ -7,6 +7,7 @@ rom snes/Alpha.sfc snes/Beta.sfc
 tap -uid 04aa11 $ROMS/snes/Alpha.sfc
 notification tokens.added uid=04aa11
 notification media.started systemId=SNES mediaName=Alpha
+event ready
 
 api run {"text":"$ROMS/snes/Beta.sfc"}
 notification media.started systemId=SNES mediaName=Beta

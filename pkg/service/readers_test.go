@@ -971,9 +971,9 @@ mode = "unrestricted"`))
 	}
 }
 
-// Media launched while the exit timer runs, before its owner update reaches
-// the reader manager, is not the removed token's to stop.
-func TestTimedExit_DoesNotStopMediaLaunchedAfterRemoval(t *testing.T) {
+// A held playlist that advances during the exit delay keeps the removed card
+// as its owner, so the exit stops the successor rather than leaving it running.
+func TestTimedExit_StopsSuccessorWithSameOwner(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
@@ -1026,12 +1026,16 @@ func TestTimedExit_DoesNotStopMediaLaunchedAfterRemoval(t *testing.T) {
 
 	select {
 	case <-stopCalled:
-		t.Fatal("exit stopped media launched after the removal")
-	case <-svc.LaunchSoftwareQueue:
-		t.Fatal("exit cleared the hold owner")
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(behaviorTimeout):
+		t.Fatal("exit did not stop the successor media")
 	}
-	assert.Equal(t, "Other", st.ActiveMedia().Name)
+	select {
+	case update := <-svc.LaunchSoftwareQueue:
+		assert.Nil(t, update.token)
+		assert.False(t, update.release)
+	case <-time.After(behaviorTimeout):
+		t.Fatal("exit did not clear the hold owner")
+	}
 }
 
 // A system on the hold-mode ignore list never auto-exits, so there is nothing

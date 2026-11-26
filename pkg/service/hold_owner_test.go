@@ -225,3 +225,23 @@ func TestTimedExit_ClearKeepsCapturedGenerationsWhilePlaylistBlocked(t *testing.
 		t.Fatal("exit did not publish its conditional owner clear")
 	}
 }
+
+// Playlist and token runs launch on separate goroutines, so an update from an
+// older launch can arrive after a newer launch's owner was applied.
+func TestReaderManager_SoftwareTokenLaunchOrder(t *testing.T) {
+	t.Parallel()
+
+	env := setupReaderManager(t)
+	newer := &tokens.Token{UID: "newer-card", Text: "newer.nes", ReaderID: "reader"}
+	older := &tokens.Token{UID: "older-card", Text: "older.nes", ReaderID: "reader"}
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{token: newer, launchSeq: 2})
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{release: true, launchSeq: 1})
+	assert.Same(t, newer, env.st.GetSoftwareToken(), "older release cleared a newer owner")
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{token: older, launchSeq: 1})
+	assert.Same(t, newer, env.st.GetSoftwareToken(), "older owner replaced a newer one")
+
+	applySoftwareUpdate(t, env.softwareQueue, env.confirmQueue, softwareTokenUpdate{release: true, launchSeq: 3})
+	assert.Nil(t, env.st.GetSoftwareToken())
+}

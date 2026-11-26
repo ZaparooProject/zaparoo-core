@@ -484,9 +484,6 @@ func timedExit(
 	}
 
 	ownerCopy := *owner
-	// The exit is for the media running now. Anything launched in its place
-	// before the timer fires is not the removed token's to stop.
-	armedGen, armedHadMedia := svc.State.ActiveMediaReadyGeneration()
 	timerLen := time.Duration(float64(svc.Config.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
 	exitTimer = clock.NewTimer(timerLen)
@@ -523,10 +520,6 @@ func timedExit(
 		activeMedia := svc.State.ActiveMedia()
 		if activeMedia == nil {
 			log.Debug().Msg("no active media, cancelling exit")
-			return
-		}
-		if svc.State.ActiveMediaReplacedSince(armedGen, armedHadMedia) {
-			log.Debug().Msg("media replaced since removal, cancelling exit")
 			return
 		}
 		if svc.Config.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
@@ -623,6 +616,7 @@ func readerManager(
 	var exitTimer clockwork.Timer
 	var exitGeneration atomic.Uint64
 	var ownerGeneration uint64
+	var ownerLaunchSeq uint64
 	var removalHookGeneration uint64
 	var activeRemovalHook *pendingRemovalHook
 
@@ -922,6 +916,13 @@ preprocessing:
 				update.exitGeneration != exitGeneration.Load()) {
 				log.Debug().Msg("ignoring stale hold-owner clear")
 				continue preprocessing
+			}
+			if update.launchSeq != 0 {
+				if update.launchSeq < ownerLaunchSeq {
+					log.Debug().Msg("ignoring hold-owner update from an older launch")
+					continue preprocessing
+				}
+				ownerLaunchSeq = update.launchSeq
 			}
 			// A token has launched primary software and now owns hold-mode exit,
 			// or the primary media is no longer owned by any token.
