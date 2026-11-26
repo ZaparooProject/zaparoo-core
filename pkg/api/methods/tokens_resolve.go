@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
@@ -118,8 +119,8 @@ func resolveTokenScript(env *requests.RequestEnv, t *tokens.Token) (string, *mod
 }
 
 // resolveScriptMedia returns the indexed game the script's first launch
-// names by path, or nil when it names none or the media database does not
-// have it.
+// names, by path or by title, or nil when it names none or the media
+// database does not have it.
 func resolveScriptMedia(env *requests.RequestEnv, script string) *models.ResolvedMedia {
 	if strings.TrimSpace(script) == "" || env.Database == nil || env.Database.MediaDB == nil {
 		return nil
@@ -132,25 +133,59 @@ func resolveScriptMedia(env *requests.RequestEnv, script string) *models.Resolve
 		if !zapscript.HasResolvedLaunchTarget(cmd.Name) {
 			continue
 		}
-		if cmd.Name != gozapscript.ZapScriptCmdLaunch || len(cmd.Args) == 0 {
+		if len(cmd.Args) == 0 {
 			return nil
 		}
-		row := findLaunchMedia(env, cmd.Args[0])
-		if row == nil {
+		switch cmd.Name {
+		case gozapscript.ZapScriptCmdLaunch:
+			if row := findLaunchMedia(env, cmd.Args[0]); row != nil {
+				return resolvedMedia(row.System.SystemID, row.System.Name, row.Path, row.Title.Name)
+			}
+			// A launch argument that names no file is taken as a title,
+			// as the launch command takes it.
+			if !zapscript.MightBeTitle(cmd.Args[0]) {
+				return nil
+			}
+			return findTitleMedia(env, cmd)
+		case gozapscript.ZapScriptCmdLaunchTitle:
+			return findTitleMedia(env, cmd)
+		default:
 			return nil
-		}
-		name := row.System.Name
-		if meta, metaErr := assets.GetSystemMetadata(row.System.SystemID); metaErr == nil {
-			name = meta.Name
-		}
-		return &models.ResolvedMedia{
-			System:     row.System.SystemID,
-			SystemName: name,
-			Path:       row.Path,
-			Name:       row.Title.Name,
 		}
 	}
 	return nil
+}
+
+// findTitleMedia resolves a title launch the way launch.title does.
+func findTitleMedia(env *requests.RequestEnv, cmd gozapscript.Command) *models.ResolvedMedia {
+	if env.Platform == nil {
+		return nil
+	}
+	cmdEnv := platforms.CmdEnv{
+		Cmd:        cmd,
+		Cfg:        env.Config,
+		Database:   env.Database,
+		ServiceCtx: env.Context,
+		Launchers:  &platforms.LauncherSnapshot{},
+	}
+	result, err := zapscript.ResolveLaunchTitle(env.Platform, &cmdEnv)
+	if err != nil {
+		log.Debug().Err(err).Msg("tokens resolve: title lookup failed")
+		return nil
+	}
+	return resolvedMedia(result.Result.SystemID, "", result.Result.Path, result.Result.Name)
+}
+
+func resolvedMedia(systemID, systemName, path, name string) *models.ResolvedMedia {
+	if meta, err := assets.GetSystemMetadata(systemID); err == nil {
+		systemName = meta.Name
+	}
+	return &models.ResolvedMedia{
+		System:     systemID,
+		SystemName: systemName,
+		Path:       path,
+		Name:       name,
+	}
 }
 
 // findLaunchMedia looks up a launch argument that names a file, either an

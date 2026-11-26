@@ -585,7 +585,7 @@ Optionally, an object:
 | redacted | boolean                                    | Yes      | True when the token or the script was redacted. |
 | script   | string                                     | Yes      | The ZapScript the token runs: a matching mapping's override, otherwise the token's text. Redacted where it carries a credential. |
 | mapping  | [ResolvedMapping](#resolved-mapping-object) | No       | The mapping that matched. Omitted when none did. |
-| media    | [ResolvedMedia](#resolved-media-object)     | No       | The indexed game the script launches. Omitted when the script does not launch a single indexed game. |
+| media    | [ResolvedMedia](#resolved-media-object)     | No       | The indexed game the script launches, by path or by title (`launch.title`, or a `launch` whose argument is a title). Omitted when the script does not launch a single indexed game. |
 
 ##### Resolved mapping object
 

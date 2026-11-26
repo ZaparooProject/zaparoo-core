@@ -1,5 +1,6 @@
 # tokens.resolve reports what the last card would run and which indexed game
-# it launches, and the reader setup methods answer for the sim driver.
+# it launches, by path or by title, and the reader setup methods answer for
+# the sim driver.
 
 sim-start
 rom snes/Alpha.sfc
@@ -21,3 +22,30 @@ api readers.drivers
 stdout '"id": "sim"'
 api readers.ports {"driver":"sim"}
 stdout '"ports": \[\]'
+
+# A title card, written either way, resolves to the game the title finds.
+rom 'snes/Zaparoo Sim Quest (USA).sfc'
+rom 'snes/Second Sim Saga (USA).sfc'
+index SNES
+tap -uid 04cc33 **launch.title:SNES/Zaparoo Sim Quest
+notification media.started systemId=SNES
+api tokens.resolve
+stdout '"script": "\*\*launch.title:SNES/Zaparoo Sim Quest"'
+stdout '"path": ".*Zaparoo Sim Quest \(USA\)\.sfc"'
+stdout '"name": "Zaparoo Sim Quest"'
+remove
+
+tap -uid 04dd44 SNES/Second Sim Saga
+notification media.started systemId=SNES
+api tokens.resolve
+stdout '"script": "SNES/Second Sim Saga"'
+stdout '"path": ".*Second Sim Saga \(USA\)\.sfc"'
+remove
+
+# A title nothing in the library matches names no game.
+mark
+tap -uid 04ee55 **launch.title:SNES/No Such Game Here
+notification tokens.added
+api tokens.resolve
+stdout '"uid": "04ee55"'
+! stdout '"media"'

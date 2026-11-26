@@ -38,39 +38,80 @@ import (
 //
 //nolint:gocritic // single-use parameter in command handler
 func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
+	result, fellBack, err := resolveTitleQuery(pl, &env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	if fellBack && !explicitLauncher {
+		// The named system's launcher cannot start another system's
+		// game; the launch picks the fallback system's own.
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
+	}
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
+
+	if result.Confidence < titles.ConfidenceAcceptable {
+		log.Warn().Msgf("launching with low confidence (%.2f): %s", result.Confidence, result.Result.Name)
+	} else {
+		log.Info().Msgf("launching with confidence %.2f: %s", result.Confidence, result.Result.Name)
+	}
+
+	cmdResult := platforms.CmdResult{
+		MediaChanged: true,
+		Strategy:     result.Strategy,
+		Confidence:   result.Confidence,
+	}
+	target := launchTarget{
+		path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
+	}
+	return cmdResult, launch(target)
+}
+
+// ResolveLaunchTitle finds the media a launch.title command, or a launch
+// command whose argument is a title, would start, without starting it.
+// env.Cmd is the command; its first argument is the SystemID/GameName query.
+func ResolveLaunchTitle(pl platforms.Platform, env *platforms.CmdEnv) (*titles.ResolveResult, error) {
+	result, _, err := resolveTitleQuery(pl, env)
+	return result, err
+}
+
+// resolveTitleQuery resolves the title query in env.Cmd's first argument.
+// fellBack is true when the match came from one of the system's fallbacks.
+// It sets the system's default launcher on env.Cmd when none is given.
+func resolveTitleQuery(
+	pl platforms.Platform, env *platforms.CmdEnv,
+) (result *titles.ResolveResult, fellBack bool, err error) {
 	if len(env.Cmd.Args) != 1 {
-		return platforms.CmdResult{}, ErrArgCount
+		return nil, false, ErrArgCount
 	}
 
 	query := env.Cmd.Args[0]
 	if query == "" {
-		return platforms.CmdResult{}, ErrRequiredArgs
+		return nil, false, ErrRequiredArgs
 	}
 
 	// Validate title format
 	valid, systemID, gameName := isValidTitleFormat(query)
 	if !valid {
-		return platforms.CmdResult{}, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"invalid title format: %s (expected SystemID/GameName)", query)
 	}
 
 	// Validate system ID
 	system, err := systemdefs.LookupSystem(systemID)
 	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
+		return nil, false, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
 	if system == nil {
-		return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
+		return nil, false, fmt.Errorf("system not found: %s", systemID)
 	}
 
 	var args zapscript.LaunchTitleArgs
-	if parseErr := ParseAdvArgs(pl, &env, &args); parseErr != nil {
-		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
+	if parseErr := ParseAdvArgs(pl, env, &args); parseErr != nil {
+		return nil, false, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
-	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
-	args.Launcher = applySystemDefaultLauncher(pl, &env, system.ID)
-	launch := getLaunchClosure(pl, &env, explicitLauncher)
+	args.Launcher = applySystemDefaultLauncher(pl, env, system.ID)
 
 	// Collect all launchers for this system to enable file type prioritization
 	// during result selection. If user specified an alt launcher explicitly,
@@ -94,10 +135,10 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 	}
 
-	ctx, cancel := mediaDBLookupContext(&env)
+	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
 
-	result, err := titles.ResolveTitle(ctx, &titles.ResolveParams{
+	result, err = titles.ResolveTitle(ctx, &titles.ResolveParams{
 		SystemID:       system.ID,
 		GameName:       gameName,
 		AdditionalTags: args.Tags,
@@ -107,34 +148,14 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		MediaType:      system.GetMediaType(),
 	})
 	if err != nil && (errors.Is(err, titles.ErrNoMatch) || errors.Is(err, titles.ErrLowConfidence)) {
-		if fallback, ok := resolveTitleInFallbacks(ctx, &env, system, gameName, args.Tags); ok {
-			result, err = fallback, nil
-			if !explicitLauncher {
-				// The named system's launcher cannot start another system's
-				// game; the launch picks the fallback system's own.
-				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, "")
-			}
+		if fallback, ok := resolveTitleInFallbacks(ctx, env, system, gameName, args.Tags); ok {
+			result, err, fellBack = fallback, nil, true
 		}
 	}
 	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("error resolving title %s/%s: %w", system.ID, gameName, err)
+		return nil, false, fmt.Errorf("error resolving title %s/%s: %w", system.ID, gameName, err)
 	}
-
-	if result.Confidence < titles.ConfidenceAcceptable {
-		log.Warn().Msgf("launching with low confidence (%.2f): %s", result.Confidence, result.Result.Name)
-	} else {
-		log.Info().Msgf("launching with confidence %.2f: %s", result.Confidence, result.Result.Name)
-	}
-
-	cmdResult := platforms.CmdResult{
-		MediaChanged: true,
-		Strategy:     result.Strategy,
-		Confidence:   result.Confidence,
-	}
-	target := launchTarget{
-		path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
-	}
-	return cmdResult, launch(target)
+	return result, fellBack, nil
 }
 
 // resolveTitleInFallbacks looks for a title the named system has no match for
@@ -169,9 +190,9 @@ func resolveTitleInFallbacks(
 	return nil, false
 }
 
-// mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
+// MightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
 // Returns false for paths with file extensions, wildcards, or Windows-style backslashes.
-func mightBeTitle(input string) bool {
+func MightBeTitle(input string) bool {
 	valid, _, game := isValidTitleFormat(input)
 	if !valid {
 		return false

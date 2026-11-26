@@ -1623,7 +1623,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	}
 
 	// check for title launch format: SystemID/Game Name
-	if mightBeTitle(path) {
+	if MightBeTitle(path) {
 		log.Debug().Msgf("detected possible title format, forwarding to cmdTitle: %s", path)
 		return cmdTitle(pl, env)
 	}
