@@ -132,6 +132,8 @@ type FakePeripheral struct {
 	disconnects   []ble.Peer
 	mu            syncutil.Mutex
 	serves        int
+	active        int
+	maxActive     int
 	failServes    int
 	advOff        bool
 }
@@ -171,7 +173,14 @@ func (p *FakePeripheral) Serve(
 		p.mu.Unlock()
 		return p.failServeErr
 	}
+	p.active++
+	p.maxActive = max(p.maxActive, p.active)
 	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		p.active--
+		p.mu.Unlock()
+	}()
 	if p.ServeErr != nil {
 		return p.ServeErr
 	}
@@ -180,6 +189,14 @@ func (p *FakePeripheral) Serve(
 	p.handler = nil
 	p.mu.Unlock()
 	return nil
+}
+
+// MaxConcurrentServes reports the most Serve calls that were running at
+// once. A real peripheral serves one application at a time.
+func (p *FakePeripheral) MaxConcurrentServes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxActive
 }
 
 // Handler returns the handler of the active Serve call, or nil.

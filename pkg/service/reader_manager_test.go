@@ -2108,3 +2108,104 @@ confirmed:
 		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
 	}
 }
+
+// TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders covers
+// ignore_on_connect turned on while a reader is connected: that reader is
+// past its connect scan, so its next scan is a person's and must launch.
+func TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders(t *testing.T) {
+	t.Parallel()
+
+	connected := mocks.NewMockReader()
+	connected.On("ReaderID").Return("reader-1")
+	connected.On("Connected").Return(true).Maybe()
+	connected.On("Path").Return("/dev/reader-1").Maybe()
+	connected.On("Info").Return("Reader 1").Maybe()
+	connected.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader", DefaultEnabled: true}).Maybe()
+	connected.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	connected.On("Capabilities").Return([]readers.Capability{}).Maybe()
+
+	var cfg *config.Instance
+	env := setupReaderManagerBeforeStart(t, nil, nil, func(st *state.State) {
+		st.SetReader(connected)
+	}, func(c *config.Instance) { cfg = c })
+
+	// A launch shows the manager is running, and so listening for the change.
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "before", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-1",
+		},
+	})
+	assert.Equal(t, "before", env.expectToken(t).UID)
+	env.sendScan(readers.Scan{Source: "test-reader", ReaderID: "reader-1"})
+	env.expectNoToken(t)
+
+	cfg.SetScanIgnoreOnConnect(true)
+	cfg.NotifyChanged(config.ChangeIgnoreOnConnect)
+	// Connected after the change, so its connect scan is still ignored even
+	// if the manager handles the change only now.
+	env.st.SetReader(lateReader(t, "reader-3"))
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "real-card", Text: "**launch.system:snes", ScanTime: time.Now(), ReaderID: "reader-1",
+		},
+	})
+	assert.Equal(t, "real-card", env.expectToken(t).UID)
+
+	// A reader that connects after the change still has its first scan
+	// ignored.
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "startup-card", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-2",
+		},
+	})
+	env.expectNoToken(t)
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "late-card", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-3",
+		},
+	})
+	env.expectNoToken(t)
+}
+
+func lateReader(t *testing.T, id string) *mocks.MockReader {
+	t.Helper()
+	reader := mocks.NewMockReader()
+	reader.On("ReaderID").Return(id)
+	reader.On("Connected").Return(true).Maybe()
+	reader.On("Path").Return("/dev/" + id).Maybe()
+	reader.On("Info").Return(id).Maybe()
+	reader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader", DefaultEnabled: true}).Maybe()
+	reader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	reader.On("Capabilities").Return([]readers.Capability{}).Maybe()
+	return reader
+}
+
+// TestReaderSnapshots_MergesUntilTaken covers ignore_on_connect changes that
+// arrive before the manager handles the first: the readers connected at each
+// change are all kept, under one signal, and a reader connecting later is in
+// none of them.
+func TestReaderSnapshots_MergesUntilTaken(t *testing.T) {
+	t.Parallel()
+
+	snapshots := newReaderSnapshots()
+	snapshots.add([]string{"reader-1"})
+	snapshots.add([]string{"reader-2", "reader-1"})
+
+	select {
+	case <-snapshots.ready:
+	default:
+		t.Fatal("no signal after a snapshot")
+	}
+	select {
+	case <-snapshots.ready:
+		t.Fatal("merged snapshots signal once")
+	default:
+	}
+	assert.ElementsMatch(t, []string{"reader-1", "reader-2"}, snapshots.take())
+	assert.Empty(t, snapshots.take(), "a take clears what it returned")
+}

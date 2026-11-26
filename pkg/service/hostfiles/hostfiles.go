@@ -56,6 +56,9 @@ const (
 	maxConcurrentRootReads = 2
 	// ImagesRootID is the ID of the root for Core's image folder.
 	ImagesRootID = "images"
+	// AssetsRootID is the ID of the root for Core's assets folder, where
+	// relative sound paths resolve.
+	AssetsRootID = "assets"
 )
 
 var (
@@ -71,9 +74,18 @@ var (
 // imageExtensions are the files an image browse lists and serves.
 var imageExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
+// audioExtensions are the files an audio browse lists and resolves: the
+// formats a sound setting can play.
+var audioExtensions = []string{".wav", ".mp3", ".ogg", ".flac"}
+
 // IsImageName reports whether a file name has an image extension.
 func IsImageName(name string) bool {
 	return slices.Contains(imageExtensions, strings.ToLower(filepath.Ext(name)))
+}
+
+// IsAudioName reports whether a file name has an audio extension.
+func IsAudioName(name string) bool {
+	return slices.Contains(audioExtensions, strings.ToLower(filepath.Ext(name)))
 }
 
 // Root is one folder a client may browse.
@@ -216,6 +228,16 @@ func rootID(path string) string {
 // A folder named twice appears once. It does not touch the filesystem: Roots
 // leaves out the folders that do not exist.
 func NewBrowser(indexRoots []string, imageDir string) *Browser {
+	return buildBrowser(indexRoots, imageDir, "")
+}
+
+// NewAudioBrowser returns a browser over Core's assets folder and the index
+// roots, for picking a sound file.
+func NewAudioBrowser(indexRoots []string, assetsDir string) *Browser {
+	return buildBrowser(indexRoots, "", assetsDir)
+}
+
+func buildBrowser(indexRoots []string, imageDir, assetsDir string) *Browser {
 	b := &Browser{timeout: ReadTimeout}
 	seen := make(map[string]struct{})
 	add := func(id, path string) {
@@ -232,6 +254,7 @@ func NewBrowser(indexRoots []string, imageDir string) *Browser {
 		}
 		b.roots = append(b.roots, Root{ID: id, Name: path, Path: path})
 	}
+	add(AssetsRootID, assetsDir)
 	add(ImagesRootID, imageDir)
 	for _, root := range indexRoots {
 		add("", root)
@@ -384,11 +407,49 @@ func (b *Browser) OpenImage(ctx context.Context, id, rel string) (*Image, error)
 	}, func(image *Image) { _ = image.File.Close() })
 }
 
+// ResolveAudio returns the real path of a regular audio file under the root
+// with the given ID, refusing a path that leaves the root the way OpenImage
+// does. The path is for storing in config: the file is read when it plays.
+func (b *Browser) ResolveAudio(ctx context.Context, id, rel string) (string, error) {
+	root, err := b.root(id)
+	if err != nil {
+		return "", err
+	}
+	clean, err := cleanRel(rel)
+	if err != nil {
+		return "", err
+	}
+	return bounded(ctx, b, root.Path, func() (string, error) {
+		_, path, resolveErr := resolveUnder(root.Path, clean)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return "", ErrNotFound
+		}
+		if !info.Mode().IsRegular() || !IsAudioName(path) {
+			return "", ErrNotFile
+		}
+		return path, nil
+	})
+}
+
 // ListImages lists the folders and image files of one folder under a root,
 // folders first, each group by name. Hidden entries and anything a symlink
 // leads out of the root are left out. The folder is read through the root,
 // so a folder swapped for a link after the check cannot lead outside.
 func (b *Browser) ListImages(ctx context.Context, id, rel string) (Listing, error) {
+	return b.list(ctx, id, rel, IsImageName)
+}
+
+// ListAudio lists the folders and audio files of one folder under a root,
+// the way ListImages does for images.
+func (b *Browser) ListAudio(ctx context.Context, id, rel string) (Listing, error) {
+	return b.list(ctx, id, rel, IsAudioName)
+}
+
+func (b *Browser) list(ctx context.Context, id, rel string, keep func(string) bool) (Listing, error) {
 	root, err := b.root(id)
 	if err != nil {
 		return Listing{}, err
@@ -424,7 +485,7 @@ func (b *Browser) ListImages(ctx context.Context, id, rel string) (Listing, erro
 			return Listing{}, ErrNotFound
 		}
 		defer func() { _ = folder.Close() }()
-		return readImages(top, folder, rootReal, dir, filepath.ToSlash(clean))
+		return readEntries(top, folder, rootReal, dir, filepath.ToSlash(clean), keep)
 	})
 }
 
@@ -435,11 +496,11 @@ func (b *Browser) checked() {
 	}
 }
 
-// readImages reads folder and keeps its folders and image files. top is the
-// browse root at rootReal, dir is folder's real path when it was checked and
-// relDir its path under the root as the client named it, with forward
-// slashes.
-func readImages(top, folder *os.Root, rootReal, dir, relDir string) (Listing, error) {
+// readEntries reads folder and keeps its folders and the files keep accepts
+// by name. top is the browse root at rootReal, dir is folder's real path when
+// it was checked and relDir its path under the root as the client named it,
+// with forward slashes.
+func readEntries(top, folder *os.Root, rootReal, dir, relDir string, keep func(string) bool) (Listing, error) {
 	file, err := folder.Open(".")
 	if err != nil {
 		return Listing{}, ErrNotFound
@@ -459,14 +520,16 @@ func readImages(top, folder *os.Root, rootReal, dir, relDir string) (Listing, er
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		info, ok := entryInfo(top, folder, rootReal, filepath.Join(dir, name), dirEntry)
+		info, target, ok := entryInfo(top, folder, rootReal, filepath.Join(dir, name), dirEntry)
 		if !ok {
 			continue
 		}
 		entry := Entry{Name: name, IsDir: info.IsDir(), Modified: info.ModTime()}
 		switch {
 		case entry.IsDir:
-		case info.Mode().IsRegular() && IsImageName(name):
+		// A link must pass by its target's name too: opening and resolving
+		// check the target, and audio is decoded by its extension.
+		case info.Mode().IsRegular() && keep(name) && keep(target):
 			entry.Size = info.Size()
 		default:
 			continue
@@ -492,21 +555,25 @@ func readImages(top, folder *os.Root, rootReal, dir, relDir string) (Listing, er
 
 // entryInfo describes one folder entry, read through the roots. A symlink is
 // described by its target, and left out when the target is outside the root.
-func entryInfo(top, folder *os.Root, rootReal, path string, dirEntry os.DirEntry) (os.FileInfo, bool) {
+// The returned path is the entry's real path: the target for a symlink.
+func entryInfo(
+	top, folder *os.Root, rootReal, path string, dirEntry os.DirEntry,
+) (info os.FileInfo, resolved string, ok bool) {
 	if dirEntry.Type()&os.ModeSymlink == 0 {
-		info, err := folder.Lstat(dirEntry.Name())
-		return info, err == nil
+		var err error
+		info, err = folder.Lstat(dirEntry.Name())
+		return info, path, err == nil
 	}
 	// An absolute link inside the root is kept, which os.Root alone refuses,
 	// so the target is resolved here and then read through the root.
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil || !within(rootReal, target) {
-		return nil, false
+		return nil, "", false
 	}
 	relTarget, err := filepath.Rel(rootReal, target)
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
-	info, err := top.Stat(relTarget)
-	return info, err == nil
+	info, err = top.Stat(relTarget)
+	return info, target, err == nil
 }

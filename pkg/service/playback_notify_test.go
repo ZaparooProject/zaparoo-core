@@ -355,3 +355,31 @@ func TestPlaybackNotifier_QueuedAfterMediaStarted(t *testing.T) {
 	require.GreaterOrEqual(t, started, 0, "saw %v", methodsSeen)
 	assert.Less(t, started, slices.Index(methodsSeen, models.NotificationMediaPlayback), "saw %v", methodsSeen)
 }
+
+func TestPlaybackNotifier_WaitsForQueuedStart(t *testing.T) {
+	t.Parallel()
+	const path = "/music/album.cue"
+	media := nativeAudioMedia(path)
+	pm := newChangeReportingPlayback()
+	require.NoError(t, pm.Play(mediaslot.Primary, path, audio.PlaybackOptions{}))
+	published := make(chan models.Notification, 4)
+	media.Slot = mediaslot.Primary
+	notifier := newPlaybackNotifier(func(string) *models.ActiveMediaResponse {
+		return &models.ActiveMediaResponse{ActiveMedia: *media, ZapScript: path}
+	}, pm, func(n models.Notification) { published <- n })
+
+	// State makes the media visible before it queues media.started, and the
+	// notifier can run in that gap.
+	notifier.publishSlot(mediaslot.Primary)
+	assert.Empty(t, published, "nothing before the start is queued")
+
+	notifier.MediaStarted(state.MediaStart{Slot: mediaslot.Primary, Media: *media})
+	notifier.publishSlot(mediaslot.Primary)
+	require.Len(t, published, 1)
+	assert.Equal(t, models.NotificationMediaPlayback, (<-published).Method)
+
+	notifier.MediaEnded(state.MediaEnd{Slot: mediaslot.Primary, Media: *media})
+	require.NoError(t, pm.Pause(mediaslot.Primary))
+	notifier.publishSlot(mediaslot.Primary)
+	assert.Empty(t, published, "nothing after the media ended")
+}

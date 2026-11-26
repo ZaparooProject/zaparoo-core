@@ -1457,3 +1457,20 @@ func TestBLETransport_StopsRetryingAfterRepeatedFailures(t *testing.T) {
 	transport.stop()
 	assert.False(t, transport.isServing())
 }
+
+func TestBLETransport_ConcurrentRenamesServeOneAtATime(t *testing.T) {
+	t.Parallel()
+	rig := newBLETestRig(t, bleTestRigOptions{})
+
+	const renames = 8
+	var wg sync.WaitGroup
+	for range renames {
+		wg.Go(rig.transport.readvertise)
+	}
+	wg.Wait()
+
+	require.Eventually(t, func() bool {
+		return rig.peripheral.Serves() == renames+1 && rig.peripheral.Handler() != nil
+	}, bleTestTimeout, 5*time.Millisecond)
+	assert.Equal(t, 1, rig.peripheral.MaxConcurrentServes(), "one peripheral never serves twice at once")
+}

@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -52,6 +53,11 @@ type playbackNotifier struct {
 	bg       chan struct{}
 	// last holds the params last published per slot. Only run touches it.
 	last map[string][]byte
+	// started holds, per slot, the path of the native audio media whose
+	// media.started is already queued. State publishes media before it
+	// queues the start, so a slot's media is not reported until it is here.
+	started   map[string]string
+	startedMu syncutil.Mutex
 }
 
 func newPlaybackNotifier(
@@ -66,6 +72,7 @@ func newPlaybackNotifier(
 		primary:  make(chan struct{}, 1),
 		bg:       make(chan struct{}, 1),
 		last:     make(map[string][]byte, 2),
+		started:  make(map[string]string, 2),
 	}
 }
 
@@ -91,17 +98,34 @@ func (n *playbackNotifier) Signal(slot string) {
 	}
 }
 
-// MediaStarted implements state.MediaObserver. A track's playback goes live
-// before its media is published, so the start is reported again once both
-// are in place.
+// MediaStarted implements state.MediaObserver. State calls it after it queues
+// media.started, and a track's playback goes live before its media is
+// published, so the start is reported again once both are in place.
 func (n *playbackNotifier) MediaStarted(start state.MediaStart) { //nolint:gocritic // the interface passes it by value
-	if start.Media.LauncherID == platforms.NativeAudioLauncherID {
-		n.Signal(start.Slot)
+	if start.Media.LauncherID != platforms.NativeAudioLauncherID {
+		return
 	}
+	n.startedMu.Lock()
+	n.started[start.Slot] = start.Media.Path
+	n.startedMu.Unlock()
+	n.Signal(start.Slot)
 }
 
 // MediaEnded implements state.MediaObserver. media.stopped reports the end.
-func (*playbackNotifier) MediaEnded(state.MediaEnd) {}
+func (n *playbackNotifier) MediaEnded(end state.MediaEnd) { //nolint:gocritic // the interface passes it by value
+	n.startedMu.Lock()
+	if n.started[end.Slot] == end.Media.Path {
+		delete(n.started, end.Slot)
+	}
+	n.startedMu.Unlock()
+}
+
+// startQueued reports whether media.started for path in slot is queued.
+func (n *playbackNotifier) startQueued(slot, path string) bool {
+	n.startedMu.Lock()
+	defer n.startedMu.Unlock()
+	return n.started[slot] == path
+}
 
 // run publishes on every signal until ctx ends.
 func (n *playbackNotifier) run(ctx context.Context) {
@@ -120,7 +144,8 @@ func (n *playbackNotifier) run(ctx context.Context) {
 // publishSlot publishes the slot's media when it is native audio and the
 // track playing there is the one published for it. Between a track going
 // live and its media being published, the slot still holds the previous
-// track or nothing, and that is not reported. A start is signalled both by
+// track or nothing, and that is not reported, nor is media whose
+// media.started is not queued yet. A start is signalled both by
 // the track going live and by its media being published, so a payload equal
 // to the last one for the slot is not sent again.
 func (n *playbackNotifier) publishSlot(slot string) {
@@ -131,7 +156,7 @@ func (n *playbackNotifier) publishSlot(slot string) {
 	if entry == nil || entry.LauncherID != platforms.NativeAudioLauncherID {
 		return
 	}
-	if entry.Path == "" || n.playback.State(slot).Path != entry.Path {
+	if entry.Path == "" || n.playback.State(slot).Path != entry.Path || !n.startQueued(slot, entry.Path) {
 		return
 	}
 	notifications.MediaPlayback(func(notification models.Notification) {

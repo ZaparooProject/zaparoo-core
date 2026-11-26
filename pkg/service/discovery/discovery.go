@@ -138,9 +138,14 @@ type Service struct {
 	responder      responder
 	cfg            *config.Instance
 	cancelFunc     context.CancelFunc
+	watchDone      chan struct{}
 	instanceName   string
-	mu             syncutil.Mutex
-	stopped        bool
+	// lifecycle serializes Start, Reconfigure and Stop, so a settings change
+	// arriving during shutdown cannot bring advertising back up.
+	lifecycle syncutil.Mutex
+	mu        syncutil.Mutex
+	started   bool
+	stopped   bool
 }
 
 // New creates a new discovery service.
@@ -160,6 +165,43 @@ func New(cfg *config.Instance) *Service {
 // error: the watch loop retries for as long as the service runs, because a
 // network that is not ready at boot usually becomes ready shortly after.
 func (s *Service) Start() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
+	}
+	s.started = true
+	s.mu.Unlock()
+
+	return s.startAdvertising()
+}
+
+// Reconfigure applies a change to the discovery settings without a restart:
+// the current record is withdrawn and advertising starts again from the
+// config as it is now, which also covers turning discovery on or off. It does
+// nothing before Start, where the host never ran Core's own responder, or
+// after Stop.
+func (s *Service) Reconfigure() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
+	s.mu.Lock()
+	if !s.started || s.stopped {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	s.stopAdvertising()
+	return s.startAdvertising()
+}
+
+// startAdvertising registers the record from the current config. The caller
+// holds lifecycle.
+func (s *Service) startAdvertising() error {
 	if !s.cfg.DiscoveryEnabled() {
 		log.Info().Msg("mDNS discovery disabled by configuration")
 		return nil
@@ -169,7 +211,6 @@ func (s *Service) Start() error {
 	if err != nil {
 		return fmt.Errorf("resolve instance name: %w", err)
 	}
-	s.instanceName = instanceName
 
 	newResponder := s.newResponder(&mdns.Service{
 		Instance: instanceName,
@@ -181,21 +222,49 @@ func (s *Service) Start() error {
 		log.Debug().Msgf("mDNS: "+format, args...)
 	})
 
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return nil
-	}
-	s.responder = newResponder
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.instanceName = instanceName
+	s.responder = newResponder
 	s.cancelFunc = cancel
+	s.watchDone = done
 	s.mu.Unlock()
 
 	started := s.tryStart(newResponder, false)
 
-	go s.watchInterfaces(ctx, newResponder, started)
+	go func() {
+		defer close(done)
+		s.watchInterfaces(ctx, newResponder, started)
+	}()
 
 	return nil
+}
+
+// stopAdvertising withdraws the current record. The watch loop is waited
+// out before the responder stops, so a retry already under way cannot
+// register the record again after its goodbye. The caller holds lifecycle.
+func (s *Service) stopAdvertising() {
+	s.mu.Lock()
+	cancel := s.cancelFunc
+	done := s.watchDone
+	mdnsResponder := s.responder
+	s.cancelFunc = nil
+	s.watchDone = nil
+	s.responder = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+
+	if mdnsResponder != nil {
+		log.Debug().Msg("stopping mDNS service advertising")
+		mdnsResponder.Stop()
+	}
 }
 
 // tryStart attempts registration once, reporting whether it succeeded. quiet
@@ -274,27 +343,21 @@ func (s *Service) watchInterfaces(ctx context.Context, mdnsResponder responder, 
 
 // Stop gracefully shuts down mDNS advertising, sending goodbye packets.
 func (s *Service) Stop() {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
 	s.mu.Lock()
 	s.stopped = true
-	cancel := s.cancelFunc
-	mdnsResponder := s.responder
-	s.cancelFunc = nil
-	s.responder = nil
 	s.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
-	}
-
-	if mdnsResponder != nil {
-		log.Debug().Msg("stopping mDNS service advertising")
-		mdnsResponder.Stop()
-	}
+	s.stopAdvertising()
 }
 
 // InstanceName returns the resolved mDNS instance name.
 // Returns empty string if Start() has not been called.
 func (s *Service) InstanceName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.instanceName
 }
 

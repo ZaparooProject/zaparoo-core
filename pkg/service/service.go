@@ -970,6 +970,11 @@ func startServiceWithOptions(
 		if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 			log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 		}
+		cfg.OnChange(config.ChangeDiscovery, func() {
+			if reconfigureErr := discoveryService.Reconfigure(); reconfigureErr != nil {
+				log.Warn().Err(reconfigureErr).Msg("mDNS discovery reconfiguration failed")
+			}
+		})
 	}
 
 	// Recover before resuming persisted media work. A running status may be stale after
@@ -1145,6 +1150,7 @@ func startServiceWithOptions(
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut, publisherFanOutDone := startPublishers(st, cfg, publisherNotifications)
+	cfg.OnChange(config.ChangePublishers, activePublishers.rebuild)
 
 	kioskHost := newKioskHostSync(kioskLock, pl, clockwork.NewRealClock(), db)
 	kioskMediaStarted, _ := notifBroker.Subscribe(8, models.NotificationStarted)
@@ -1251,9 +1257,7 @@ func startServiceWithOptions(
 		discoveryService.Stop()
 		cancelPublisherFanOut()
 		<-publisherFanOutDone
-		for _, publisher := range activePublishers {
-			publisher.Stop()
-		}
+		activePublishers.stop()
 		<-launcherCacheDone
 		if stopErr := pl.Stop(); stopErr != nil {
 			log.Warn().Msgf("error stopping platform: %s", stopErr)

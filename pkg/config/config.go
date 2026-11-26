@@ -192,6 +192,7 @@ type Instance struct {
 	customLaunchersExternal []LaunchersCustom
 	mappingsExternal        []MappingsEntry
 	loaded                  loadedState
+	runtime                 runtimeState
 	vals                    Values
 	defaults                Values
 	updateMu                syncutil.Mutex
@@ -432,7 +433,7 @@ func (c *Instance) applyTOML(data string) error {
 		"config.toml",
 		categoryResolver,
 	)
-	if err := validateLauncherDefaults(c.vals.Launchers.Default); err != nil {
+	if err := ValidateLauncherDefaults(c.vals.Launchers.Default); err != nil {
 		return fmt.Errorf("invalid launcher defaults: %w", err)
 	}
 

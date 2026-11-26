@@ -3974,15 +3974,15 @@ Every path is resolved against its root again on each request. A path that leave
 
 **Access:** Localhost or any authenticated client.
 
-List the browse roots, or the folders and images of one folder under a root. Without `root`, the result holds `roots` and no entries.
+List the browse roots, or the folders and files of one folder under a root. Without `root`, the result holds `roots` and no entries.
 
-A listing holds folders and files with an image extension (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`), folders first and each group by name. Hidden entries, whose names start with a dot, are left out.
+A listing holds folders and the files the purpose picks, folders first and each group by name. Purpose `image` lists image files (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) under the index roots and image folder. Purpose `audio` lists sound files (`.wav`, `.mp3`, `.ogg`, `.flac`) under Core's `assets` folder and the index roots, for the sound settings of [settings.update](#settingsupdate); it requires localhost or an authenticated admin client. Hidden entries, whose names start with a dot, are left out.
 
 #### Parameters
 
 | Key     | Type   | Required | Description |
 | :------ | :----- | :------- | :---------- |
-| purpose | string | Yes      | What is being picked. `image` is the one purpose. |
+| purpose | string | Yes      | What is being picked: `image` or `audio`. |
 | root    | string | No       | ID of a root from a request without `root`. Omit to list the roots. |
 | path    | string | No       | Folder under the root, with forward slashes. Omit for the root itself. Needs `root`. |
 | offset  | number | No       | Zero-based index of the first entry to return. Defaults to `0`. |
@@ -4099,7 +4099,7 @@ Returns `null` on success. Asking for a slot with no playlist open is an error.
 
 ### settings
 
-**Access:** All accepted clients. Online backup, play-history sync, remote-control and image folder fields are returned only to localhost or authenticated admin.
+**Access:** All accepted clients. Online backup, play-history sync, remote-control and image folder fields, and the [admin settings](#admin-settings), are returned only to localhost or authenticated admin.
 
 List currently set configuration settings.
 
@@ -4146,6 +4146,120 @@ None.
 | remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
 | mediaImageDir             | string                                    | No       | Absolute path of the image folder (`[media] image_dir`), where scraped images (`libretro/`) and the generated thumbnail cache (`thumbs/`) are stored. Defaults to `images` under Core's data directory. Only returned to localhost and authenticated admin clients. |
 | onlineBaseUrl             | string                                    | No       | Base URL of the Zaparoo Online service every online feature uses: account linking, cloud backup, play history sync, Library sync and remote control (read-only, set as `online_base_url` under `[service]` in the config file). Only returned to localhost and authenticated admin clients. |
+| restartRequired           | string[]                                  | Yes      | Settings fields whose current value only takes effect after Core restarts: `inputGamepadEnabled` and `errorReporting`. A field drops off when set back to the value Core started with, and the list is empty after a restart. |
+
+Localhost and authenticated admin clients also receive the admin settings below.
+
+##### Admin settings
+
+Each key is also a [settings.update](#settingsupdate) parameter unless it is marked read-only. Other clients never see these keys and cannot set them.
+
+| Key                        | Type                                          | Description |
+| :------------------------- | :-------------------------------------------- | :---------- |
+| audioSuccessSound          | [SoundSetting](#sound-setting-object)         | Sound played on a successful scan (`[audio] success_sound`). |
+| audioFailSound             | [SoundSetting](#sound-setting-object)         | Sound played on a failed scan (`fail_sound`). |
+| audioLimitSound            | [SoundSetting](#sound-setting-object)         | Sound played when a playtime limit is reached (`limit_sound`). |
+| audioPendingSound          | [SoundSetting](#sound-setting-object)         | Sound played while a launch waits for confirmation (`pending_sound`). |
+| audioReadySound            | [SoundSetting](#sound-setting-object)         | Sound played when Core is ready (`ready_sound`). |
+| inputGamepadEnabled        | boolean or null                               | Whether the virtual gamepad is created (`[input] gamepad_enabled`). `null` means the platform default, and sending `null` goes back to it. Takes effect after a restart. |
+| readersScanIgnoreOnConnect | boolean                                       | Ignore the token already on a reader when it connects (`[readers.scan] ignore_on_connect`). Turning it on does not swallow the next scan of a reader that is already connected. |
+| readersScanAllowRelaunch   | boolean                                       | Let a scan of the token that launched the running media launch it again (`allow_relaunch`). |
+| readersScanOnScan          | string                                        | ZapScript run before every scanned token (`on_scan`). A [hook](#hooks). |
+| readersScanOnRemove        | string                                        | ZapScript run when a token is removed (`on_remove`). A [hook](#hooks). |
+| readersScanHistory         | number                                        | Days of scan history kept (`[readers] scan_history`), 0 to 36500. A lower value prunes older history at once. |
+| readersDrivers             | [ReaderDriver](#reader-driver-object)[]       | Per-driver settings (`[readers.drivers]`). An update replaces the whole list. Disabling a driver closes its connected readers at once. |
+| launchersBeforeMediaStart  | string                                        | ZapScript run before any media starts (`[launchers] before_media_start`). A [hook](#hooks). |
+| launchersOnMediaStart      | string                                        | ZapScript run after media starts (`on_media_start`). A [hook](#hooks). |
+| launchersBeforeExit        | string                                        | ZapScript run before media stops (`before_exit`). A [hook](#hooks). |
+| launcherDefaults           | [LauncherDefault](#launcher-default-object)[] | Per-launcher settings (`[[launchers.default]]`). An update replaces the whole list and refreshes the launchers at once. |
+| systemCategories           | [SystemCategory](#system-category-object)[]   | Custom system categories (`[[systems.category]]`). An update replaces the whole list, and every entry must be valid. |
+| mediaFilenameTags          | boolean                                       | Read tags from file names when indexing (`[media] filename_tags`). A change needs a reindex. |
+| mediaDefaultRegions        | string[]                                      | Preferred regions, in order (`default_regions`). The response holds the effective list, which is the built-in default when unset; `[]` restores the default. Values must be known region tags. A change needs a re-scrape. |
+| mediaDefaultLangs          | string[]                                      | Preferred languages, in order (`default_langs`), with the same rules as `mediaDefaultRegions`. |
+| backupScope                | string                                        | What a backup holds: `platform` or `zaparoo` (`[backup] scope`). |
+| discoveryEnabled           | boolean                                       | Advertise Core on the local network over mDNS (`[service.discovery] enabled`). Applies at once. |
+| discoveryInstanceName      | string                                        | Name advertised over mDNS (`instance_name`), at most 63 bytes, with no control characters or surrounding spaces. Empty uses the default. Applies at once, and renames the Bluetooth LE advertisement while `bleName` is empty. |
+| bleName                    | string                                        | Name advertised over Bluetooth LE (`[service.ble] name`), at most 29 bytes, with the same rules. Empty uses the default. Applies at once. |
+| internetCheck              | boolean                                       | Whether Core probes public endpoints to learn if the device can reach the internet (`[service] internet_check`). Defaults to true. |
+| serviceOnBoot              | string                                        | ZapScript run when Core starts (`on_boot`). A [hook](#hooks); a change runs from the next start. |
+| serviceOnReady             | string                                        | ZapScript run when Core is ready (`on_ready`). A [hook](#hooks); a change runs from the next start. |
+| publishersMqtt             | [MQTTPublisher](#mqtt-publisher-object)[]     | MQTT publishers (`[[service.publishers.mqtt]]`). A change applies at once. |
+| publishersPixelcade        | [PixelcadePublisher](#pixelcade-publisher-object)[] | Pixelcade publishers (`[[service.publishers.pixelcade]]`). A change applies at once. |
+| deviceId                   | string                                        | Read-only. This device's ID (`[service] device_id`). |
+| apiPort                    | number                                        | Read-only. Port the API listens on (`api_port`). |
+| apiListen                  | string                                        | Read-only. Address the API listens on (`api_listen`). |
+
+###### Hooks
+
+A hook runs with Core's own trust. Changing one, including the `beforeExit` of a `systemDefaults` or `launcherDefaults` entry, requires localhost or an authenticated admin client. Sending a hook's current value again is allowed for any client that may send the field. When `[service] allow_run` is set, a remote client may only set a hook to a script it permits.
+
+###### Sound setting object
+
+| Key  | Type   | Description |
+| :--- | :----- | :---------- |
+| mode | string | `default` plays the built-in sound, or an override file in Core's `assets` folder; `off` plays nothing; `file` plays `path`. |
+| path | string | Absolute path of the file played. Present for mode `file`. |
+
+To set a sound, send `{ "mode": "default" }`, `{ "mode": "off" }`, or `{ "mode": "file", "root": "...", "path": "..." }` with a root and path from [files.browse](#filesbrowse) purpose `audio`. An absolute `path` with no `root` is also accepted. The file must exist and be `.wav`, `.mp3`, `.ogg` or `.flac`. A changed sound plays from the next scan.
+
+###### Reader driver object
+
+| Key             | Type    | Required | Description |
+| :-------------- | :------ | :------- | :---------- |
+| id              | string  | Yes      | Driver ID, such as `pn532` or `ccid`. Listed once. |
+| enabled         | boolean | No       | Whether the driver is used. Omit for the driver's default. |
+| autoDetect      | boolean | No       | Whether the driver's readers are found automatically. |
+| keepReading     | boolean | No       | Optical drive only: whether the drive keeps reading the disc left in it. |
+| scanMode        | string  | No       | `tap` or `hold`, overriding the global scan mode for this driver. |
+| launchOrder     | string  | No       | Optical drive only, choosing between a matched library image and the disc: `image_first`, `disc_first`, `image_only` or `disc_only`. |
+| audioCdLauncher | string  | No       | Optical drive only: launcher ID or group that plays an audio CD. A new value must name a known launcher. |
+
+###### Launcher default object
+
+| Key              | Type    | Required | Description |
+| :--------------- | :------ | :------- | :---------- |
+| launcher         | string  | Yes      | Launcher ID or group the entry applies to. An entry for a launcher not already listed must name a known launcher. |
+| renderScale      | number  | No       | Render scale, 1 to 16. |
+| renderResolution | string  | No       | Render resolution. |
+| scanDuplicates   | boolean | No       | Index every copy of a game rather than one. A change needs a reindex. |
+| client           | string  | No       | Client the launcher hands media to. |
+| action           | string  | No       | `run` or `details`. |
+| loadPath         | string  | No       | Core or file name the launcher loads, relative to where the launcher looks for it. An absolute path, `..`, a backslash or a NUL is refused. |
+| beforeExit       | string  | No       | ZapScript run before this launcher's media stops. A [hook](#hooks). |
+| installDir       | string  | No       | Read-only. Install folder (`install_dir`). Only set in the config file; an update keeps it on the entry for the same launcher. |
+| serverUrl        | string  | No       | Read-only. Media server address (`server_url`), shown without credentials. Only set in the config file, and kept the same way. |
+
+###### System category object
+
+| Key     | Type     | Required | Description |
+| :------ | :------- | :------- | :---------- |
+| name    | string   | Yes      | Category name. |
+| systems | string[] | Yes      | System IDs in the category. |
+
+###### MQTT publisher object
+
+| Key     | Type     | Description |
+| :------ | :------- | :---------- |
+| index   | number   | Position of the publisher in the config file. |
+| enabled | boolean  | Whether the publisher sends events. |
+| filter  | string[] | Event types sent. Empty sends every event. |
+| broker  | string   | Read-only. Broker address, shown without credentials. |
+| topic   | string   | Read-only. Topic events are sent to. |
+
+###### Pixelcade publisher object
+
+| Key     | Type     | Description |
+| :------ | :------- | :---------- |
+| index   | number   | Position of the publisher in the config file. |
+| enabled | boolean  | Whether the publisher sends events. |
+| filter  | string[] | Event types sent. Empty sends every event. |
+| mode    | string   | `stream` or `write`. |
+| host    | string   | Read-only. Pixelcade host. |
+| port    | number   | Read-only. Pixelcade port. |
+
+To change publishers, send `publishersMqtt` or `publishersPixelcade` as a list of `{ "index": n, "enabled": ..., "filter": [...], "mode": "..." }`. Each item names an existing publisher by `index`, which is required, and holds only the fields to change; `mode` applies to Pixelcade only. Publishers are added, removed and pointed at a host only in the config file.
+
+Some settings are only set in the config file, because changing them from the network would widen what Core runs, reads, writes or sends: `install_dir`, `server_url`, `[launchers] index_root` and `media_dir`, the `[scraper]` paths and hosts, `[backup] local_dir`, publisher hosts, the `allow_*` lists, the `[zapscript]` input and command blocks, the GMC proxy and custom launchers. [launchers.custom](#launcherscustom) lists custom launchers read-only.
 
 ##### Reader connection object
 
@@ -4163,7 +4277,8 @@ None.
 | :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
 | launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
-| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. A `before_exit` can also be written per launcher or launcher group as `[[launchers.default]] before_exit`, or globally as `[launchers] before_exit`; neither is exposed through this API, and this per-system script beats a group entry and the global but loses to an entry naming the launcher that started the media. |
+| pauseOnLaunch | boolean | No    | For the `Audio` entry, whether background music pauses while a game runs. Omitted in an update keeps the current value. |
+| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. A `before_exit` can also be written per launcher or launcher group as `launcherDefaults` `beforeExit`, or globally as `launchersBeforeExit` (both [admin settings](#admin-settings)); this per-system script beats a group entry and the global but loses to an entry naming the launcher that started the media. |
 
 #### Example
 
@@ -4201,14 +4316,15 @@ None.
         "launcher": "retroarch"
       }
     ],
-    "launcherPreference": ["retroarch", "libretro"]
+    "launcherPreference": ["retroarch", "libretro"],
+    "restartRequired": []
   }
 }
 ```
 
 ### settings.update
 
-**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup, play-history sync, remote-control and image folder settings require localhost or authenticated admin, so legacy clients cannot change them.
+**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup, play-history sync, remote-control and image folder settings, every [admin setting](#admin-settings) and every [hook](#hooks) require localhost or authenticated admin, so legacy clients cannot change them.
 
 Update one or more settings in-memory and save changes to disk.
 
@@ -4237,7 +4353,7 @@ An object containing any of the following optional keys:
 | encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
 | bleEnabled                | boolean                                   | No       | Serve the API over [Bluetooth LE](./#bluetooth-le) as well. Takes effect within about fifteen seconds without a restart. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
-| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). Fields the API does not carry, such as `pause_on_launch`, are kept, including on an `Audio` entry the list leaves out. |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). An omitted `pauseOnLaunch` keeps the current value, including on an `Audio` entry the list leaves out. A changed `beforeExit` is a [hook](#hooks). |
 | launcherPreference        | string[]                                  | No       | Replace the global launcher preference list, keeping its order. `[]` clears it. Each entry must match a known launcher ID or group (case-insensitive), unless it is already in the current list. |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
@@ -4253,9 +4369,15 @@ An object containing any of the following optional keys:
 | backupRemoteAutoBackup    | boolean                                   | No       | Turn Auto Backup on or off. Has no effect while the schedule is `manual`; the value is kept. Requires localhost or an authenticated admin client. |
 | remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
+The [admin settings](#admin-settings) are also accepted, from localhost or an authenticated admin client. A request holding one from any other client is refused whole.
+
 #### Result
 
-Returns `null` on success.
+| Key     | Type               | Required | Description |
+| :------ | :----------------- | :------- | :---------- |
+| applied | object of string[] | Yes      | Every field the request set, with what it still needs before it shows: `restart` (takes effect after Core restarts), `reindex` (the media database reflects it after the next index) or `rescrape` (scraped metadata reflects it after the next scrape). An empty list means it applied at once. |
+
+Older Core versions returned `null`.
 
 #### Example
 
@@ -4278,7 +4400,9 @@ Returns `null` on success.
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
-  "result": null
+  "result": {
+    "applied": { "debugLogging": [] }
+  }
 }
 ```
 
@@ -6595,6 +6719,7 @@ The unfiltered response can be large on platforms with many launchers (250+ on M
 | available           | boolean  | Yes      | Whether this launcher's runtime dependencies are currently satisfied.                                  |
 | availabilityReason  | string   | No       | Why the launcher is unavailable. Omitted when `available` is `true`.                                   |
 | detected            | boolean  | No       | Whether the platform looked for this launcher and found it installed. Omitted when the platform does not check its launchers, which is every platform that reports nothing here; an omitted value means unknown, not missing. Distinct from `available`, which is about the launcher's runtime dependencies. |
+| custom              | boolean  | No       | True for a custom launcher defined in the config file or the launchers folder. Omitted otherwise. See [launchers.custom](#launcherscustom). |
 | default             | boolean  | No       | Whether this launcher is the configured default for its system (`systemDefaults.launcher`, matched by launcher ID or by any of `groups`). Omitted (implicitly `false`) otherwise.                                    |
 | backend             | string   | No       | What kind of thing this launcher runs. Currently only `mister_core` is emitted. Omitted when the platform has nothing to say about this launcher. Clients must ignore backend values they don't recognize. |
 | misterCore          | [MisterCoreInfo](#mistercoreinfo-object) | No | Present when `backend` is `mister_core` and the core is installed. Absent when the core isn't installed; `available` and `availabilityReason` say why. |
@@ -6655,6 +6780,44 @@ The unfiltered response can be large on platforms with many launchers (250+ on M
   }
 }
 ```
+
+### launchers.custom
+
+**Access:** Localhost or authenticated admin.
+
+List the custom launchers loaded from the config file and the launchers folder, as written. Custom launchers run commands on the Core host, so they are only defined in those files, and this method never writes one.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type                                        | Required | Description |
+| :-------- | :------------------------------------------ | :------- | :---------- |
+| launchers | [CustomLauncher](#custom-launcher-object)[] | Yes      | Every loaded custom launcher definition. |
+
+##### Custom launcher object
+
+| Key        | Type     | Required | Description |
+| :--------- | :------- | :------- | :---------- |
+| id         | string   | Yes      | Launcher ID. |
+| name       | string   | No       | Display name. |
+| system     | string   | No       | System the launcher targets. |
+| kind       | string   | No       | Launcher kind. |
+| backend    | string   | No       | Backend the launcher runs on. |
+| category   | string   | No       | Category. |
+| categories | string[] | No       | Categories. |
+| execute    | string   | No       | Command run to launch media. |
+| lifecycle  | string   | No       | How Core tracks the launched process. |
+| loadPath   | string   | No       | Core or file the launcher loads. |
+| mediaDirs  | string[] | No       | Folders indexed for this launcher. |
+| fileExts   | string[] | No       | File extensions the launcher accepts. |
+| groups     | string[] | No       | Launcher groups it belongs to. |
+| schemes    | string[] | No       | URI schemes it launches. |
+| controls   | object   | No       | Control names mapped to ZapScript. |
+| restricted | boolean  | No       | Whether the launcher is restricted. |
+| source     | string   | No       | File in the launchers folder the entry came from. Omitted for `config.toml`. |
 
 ### launchers.refresh
 

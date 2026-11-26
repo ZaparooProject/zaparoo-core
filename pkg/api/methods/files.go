@@ -21,11 +21,13 @@ package methods
 
 import (
 	"errors"
+	"path/filepath"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/hostfiles"
 )
@@ -35,6 +37,8 @@ const (
 	// filesImageTypeTag labels a files.image response, which is not a
 	// property of any media.
 	filesImageTypeTag = "file:image"
+	// filesPurposeAudio browses for a sound file to set in settings.
+	filesPurposeAudio = "audio"
 )
 
 // hostBrowser returns the browser over the request's index roots and image
@@ -49,6 +53,22 @@ func hostBrowser(env *requests.RequestEnv) (*hostfiles.Browser, error) {
 	}
 	return hostfiles.NewBrowser(
 		env.Platform.RootDirs(env.Config), env.Config.ImageDir(helpers.DataDir(env.Platform)),
+	), nil
+}
+
+// audioBrowser returns the browser a sound setting is picked from: Core's
+// assets folder and the index roots. A sound is only set by a local or admin
+// client, so only one may browse for it.
+func audioBrowser(env *requests.RequestEnv) (*hostfiles.Browser, error) {
+	if env.Platform == nil || env.Config == nil {
+		return nil, models.ClientErrf("file browsing is not available")
+	}
+	if !isLocalOrAdmin(env) {
+		return nil, models.ClientErrf("browsing for sounds requires a local or admin client: %w", ErrForbidden)
+	}
+	return hostfiles.NewAudioBrowser(
+		env.Platform.RootDirs(env.Config),
+		filepath.Join(helpers.DataDir(env.Platform), config.AssetsDir),
 	), nil
 }
 
@@ -73,7 +93,13 @@ func HandleFilesBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
-	browser, err := hostBrowser(&env)
+	var browser *hostfiles.Browser
+	var err error
+	if params.Purpose == filesPurposeAudio {
+		browser, err = audioBrowser(&env)
+	} else {
+		browser, err = hostBrowser(&env)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +117,11 @@ func HandleFilesBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return response, nil
 	}
 
-	listing, err := browser.ListImages(env.Context, params.Root, params.Path)
+	list := browser.ListImages
+	if params.Purpose == filesPurposeAudio {
+		list = browser.ListAudio
+	}
+	listing, err := list(env.Context, params.Root, params.Path)
 	if err != nil {
 		return nil, hostFilesClientError(err)
 	}

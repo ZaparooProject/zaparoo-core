@@ -524,6 +524,7 @@ func Setup(
 	}
 
 	// Initialize error reporting (opt-in)
+	cfg.RecordErrorReportingAtStart(cfg.ErrorReporting())
 	if err := telemetry.Init(
 		cfg.ErrorReporting(),
 		cfg.DeviceID(),
