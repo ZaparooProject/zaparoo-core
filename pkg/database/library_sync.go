@@ -120,8 +120,18 @@ type DeckSyncRow struct {
 	Snapshot     string
 	RejectedCode string
 	RejectedHash string
-	Revision     int64
-	UpdatedAt    int64
-	Conflicts    int
-	Locked       bool
+	// RejectedItems names the local deck items the account refused on the
+	// last rejected push, empty when the rejection was about the whole deck.
+	RejectedItems []DeckSyncItemError
+	Revision      int64
+	UpdatedAt     int64
+	Conflicts     int
+	Locked        bool
+}
+
+// DeckSyncItemError is one deck item the account refused, by its local item
+// ID, and the code it gave.
+type DeckSyncItemError struct {
+	Code   string `json:"code"`
+	ItemID int64  `json:"itemId"`
 }

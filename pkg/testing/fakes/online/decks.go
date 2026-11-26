@@ -107,11 +107,28 @@ type deckPushRecord struct {
 	RemoveImage   bool        `json:"remove_image"`
 }
 
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckResult struct {
-	Deck   *Deck  `json:"deck"`
-	Status string `json:"status"`
-	Code   string `json:"code,omitempty"`
-	Index  int    `json:"index"`
+	Deck      *Deck  `json:"deck"`
+	ItemIndex *int   `json:"item_index,omitempty"`
+	Status    string `json:"status"`
+	Code      string `json:"code,omitempty"`
+	// ItemErrors lists every refused item by its position in the pushed
+	// items, on the item-level codes only.
+	ItemErrors []deckItemError `json:"item_errors,omitempty"`
+	Index      int             `json:"index"`
+}
+
+type deckItemError struct {
+	Code  string `json:"code"`
+	Index int    `json:"index"`
+}
+
+// refusedCards is the rejection for a record naming cards the account does
+// not hold.
+func refusedCards(refused []deckItemError) deckResult {
+	first := refused[0].Index
+	return deckResult{Status: "rejected", Code: "unknown_card", ItemIndex: &first, ItemErrors: refused}
 }
 
 // AddCard puts a card on the account, so deck items naming it are filled in
@@ -182,15 +199,18 @@ func (s *Server) enrichDeckItems(items []DeckItem) []DeckItem {
 
 // unknownCard reports whether an item names a card the account lacks. Call
 // with s.mu held.
-func (s *Server) unknownCard(items []DeckItem) bool {
-	for _, item := range items {
+// unknownCards lists the positions of card items naming a card the account
+// does not hold.
+func (s *Server) unknownCards(items []DeckItem) []deckItemError {
+	var out []deckItemError
+	for i, item := range items {
 		if item.Kind == "card" {
 			if _, ok := s.state.Cards[item.CardID]; !ok {
-				return true
+				out = append(out, deckItemError{Index: i, Code: "unknown_card"})
 			}
 		}
 	}
-	return false
+	return out
 }
 
 // mintedDeckID reports whether a create's deck ID is one a device mints:
@@ -298,21 +318,21 @@ func (s *Server) handleDeckPush(w http.ResponseWriter, r *http.Request, _ string
 	resp := pushResponse[deckResult]{Items: make([]deckResult, 0, len(body.Items))}
 	s.mu.Lock()
 	for i := range body.Items {
-		status, code, deck := s.applyDeckRecord(&body.Items[i], base)
-		var out *Deck
-		if deck != nil {
-			copied := *deck
-			out = &copied
+		result := s.applyDeckRecord(&body.Items[i], base)
+		if result.Deck != nil {
+			copied := *result.Deck
+			result.Deck = &copied
 		}
-		resp.Items = append(resp.Items, deckResult{Index: i, Status: status, Code: code, Deck: out})
-		resp.count(status)
+		result.Index = i
+		resp.Items = append(resp.Items, result)
+		resp.count(result.Status)
 	}
 	s.mu.Unlock()
 	fakectl.WriteJSON(w, http.StatusOK, resp)
 }
 
 // applyDeckRecord applies one record. Call with s.mu held.
-func (s *Server) applyDeckRecord(record *deckPushRecord, base string) (status, code string, result *Deck) {
+func (s *Server) applyDeckRecord(record *deckPushRecord, base string) deckResult {
 	deckID := strings.ToUpper(record.DeckID)
 	deck := s.state.Decks[deckID]
 	if record.BaseRevision == 0 {
@@ -320,11 +340,11 @@ func (s *Server) applyDeckRecord(record *deckPushRecord, base string) (status, c
 	}
 	switch {
 	case deck == nil:
-		return "conflict", "", nil
+		return deckResult{Status: "conflict"}
 	case deck.Revision != record.BaseRevision:
-		return "conflict", "", deck
+		return deckResult{Status: "conflict", Deck: deck}
 	case deck.IsLocked:
-		return "rejected", "deck_locked", deck
+		return deckResult{Status: "rejected", Code: "deck_locked", Deck: deck}
 	}
 	if record.Deleted {
 		s.state.DeckRev++
@@ -332,15 +352,17 @@ func (s *Server) applyDeckRecord(record *deckPushRecord, base string) (status, c
 		deck.Items = nil
 		deck.ItemCount = 0
 		deck.Revision = s.state.DeckRev
-		return "applied", "", deck
+		return deckResult{Status: "applied", Deck: deck}
 	}
-	if record.Items != nil && s.unknownCard(*record.Items) {
-		return "rejected", "unknown_card", nil
+	if record.Items != nil {
+		if refused := s.unknownCards(*record.Items); len(refused) > 0 {
+			return refusedCards(refused)
+		}
 	}
 	before := *deck
 	if imageCode := s.applyImageChange(record, deck, base); imageCode != "" {
 		*deck = before
-		return "rejected", imageCode, nil
+		return deckResult{Status: "rejected", Code: imageCode}
 	}
 	// An update against a tombstone's revision brings the deck back.
 	deck.Deleted = false
@@ -356,30 +378,30 @@ func (s *Server) applyDeckRecord(record *deckPushRecord, base string) (status, c
 	}
 	s.state.DeckRev++
 	deck.Revision = s.state.DeckRev
-	return "applied", "", deck
+	return deckResult{Status: "applied", Deck: deck}
 }
 
 // createDeck applies a record with base revision zero. A deck that already
 // exists under the ID is the answer to a retried create. Call with s.mu held.
-func (s *Server) createDeck(record *deckPushRecord, deckID string, existing *Deck) (status, code string, result *Deck) {
+func (s *Server) createDeck(record *deckPushRecord, deckID string, existing *Deck) deckResult {
 	if record.ImageUploadID != "" || record.RemoveImage {
-		return "rejected", "image_needs_existing_deck", nil
+		return deckResult{Status: "rejected", Code: "image_needs_existing_deck"}
 	}
 	if existing != nil {
 		if existing.Deleted {
-			return "conflict", "", existing
+			return deckResult{Status: "conflict", Deck: existing}
 		}
-		return "applied", "", existing
+		return deckResult{Status: "applied", Deck: existing}
 	}
 	if record.Name == nil || *record.Name == "" {
-		return "rejected", "validation_error", nil
+		return deckResult{Status: "rejected", Code: "validation_error"}
 	}
 	var items []DeckItem
 	if record.Items != nil {
 		items = *record.Items
 	}
-	if s.unknownCard(items) {
-		return "rejected", "unknown_card", nil
+	if refused := s.unknownCards(items); len(refused) > 0 {
+		return refusedCards(refused)
 	}
 	description := ""
 	if record.Description != nil {
@@ -393,7 +415,7 @@ func (s *Server) createDeck(record *deckPushRecord, deckID string, existing *Dec
 	}
 	created.ItemCount = len(created.Items)
 	s.state.Decks[deckID] = created
-	return "applied", "", created
+	return deckResult{Status: "applied", Deck: created}
 }
 
 // handleDeckPull pages decks changed since a revision. A first pull leaves

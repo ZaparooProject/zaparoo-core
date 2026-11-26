@@ -344,6 +344,45 @@ func TestSyncDecks_RejectedDeckWaitsForAChange(t *testing.T) {
 	assert.Equal(t, 1, result.Pushed)
 }
 
+// The account names every item it refused. Each is recorded by its local item
+// ID, a client is told when the recorded rejection changes, and a push the
+// account takes clears it.
+func TestSyncDecks_RejectedDeckRecordsTheRefusedItems(t *testing.T) {
+	f := newSavedDeckFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine",
+		scriptDeckItem("A", "**a"),
+		database.DeckItem{Kind: database.DeckItemKindCard, CardID: "NOPE0000"},
+		scriptDeckItem("B", "**b"),
+		database.DeckItem{Kind: database.DeckItemKindCard, CardID: "NOPE0001"})
+	deck := f.localDeck(t, "0123456789ab")
+	require.Len(t, deck.Items, 4)
+
+	result := f.sync(t)
+	assert.Equal(t, 1, result.Rejected)
+	row := f.deckSyncRow(t, "0123456789ab")
+	assert.Equal(t, "unknown_card", row.RejectedCode)
+	assert.Equal(t, []database.DeckSyncItemError{
+		{ItemID: deck.Items[1].DBID, Code: "unknown_card"},
+		{ItemID: deck.Items[3].DBID, Code: "unknown_card"},
+	}, row.RejectedItems)
+	assert.Contains(t, f.changes(t),
+		models.DecksChangedNotification{DeckID: "0123456789ab", Action: models.DecksChangedUpdated})
+
+	f.sync(t)
+	assert.Empty(t, f.changes(t), "an unchanged rejection is not announced again")
+
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) {
+		deck.Items = []database.DeckItem{scriptDeckItem("A", "**a"), scriptDeckItem("B", "**b")}
+	})
+	result = f.sync(t)
+	assert.Equal(t, 1, result.Pushed)
+	row = f.deckSyncRow(t, "0123456789ab")
+	assert.Empty(t, row.RejectedCode)
+	assert.Empty(t, row.RejectedItems)
+	assert.Contains(t, f.changes(t),
+		models.DecksChangedNotification{DeckID: "0123456789ab", Action: models.DecksChangedUpdated})
+}
+
 func TestPullDecksIfStaleSkipsAFreshPull(t *testing.T) {
 	f := newSyncFixture(t)
 	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))

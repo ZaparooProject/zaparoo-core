@@ -1254,12 +1254,15 @@ type DeckItemMedia struct {
 
 // DeckItemResponse is one member of a deck.
 type DeckItemResponse struct {
-	Media     *DeckItemMedia        `json:"media,omitempty"`
-	Metadata  json.RawMessage       `json:"metadata,omitempty"`
-	Kind      string                `json:"kind"`
-	Name      string                `json:"name"`
-	ZapScript string                `json:"zapscript,omitempty"`
-	CardID    string                `json:"cardId,omitempty"`
+	Media     *DeckItemMedia  `json:"media,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	Kind      string          `json:"kind"`
+	Name      string          `json:"name"`
+	ZapScript string          `json:"zapscript,omitempty"`
+	CardID    string          `json:"cardId,omitempty"`
+	// SyncError is the code Zaparoo Online refused this item with on the
+	// deck's last sync, omitted when it was not refused.
+	SyncError string                `json:"syncError,omitempty"`
 	Scripts   []DeckCardScriptInput `json:"scripts,omitempty"`
 	ID        int64                 `json:"id"`
 	Position  int                   `json:"position"`
@@ -1270,13 +1273,17 @@ type DeckItemResponse struct {
 // DeckResponse is a deck. Items is present, as [] for an empty deck, on
 // decks.get, decks.new and decks.update, and omitted by the decks list.
 type DeckResponse struct {
-	Metadata    json.RawMessage    `json:"metadata,omitempty"`
-	DeckID      string             `json:"deckId"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	SourceURL   string             `json:"sourceUrl,omitempty"`
-	OwnedBy     string             `json:"ownedBy,omitempty"`
-	Items       []DeckItemResponse `json:"items,omitzero"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	DeckID      string          `json:"deckId"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	SourceURL   string          `json:"sourceUrl,omitempty"`
+	OwnedBy     string          `json:"ownedBy,omitempty"`
+	// SyncError is the code Zaparoo Online refused the deck with on its
+	// last sync, omitted while the deck syncs. The refused items carry
+	// their own code on decks.get.
+	SyncError string             `json:"syncError,omitempty"`
+	Items     []DeckItemResponse `json:"items,omitzero"`
 	// ContainsItemIDs lists the items linked to the game the decks list was
 	// asked about, and is omitted when it was asked about none.
 	ContainsItemIDs []int64 `json:"containsItemIds,omitzero"`

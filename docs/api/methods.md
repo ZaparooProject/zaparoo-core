@@ -5500,6 +5500,7 @@ Decks work with no account. With Library sync on, the decks this device owns syn
 | description | string                           | Yes      | Description, at most 1000 characters. Empty when unset.              |
 | owned       | boolean                          | Yes      | True for decks made on this device or its account; false for a cached copy of somebody else's deck, which cannot be edited. |
 | locked      | boolean                          | Yes      | True when the linked Zaparoo Online account locked the deck. A locked deck cannot be edited or deleted on the device. |
+| syncError   | string                           | No       | The code Zaparoo Online refused the deck with on its last sync, such as `unknown_card` or `deck_limit_reached`. Omitted while the deck syncs. The deck stays on the device and is not sent again until it changes. |
 | saved       | boolean                          | Yes      | True for a copy of a deck the linked account saved from another account. It follows the account's saved list: it is kept while the account lists it and removed when it stops. |
 | ownedBy     | string                           | No       | The owner's name as the account gave it, for a saved deck. Omitted when the account gave none. |
 | sourceUrl   | string                           | No       | The link a deck that is not owned was fetched from. Omitted for owned decks. |
@@ -5524,6 +5525,7 @@ Decks work with no account. With Library sync on, the decks this device owns syn
 | scripts   | object[] | No       | A `card` item's scripts, each `{name, zapscript}`.                                          |
 | metadata  | object   | No       | A `card` item's display metadata, verbatim.                                                 |
 | hasImage  | boolean  | Yes      | True when a `card` item has art [`decks.image`](#decksimage) can serve (an https `rendered_url` or `image_url` in its metadata). Always false for other items; for a game item, ask [`media.image`](#mediaimage) with its `media.system` and `media.path`. |
+| syncError | string   | No       | The code Zaparoo Online refused this item with on the deck's last sync, such as `unknown_card` or `invalid_script`. Omitted for an item that was not refused, and for one added or changed since. |
 | media     | object   | No       | The local file a game item is linked to: `system`, `path`, `name`, `tags`, `available` (whether the path is currently indexed) and `userTags`, the file's current user flags as [TagInfo](#taginfo-object)[] (any of `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`, `[]` when none is set, always present with `media`). Absent for cards and for items added elsewhere that have not been resolved on this device. |
 
 ### Deck item input
