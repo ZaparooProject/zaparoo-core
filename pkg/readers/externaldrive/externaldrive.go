@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -59,34 +59,7 @@ var (
 	// platformSupported caches whether this platform supports mount detection
 	platformSupported     bool
 	platformSupportedOnce sync.Once
-
-	// partitionSuffixRegex matches partition numbers at the end of device paths
-	// e.g., /dev/sda1 -> /dev/sda, /dev/nvme0n1p2 -> /dev/nvme0n1
-	partitionSuffixRegex = regexp.MustCompile(`(p?\d+)$`)
 )
-
-// sysBlockPath is the sysfs path for block devices.
-const sysBlockPath = "/sys/block"
-
-// isBlockDevicePresent checks if the underlying block device still exists.
-// For device paths like "/dev/sda1", it checks if "/sys/block/sda" exists.
-// Returns true if device appears present, false if definitely gone.
-// Returns true for empty strings (assume present if we can't check).
-func isBlockDevicePresent(deviceNode string) bool {
-	// Only check /dev/sdX style device nodes
-	if !strings.HasPrefix(deviceNode, "/dev/") {
-		return true // Can't validate non-path device nodes, assume present
-	}
-
-	// Extract base device: /dev/sda1 -> sda, /dev/nvme0n1p1 -> nvme0n1
-	devName := strings.TrimPrefix(deviceNode, "/dev/")
-	baseDev := partitionSuffixRegex.ReplaceAllString(devName, "")
-
-	// Check if block device exists in sysfs
-	sysPath := filepath.Join(sysBlockPath, baseDev)
-	_, err := os.Stat(sysPath)
-	return err == nil
-}
 
 // canSafelyUnmount checks if a stale mount can be safely unmounted.
 // Returns true only if ALL conditions are met:
@@ -94,10 +67,9 @@ func isBlockDevicePresent(deviceNode string) bool {
 //  2. Device node looks like removable media (/dev/sd*, /dev/mmcblk*)
 //  3. Device node no longer exists (physically unplugged)
 //  4. Sysfs entry no longer exists (kernel confirms device removed)
-func canSafelyUnmount(deviceNode, mountPath string) bool {
-	if !strings.HasPrefix(mountPath, "/media/") &&
-		!strings.HasPrefix(mountPath, "/mnt/") &&
-		!strings.HasPrefix(mountPath, "/run/media/") {
+func canSafelyUnmount(sysRoot string, event *MountEvent) bool {
+	deviceNode := event.DeviceNode
+	if !isRemovableMountPath(event.MountPath) {
 		return false
 	}
 
@@ -110,11 +82,7 @@ func canSafelyUnmount(deviceNode, mountPath string) bool {
 		return false
 	}
 
-	if isBlockDevicePresent(deviceNode) {
-		return false
-	}
-
-	return true
+	return !isBlockDevicePresent(sysRoot, event)
 }
 
 // Reader implements the readers.Reader interface for external drive devices.
@@ -125,10 +93,20 @@ type Reader struct {
 	scanChan     chan<- readers.Scan
 	stopChan     chan struct{}
 	activeTokens map[string]*tokens.Token
-	device       config.ReadersConnect
-	wg           sync.WaitGroup
-	closeOnce    sync.Once
-	mu           syncutil.RWMutex
+	// deviceKeys maps the DeviceID of the mount that stored a token to its
+	// activeTokens key. It is recorded at mount time because the key may come
+	// from sysfs, which is gone by the time a yanked device's unmount arrives.
+	// Sibling partitions get no entry, so a late sibling unmount can't remove
+	// a token a newly inserted drive stored under the same key.
+	deviceKeys map[string]string
+	// readMounts returns the current mount table, for finding sibling
+	// partitions. sysRoot is the sysfs root. Both are replaceable in tests.
+	readMounts func() ([]helpers.MountEntry, error)
+	sysRoot    string
+	device     config.ReadersConnect
+	wg         sync.WaitGroup
+	closeOnce  sync.Once
+	mu         syncutil.RWMutex
 	// feedEnded is set when the detector's event feed closes on its own,
 	// as when its D-Bus connection drops. The reader then sees no more
 	// mounts, so it reports itself disconnected to be replaced.
@@ -141,13 +119,17 @@ func NewReader(cfg *config.Instance) *Reader {
 		cfg:          cfg,
 		cmdExecutor:  &command.RealExecutor{},
 		activeTokens: make(map[string]*tokens.Token),
+		deviceKeys:   make(map[string]string),
+		readMounts:   helpers.ReadMountInfo,
+		sysRoot:      defaultSysRoot,
 	}
 }
 
 // attemptStaleUnmount tries to clean up a stale mount point using lazy unmount.
 // Only unmounts if canSafelyUnmount returns true.
-func (r *Reader) attemptStaleUnmount(deviceNode, mountPath string) {
-	if !canSafelyUnmount(deviceNode, mountPath) {
+func (r *Reader) attemptStaleUnmount(event *MountEvent) {
+	deviceNode, mountPath := event.DeviceNode, event.MountPath
+	if !canSafelyUnmount(r.sysRoot, event) {
 		log.Debug().
 			Str("device_node", deviceNode).
 			Str("mount_path", mountPath).
@@ -295,16 +277,6 @@ func (r *Reader) endFeed() {
 	r.feedEnded.Store(true)
 }
 
-// getBaseDevice extracts the base device path from a partition device path.
-// For example: /dev/sda1 -> /dev/sda, /dev/nvme0n1p2 -> /dev/nvme0n1
-// Returns the original string if it doesn't look like a partition path.
-func getBaseDevice(deviceID string) string {
-	if !strings.HasPrefix(deviceID, "/dev/") {
-		return deviceID
-	}
-	return partitionSuffixRegex.ReplaceAllString(deviceID, "")
-}
-
 // findTokenFileInDir searches for zaparoo.txt (case-insensitive) in the given directory.
 // Returns the full path if found, or empty string if not found.
 func findTokenFileInDir(dir string) string {
@@ -330,33 +302,10 @@ func findFileInDir(dir, name string) string {
 	return ""
 }
 
-// findTokenFile searches for zaparoo.txt (case-insensitive) on the given mount path
-// and any sibling partitions (other partitions of the same physical device).
-// Returns the path where the token file was found, or empty string if not found.
-func findTokenFile(primaryMount string) (tokenPath, foundMount string) {
-	// Build list of mount paths to check, starting with primary
-	mountsToCheck := []string{primaryMount}
-
-	// Always search sibling mounts in /media/ and /mnt/ for removable devices.
-	// Multi-partition USB drives (like Ventoy) may have zaparoo.txt on a different
-	// partition than the one that triggered the mount event. Device IDs can be
-	// UUIDs or /dev/ paths, so we search all siblings regardless of format.
-	for _, mediaDir := range []string{"/media", "/mnt"} {
-		entries, err := os.ReadDir(mediaDir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			mountPath := filepath.Join(mediaDir, entry.Name())
-			if mountPath != primaryMount {
-				mountsToCheck = append(mountsToCheck, mountPath)
-			}
-		}
-	}
-
+// findTokenFile searches for zaparoo.txt (case-insensitive) on each mount
+// path in order, the event's own mount first. Returns the path where the
+// token file was found, or empty strings if not found.
+func findTokenFile(mountsToCheck []string) (tokenPath, foundMount string) {
 	// Check each mount path for zaparoo.txt (case-insensitive)
 	for _, mountPath := range mountsToCheck {
 		tokenPath := findTokenFileInDir(mountPath)
@@ -411,28 +360,46 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 	}()
 	defer close(done)
 
+	disk := parentDisk(r.sysRoot, event.DevNum, event.DeviceNode)
+	deviceKey := getBaseDevice(event.DeviceID)
+	if disk != "" {
+		deviceKey = "/dev/" + disk
+	}
+
 	log.Debug().
 		Str("device_id", event.DeviceID).
 		Str("device_node", event.DeviceNode).
+		Str("dev_num", event.DevNum).
 		Str("mount_path", event.MountPath).
-		Str("base_device", getBaseDevice(event.DeviceID)).
+		Str("base_device", deviceKey).
 		Msg("checking for token file on device")
 
 	// Validate block device is still present (detect stale mounts from yanked USB)
-	// Only check if we have a device node - some mounts may not have one
-	if event.DeviceNode != "" && !isBlockDevicePresent(event.DeviceNode) {
+	if !isBlockDevicePresent(r.sysRoot, event) {
 		log.Warn().
 			Str("device_id", event.DeviceID).
 			Str("device_node", event.DeviceNode).
+			Str("dev_num", event.DevNum).
 			Str("mount_path", event.MountPath).
 			Msg("stale mount detected - block device no longer exists, clearing from tracking")
 		r.detector.Forget(event.DeviceID)
-		r.attemptStaleUnmount(event.DeviceNode, event.MountPath)
+		r.attemptStaleUnmount(event)
 		return
 	}
 
-	// Find token file on this mount or sibling partitions
-	tokenPath, foundMount := findTokenFile(event.MountPath)
+	// Find token file on this mount or other partitions of the same disk.
+	// Multi-partition drives (like Ventoy) may have zaparoo.txt on a
+	// different partition than the one that triggered the mount event.
+	mountsToCheck := []string{event.MountPath}
+	if disk != "" {
+		if entries, err := r.readMounts(); err != nil {
+			log.Debug().Err(err).Msg("could not read mount table for sibling partitions")
+		} else {
+			mountsToCheck = append(mountsToCheck,
+				siblingMountsFrom(r.sysRoot, disk, event.MountPath, entries)...)
+		}
+	}
+	tokenPath, foundMount := findTokenFile(mountsToCheck)
 	if tokenPath == "" {
 		log.Debug().
 			Str("device_id", event.DeviceID).
@@ -495,15 +462,14 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 
 	if readErr != nil {
 		// Check if this is a stale mount (device was unplugged during retries)
-		// Only check if we have a device node - some mounts may not have one
-		if event.DeviceNode != "" && !isBlockDevicePresent(event.DeviceNode) {
+		if !isBlockDevicePresent(r.sysRoot, event) {
 			log.Warn().
 				Str("device_id", event.DeviceID).
 				Str("device_node", event.DeviceNode).
 				Str("mount_path", event.MountPath).
 				Msg("I/O errors due to stale mount - device unplugged, clearing from tracking")
 			r.detector.Forget(event.DeviceID)
-			r.attemptStaleUnmount(event.DeviceNode, event.MountPath)
+			r.attemptStaleUnmount(event)
 		} else {
 			log.Warn().
 				Err(readErr).
@@ -544,19 +510,19 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		return
 	}
 
-	// Store active token using base device to prevent duplicates from sibling partitions
-	baseDevice := getBaseDevice(event.DeviceID)
+	// Store active token by physical device to prevent duplicates from sibling partitions
 	r.mu.Lock()
-	if _, exists := r.activeTokens[baseDevice]; exists {
+	if _, exists := r.activeTokens[deviceKey]; exists {
 		// Already have a token for this physical device
 		r.mu.Unlock()
 		log.Debug().
 			Str("device_id", event.DeviceID).
-			Str("base_device", baseDevice).
+			Str("base_device", deviceKey).
 			Msg("token already active for this device, skipping")
 		return
 	}
-	r.activeTokens[baseDevice] = token
+	r.activeTokens[deviceKey] = token
+	r.deviceKeys[event.DeviceID] = deviceKey
 	r.mu.Unlock()
 
 	// Emit scan event
@@ -577,17 +543,18 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 }
 
 func (r *Reader) handleUnmountEvent(deviceID string) {
-	// Use base device to match how tokens are stored in handleMountEvent
-	baseDevice := getBaseDevice(deviceID)
-
+	// Only the mount that stored a token removes it, using the key it
+	// recorded
 	r.mu.Lock()
+	baseDevice, owner := r.deviceKeys[deviceID]
+	delete(r.deviceKeys, deviceID)
 	_, exists := r.activeTokens[baseDevice]
-	if exists {
+	if owner && exists {
 		delete(r.activeTokens, baseDevice)
 	}
 	r.mu.Unlock()
 
-	if !exists {
+	if !owner || !exists {
 		return
 	}
 

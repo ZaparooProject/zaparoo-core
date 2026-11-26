@@ -22,7 +22,6 @@
 package externaldrive
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/godbus/dbus/v5"
 	"github.com/rs/zerolog/log"
@@ -383,6 +383,7 @@ func (d *linuxMountDetector) buildMountEvent(
 	return MountEvent{
 		DeviceID:    deviceID,
 		DeviceNode:  deviceNode,
+		DevNum:      getDevNum(blockProps),
 		MountPath:   mountPath,
 		VolumeLabel: volumeLabel,
 		DeviceType:  deviceType,
@@ -683,6 +684,16 @@ func (*linuxMountDetector) getDeviceNode(props map[string]dbus.Variant) string {
 	return ""
 }
 
+// getDevNum formats the UDisks2 Block DeviceNumber property as "MAJ:MIN".
+func getDevNum(props map[string]dbus.Variant) string {
+	if v, ok := props["DeviceNumber"]; ok {
+		if dev, ok := v.Value().(uint64); ok && dev != 0 {
+			return fmt.Sprintf("%d:%d", unix.Major(dev), unix.Minor(dev))
+		}
+	}
+	return ""
+}
+
 func (*linuxMountDetector) getVolumeLabel(props map[string]dbus.Variant) string {
 	if idLabel, ok := props["IdLabel"]; ok {
 		if label, ok := idLabel.Value().(string); ok {
@@ -717,8 +728,9 @@ func (*linuxMountDetector) getDeviceType(props map[string]dbus.Variant) string {
 	return "unknown"
 }
 
-// linuxMountDetectorFallback implements MountDetector for Linux using poll() on /proc/mounts.
-// This is used when D-Bus/UDisks2 is not available (minimal Linux systems like MiSTer).
+// linuxMountDetectorFallback implements MountDetector for Linux using poll() on
+// /proc/self/mountinfo. This is used when D-Bus/UDisks2 is not available
+// (minimal Linux systems like MiSTer).
 type linuxMountDetectorFallback struct {
 	lastScan    time.Time
 	mountsFile  *os.File
@@ -726,9 +738,13 @@ type linuxMountDetectorFallback struct {
 	unmounts    chan string
 	stopChan    chan struct{}
 	mountedDevs map[string]MountEvent
-	wg          sync.WaitGroup
-	mu          syncutil.RWMutex
-	stopOnce    sync.Once
+	// staleDevs holds mounts dropped by Forget. A mount still in the table
+	// unchanged is not reported again, which would otherwise repeat the
+	// stale handling on every rescan.
+	staleDevs map[string]MountEvent
+	wg        sync.WaitGroup
+	mu        syncutil.RWMutex
+	stopOnce  sync.Once
 }
 
 // newLinuxMountDetectorFallback creates a new poll()-based mount detector for Linux.
@@ -738,6 +754,7 @@ func newLinuxMountDetectorFallback() (MountDetector, error) {
 		unmounts:    make(chan string, 10),
 		stopChan:    make(chan struct{}),
 		mountedDevs: make(map[string]MountEvent),
+		staleDevs:   make(map[string]MountEvent),
 	}, nil
 }
 
@@ -750,14 +767,15 @@ func (d *linuxMountDetectorFallback) Unmounts() <-chan string {
 }
 
 func (d *linuxMountDetectorFallback) Start() error {
-	// Open /proc/mounts for polling
-	file, err := os.Open("/proc/mounts")
+	// mountinfo, unlike /proc/mounts, carries each mount's device number,
+	// and supports the same poll() change notification.
+	file, err := os.Open(helpers.MountInfoPath())
 	if err != nil {
-		return fmt.Errorf("failed to open /proc/mounts: %w", err)
+		return fmt.Errorf("failed to open mountinfo: %w", err)
 	}
 	d.mountsFile = file
 
-	log.Debug().Msg("watching /proc/mounts for mount events via poll()")
+	log.Debug().Msg("watching mountinfo for mount events via poll()")
 
 	// Start event loop
 	d.wg.Add(1)
@@ -781,6 +799,9 @@ func (d *linuxMountDetectorFallback) Stop() {
 func (d *linuxMountDetectorFallback) Forget(deviceID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if event, ok := d.mountedDevs[deviceID]; ok {
+		d.staleDevs[deviceID] = event
+	}
 	delete(d.mountedDevs, deviceID)
 	log.Debug().Str("device_id", deviceID).Msg("forgot stale mount from poll tracking")
 }
@@ -798,7 +819,7 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 		Dur("rescan_interval", fallbackRescanInterval).
 		Msg("fallback mount detector started with periodic rescan")
 
-	// Set up poll for /proc/mounts with POLLPRI (priority event) and POLLERR
+	// Set up poll for mountinfo with POLLPRI (priority event) and POLLERR
 	pollFds := []unix.PollFd{
 		{
 			Fd:     int32(d.mountsFile.Fd()), //nolint:gosec // G115: uintptr->int32 for Fd(), safe on Linux
@@ -850,7 +871,7 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 
 		if shouldRescan {
 			if _, err := d.mountsFile.Seek(0, io.SeekStart); err != nil {
-				log.Warn().Err(err).Msg("failed to seek /proc/mounts")
+				log.Warn().Err(err).Msg("failed to seek mountinfo")
 				continue
 			}
 
@@ -865,75 +886,69 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 }
 
 func (d *linuxMountDetectorFallback) scanMounts() {
-	// Read current mounts from /proc/mounts
+	data, err := io.ReadAll(d.mountsFile)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read mountinfo")
+		return
+	}
+	d.applyMounts(helpers.ParseMountInfo(string(data)), d.getDeviceUUID)
+}
+
+// systemFSTypes are virtual filesystems that never back a removable drive.
+var systemFSTypes = map[string]bool{
+	"sysfs": true, "proc": true, "devtmpfs": true, "devpts": true, "tmpfs": true,
+	"cgroup": true, "cgroup2": true, "pstore": true, "bpf": true, "configfs": true,
+	"selinuxfs": true, "debugfs": true, "tracefs": true, "fusectl": true,
+	"fuse.portal": true, "mqueue": true, "hugetlbfs": true, "autofs": true,
+	"efivarfs": true, "binfmt_misc": true, "overlay": true,
+}
+
+// applyMounts compares a mount table snapshot with the tracked mounts and
+// emits mount and unmount events for the differences. uuidOf maps a device
+// node to its filesystem UUID, or "" if it has none.
+func (d *linuxMountDetectorFallback) applyMounts(entries []helpers.MountEntry, uuidOf func(string) string) {
 	currentMounts := make(map[string]MountEvent)
 
-	scanner := bufio.NewScanner(d.mountsFile)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 3 {
+	for i := range entries {
+		e := &entries[i]
+		if systemFSTypes[e.FSType] {
 			continue
 		}
 
-		device := fields[0]
-		mountPath := fields[1]
-		fstype := fields[2]
-
-		// Skip system filesystems
-		systemFSTypes := []string{
-			"sysfs", "proc", "devtmpfs", "devpts", "tmpfs", "cgroup",
-			"cgroup2", "pstore", "bpf", "configfs", "selinuxfs", "debugfs",
-			"tracefs", "fusectl", "fuse.portal", "mqueue", "hugetlbfs",
-			"autofs", "efivarfs", "binfmt_misc", "overlay",
-		}
-		isSystemFS := false
-		for _, sysFS := range systemFSTypes {
-			if fstype == sysFS {
-				isSystemFS = true
-				break
-			}
-		}
-		if isSystemFS {
+		// Bind mounts of a subdirectory are not drives of their own
+		if !isWholeFilesystemMount(e) {
 			continue
 		}
 
 		// Skip non-device mounts (network, etc)
-		if !strings.HasPrefix(device, "/dev/") {
+		if !strings.HasPrefix(e.Source, "/dev/") {
 			continue
 		}
 
 		// Only watch /media and /mnt mount points (removable media)
-		if !strings.HasPrefix(mountPath, "/media/") && !strings.HasPrefix(mountPath, "/mnt/") {
+		if !strings.HasPrefix(e.Mountpoint, "/media/") && !strings.HasPrefix(e.Mountpoint, "/mnt/") {
 			continue
 		}
 
-		// Try to get UUID from /dev/disk/by-uuid/
-		deviceID := d.getDeviceUUID(device)
+		deviceID := uuidOf(e.Source)
 		if deviceID == "" {
-			// Fall back to device name
-			deviceID = device
+			deviceID = e.Source
 		}
 
-		// Determine device type
-		deviceType := "removable"
-		removableFSTypes := []string{"vfat", "exfat", "ntfs", "ext2", "ext3", "ext4", "hfs", "hfsplus"}
-		for _, rmFS := range removableFSTypes {
-			if strings.HasPrefix(fstype, rmFS) {
-				deviceType = "removable"
-				break
-			}
+		// A device mounted at several paths keeps its first mount, as the
+		// kernel lists them in mount order.
+		if _, dup := currentMounts[deviceID]; dup {
+			continue
 		}
 
-		volumeLabel := filepath.Base(mountPath)
-		event := MountEvent{
+		currentMounts[deviceID] = MountEvent{
 			DeviceID:    deviceID,
-			DeviceNode:  device, // The actual block device path from /proc/mounts
-			MountPath:   mountPath,
-			VolumeLabel: volumeLabel,
-			DeviceType:  deviceType,
+			DeviceNode:  e.Source,
+			DevNum:      e.DevNum,
+			MountPath:   e.Mountpoint,
+			VolumeLabel: filepath.Base(e.Mountpoint),
+			DeviceType:  "removable",
 		}
-
-		currentMounts[deviceID] = event
 	}
 
 	log.Debug().
@@ -944,22 +959,34 @@ func (d *linuxMountDetectorFallback) scanMounts() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// A stale mount that is gone or has changed can be reported again.
+	for deviceID, stale := range d.staleDevs {
+		if current, exists := currentMounts[deviceID]; !exists || current != stale {
+			delete(d.staleDevs, deviceID)
+		}
+	}
+
 	// Find newly mounted devices
 	for deviceID, event := range currentMounts {
-		if _, exists := d.mountedDevs[deviceID]; !exists {
-			// New mount detected
-			d.mountedDevs[deviceID] = event
+		if _, exists := d.mountedDevs[deviceID]; exists {
+			continue
+		}
+		if _, stale := d.staleDevs[deviceID]; stale {
+			continue
+		}
 
-			select {
-			case d.events <- event:
-				log.Debug().
-					Str("device_id", deviceID).
-					Str("mount_path", event.MountPath).
-					Str("label", event.VolumeLabel).
-					Msg("mount detected (poll)")
-			case <-d.stopChan:
-				return
-			}
+		// New mount detected
+		d.mountedDevs[deviceID] = event
+
+		select {
+		case d.events <- event:
+			log.Debug().
+				Str("device_id", deviceID).
+				Str("mount_path", event.MountPath).
+				Str("label", event.VolumeLabel).
+				Msg("mount detected (poll)")
+		case <-d.stopChan:
+			return
 		}
 	}
 

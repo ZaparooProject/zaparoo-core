@@ -29,6 +29,12 @@ type MountEvent struct {
 	// Used for safety checks when detecting stale mounts. May be empty if unavailable.
 	DeviceNode string
 
+	// DevNum is the device number of the mounted filesystem as "MAJ:MIN"
+	// (e.g., "179:1"), used to check the block device through sysfs when its
+	// name doesn't match a sysfs entry (e.g., "/dev/root"). Linux only; may be
+	// empty.
+	DevNum string
+
 	// MountPath is the filesystem path where the volume is mounted.
 	// Examples: "E:\", "/media/user/USB_DRIVE", "/Volumes/MyUSB"
 	MountPath string
@@ -62,8 +68,9 @@ type MountDetector interface {
 	// After Stop() is called, the Events() and Unmounts() channels are closed.
 	Stop()
 
-	// Forget removes a device from internal tracking, allowing it to be
-	// re-detected on the next scan. Used when a mount is detected as stale
-	// (e.g., block device no longer exists after USB was yanked).
+	// Forget drops a device found to be stale (e.g., its block device is gone
+	// after a USB stick was yanked) from internal tracking. The same mount is
+	// not reported again while it stays mounted; it is reported again once it
+	// has gone away and come back.
 	Forget(deviceID string)
 }

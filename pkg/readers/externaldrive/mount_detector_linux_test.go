@@ -26,9 +26,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/godbus/dbus/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -537,4 +539,98 @@ func TestNewLinuxMountDetectorFallback_InitializesCorrectly(t *testing.T) {
 
 	// lastScan should be zero initially (set when Start() is called)
 	assert.True(t, fallback.lastScan.IsZero())
+}
+
+func noUUID(string) string { return "" }
+
+func drainMountEvents(d *linuxMountDetectorFallback) []MountEvent {
+	var events []MountEvent
+	for {
+		select {
+		case ev := <-d.events:
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
+
+func TestFallbackApplyMounts_EmitsDeviceNumber(t *testing.T) {
+	t.Parallel()
+	detector, err := newLinuxMountDetectorFallback()
+	require.NoError(t, err)
+	d, ok := detector.(*linuxMountDetectorFallback)
+	require.True(t, ok)
+
+	entries := helpers.ParseMountInfo(
+		"20 1 7:1 / / ro,relatime - ext4 /dev/loop1 ro\n" +
+			"21 20 179:1 / /media/fat rw,noatime - exfat /dev/root rw\n" +
+			"22 21 179:1 /saves /media/fat/saves rw,noatime - exfat /dev/root rw\n" +
+			"23 20 0:22 / /tmp rw - tmpfs tmpfs rw\n" +
+			"24 20 8:1 / /media/usb\\0400 rw - vfat /dev/sda1 rw\n" +
+			"25 20 0:50 /@data /media/usb1 rw - btrfs /dev/sdb1 rw,subvolid=256,subvol=/@data\n" +
+			"26 20 0:51 /@data/roms /media/usb2 rw - btrfs /dev/sdc1 rw,subvolid=256,subvol=/@data\n")
+	d.applyMounts(entries, noUUID)
+
+	events := drainMountEvents(d)
+	require.Len(t, events, 3)
+	byID := map[string]MountEvent{}
+	for _, ev := range events {
+		byID[ev.DeviceID] = ev
+	}
+	assert.Equal(t, MountEvent{
+		DeviceID: "/dev/root", DeviceNode: "/dev/root", DevNum: "179:1",
+		MountPath: "/media/fat", VolumeLabel: "fat", DeviceType: "removable",
+	}, byID["/dev/root"], "the subdirectory bind mount does not replace the drive's own mount")
+	assert.Equal(t, "/media/usb 0", byID["/dev/sda1"].MountPath, "escaped spaces decoded")
+	assert.Equal(t, "8:1", byID["/dev/sda1"].DevNum)
+	assert.Equal(t, "/media/usb1", byID["/dev/sdb1"].MountPath, "Btrfs subvolume mount is a drive")
+	assert.NotContains(t, byID, "/dev/sdc1", "bind mount of a directory inside a subvolume is not")
+}
+
+// A stale mount that stays in the table is reported once, not on every
+// rescan (#1898), and again after it has gone and come back.
+func TestFallbackApplyMounts_ForgottenMountNotReEmitted(t *testing.T) {
+	t.Parallel()
+	detector, err := newLinuxMountDetectorFallback()
+	require.NoError(t, err)
+	d, ok := detector.(*linuxMountDetectorFallback)
+	require.True(t, ok)
+
+	mounted := helpers.ParseMountInfo("21 20 8:1 / /media/usb0 rw - vfat /dev/sda1 rw\n")
+
+	d.applyMounts(mounted, noUUID)
+	require.Len(t, drainMountEvents(d), 1)
+
+	d.Forget("/dev/sda1")
+	for range 3 {
+		d.applyMounts(mounted, noUUID)
+	}
+	assert.Empty(t, drainMountEvents(d), "forgotten mount still in the table is not re-emitted")
+
+	// A different mount under the same ID (replugged, new device number) is new.
+	replugged := helpers.ParseMountInfo("21 20 8:17 / /media/usb0 rw - vfat /dev/sda1 rw\n")
+	d.applyMounts(replugged, noUUID)
+	require.Len(t, drainMountEvents(d), 1)
+
+	// Gone and back after a Forget is re-emitted as well.
+	d.Forget("/dev/sda1")
+	d.applyMounts(nil, noUUID)
+	assert.Empty(t, drainMountEvents(d))
+	select {
+	case id := <-d.unmounts:
+		t.Fatalf("forgotten mount must not emit an unmount, got %q", id)
+	default:
+	}
+	d.applyMounts(mounted, noUUID)
+	assert.Len(t, drainMountEvents(d), 1)
+}
+
+func TestGetDevNum(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "179:1", getDevNum(map[string]dbus.Variant{
+		"DeviceNumber": dbus.MakeVariant(unix.Mkdev(179, 1)),
+	}))
+	assert.Empty(t, getDevNum(map[string]dbus.Variant{}))
+	assert.Empty(t, getDevNum(map[string]dbus.Variant{"DeviceNumber": dbus.MakeVariant("8:1")}))
 }

@@ -38,6 +38,9 @@ type MountEntry struct {
 	FSType     string // e.g. exfat, vfat, cifs
 	Source     string // device or share, e.g. /dev/mmcblk0p1, //nas/share
 	Options    string // per-mount options, e.g. rw,noatime
+	DevNum     string // st_dev of the mounted filesystem as MAJ:MIN, e.g. 179:1
+	// SuperOptions are the filesystem's own options, e.g. rw,subvol=/@home
+	SuperOptions string
 }
 
 // StorageInfo is the longest-matching mount for a path, for logging what
@@ -71,12 +74,18 @@ func ParseMountInfo(data string) []MountEntry {
 		if sep < 0 || sep+2 >= len(fields) || len(fields) < 5 {
 			continue
 		}
+		var superOptions string
+		if sep+3 < len(fields) {
+			superOptions = unescapeMountField(fields[sep+3])
+		}
 		entries = append(entries, MountEntry{
-			Root:       unescapeMountField(fields[3]),
-			Mountpoint: unescapeMountField(fields[4]),
-			Options:    fields[5],
-			FSType:     fields[sep+1],
-			Source:     unescapeMountField(fields[sep+2]),
+			Root:         unescapeMountField(fields[3]),
+			Mountpoint:   unescapeMountField(fields[4]),
+			Options:      fields[5],
+			DevNum:       fields[2],
+			FSType:       fields[sep+1],
+			Source:       unescapeMountField(fields[sep+2]),
+			SuperOptions: superOptions,
 		})
 	}
 	return entries

@@ -40,10 +40,11 @@ garbage line
 	require.Len(t, entries, 3)
 	assert.Equal(t, MountEntry{
 		Root: "/", Mountpoint: "/media/fat", Options: "rw,noatime", FSType: "exfat", Source: "/dev/mmcblk0p1",
+		DevNum: "179:1", SuperOptions: "rw,iocharset=utf8",
 	}, entries[0])
 	assert.Equal(t, MountEntry{
 		Root: "/saves", Mountpoint: "/media/fat/saves", Options: "rw,relatime", FSType: "cifs",
-		Source: "//10.0.0.3/MiSTer",
+		Source: "//10.0.0.3/MiSTer", DevNum: "0:41", SuperOptions: "rw,username=x",
 	}, entries[1])
 	assert.Equal(t, "/System Volume Information", entries[2].Root, "octal escapes decoded")
 }
