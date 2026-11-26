@@ -82,10 +82,10 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/spark2k06">
-                    <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
+                <a href="https://github.com/Yshuro">
+                    <img src="https://avatars.githubusercontent.com/u/83331159?v=4" width="100;" alt="Yshuro"/>
                     <br />
-                    <sub><b>Aitor Gómez García</b></sub>
+                    <sub><b>Sami</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -96,14 +96,21 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/spark2k06">
+                    <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
+                    <br />
+                    <sub><b>Aitor Gómez García</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
                 <a href="https://github.com/staydata">
                     <img src="https://avatars.githubusercontent.com/u/130571429?v=4" width="100;" alt="staydata"/>
                     <br />
                     <sub><b>staydata</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/protogem2">
                     <img src="https://avatars.githubusercontent.com/u/62781710?v=4" width="100;" alt="protogem2"/>
@@ -139,6 +146,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Turner Monroe</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/treyturner">
                     <img src="https://avatars.githubusercontent.com/u/1878152?v=4" width="100;" alt="treyturner"/>
@@ -146,20 +155,11 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Trey Turner</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/sreuter">
                     <img src="https://avatars.githubusercontent.com/u/550246?v=4" width="100;" alt="sreuter"/>
                     <br />
                     <sub><b>Sascha Reuter</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/Yshuro">
-                    <img src="https://avatars.githubusercontent.com/u/83331159?v=4" width="100;" alt="Yshuro"/>
-                    <br />
-                    <sub><b>Sami</b></sub>
                 </a>
             </td>
             <td align="center">
