@@ -39,6 +39,9 @@ func TestDeckSyncRoundTrip(t *testing.T) {
 	row := database.DeckSyncRow{
 		DeckID: "0123456789ab", Snapshot: `{"name":"Weekend"}`, Revision: 7, Locked: true,
 		Conflicts: 2, RejectedCode: "unknown_card", RejectedHash: "abc",
+		RejectedItems: []database.DeckSyncItemError{
+			{ItemID: 4, Code: "unknown_card"}, {ItemID: 9, Code: "invalid_script"},
+		},
 	}
 	require.NoError(t, db.UpsertDeckSync([]database.DeckSyncRow{row, {DeckID: "bbbbbbbbbbbb"}}))
 	got, found, err := db.GetDeckSync("0123456789ab")
@@ -61,6 +64,27 @@ func TestDeckSyncRoundTrip(t *testing.T) {
 	rows, err = db.ListDeckSync()
 	require.NoError(t, err)
 	assert.Empty(t, rows)
+}
+
+// A stored value that no longer parses only ever marked items, so it reads as
+// none rather than failing every deck sync read.
+func TestDeckSyncUnreadableRejectedItemsReadAsNone(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, db.UpsertDeckSync([]database.DeckSyncRow{
+		{DeckID: "0123456789ab", RejectedCode: "unknown_card"},
+	}))
+	_, err := db.sql.Load().ExecContext(db.ctx,
+		`update DeckSync set RejectedItems = 'not json' where DeckID = ?`, "0123456789ab")
+	require.NoError(t, err)
+
+	got, found, err := db.GetDeckSync("0123456789ab")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "unknown_card", got.RejectedCode)
+	assert.Nil(t, got.RejectedItems)
 }
 
 func TestRenameDeckMovesItsSyncRow(t *testing.T) {

@@ -733,15 +733,18 @@ func (f *fakeOnline) enrichDeckItems(items []fakeDeckItem) []fakeDeckItem {
 	return out
 }
 
-func (f *fakeOnline) unknownCard(items []fakeDeckItem) bool {
-	for _, item := range items {
+// unknownCards returns the positions of the card items naming a card the
+// account does not hold, as the account lists them on a rejection.
+func (f *fakeOnline) unknownCards(items []fakeDeckItem) []map[string]any {
+	var out []map[string]any
+	for i, item := range items {
 		if item.Kind == "card" {
 			if _, ok := f.cards[item.CardID]; !ok {
-				return true
+				out = append(out, map[string]any{"index": i, "code": "unknown_card"})
 			}
 		}
 	}
-	return false
+	return out
 }
 
 // mintedFakeDeckID mirrors the account's rule for a create: twelve
@@ -871,6 +874,11 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, entry)
 	}
+	refuseItems := func(i int, refused []map[string]any) {
+		result(i, "rejected", "unknown_card", nil)
+		results[len(results)-1]["item_index"] = refused[0]["index"]
+		results[len(results)-1]["item_errors"] = refused
+	}
 	for i := range request.Items {
 		record := &request.Items[i]
 		deckID := strings.ToUpper(record.DeckID)
@@ -904,8 +912,8 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			if record.Items != nil {
 				items = *record.Items
 			}
-			if f.unknownCard(items) {
-				result(i, "rejected", "unknown_card", nil)
+			if refused := f.unknownCards(items); len(refused) > 0 {
+				refuseItems(i, refused)
 				continue
 			}
 			description := ""
@@ -942,9 +950,11 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			result(i, "applied", "", deck)
 			continue
 		}
-		if record.Items != nil && f.unknownCard(*record.Items) {
-			result(i, "rejected", "unknown_card", nil)
-			continue
+		if record.Items != nil {
+			if refused := f.unknownCards(*record.Items); len(refused) > 0 {
+				refuseItems(i, refused)
+				continue
+			}
 		}
 		before := *deck
 		if code := f.applyImageChange(record, deck); code != "" {

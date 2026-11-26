@@ -568,6 +568,56 @@ func TestHandleDecks_LockedDeckIsReadOnly(t *testing.T) {
 	require.ErrorIs(t, err, database.ErrDeckReadOnly)
 }
 
+// A deck the account refused shows the code, and each refused item still in
+// the deck shows its own. A refused item removed since marks nothing.
+func TestHandleDecks_SyncErrorShowsTheRefusedItems(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	require.NoError(t, e.env.Database.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Refused", Owned: true,
+		Items: []database.DeckItem{
+			{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"},
+			{Kind: database.DeckItemKindCard, CardID: "NOPE0000"},
+		},
+	}))
+	require.NoError(t, e.env.Database.UserDB.CreateDeck(&database.Deck{
+		DeckID: "bbbbbbbbbbbb", Name: "Fine", Owned: true,
+	}))
+	deck, err := e.env.Database.UserDB.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	require.Len(t, deck.Items, 2)
+	require.NoError(t, e.env.Database.UserDB.UpsertDeckSync([]database.DeckSyncRow{
+		{
+			DeckID: "0123456789ab", RejectedCode: "unknown_card", RejectedHash: "abc",
+			RejectedItems: []database.DeckSyncItemError{
+				{ItemID: deck.Items[1].DBID, Code: "unknown_card"},
+				{ItemID: deck.Items[1].DBID + 100, Code: "invalid_script"},
+			},
+		},
+		{DeckID: "bbbbbbbbbbbb", Revision: 2},
+	}))
+
+	got, ok := e.call(t, HandleDecksGet, `{"deckId":"0123456789ab"}`).(models.DeckResponse)
+	require.True(t, ok)
+	assert.Equal(t, "unknown_card", got.SyncError)
+	require.Len(t, got.Items, 2)
+	assert.Empty(t, got.Items[0].SyncError)
+	assert.Equal(t, "unknown_card", got.Items[1].SyncError)
+
+	list, ok := e.call(t, HandleDecks, `{}`).(models.DecksResponse)
+	require.True(t, ok)
+	byID := make(map[string]models.DeckResponse, len(list.Decks))
+	for _, d := range list.Decks {
+		byID[d.DeckID] = d
+	}
+	assert.Equal(t, "unknown_card", byID["0123456789ab"].SyncError)
+	assert.Empty(t, byID["bbbbbbbbbbbb"].SyncError)
+
+	raw, err := json.Marshal(byID["bbbbbbbbbbbb"])
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "syncError", "a deck that syncs carries no sync error")
+}
+
 func TestHandleDecksNew_SignalsSync(t *testing.T) {
 	t.Parallel()
 	e := newDecksTestEnv(t)

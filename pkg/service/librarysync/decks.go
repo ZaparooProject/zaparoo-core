@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -389,8 +390,15 @@ func (p *deckPass) checkLink() error {
 	if found && stored == link {
 		return nil
 	}
+	rows, err := p.userDB().ListDeckSync()
+	if err != nil {
+		return fmt.Errorf("read deck sync rows: %w", err)
+	}
 	if err := p.userDB().ClearDeckSync(); err != nil {
 		return fmt.Errorf("clear deck sync rows: %w", err)
+	}
+	for i := range rows {
+		p.notifyRejectionCleared(&rows[i])
 	}
 	if err := p.userDB().SetDeviceState(DeviceStateKeyDecksSince, "0"); err != nil {
 		return fmt.Errorf("reset deck cursor: %w", err)
@@ -402,19 +410,49 @@ func (p *deckPass) checkLink() error {
 }
 
 func (p *deckPass) saveRow(row *database.DeckSyncRow) error {
+	previous := p.rows[row.DeckID]
 	p.rows[row.DeckID] = row
 	if err := p.userDB().UpsertDeckSync([]database.DeckSyncRow{*row}); err != nil {
 		return fmt.Errorf("store deck sync row: %w", err)
+	}
+	if rejectionChanged(previous, row) {
+		p.svc.notifyDecks(row.DeckID, models.DecksChangedUpdated)
 	}
 	return nil
 }
 
 func (p *deckPass) dropRow(deckID string) error {
+	previous := p.rows[deckID]
 	delete(p.rows, deckID)
 	if err := p.userDB().DeleteDeckSync([]string{deckID}); err != nil {
 		return fmt.Errorf("remove deck sync row: %w", err)
 	}
+	if rejectionChanged(previous, nil) {
+		p.svc.notifyDecks(deckID, models.DecksChangedUpdated)
+	}
 	return nil
+}
+
+// notifyRejectionCleared tells clients a deck no longer shows a refused sync
+// once its row is cleared with the rest of the bookkeeping.
+func (p *deckPass) notifyRejectionCleared(row *database.DeckSyncRow) {
+	if rejectionChanged(row, nil) {
+		p.svc.notifyDecks(row.DeckID, models.DecksChangedUpdated)
+	}
+}
+
+// rejectionChanged reports whether what the API shows about a deck's refused
+// sync moved between two rows, either of which may be absent.
+func rejectionChanged(before, after *database.DeckSyncRow) bool {
+	var beforeCode, afterCode string
+	var beforeItems, afterItems []database.DeckSyncItemError
+	if before != nil {
+		beforeCode, beforeItems = before.RejectedCode, before.RejectedItems
+	}
+	if after != nil {
+		afterCode, afterItems = after.RejectedCode, after.RejectedItems
+	}
+	return beforeCode != afterCode || !slices.Equal(beforeItems, afterItems)
 }
 
 // pull applies every deck that changed on the account since the cursor.
@@ -443,6 +481,9 @@ func (p *deckPass) pull(ctx context.Context) error {
 			log.Info().Msg("decks were erased on the account; forgetting sync bookkeeping, local decks are kept")
 			if err := p.userDB().ClearDeckSync(); err != nil {
 				return fmt.Errorf("clear deck sync rows: %w", err)
+			}
+			for _, row := range p.rows {
+				p.notifyRejectionCleared(row)
 			}
 			p.rows = make(map[string]*database.DeckSyncRow)
 			// Every deck is about to be pushed again as new, and decks the
@@ -680,6 +721,9 @@ type pendingDeck struct {
 	content *deckContent
 	deckID  string
 	name    string
+	// itemIDs are the local IDs of content's items, in the order pushed, so
+	// an item the account refuses by position is named by its ID.
+	itemIDs []int64
 	// coverPending and coverFile are the deck's cover change as it stood
 	// when the record was built, and coverSent whether the record carries
 	// it. A change not sent with a create goes in the next round.
@@ -742,8 +786,12 @@ func (p *deckPass) dirtyRecords(ctx context.Context) ([]pendingDeck, error) {
 		if row != nil {
 			record.BaseRevision = row.Revision
 		}
+		itemIDs := make([]int64, len(deck.Items))
+		for i := range deck.Items {
+			itemIDs[i] = deck.Items[i].DBID
+		}
 		next := pendingDeck{
-			deckID: deckID, name: deck.Name, content: &content, record: record,
+			deckID: deckID, name: deck.Name, content: &content, record: record, itemIDs: itemIDs,
 			coverPending: coverPending, coverFile: deck.CoverFile,
 		}
 		p.attachCover(ctx, &next)
@@ -973,17 +1021,59 @@ func (p *deckPass) handleRejected(pending *pendingDeck, result *deckPushResult) 
 		copied := *row
 		next = &copied
 	}
+	refused := refusedItems(pending, result)
 	if pending.content != nil {
 		if next.RejectedHash != pending.content.hash() {
-			log.Warn().Str("deck", pending.deckID).Str("code", result.Code).Msg("deck was rejected by the account")
-			p.svc.notifyInbox("Deck not synced", fmt.Sprintf(
-				"%q could not be synced with Zaparoo Online (%s). It is kept on this device.",
-				pending.name, strings.ReplaceAll(result.Code, "_", " ")), inbox.CategoryNone)
+			log.Warn().Str("deck", pending.deckID).Str("code", result.Code).Int("items", len(refused)).
+				Msg("deck was rejected by the account")
+			p.svc.notifyInbox("Deck not synced", rejectedDeckMessage(pending.name, result.Code, len(refused)),
+				inbox.CategoryNone)
 		}
 		next.RejectedHash = pending.content.hash()
 	}
 	next.RejectedCode = result.Code
+	next.RejectedItems = refused
 	return false, p.saveRow(next)
+}
+
+func rejectedDeckMessage(name, code string, refused int) string {
+	reason := strings.ReplaceAll(code, "_", " ")
+	switch {
+	case refused == 1:
+		reason += ", 1 item"
+	case refused > 1:
+		reason = fmt.Sprintf("%s, %d items", reason, refused)
+	}
+	return fmt.Sprintf("%q could not be synced with Zaparoo Online (%s). It is kept on this device.", name, reason)
+}
+
+// refusedItems names the pushed items the account refused by their local
+// IDs. A position outside what was pushed, or named twice, is dropped. An
+// account that gives only the first refused position still marks that item.
+func refusedItems(pending *pendingDeck, result *deckPushResult) []database.DeckSyncItemError {
+	errs := result.ItemErrors
+	if len(errs) == 0 && result.ItemIndex != nil {
+		errs = []deckItemError{{Index: *result.ItemIndex, Code: result.Code}}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(errs))
+	out := make([]database.DeckSyncItemError, 0, len(errs))
+	for _, e := range errs {
+		if e.Index < 0 || e.Index >= len(pending.itemIDs) || e.Code == "" {
+			continue
+		}
+		if _, dup := seen[e.Index]; dup {
+			continue
+		}
+		seen[e.Index] = struct{}{}
+		out = append(out, database.DeckSyncItemError{ItemID: pending.itemIDs[e.Index], Code: e.Code})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // remint gives a deck whose ID another account holds a new one. Cards
@@ -1062,11 +1152,21 @@ type deckPushResponse struct {
 	Items []deckPushResult `json:"items"`
 }
 
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
 type deckPushResult struct {
-	Deck   *deckSync `json:"deck"`
-	Status string    `json:"status"`
-	Code   string    `json:"code"`
-	Index  int       `json:"index"`
+	Deck      *deckSync `json:"deck"`
+	ItemIndex *int      `json:"item_index"`
+	Status    string    `json:"status"`
+	Code      string    `json:"code"`
+	// ItemErrors lists every item a rejected record was refused over, by
+	// its position in the pushed items.
+	ItemErrors []deckItemError `json:"item_errors"`
+	Index      int             `json:"index"`
+}
+
+type deckItemError struct {
+	Code  string `json:"code"`
+	Index int    `json:"index"`
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.

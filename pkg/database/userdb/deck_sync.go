@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -29,13 +30,43 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
-const deckSyncColumns = `DeckID, Snapshot, Revision, Locked, Conflicts, RejectedCode, RejectedHash, UpdatedAt`
+const deckSyncColumns = `DeckID, Snapshot, Revision, Locked, Conflicts, RejectedCode, RejectedHash, ` +
+	`RejectedItems, UpdatedAt`
 
 func scanDeckSync(scan func(dest ...any) error) (database.DeckSyncRow, error) {
 	var row database.DeckSyncRow
+	var rejectedItems string
 	err := scan(&row.DeckID, &row.Snapshot, &row.Revision, &row.Locked, &row.Conflicts,
-		&row.RejectedCode, &row.RejectedHash, &row.UpdatedAt)
-	return row, err //nolint:wrapcheck // callers wrap with context
+		&row.RejectedCode, &row.RejectedHash, &rejectedItems, &row.UpdatedAt)
+	if err != nil {
+		return row, err //nolint:wrapcheck // callers wrap with context
+	}
+	row.RejectedItems = decodeDeckSyncItemErrors(rejectedItems)
+	return row, nil
+}
+
+// decodeDeckSyncItemErrors reads stored refused items. A value that does not
+// parse reads as none: it only ever marks items, and the next push replaces it.
+func decodeDeckSyncItemErrors(raw string) []database.DeckSyncItemError {
+	if raw == "" {
+		return nil
+	}
+	var items []database.DeckSyncItemError
+	if err := json.Unmarshal([]byte(raw), &items); err != nil || len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func encodeDeckSyncItemErrors(items []database.DeckSyncItemError) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return "", fmt.Errorf("encode refused deck items: %w", err)
+	}
+	return string(data), nil
 }
 
 // ListDeckSync returns every deck sync row.
@@ -89,10 +120,14 @@ func (db *UserDB) UpsertDeckSync(rows []database.DeckSyncRow) error {
 		now := time.Now().Unix()
 		for i := range rows {
 			row := &rows[i]
+			rejectedItems, err := encodeDeckSyncItemErrors(row.RejectedItems)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `insert or replace into DeckSync (`+deckSyncColumns+`)
-				values (?, ?, ?, ?, ?, ?, ?, ?)`,
+				values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				row.DeckID, row.Snapshot, row.Revision, row.Locked, row.Conflicts,
-				row.RejectedCode, row.RejectedHash, now,
+				row.RejectedCode, row.RejectedHash, rejectedItems, now,
 			); err != nil {
 				return fmt.Errorf("upsert deck sync row: %w", err)
 			}

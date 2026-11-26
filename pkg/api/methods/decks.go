@@ -78,14 +78,17 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list decks: %w", err)
 	}
-	locked, err := lockedDecks(&env)
+	syncRows, err := deckSyncRows(&env)
 	if err != nil {
 		return nil, err
 	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
 		deck := deckSummary(&env, &list[i])
-		deck.Locked = locked[deck.DeckID]
+		if row, ok := syncRows[deck.DeckID]; ok {
+			deck.Locked = row.Locked
+			deck.SyncError = row.RejectedCode
+		}
 		if params.System != nil {
 			deck.ContainsItemIDs = contains[deck.DeckID]
 			if deck.ContainsItemIDs == nil {
@@ -670,29 +673,43 @@ func isDeckLocked(env *requests.RequestEnv, deckID string) (bool, error) {
 	return found && row.Locked, nil
 }
 
-// lockedDecks names every deck the account locked, for the decks list.
-func lockedDecks(env *requests.RequestEnv) (map[string]bool, error) {
+// deckSyncRows returns every deck's sync state by deck ID, for the lock and
+// sync error the decks list shows.
+func deckSyncRows(env *requests.RequestEnv) (map[string]*database.DeckSyncRow, error) {
 	rows, err := env.Database.UserDB.ListDeckSync()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read deck sync state: %w", err)
 	}
-	locked := make(map[string]bool, len(rows))
+	byID := make(map[string]*database.DeckSyncRow, len(rows))
 	for i := range rows {
-		if rows[i].Locked {
-			locked[rows[i].DeckID] = true
-		}
+		byID[rows[i].DeckID] = &rows[i]
 	}
-	return locked, nil
+	return byID, nil
 }
 
-// lockedDeckResponse is a deck with its items and its lock state.
+// lockedDeckResponse is a deck with its items, its lock state and what the
+// account refused on its last sync. A sync row that cannot be read is an
+// error, as in isDeckLocked.
 func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.DeckResponse, error) {
 	resp := deckResponse(env, deck, anchorAvailability(env, deck.Items))
-	locked, err := isDeckLocked(env, deck.DeckID)
+	row, found, err := env.Database.UserDB.GetDeckSync(deck.DeckID)
 	if err != nil {
-		return models.DeckResponse{}, err
+		return models.DeckResponse{}, fmt.Errorf("failed to read deck sync state: %w", err)
 	}
-	resp.Locked = locked
+	if !found {
+		return resp, nil
+	}
+	resp.Locked = row.Locked
+	resp.SyncError = row.RejectedCode
+	if len(row.RejectedItems) > 0 {
+		refused := make(map[int64]string, len(row.RejectedItems))
+		for _, item := range row.RejectedItems {
+			refused[item.ItemID] = item.Code
+		}
+		for i := range resp.Items {
+			resp.Items[i].SyncError = refused[resp.Items[i].ID]
+		}
+	}
 	return resp, nil
 }
 

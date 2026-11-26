@@ -23,6 +23,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,4 +121,86 @@ func TestDeckPassError(t *testing.T) {
 	err = deckPassError(failure, other)
 	require.ErrorIs(t, err, failure)
 	assert.ErrorIs(t, err, other)
+}
+
+// Positions come from the account. Only ones inside what was pushed name an
+// item, each item once, and an account that gives only the first refused
+// position still marks that item.
+func TestRefusedItems(t *testing.T) {
+	t.Parallel()
+	pending := &pendingDeck{itemIDs: []int64{10, 11, 12}}
+	first := 2
+
+	tests := []struct {
+		want   []database.DeckSyncItemError
+		name   string
+		result deckPushResult
+	}{
+		{name: "deck level", result: deckPushResult{Code: "deck_limit_reached"}},
+		{
+			name: "every refused item",
+			result: deckPushResult{Code: "unknown_card", ItemIndex: &first, ItemErrors: []deckItemError{
+				{Index: 2, Code: "unknown_card"}, {Index: 0, Code: "invalid_script"},
+			}},
+			want: []database.DeckSyncItemError{
+				{ItemID: 12, Code: "unknown_card"}, {ItemID: 10, Code: "invalid_script"},
+			},
+		},
+		{
+			name:   "first position only",
+			result: deckPushResult{Code: "invalid_media", ItemIndex: &first},
+			want:   []database.DeckSyncItemError{{ItemID: 12, Code: "invalid_media"}},
+		},
+		{
+			name: "out of range, repeated and codeless positions",
+			result: deckPushResult{Code: "unknown_card", ItemErrors: []deckItemError{
+				{Index: -1, Code: "unknown_card"},
+				{Index: 3, Code: "unknown_card"},
+				{Index: 1, Code: "unknown_card"},
+				{Index: 1, Code: "invalid_script"},
+				{Index: 0},
+			}},
+			want: []database.DeckSyncItemError{{ItemID: 11, Code: "unknown_card"}},
+		},
+		{
+			name:   "nothing usable",
+			result: deckPushResult{Code: "unknown_card", ItemErrors: []deckItemError{{Index: 9, Code: "unknown_card"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, refusedItems(pending, &tt.result))
+		})
+	}
+}
+
+func TestRejectedDeckMessage(t *testing.T) {
+	t.Parallel()
+	const tail = "). It is kept on this device."
+	assert.Equal(t, `"Mine" could not be synced with Zaparoo Online (deck limit reached`+tail,
+		rejectedDeckMessage("Mine", "deck_limit_reached", 0))
+	assert.Equal(t, `"Mine" could not be synced with Zaparoo Online (unknown card, 1 item`+tail,
+		rejectedDeckMessage("Mine", "unknown_card", 1))
+	assert.Equal(t, `"Mine" could not be synced with Zaparoo Online (unknown card, 3 items`+tail,
+		rejectedDeckMessage("Mine", "unknown_card", 3))
+}
+
+func TestRejectionChanged(t *testing.T) {
+	t.Parallel()
+	refused := &database.DeckSyncRow{
+		RejectedCode: "unknown_card", RejectedItems: []database.DeckSyncItemError{{ItemID: 1, Code: "unknown_card"}},
+	}
+	same := *refused
+	same.Revision = 9
+	other := *refused
+	other.RejectedItems = []database.DeckSyncItemError{{ItemID: 2, Code: "unknown_card"}}
+
+	assert.False(t, rejectionChanged(nil, nil))
+	assert.False(t, rejectionChanged(nil, &database.DeckSyncRow{Revision: 3}))
+	assert.False(t, rejectionChanged(refused, &same))
+	assert.True(t, rejectionChanged(nil, refused))
+	assert.True(t, rejectionChanged(refused, nil))
+	assert.True(t, rejectionChanged(refused, &other))
+	assert.True(t, rejectionChanged(refused, &database.DeckSyncRow{}))
 }
