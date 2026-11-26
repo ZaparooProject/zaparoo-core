@@ -498,3 +498,22 @@ func mustJSON(t *testing.T, v any) []byte {
 	require.NoError(t, err)
 	return b
 }
+
+func TestLiveRootName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/media/fat", want: "fat"},
+		{path: "C:/Users/me/Games", want: "Games"},
+		{path: "R:/", want: "R:"},
+		{path: "R:", want: "R:"},
+		{path: "/", want: "/"},
+		{path: "//server/share", want: "share"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, liveRootName(tt.path), tt.path)
+	}
+}

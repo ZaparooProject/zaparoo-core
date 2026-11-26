@@ -362,7 +362,7 @@ func browseLiveRoots(env *requests.RequestEnv, params *models.BrowseParams) (any
 			continue
 		}
 		entries = append(entries, models.BrowseEntry{
-			Name: filepath.Base(root.path),
+			Name: liveRootName(root.path),
 			Path: root.path,
 			Type: "root",
 		})
@@ -375,6 +375,17 @@ func browseLiveRoots(env *requests.RequestEnv, params *models.BrowseParams) (any
 		Entries:   entries,
 		TotalDirs: len(entries),
 	}, nil
+}
+
+// liveRootName names a root by its last element. The path uses forward
+// slashes, and a root with no element below it, such as a whole drive "R:/"
+// or "/", is named by the path itself.
+func liveRootName(root string) string {
+	trimmed := strings.TrimRight(root, "/")
+	if trimmed == "" {
+		return root
+	}
+	return trimmed[strings.LastIndex(trimmed, "/")+1:]
 }
 
 // liveBrowseFileOrder returns the file comparator for a sort mode. Name
