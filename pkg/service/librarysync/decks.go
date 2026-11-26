@@ -390,8 +390,15 @@ func (p *deckPass) checkLink() error {
 	if found && stored == link {
 		return nil
 	}
+	rows, err := p.userDB().ListDeckSync()
+	if err != nil {
+		return fmt.Errorf("read deck sync rows: %w", err)
+	}
 	if err := p.userDB().ClearDeckSync(); err != nil {
 		return fmt.Errorf("clear deck sync rows: %w", err)
+	}
+	for i := range rows {
+		p.notifyRejectionCleared(&rows[i])
 	}
 	if err := p.userDB().SetDeviceState(DeviceStateKeyDecksSince, "0"); err != nil {
 		return fmt.Errorf("reset deck cursor: %w", err)
@@ -424,6 +431,14 @@ func (p *deckPass) dropRow(deckID string) error {
 		p.svc.notifyDecks(deckID, models.DecksChangedUpdated)
 	}
 	return nil
+}
+
+// notifyRejectionCleared tells clients a deck no longer shows a refused sync
+// once its row is cleared with the rest of the bookkeeping.
+func (p *deckPass) notifyRejectionCleared(row *database.DeckSyncRow) {
+	if rejectionChanged(row, nil) {
+		p.svc.notifyDecks(row.DeckID, models.DecksChangedUpdated)
+	}
 }
 
 // rejectionChanged reports whether what the API shows about a deck's refused
@@ -466,6 +481,9 @@ func (p *deckPass) pull(ctx context.Context) error {
 			log.Info().Msg("decks were erased on the account; forgetting sync bookkeeping, local decks are kept")
 			if err := p.userDB().ClearDeckSync(); err != nil {
 				return fmt.Errorf("clear deck sync rows: %w", err)
+			}
+			for _, row := range p.rows {
+				p.notifyRejectionCleared(row)
 			}
 			p.rows = make(map[string]*database.DeckSyncRow)
 			// Every deck is about to be pushed again as new, and decks the

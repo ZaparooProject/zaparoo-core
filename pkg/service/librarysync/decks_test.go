@@ -383,6 +383,52 @@ func TestSyncDecks_RejectedDeckRecordsTheRefusedItems(t *testing.T) {
 		models.DecksChangedNotification{DeckID: "0123456789ab", Action: models.DecksChangedUpdated})
 }
 
+// Bookkeeping cleared for a new link or an erased account takes a deck's
+// rejection with it, so a client is told the deck changed.
+func TestSyncDecks_ClearedBookkeepingAnnouncesTheRejectionGone(t *testing.T) {
+	rejected := func(t *testing.T) *savedDeckFixture {
+		t.Helper()
+		f := newSavedDeckFixture(t)
+		f.createDeck(t, "0123456789ab", "Mine", database.DeckItem{Kind: database.DeckItemKindCard, CardID: "NOPE0000"})
+		f.createDeck(t, "bbbbbbbbbbbb", "Other", scriptDeckItem("B", "**b"))
+		f.sync(t)
+		// A second pass moves the pull cursor past the device's own pushes.
+		f.sync(t)
+		require.Equal(t, "unknown_card", f.deckSyncRow(t, "0123456789ab").RejectedCode)
+		f.changes(t)
+		return f
+	}
+	cleared := models.DecksChangedNotification{DeckID: "0123456789ab", Action: models.DecksChangedUpdated}
+	untouched := models.DecksChangedNotification{DeckID: "bbbbbbbbbbbb", Action: models.DecksChangedUpdated}
+
+	t.Run("relink", func(t *testing.T) {
+		f := rejected(t)
+		f.online.mu.Lock()
+		f.online.token = "library-token-2"
+		f.online.mu.Unlock()
+		setFixtureAuth(f.online.server.URL, "library-token-2")
+		require.NoError(t, f.svc.PullDecks(f.ctx))
+		_, found, err := f.db.UserDB.GetDeckSync("0123456789ab")
+		require.NoError(t, err)
+		assert.False(t, found)
+		changes := f.changes(t)
+		assert.Contains(t, changes, cleared)
+		assert.NotContains(t, changes, untouched, "a deck with no rejection is not announced")
+	})
+
+	t.Run("account erase", func(t *testing.T) {
+		f := rejected(t)
+		f.online.eraseDecks()
+		require.NoError(t, f.svc.PullDecks(f.ctx))
+		_, found, err := f.db.UserDB.GetDeckSync("0123456789ab")
+		require.NoError(t, err)
+		assert.False(t, found)
+		changes := f.changes(t)
+		assert.Contains(t, changes, cleared)
+		assert.NotContains(t, changes, untouched, "a deck with no rejection is not announced")
+	})
+}
+
 func TestPullDecksIfStaleSkipsAFreshPull(t *testing.T) {
 	f := newSyncFixture(t)
 	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))

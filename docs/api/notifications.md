@@ -844,7 +844,7 @@ Sent to authenticated clients when the kiosk lock refuses a launch. A paired adm
 
 ### decks.changed
 
-Sent when a deck is created, edited or deleted on the device, refreshed from its source, when Core links its title items to local files after matching them, or with `updated` when Zaparoo Online refuses a deck or accepts it again (its `syncError` changes), so clients reload their deck lists. Deck edits also change media preferences, so open browse cursors should be discarded.
+Sent when a deck is created, edited or deleted on the device, refreshed from its source, when Core links its title items to local files after matching them, or with `updated` when a deck's `syncError` changes (Zaparoo Online refuses the deck or accepts it again, or the refusal is dropped because the device was linked to another account or the account erased its decks), so clients reload their deck lists. Deck edits also change media preferences, so open browse cursors should be discarded.
 
 #### Parameters
 
