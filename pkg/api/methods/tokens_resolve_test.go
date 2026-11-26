@@ -22,6 +22,8 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -116,6 +118,8 @@ func TestHandleTokensResolve_OtherReader(t *testing.T) {
 func TestHandleTokensResolve_DatabaseMappingAndMedia(t *testing.T) {
 	t.Parallel()
 	row := makeMediaFullRow(9300, 9310)
+	// A launch argument's path is slash-separated on every platform.
+	row.Path = filepath.ToSlash(row.Path)
 	f := newTokensResolveFixture(t, database.Mapping{
 		DBID: 7, Label: "Test card", Type: userdb.MappingTypeID, Match: userdb.MatchTypeExact,
 		Pattern: "04a1", Override: "NES/" + row.Path, Enabled: true,
@@ -140,6 +144,9 @@ func TestHandleTokensResolve_AbsolutePath(t *testing.T) {
 	t.Parallel()
 	row := makeMediaFullRow(9400, 9410)
 	path := "/media/fat/games/NES/test.nes"
+	if runtime.GOOS == "windows" {
+		path = `C:\games\NES\test.nes`
+	}
 	f := newTokensResolveFixture(t)
 	f.mediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{path}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: path, DBID: row.DBID}}, nil)
