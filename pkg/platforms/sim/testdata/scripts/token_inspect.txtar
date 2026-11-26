@@ -4,6 +4,8 @@
 
 sim-start
 rom snes/Alpha.sfc
+rom 'snes/Zaparoo Sim Quest (USA).sfc'
+rom 'snes/Second Sim Saga (USA).sfc'
 index SNES
 
 ! api tokens.resolve
@@ -24,9 +26,6 @@ api readers.ports {"driver":"sim"}
 stdout '"ports": \[\]'
 
 # A title card, written either way, resolves to the game the title finds.
-rom 'snes/Zaparoo Sim Quest (USA).sfc'
-rom 'snes/Second Sim Saga (USA).sfc'
-index SNES
 tap -uid 04cc33 **launch.title:SNES/Zaparoo Sim Quest
 notification media.started systemId=SNES
 api tokens.resolve
