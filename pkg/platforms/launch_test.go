@@ -653,6 +653,55 @@ func TestDoLaunch_LaunchError(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_AvailabilityError(t *testing.T) {
+	t.Parallel()
+
+	repair := platforms.NewLaunchRepairError("install the thing")
+	tests := []struct {
+		availErr        error
+		name            string
+		wantUnavailable bool
+		wantRepair      bool
+	}{
+		{name: "plain error is marked unavailable", availErr: assert.AnError, wantUnavailable: true},
+		{name: "repair error keeps its message", availErr: repair, wantRepair: true},
+		{
+			name:            "already unavailable",
+			availErr:        fmt.Errorf("api down: %w", platforms.ErrLauncherUnavailable),
+			wantUnavailable: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			launcher := &platforms.Launcher{
+				ID:           "test-launcher",
+				SystemID:     "test-system",
+				Lifecycle:    platforms.LifecycleFireAndForget,
+				Availability: func(*config.Instance) error { return tt.availErr },
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+					t.Error("launch must not run when the launcher is unavailable")
+					return nil, assert.AnError
+				},
+			}
+			params := &platforms.LaunchParams{
+				Platform:       mocks.NewMockPlatform(),
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				Path:           "/test/path.rom",
+			}
+
+			err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+			require.ErrorIs(t, err, tt.availErr)
+			assert.Equal(t, tt.wantUnavailable, errors.Is(err, platforms.ErrLauncherUnavailable))
+			var gotRepair *platforms.LaunchRepairError
+			assert.Equal(t, tt.wantRepair, errors.As(err, &gotRepair))
+		})
+	}
+}
+
 func TestDoLaunch_BlockingLaunchError(t *testing.T) {
 	t.Parallel()
 

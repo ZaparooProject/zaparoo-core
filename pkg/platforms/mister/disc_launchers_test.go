@@ -330,7 +330,11 @@ func TestMiSTerHiFiLauncher(t *testing.T) {
 	l := createMiSTerHiFiLauncher(pl)
 
 	assert.True(t, l.ExplicitOnly)
-	require.Error(t, l.Availability(cfg))
+	availErr := l.Availability(cfg)
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, availErr, &repair, "a missing Hi-Fi says what to install")
+	assert.Equal(t, platforms.LaunchRepairLauncherNotInstalled, repair.Reason())
+	assert.Equal(t, "MiSTer Hi-Fi is not installed", repair.Error())
 	writeFiles(t, fs, hiFiScriptPath())
 	require.NoError(t, l.Availability(cfg))
 	assert.Equal(t, "/media/fat/Scripts/misterhifi.sh", hiFiScriptPath())

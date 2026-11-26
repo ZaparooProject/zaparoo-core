@@ -162,7 +162,13 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	}
 	if params.Launcher.Availability != nil {
 		if err := params.Launcher.Availability(params.Config); err != nil {
-			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+			// A repair error already tells the user what to install, so only
+			// a plain error is marked unavailable for the generic message.
+			var repair *LaunchRepairError
+			if errors.As(err, &repair) || errors.Is(err, ErrLauncherUnavailable) {
+				return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+			}
+			return fmt.Errorf("launcher %q is unavailable: %w: %w", params.Launcher.ID, ErrLauncherUnavailable, err)
 		}
 	}
 	// Preflight decides whether this request can start anything at all. It
