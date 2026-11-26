@@ -133,6 +133,24 @@ func TestListPorts(t *testing.T) {
 	assert.Equal(t, []readers.Port{{Path: devPath + "/sr0"}}, ports)
 }
 
+func TestListPortsReadDirError(t *testing.T) {
+	t.Parallel()
+
+	reader := &FileReader{
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(string) ([]os.DirEntry, error) {
+				return nil, os.ErrPermission
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
+		devPath:      "/fake/dev",
+	}
+
+	_, err := reader.ListPorts()
+	require.ErrorIs(t, err, os.ErrPermission, "a failed listing is not an empty one")
+	assert.Empty(t, reader.Detect(nil))
+}
+
 func TestOpticalPathExcluded(t *testing.T) {
 	t.Parallel()
 

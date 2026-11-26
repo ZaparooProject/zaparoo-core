@@ -960,6 +960,43 @@ func TestReaderManager_LaunchGuard_DoubleTapConfirms(t *testing.T) {
 	assert.Equal(t, "card-b", tok.UID)
 }
 
+func TestReaderManager_LaunchGuard_ClaimedRetapDoesNotConfirm(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	claim, release := env.st.ClaimNextScan("client-1")
+	defer release()
+
+	// The re-tap would confirm the staged card, but a client is waiting for
+	// a scan, so the client gets it and nothing runs.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	select {
+	case claimed, ok := <-claim.Scans():
+		require.True(t, ok, "the claim receives the token")
+		assert.Equal(t, "card-b", claimed.UID)
+	case <-time.After(time.Second):
+		t.Fatal("the claim did not receive the scan")
+	}
+	env.expectNoToken(t)
+}
+
 func TestReaderManager_LaunchGuard_DifferentCardReplacesStaged(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t, withLaunchGuard)

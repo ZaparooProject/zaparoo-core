@@ -6005,7 +6005,7 @@ PIN attempts share the same per-profile rate limiter as `profiles.switch`, so th
 
 Exactly one of `profileId`, `switchId` or `scan` is required.
 
-With `scan`, the request waits until a card is scanned, the request times out, the connection closes, or [`profiles.verify.cancel`](#profilesverifycancel) is called on the same connection. The scanned card is taken by the request and does not run, whatever is on it. A card whose ZapScript, after mappings, has no `profile` command returns `not a profile switch card`.
+With `scan`, the request waits until a card is scanned, the request times out, the connection closes, or [`profiles.verify.cancel`](#profilesverifycancel) is called on the same connection. The scanned card is taken by the request and does not run, whatever is on it. A card whose ZapScript, after mappings, has no `profile` command returns `not a profile switch card`. `scan` is refused to unpaired legacy connections, which cannot call `profiles.verify.cancel`.
 
 #### Result
 

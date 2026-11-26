@@ -233,6 +233,12 @@ func HandleProfilesVerify(env requests.RequestEnv) (any, error) {
 	case params.Scan && (hasProfileID || hasSwitchID):
 		return nil, models.ClientErrf("provide exactly one of profileId, switchId or scan")
 	case params.Scan:
+		// A scan holds the request open until a card is read, and legacy
+		// clients cannot reach profiles.verify.cancel to end it, so the
+		// newer scan form stays closed to them.
+		if requestGrant(&env).Access() == permissions.AccessLegacy {
+			return nil, models.ClientErrf("%w", ErrForbidden)
+		}
 		p, err = verifyProfileByScan(&env)
 	case hasProfileID && hasSwitchID:
 		return nil, models.ClientErrf("provide exactly one of profileId or switchId")

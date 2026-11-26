@@ -118,9 +118,9 @@ func resolveTokenScript(env *requests.RequestEnv, t *tokens.Token) (string, *mod
 	return t.Text, nil
 }
 
-// resolveScriptMedia returns the indexed game the script's first launch
-// names, by path or by title, or nil when it names none or the media
-// database does not have it.
+// resolveScriptMedia returns the indexed game the script's only launch
+// names, by path or by title, or nil when it names none, launches more than
+// once, or the media database does not have it.
 func resolveScriptMedia(env *requests.RequestEnv, script string) *models.ResolvedMedia {
 	if strings.TrimSpace(script) == "" || env.Database == nil || env.Database.MediaDB == nil {
 		return nil
@@ -129,31 +129,35 @@ func resolveScriptMedia(env *requests.RequestEnv, script string) *models.Resolve
 	if err != nil {
 		return nil
 	}
-	for _, cmd := range parsed.Cmds {
-		if !zapscript.HasResolvedLaunchTarget(cmd.Name) {
+	var launch *gozapscript.Command
+	for i := range parsed.Cmds {
+		if !zapscript.HasResolvedLaunchTarget(parsed.Cmds[i].Name) {
 			continue
 		}
-		if len(cmd.Args) == 0 {
+		if launch != nil {
 			return nil
 		}
-		switch cmd.Name {
-		case gozapscript.ZapScriptCmdLaunch:
-			if row := findLaunchMedia(env, cmd.Args[0]); row != nil {
-				return resolvedMedia(row.System.SystemID, row.System.Name, row.Path, row.Title.Name)
-			}
-			// A launch argument that names no file is taken as a title,
-			// as the launch command takes it.
-			if !zapscript.MightBeTitle(cmd.Args[0]) {
-				return nil
-			}
-			return findTitleMedia(env, cmd)
-		case gozapscript.ZapScriptCmdLaunchTitle:
-			return findTitleMedia(env, cmd)
-		default:
-			return nil
-		}
+		launch = &parsed.Cmds[i]
 	}
-	return nil
+	if launch == nil || len(launch.Args) == 0 {
+		return nil
+	}
+	switch launch.Name {
+	case gozapscript.ZapScriptCmdLaunch:
+		if row := findLaunchMedia(env, launch.Args[0]); row != nil {
+			return resolvedMedia(row.System.SystemID, row.System.Name, row.Path, row.Title.Name)
+		}
+		// A launch argument that names no file is taken as a title, as the
+		// launch command takes it.
+		if !zapscript.MightBeTitle(launch.Args[0]) {
+			return nil
+		}
+		return findTitleMedia(env, *launch)
+	case gozapscript.ZapScriptCmdLaunchTitle:
+		return findTitleMedia(env, *launch)
+	default:
+		return nil
+	}
 }
 
 // findTitleMedia resolves a title launch the way launch.title does.

@@ -199,3 +199,42 @@ path = "/dev/ttyUSB2"
 	assert.Equal(t, "no such device", failed.Error)
 	assert.NotNil(t, failed.Capabilities)
 }
+
+func TestHandleReaders_ConnectEntrySharingPath(t *testing.T) {
+	t.Parallel()
+
+	cfg, st := readersEnv(t, `
+[[readers.connect]]
+driver = "PN532"
+path = "/dev/ttyUSB0"
+
+[[readers.connect]]
+driver = "simpleserial"
+path = "/dev/ttyUSB0"
+`)
+	st.SetReaderConnectError("simpleserial:/dev/ttyUSB0", "path already used by pn532:/dev/ttyUSB0")
+
+	m := mocks.NewMockReader()
+	m.On("Path").Return("/dev/ttyUSB0").Maybe()
+	m.On("ReaderID").Return("pn532-aaaaaaaa").Maybe()
+	m.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"}).Maybe()
+	m.On("IDs").Return([]string{"pn532"}).Maybe()
+	m.On("Info").Return("PN532").Maybe()
+	m.On("Connected").Return(true).Maybe()
+	m.On("Capabilities").Return([]readers.Capability{}).Maybe()
+
+	result, err := methods.HandleReaders(cfg, st, []readers.Reader{m})
+	require.NoError(t, err)
+	resp, ok := result.(models.ReadersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Readers, 2, "the open entry is listed once and the rejected one keeps its row")
+
+	assert.Equal(t, "pn532-aaaaaaaa", resp.Readers[0].ReaderID)
+	assert.Equal(t, models.ReaderSourceConnect, resp.Readers[0].Source)
+
+	rejected := resp.Readers[1]
+	assert.Equal(t, "simpleserial", rejected.Driver)
+	assert.Equal(t, "/dev/ttyUSB0", rejected.Path)
+	assert.False(t, rejected.Connected)
+	assert.Equal(t, "path already used by pn532:/dev/ttyUSB0", rejected.Error)
+}

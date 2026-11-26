@@ -640,7 +640,8 @@ func (r *FileReader) Close() error {
 }
 
 func (r *FileReader) Detect(exclude []string) string {
-	for _, path := range r.drivePaths() {
+	paths, _ := r.drivePaths()
+	for _, path := range paths {
 		if !opticalPathExcluded(path, exclude) {
 			return "opticaldrive:" + path
 		}
@@ -651,7 +652,10 @@ func (r *FileReader) Detect(exclude []string) string {
 // ListPorts lists every optical drive's device node, for a manual
 // connection.
 func (r *FileReader) ListPorts() ([]readers.Port, error) {
-	paths := r.drivePaths()
+	paths, err := r.drivePaths()
+	if err != nil {
+		return nil, err
+	}
 	ports := make([]readers.Port, 0, len(paths))
 	for _, path := range paths {
 		ports = append(ports, readers.Port{Path: path})
@@ -660,7 +664,7 @@ func (r *FileReader) ListPorts() ([]readers.Port, error) {
 }
 
 // drivePaths lists the device node of each sr* block device that exists.
-func (r *FileReader) drivePaths() []string {
+func (r *FileReader) drivePaths() ([]string, error) {
 	sysBlockPath := r.sysBlockPath
 	if sysBlockPath == "" {
 		sysBlockPath = filepath.Join(string(filepath.Separator), "sys", "block")
@@ -677,7 +681,7 @@ func (r *FileReader) drivePaths() []string {
 
 	entries, err := fsChecker.ReadDir(sysBlockPath)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to list block devices: %w", err)
 	}
 
 	var paths []string
@@ -692,7 +696,7 @@ func (r *FileReader) drivePaths() []string {
 		}
 		paths = append(paths, path)
 	}
-	return paths
+	return paths, nil
 }
 
 func opticalPathExcluded(path string, exclude []string) bool {

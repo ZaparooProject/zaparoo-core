@@ -964,8 +964,11 @@ preprocessing:
 		// a re-scan of the staged token is not eaten as a duplicate. This is
 		// needed for barcode scanners which don't send removal events between
 		// scans — the preprocessor would see the re-scan as a duplicate.
+		// A scan a client is waiting for is never a confirmation: it goes
+		// through the usual checks below and to that client instead.
 		if scan != nil && !reinsertedDuringRemovalHook && stagedToken != nil &&
-			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() {
+			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() &&
+			!svc.State.HasScanClaims() {
 			if helpers.TokensEqual(scan, stagedToken) && svc.State.ActiveMedia() != nil {
 				if !delayExpired {
 					// Re-tap during delay period — reset both timers as punishment.

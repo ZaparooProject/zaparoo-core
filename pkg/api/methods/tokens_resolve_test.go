@@ -153,6 +153,18 @@ func TestHandleTokensResolve_AbsolutePath(t *testing.T) {
 	assert.Equal(t, "Test Game", resp.Media.Name)
 }
 
+func TestHandleTokensResolve_SeveralLaunches(t *testing.T) {
+	t.Parallel()
+	f := newTokensResolveFixture(t)
+	script := "**launch:/media/fat/games/NES/a.nes||**launch:/media/fat/games/NES/b.nes"
+	f.scan(&tokens.Token{UID: "04a1", Text: script})
+
+	resp := f.resolve(t, "")
+	assert.Equal(t, script, resp.Script)
+	assert.Nil(t, resp.Media, "a script that launches twice has no single game")
+	f.mediaDB.AssertNotCalled(t, "FindMediaIDsByPaths", mock.Anything, mock.Anything)
+}
+
 func TestHandleTokensResolve_NoLaunch(t *testing.T) {
 	t.Parallel()
 	f := newTokensResolveFixture(t)

@@ -148,6 +148,7 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 		}
 	}
 	connectedPaths := make(map[string]struct{})
+	openConnections := make(map[string]struct{})
 
 	for _, r := range allReaders {
 		if r == nil {
@@ -165,6 +166,9 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 			source = models.ReaderSourceConnect
 		}
 		connectedPaths[r.Path()] = struct{}{}
+		for _, id := range readers.DriverIDs(r) {
+			openConnections[readers.NormalizeDriverID(id)+":"+r.Path()] = struct{}{}
+		}
 
 		readerInfo := models.ReaderInfo{
 			ID:           r.Path(), // Legacy field, prefer ReaderID for stable identification
@@ -184,19 +188,30 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 	// Configured connections that did not open are listed too, with the
 	// reason, so a client can show a connection the user added and why it
 	// is not working.
+	listed := make(map[string]struct{})
 	for i := range connects {
 		entry := connects[i]
-		if _, ok := connectedPaths[entry.Path]; ok {
+		connection := entry.ConnectionString()
+		if _, ok := listed[connection]; ok {
 			continue
 		}
-		connectedPaths[entry.Path] = struct{}{}
+		listed[connection] = struct{}{}
+		if _, ok := openConnections[connection]; ok {
+			continue
+		}
+		connectErr := st.ReaderConnectError(connection)
+		// An entry whose path another reader holds is listed only when it
+		// failed, such as a second driver configured on the same path.
+		if _, ok := connectedPaths[entry.Path]; ok && connectErr == "" {
+			continue
+		}
 		readerInfos = append(readerInfos, models.ReaderInfo{
 			ID:           entry.Path,
 			Driver:       entry.Driver,
 			Path:         entry.Path,
 			Source:       models.ReaderSourceConnect,
 			ScanMode:     cfg.ScanModeForReader([]string{entry.Driver}, entry.Path),
-			Error:        st.ReaderConnectError(entry.ConnectionString()),
+			Error:        connectErr,
 			Capabilities: []string{},
 		})
 	}

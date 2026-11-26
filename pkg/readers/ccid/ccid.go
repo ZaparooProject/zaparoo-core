@@ -124,9 +124,26 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "USB CCID NFC readers",
-		PathKind:          readers.PathKindNone,
+		PathKind:          readers.PathKindDevice,
 		CanAutoDetect:     true,
 	}
+}
+
+// ListPorts lists the usable readers attached now, by the path a connection
+// entry names. It fails only when no backend could list.
+func (r *Reader) ListPorts() ([]readers.Port, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), openTimeout)
+	defer cancel()
+
+	found := r.listAll(ctx)
+	if !found.anyListed && found.listErr != nil {
+		return nil, fmt.Errorf("failed to list ccid readers: %w", found.listErr)
+	}
+	ports := make([]readers.Port, 0, len(found.infos))
+	for i := range found.infos {
+		ports = append(ports, readers.Port{Path: found.infos[i].Path, Description: found.infos[i].Name})
+	}
+	return ports, nil
 }
 
 // IDs includes the names of the PC/SC ACR122 driver this one replaced, so
@@ -146,10 +163,14 @@ func (r *Reader) backendList() []backend {
 
 // listing is what the backends can currently see.
 type listing struct {
+	// listErr is the last error a backend gave when it could not list.
+	listErr error
 	// paths is every reader found, usable or not.
 	paths  map[string]bool
 	owners []backend
 	infos  []readerInfo
+	// anyListed is whether at least one backend listed.
+	anyListed bool
 }
 
 // listAll returns every usable reader with the backend that reaches it.
@@ -169,11 +190,13 @@ func (r *Reader) listAll(ctx context.Context) listing {
 		listed, err := b.List(ctx)
 		if err != nil {
 			failed = true
+			found.listErr = err
 			if r.registry.firstTime("list-error:" + b.Name() + ":" + err.Error()) {
 				log.Info().Err(err).Str("backend", b.Name()).Msg("ccid: backend not available")
 			}
 			continue
 		}
+		found.anyListed = true
 		for i := range listed {
 			found.paths[listed[i].Path] = true
 			if listed[i].Unusable != "" {

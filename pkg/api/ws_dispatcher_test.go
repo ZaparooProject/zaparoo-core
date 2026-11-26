@@ -560,6 +560,7 @@ func TestMediaDBLockModeForAPIMethod(t *testing.T) {
 		{"device reboot takes no lock", models.MethodDevicePowerReboot, mediaDBLockNone},
 		{"device namespace is case insensitive", "DEVICE.POWER.SHUTDOWN", mediaDBLockNone},
 		{"profile verify takes no lock", models.MethodProfilesVerify, mediaDBLockNone},
+		{"profile verify cancel takes no lock", models.MethodProfilesVerifyCancel, mediaDBLockNone},
 	}
 
 	for _, tt := range tests {

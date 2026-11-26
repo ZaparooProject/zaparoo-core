@@ -481,12 +481,24 @@ func verifyByScan(t *testing.T, env *requests.RequestEnv, st *state.State, scann
 	}
 }
 
+func TestHandleProfilesVerify_ScanRefusedToLegacyClients(t *testing.T) {
+	t.Parallel()
+	env, _, st := newProfilesEnv(t)
+	env.PlatformID = platformids.Mister
+	env.Params = json.RawMessage(`{"scan": true}`)
+
+	_, err := HandleProfilesVerify(env)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.False(t, st.HasScanClaims(), "no scan is opened")
+}
+
 func TestHandleProfilesVerify_Scan(t *testing.T) {
 	t.Parallel()
 	env, mockUserDB, st := newProfilesEnv(t)
 	env.ClientID = "client-1"
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
 	mockUserDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(testProfileRow(t, "1234"), nil)
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	result, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "**profile:corn-arm-truck"})
@@ -507,6 +519,7 @@ func TestHandleProfilesVerify_ScanMappedCard(t *testing.T) {
 		Pattern: "04a1", Override: "**profile:corn-arm-truck", Enabled: true,
 	}}, nil)
 	mockUserDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(testProfileRow(t, ""), nil)
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	result, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04A1"})
@@ -520,6 +533,7 @@ func TestHandleProfilesVerify_ScanNotASwitchCard(t *testing.T) {
 	t.Parallel()
 	env, mockUserDB, st := newProfilesEnv(t)
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	_, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "snes/smw.sfc"})
@@ -533,6 +547,7 @@ func TestHandleProfilesVerify_ScanUnknownSwitchID(t *testing.T) {
 	env, mockUserDB, st := newProfilesEnv(t)
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
 	mockUserDB.On("GetProfileBySwitchID", "no-such-card").Return(nil, userdb.ErrProfileNotFound)
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	_, err := verifyByScan(t, &env, st, &tokens.Token{UID: "04a1", Text: "**profile:no-such-card"})
@@ -543,6 +558,7 @@ func TestHandleProfilesVerify_ScanCancelled(t *testing.T) {
 	t.Parallel()
 	env, _, st := newProfilesEnv(t)
 	env.ClientID = "client-1"
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	type result struct{ err error }
@@ -578,6 +594,7 @@ func TestHandleProfilesVerify_ScanTimesOut(t *testing.T) {
 	env, _, st := newProfilesEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	env.Context = ctx
+	env.IsLocal = true
 	env.Params = json.RawMessage(`{"scan": true}`)
 
 	done := make(chan error, 1)
