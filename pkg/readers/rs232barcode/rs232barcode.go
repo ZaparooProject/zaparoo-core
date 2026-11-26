@@ -63,6 +63,7 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: false,
 		Description:       "RS232 barcode/QR code reader",
+		PathKind:          readers.PathKindSerial,
 	}
 }
 

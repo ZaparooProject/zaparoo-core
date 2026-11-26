@@ -529,6 +529,8 @@ func (*Reader) Metadata() readers.DriverMetadata {
 		Description:       "Simulated reader (sim platform only)",
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
+		PathKind:          readers.PathKindNone,
+		CanAutoDetect:     true,
 	}
 }
 

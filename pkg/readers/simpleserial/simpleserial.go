@@ -65,6 +65,7 @@ func (*SimpleSerialReader) Metadata() readers.DriverMetadata {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "Simple serial protocol reader",
+		PathKind:          readers.PathKindSerial,
 	}
 }
 

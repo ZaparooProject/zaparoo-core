@@ -563,6 +563,93 @@ None.
 }
 ```
 
+### tokens.resolve
+
+**Access:** All clients.
+
+Report what the last token read would do if it were scanned again, without running it: the ZapScript it resolves to after mappings, the mapping that matched, and the indexed game its launch names. Nothing is launched and no state changes.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key      | Type   | Required | Description                                                                 |
+| :------- | :----- | :------- | :-------------------------------------------------------------------------- |
+| readerId | string | No       | Only answer for a token read on this reader. Returns an error when the last token came from another reader. |
+
+#### Result
+
+| Key      | Type                                       | Required | Description |
+| :------- | :----------------------------------------- | :------- | :---------- |
+| token    | [TokenResponse](#token-object)             | Yes      | The last token read. `text` and `data` are redacted where they carry a credential. |
+| redacted | boolean                                    | Yes      | True when the token or the script was redacted. |
+| script   | string                                     | Yes      | The ZapScript the token runs: a matching mapping's override, otherwise the token's text. Redacted where it carries a credential. |
+| mapping  | [ResolvedMapping](#resolved-mapping-object) | No       | The mapping that matched. Omitted when none did. |
+| media    | [ResolvedMedia](#resolved-media-object)     | No       | The indexed game the script launches, by path or by title (`launch.title`, or a `launch` whose argument is a title). Omitted when the script does not launch a single indexed game. |
+
+##### Resolved mapping object
+
+| Key    | Type   | Required | Description |
+| :----- | :----- | :------- | :---------- |
+| id     | string | Yes      | Mapping ID for a `database` mapping, otherwise empty. |
+| source | string | Yes      | `database`, `file` or `platform`. |
+| label  | string | Yes      | The mapping's label. |
+
+##### Resolved media object
+
+| Key        | Type   | Required | Description |
+| :--------- | :----- | :------- | :---------- |
+| system     | string | Yes      | System ID. |
+| systemName | string | Yes      | System display name. |
+| path       | string | Yes      | Path of the media. |
+| name       | string | Yes      | Name of the media. |
+
+An error is returned when no token has been read since Core started.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5b-11ef-8084-020304050607",
+  "method": "tokens.resolve"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5e9f3a0e-7a5b-11ef-8084-020304050607",
+  "result": {
+    "token": {
+      "type": "ntag215",
+      "uid": "04a1b2c3d4e5f6",
+      "text": "",
+      "data": "",
+      "scanTime": "2024-09-24T17:49:42.938167429+08:00",
+      "readerId": "pn532-ujqixjv6"
+    },
+    "redacted": false,
+    "script": "**launch:/media/fat/games/SNES/Super Mario World.sfc",
+    "mapping": {
+      "id": "3",
+      "source": "database",
+      "label": "Super Mario World"
+    },
+    "media": {
+      "system": "SNES",
+      "systemName": "Super Nintendo",
+      "path": "/media/fat/games/SNES/Super Mario World.sfc",
+      "name": "Super Mario World"
+    }
+  }
+}
+```
+
 ## Media
 
 ### media
@@ -6027,7 +6114,7 @@ The new active profile, or null when deactivated (shared profile).
 
 **Access:** All clients. Requires valid profile PIN or switch ID.
 
-Verify a profile credential **without switching**: either a profile ID plus its PIN, or a switch ID (a bearer credential — resolving it is the verification, same as scanning the card). Success returns the profile's identity and changes nothing on the device: no session, no active-profile change, no server-side grant of any kind. Clients use this to gate their own ad-hoc UI items behind a credential — e.g. a kiosk frontend requiring a parent's PIN before opening its settings screen. The security of whatever the client unlocks is entirely the client's responsibility.
+Verify a profile credential **without switching**: a profile ID plus its PIN, a switch ID, or the next profile card scanned. A switch ID is a bearer credential: resolving it is the verification, same as scanning the card. Success returns the profile's identity and changes nothing on the device: no session, no active-profile change, no server-side grant of any kind. Clients use this to gate their own ad-hoc UI items behind a credential, such as a kiosk frontend requiring a parent's PIN before opening its settings screen. The security of whatever the client unlocks is entirely the client's responsibility.
 
 PIN attempts share the same per-profile rate limiter as `profiles.switch`, so this method cannot be used to brute-force a PIN any faster than switching attempts could.
 
@@ -6038,8 +6125,11 @@ PIN attempts share the same per-profile rate limiter as `profiles.switch`, so th
 | profileId | string | No       | Profile to verify against. Requires `pin` when the profile has one. |
 | switchId  | string | No       | Verify by switch ID (bearer credential; no PIN needed).  |
 | pin       | string | No       | The profile's PIN, for `profileId` verification.         |
+| scan      | boolean | No      | Wait for the next card a reader scans and verify the switch ID on it. |
 
-Exactly one of `profileId` or `switchId` is required.
+Exactly one of `profileId`, `switchId` or `scan` is required.
+
+With `scan`, the request waits until a card is scanned, the request times out, the connection closes, or [`profiles.verify.cancel`](#profilesverifycancel) is called on the same connection. The scanned card is taken by the request and does not run, whatever is on it. A card whose ZapScript, after mappings, has no `profile` command returns `not a profile switch card`. `scan` is refused to unpaired legacy connections, which cannot call `profiles.verify.cancel`.
 
 #### Result
 
@@ -6051,6 +6141,20 @@ Exactly one of `profileId` or `switchId` is required.
 | hasPin    | boolean | Yes      | Whether the profile has a PIN set.       |
 
 Verification failure (wrong PIN, unknown profile or switch ID, rate limited) returns an error, using the same errors as `profiles.switch`.
+
+### profiles.verify.cancel
+
+**Access:** All clients.
+
+End a `profiles.verify` request with `scan` that is waiting on the same connection. The waiting request returns `scan cancelled`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success, or an error when no scan is in progress on the connection.
 
 ## Kiosk
 
@@ -6539,7 +6643,7 @@ Returns `null` on success.
 
 **Access:** All clients.
 
-List all currently connected readers and their capabilities.
+List all connected readers and their capabilities, plus each enabled `[[readers.connect]]` entry that has no reader open, with `connected` false and the reason in `error`.
 
 #### Parameters
 
@@ -6562,6 +6666,9 @@ None.
 | driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"ccid"`, `"file"`).       |
 | info         | string   | Yes      | Human-readable information about the reader.  |
 | scanMode     | string   | Yes      | Effective scan mode for this reader (`"tap"` or `"hold"`), resolving its `[[readers.connect]]` entry, then its `[readers.drivers.<id>]` entry, then the global `readers.scan.mode`. |
+| path         | string   | Yes      | Port, device or address the reader is on.     |
+| source       | string   | Yes      | `connect` for a `[[readers.connect]]` entry, `auto` for a reader auto-detect found. |
+| error        | string   | No       | Why a `[[readers.connect]]` entry is not connected. |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
 | capabilities | string[] | Yes      | List of capabilities supported by the reader. |
 
@@ -6591,6 +6698,8 @@ None.
         "driver": "pn532",
         "info": "PN532 (1-2.3.1)",
         "scanMode": "tap",
+        "path": "/dev/ttyUSB0",
+        "source": "auto",
         "capabilities": ["read", "write"],
         "connected": true
       }
@@ -6682,6 +6791,128 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
   "result": null
+}
+```
+
+### readers.drivers
+
+**Access:** All clients.
+
+List the reader drivers Core supports on this platform, with what a client needs to offer a `[[readers.connect]]` entry for each.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type                                 | Required | Description |
+| :------ | :----------------------------------- | :------- | :---------- |
+| drivers | [DriverInfo](#driver-info-object)[]  | Yes      | Supported drivers. |
+
+##### Driver info object
+
+| Key               | Type     | Required | Description |
+| :---------------- | :------- | :------- | :---------- |
+| id                | string   | Yes      | Driver ID, as used in `[readers.drivers.<id>]` and `[[readers.connect]]`. |
+| description       | string   | Yes      | Human-readable description. |
+| pathKind          | string   | Yes      | What a connection's `path` names: `serial` (a serial port), `device` (a device node or address), `text` (free text) or `none` (no path). |
+| idSources         | string[] | Yes      | Values a connection's `idSource` may take. Empty when the driver has no choice. |
+| defaultEnabled    | boolean  | Yes      | Whether the driver is enabled when the config does not say. |
+| defaultAutoDetect | boolean  | Yes      | Whether the driver auto-detects when the config does not say. |
+| canAutoDetect     | boolean  | Yes      | Whether the driver can find its devices by itself. |
+| display           | boolean  | Yes      | True for a device Core drives as a display rather than a reader. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "readers.drivers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": {
+    "drivers": [
+      {
+        "id": "pn532",
+        "description": "PN532 NFC reader (UART/I2C/SPI)",
+        "pathKind": "serial",
+        "idSources": [],
+        "defaultEnabled": true,
+        "defaultAutoDetect": true,
+        "canAutoDetect": true,
+        "display": false
+      }
+    ]
+  }
+}
+```
+
+### readers.ports
+
+**Access:** All clients.
+
+List candidate paths for a driver's `[[readers.connect]]` entry, such as the serial ports or drives present now. Readers are not opened.
+
+#### Parameters
+
+An object:
+
+| Key    | Type   | Required | Description |
+| :----- | :----- | :------- | :---------- |
+| driver | string | Yes      | Driver ID from [`readers.drivers`](#readersdrivers). |
+
+#### Result
+
+| Key   | Type                             | Required | Description |
+| :---- | :------------------------------- | :------- | :---------- |
+| ports | [PortInfo](#port-info-object)[]  | Yes      | Candidate paths. Empty when the driver has none to offer. |
+
+##### Port info object
+
+| Key         | Type   | Required | Description |
+| :---------- | :----- | :------- | :---------- |
+| path        | string | Yes      | Value for the connection's `path`. |
+| description | string | No       | Human-readable description of the port. |
+
+An unknown driver returns an error.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "readers.ports",
+  "params": {
+    "driver": "pn532"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": {
+    "ports": [
+      { "path": "/dev/ttyUSB0" }
+    ]
+  }
 }
 ```
 

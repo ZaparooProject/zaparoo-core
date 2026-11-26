@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -430,6 +431,14 @@ func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
 	// A reboot must not wait behind an indexing commit, and a status read has
 	// no business holding up one either.
 	if isDeviceAPIMethod(method) {
+		return mediaDBLockNone
+	}
+	// profiles.verify can wait for a card to be scanned, and reads only the
+	// user database, so it must not hold the read lane while it waits. Its
+	// cancel runs on the high-priority worker and must not wait behind a
+	// MediaDB write either.
+	if strings.EqualFold(method, models.MethodProfilesVerify) ||
+		strings.EqualFold(method, models.MethodProfilesVerifyCancel) {
 		return mediaDBLockNone
 	}
 	if isMediaDBTransactionAPIMethod(method) {

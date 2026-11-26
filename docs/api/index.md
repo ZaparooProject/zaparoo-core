@@ -326,6 +326,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | ui.shown                        | Report that the active global UI event is on screen.                                   | Localhost or any authenticated client |
 | tokens                          | List active tokens.                                                                   | All clients |
 | tokens.history                  | Return latest token launches.                                                         | All clients |
+| tokens.resolve                  | Report what the last token read would run, without running it.                        | All clients |
 | media                           | Return media database status and active media.                                        | All clients |
 | media.generate                  | Start a media database index.                                                         | All clients |
 | media.generate.cancel           | Cancel active media database indexing.                                                | All clients |
@@ -389,6 +390,8 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | readers                         | List connected readers and capabilities.                                              | All clients |
 | readers.write                   | Write text using available write-capable reader.                                      | All clients |
 | readers.write.cancel            | Cancel active reader write.                                                           | All clients |
+| readers.drivers                 | List supported reader drivers.                                                        | All clients |
+| readers.ports                   | List candidate paths for a driver's manual connection.                                | All clients |
 | input.keyboard                  | Send keyboard input sequence.                                                         | `input` |
 | input.gamepad                   | Send gamepad input sequence.                                                          | `input` |
 | screenshot                      | Capture platform display.                                                             | `screenshot` |
@@ -409,6 +412,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | profiles.active                 | Return active profile.                                                                | All clients |
 | profiles.switch                 | Switch active profile.                                                                | All clients |
 | profiles.verify                 | Verify profile PIN.                                                                   | All clients |
+| profiles.verify.cancel          | Cancel a profiles.verify card scan.                                                   | All clients |
 | profiles.content                | Return a profile's kiosk content rule.                                                | Admin |
 | profiles.content.update         | Replace a profile's kiosk content rule.                                               | Admin |
 | kiosk                           | Return kiosk lock state, settings and seal status.                                    | Authenticated |

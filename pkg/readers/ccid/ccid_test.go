@@ -47,6 +47,8 @@ func TestReader_Metadata(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 		Description:       "USB CCID NFC readers",
+		PathKind:          readers.PathKindDevice,
+		CanAutoDetect:     true,
 	}, r.Metadata())
 	assert.Equal(t, []string{"ccid", "acr122pcsc", "acr122_pcsc"}, r.IDs(),
 		"connection entries written for the driver this replaced must keep working")
@@ -614,6 +616,49 @@ func TestReader_OpenWithoutAPathPrefersAKnownReader(t *testing.T) {
 	require.NoError(t, r.Open(config.ReadersConnect{Driver: "ccid"}, make(chan readers.Scan, 1), readers.OpenOpts{}))
 
 	assert.Equal(t, testInfo.Path, r.Path())
+	require.NoError(t, r.Close())
+}
+
+func TestReader_ListPorts(t *testing.T) {
+	t.Parallel()
+	pcsc := newFakeBackend("pcsc")
+	pcsc.listErr = errors.New("service not running")
+	usb := newFakeBackend("usb")
+	usb.add(&testInfo, profileACR122U)
+	busy := readerInfo{Path: "usb:1-5:0", Name: "Busy Reader", Unusable: "in use by another program", Busy: true}
+	usb.add(&busy, profileACR122U)
+	r := newTestReader(pcsc, usb)
+
+	ports, err := r.ListPorts()
+	require.NoError(t, err, "one backend that lists is enough")
+	assert.Equal(t, []readers.Port{{Path: testInfo.Path, Description: testInfo.Name}}, ports,
+		"only readers a connection could open are offered")
+	assert.Empty(t, usb.opened, "listing opens nothing")
+	require.NoError(t, r.Close())
+}
+
+func TestReader_ListPortsFailsWhenNoBackendCanList(t *testing.T) {
+	t.Parallel()
+	pcsc := newFakeBackend("pcsc")
+	pcsc.listErr = errors.New("service not running")
+	usb := newFakeBackend("usb")
+	usb.listErr = errors.New("permission denied")
+	r := newTestReader(pcsc, usb)
+
+	_, err := r.ListPorts()
+	require.Error(t, err)
+	require.NoError(t, r.Close())
+}
+
+func TestReader_ListPortsEmpty(t *testing.T) {
+	t.Parallel()
+	pcsc := newFakeBackend("pcsc")
+	pcsc.listErr = errors.New("service not running")
+	r := newTestReader(pcsc, newFakeBackend("usb"))
+
+	ports, err := r.ListPorts()
+	require.NoError(t, err, "no PC/SC service and no reader is an empty list, not a failure")
+	assert.Empty(t, ports)
 	require.NoError(t, r.Close())
 }
 

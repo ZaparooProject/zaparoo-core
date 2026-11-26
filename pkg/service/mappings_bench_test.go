@@ -65,7 +65,7 @@ func BenchmarkMatchMapping_Exact_50rules(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for i := range mappings {
-			if checkMappingUID(&mappings[i], &token) {
+			if userdb.MatchesID(&mappings[i], &token) {
 				break
 			}
 		}
@@ -91,7 +91,7 @@ func BenchmarkMatchMapping_Regex_50rules(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for i := range mappings {
-			if checkMappingUID(&mappings[i], &token) {
+			if userdb.MatchesID(&mappings[i], &token) {
 				break
 			}
 		}
@@ -134,7 +134,7 @@ func BenchmarkMatchMapping_Mixed_100rules(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for i := range mappings {
-			if checkMappingUID(&mappings[i], &token) {
+			if userdb.MatchesID(&mappings[i], &token) {
 				break
 			}
 		}

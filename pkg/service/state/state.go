@@ -107,6 +107,8 @@ type State struct {
 	earlyStop              earlyStop
 	bootUUID               string
 	mediaObservers         []MediaObserver
+	scanClaims             []*ScanClaim
+	readerConnectErrors    map[string]string
 	stopIntent             mediaStopIntent
 	stopIntentTTL          time.Duration
 	earlyStopWindow        time.Duration
@@ -124,6 +126,7 @@ type State struct {
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
+	scanClaimsMu          syncutil.Mutex
 	activeMediaReady      bool
 	publishedSinceLaunch  bool
 	beforeExitRunning     bool

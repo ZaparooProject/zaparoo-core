@@ -1132,14 +1132,85 @@ type RemoteActivityResponse struct {
 	Entries []RemoteActivityEntry `json:"entries"`
 }
 
+// Where a reader in the readers list comes from.
+const (
+	ReaderSourceAuto    = "auto"
+	ReaderSourceConnect = "connect"
+)
+
 type ReaderInfo struct {
-	ID           string   `json:"id"`
-	ReaderID     string   `json:"readerId"`
-	Driver       string   `json:"driver"`
-	Info         string   `json:"info"`
-	ScanMode     string   `json:"scanMode"`
+	ID       string `json:"id"`
+	ReaderID string `json:"readerId"`
+	Driver   string `json:"driver"`
+	Info     string `json:"info"`
+	ScanMode string `json:"scanMode"`
+	// Path is the port, device or address the reader is on.
+	Path string `json:"path"`
+	// Source is "connect" for a readers.connect entry and "auto" for a
+	// reader auto-detect found.
+	Source string `json:"source"`
+	// Error is why a readers.connect entry is not connected.
+	Error        string   `json:"error,omitempty"`
 	Capabilities []string `json:"capabilities"`
 	Connected    bool     `json:"connected"`
+}
+
+// DriverInfo describes one reader driver Core supports on this platform.
+type DriverInfo struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	// PathKind is what a readers.connect path names for the driver:
+	// "serial", "device", "text" or "none".
+	PathKind string `json:"pathKind"`
+	// IDSources are the idSource values a connection may choose from.
+	IDSources         []string `json:"idSources"`
+	DefaultEnabled    bool     `json:"defaultEnabled"`
+	DefaultAutoDetect bool     `json:"defaultAutoDetect"`
+	// CanAutoDetect reports whether the driver can find its devices itself.
+	CanAutoDetect bool `json:"canAutoDetect"`
+	// Display is a device Core drives as a display, not a reader.
+	Display bool `json:"display"`
+}
+
+type ReadersDriversResponse struct {
+	Drivers []DriverInfo `json:"drivers"`
+}
+
+// PortInfo is a candidate path for a manual reader connection.
+type PortInfo struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+}
+
+type ReadersPortsResponse struct {
+	Ports []PortInfo `json:"ports"`
+}
+
+// ResolvedMapping is the mapping a token matched. ID is empty for a mapping
+// that is not in the database.
+type ResolvedMapping struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Label  string `json:"label"`
+}
+
+// ResolvedMedia is the indexed game a token's launch names.
+type ResolvedMedia struct {
+	System     string `json:"system"`
+	SystemName string `json:"systemName"`
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+}
+
+// TokensResolveResponse is what the last token read would do if scanned
+// again, without running it. Token text and data, and the script, are
+// redacted where they carry a credential.
+type TokensResolveResponse struct {
+	Mapping  *ResolvedMapping `json:"mapping,omitempty"`
+	Media    *ResolvedMedia   `json:"media,omitempty"`
+	Script   string           `json:"script"`
+	Token    TokenResponse    `json:"token"`
+	Redacted bool             `json:"redacted"`
 }
 
 type ReadersResponse struct {

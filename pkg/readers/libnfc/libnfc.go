@@ -458,6 +458,37 @@ func (r *Reader) Close() error {
 	return err
 }
 
+// i2cDeviceGlob matches the I2C bus device nodes a legacy PN532 can sit on.
+var i2cDeviceGlob = filepath.Join(string(filepath.Separator), "dev", "i2c-*")
+
+// ListPorts lists the paths a manual connection can use: I2C buses for the
+// legacy I2C mode and serial ports for the legacy UART mode. The other
+// modes take no path.
+func (r *Reader) ListPorts() ([]readers.Port, error) {
+	var paths []string
+	switch r.mode {
+	case modeLegacyI2C:
+		found, err := filepath.Glob(i2cDeviceGlob)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list i2c devices: %w", err)
+		}
+		paths = found
+	case modeLegacyUART:
+		found, err := helpers.GetSerialDeviceList()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list serial devices: %w", err)
+		}
+		paths = found
+	case modeAll, modeACR122Only:
+		return []readers.Port{}, nil
+	}
+	ports := make([]readers.Port, 0, len(paths))
+	for _, path := range paths {
+		ports = append(ports, readers.Port{Path: path})
+	}
+	return ports, nil
+}
+
 func (r *Reader) Metadata() readers.DriverMetadata {
 	switch r.mode {
 	case modeACR122Only:
@@ -481,6 +512,8 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 			// or readers.drivers.libnfcacr122.auto_detect = true.
 			DefaultAutoDetect: false,
 			Description:       "LibNFC ACR122 USB NFC reader",
+			PathKind:          readers.PathKindNone,
+			CanAutoDetect:     true,
 		}
 	case modeLegacyUART:
 		return readers.DriverMetadata{
@@ -488,6 +521,7 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 			DefaultEnabled:    true,
 			DefaultAutoDetect: false,
 			Description:       "Legacy PN532 UART reader via LibNFC",
+			PathKind:          readers.PathKindSerial,
 		}
 	case modeLegacyI2C:
 		return readers.DriverMetadata{
@@ -495,6 +529,7 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 			DefaultEnabled:    true,
 			DefaultAutoDetect: false,
 			Description:       "Legacy PN532 I2C reader via LibNFC",
+			PathKind:          readers.PathKindDevice,
 		}
 	default:
 		return readers.DriverMetadata{
@@ -502,6 +537,8 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 			DefaultEnabled:    true,
 			DefaultAutoDetect: true,
 			Description:       "LibNFC NFC reader (PN532/ACR122)",
+			PathKind:          readers.PathKindNone,
+			CanAutoDetect:     true,
 		}
 	}
 }

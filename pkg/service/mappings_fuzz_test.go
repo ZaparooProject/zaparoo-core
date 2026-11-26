@@ -62,10 +62,10 @@ func FuzzCheckMappingUID(f *testing.F) {
 		}
 		token := &tokens.Token{UID: uid}
 
-		result := checkMappingUID(m, token)
+		result := userdb.MatchesID(m, token)
 
 		// Determinism
-		result2 := checkMappingUID(m, token)
+		result2 := userdb.MatchesID(m, token)
 		if result != result2 {
 			t.Errorf("non-deterministic result for pattern=%q uid=%q match=%q", pattern, uid, matchType)
 		}
@@ -106,10 +106,10 @@ func FuzzCheckMappingText(f *testing.F) {
 		}
 		token := &tokens.Token{Text: text}
 
-		result := checkMappingText(m, token)
+		result := userdb.MatchesValue(m, token)
 
 		// Determinism
-		result2 := checkMappingText(m, token)
+		result2 := userdb.MatchesValue(m, token)
 		if result != result2 {
 			t.Errorf("non-deterministic result for pattern=%q text=%q match=%q", pattern, text, matchType)
 		}
@@ -146,10 +146,10 @@ func FuzzCheckMappingData(f *testing.F) {
 		}
 		token := &tokens.Token{Data: data}
 
-		result := checkMappingData(m, token)
+		result := userdb.MatchesData(m, token)
 
 		// Determinism
-		result2 := checkMappingData(m, token)
+		result2 := userdb.MatchesData(m, token)
 		if result != result2 {
 			t.Errorf("non-deterministic result for pattern=%q data=%q match=%q", pattern, data, matchType)
 		}

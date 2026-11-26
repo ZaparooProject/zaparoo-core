@@ -54,11 +54,44 @@ const (
 	CapabilityRemovable Capability = "removable"
 )
 
+// PathKind is what a manual connection's path names for a driver.
+type PathKind string
+
+const (
+	// PathKindSerial is a serial port, as listed by ListPorts.
+	PathKindSerial PathKind = "serial"
+	// PathKindDevice is a device node the driver lists itself.
+	PathKindDevice PathKind = "device"
+	// PathKindText is free text, such as a file path or a broker address.
+	PathKindText PathKind = "text"
+	// PathKindNone means the driver takes no path.
+	PathKindNone PathKind = "none"
+)
+
 type DriverMetadata struct {
-	ID                string
-	Description       string
+	ID          string
+	Description string
+	// PathKind is what a readers.connect path names for this driver.
+	PathKind PathKind
+	// IDSources are the id_source values a connection may choose from.
+	IDSources         []string
 	DefaultEnabled    bool
 	DefaultAutoDetect bool
+	// CanAutoDetect reports whether Detect can ever find a device, so
+	// auto-detect is a real choice for this driver.
+	CanAutoDetect bool
+}
+
+// Port is a candidate path for a manual connection.
+type Port struct {
+	Path        string
+	Description string
+}
+
+// PortLister is implemented by drivers whose paths are device nodes they
+// list themselves, rather than serial ports.
+type PortLister interface {
+	ListPorts() ([]Port, error)
 }
 
 // Scan properties an optical drive reports about the disc in it. They are

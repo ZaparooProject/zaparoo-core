@@ -104,6 +104,53 @@ func TestDetect(t *testing.T) {
 	assert.Equal(t, "opticaldrive:"+path, reader.Detect(nil))
 }
 
+func TestListPorts(t *testing.T) {
+	t.Parallel()
+
+	const devPath = "/fake/dev"
+	reader := &FileReader{
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(string) ([]os.DirEntry, error) {
+				return []os.DirEntry{
+					mockDirEntry{name: "sda"},
+					mockDirEntry{name: "sr0"},
+					mockDirEntry{name: "sr1"},
+				}, nil
+			},
+			statFunc: func(path string) (os.FileInfo, error) {
+				if path == devPath+"/sr1" {
+					return nil, os.ErrNotExist
+				}
+				return &mockFileInfo{}, nil
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
+		devPath:      devPath,
+	}
+
+	ports, err := reader.ListPorts()
+	require.NoError(t, err)
+	assert.Equal(t, []readers.Port{{Path: devPath + "/sr0"}}, ports)
+}
+
+func TestListPortsReadDirError(t *testing.T) {
+	t.Parallel()
+
+	reader := &FileReader{
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(string) ([]os.DirEntry, error) {
+				return nil, os.ErrPermission
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
+		devPath:      "/fake/dev",
+	}
+
+	_, err := reader.ListPorts()
+	require.ErrorIs(t, err, os.ErrPermission, "a failed listing is not an empty one")
+	assert.Empty(t, reader.Detect(nil))
+}
+
 func TestOpticalPathExcluded(t *testing.T) {
 	t.Parallel()
 
