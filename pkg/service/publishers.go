@@ -23,44 +23,91 @@ package service
 
 import (
 	"context"
-	"net/url"
-	"strings"
+	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
 )
 
-// startPublishers initializes and starts all configured publishers.
-// Returns a slice of active publishers and a cancel function for graceful shutdown.
-func startPublishers(
-	st *state.State,
-	cfg *config.Instance,
-	notifChan <-chan models.Notification,
-) ([]publishers.Publisher, context.CancelFunc, <-chan struct{}) {
+// publisherSet holds the running publishers. A settings change rebuilds it
+// from the config, so publishers can be turned on, off or refiltered
+// without restarting Core.
+type publisherSet struct {
+	st     *state.State
+	cfg    *config.Instance
+	active []publishers.Publisher
+	// mu is held for reading while a notification is published and for
+	// writing while the set is swapped, so a publisher is never stopped in
+	// the middle of a publish.
+	mu syncutil.RWMutex
+}
+
+// snapshot returns the publishers running now.
+func (p *publisherSet) snapshot() []publishers.Publisher {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return slices.Clone(p.active)
+}
+
+// rebuild stops the running publishers and starts the ones the config
+// describes now. The old ones stop first, so a broker never sees the same
+// client connected twice.
+func (p *publisherSet) rebuild() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, publisher := range p.active {
+		publisher.Stop()
+	}
+	p.active = buildPublishers(p.st, p.cfg)
+}
+
+// stop stops every running publisher.
+func (p *publisherSet) stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, publisher := range p.active {
+		publisher.Stop()
+	}
+	p.active = nil
+}
+
+func (p *publisherSet) publish(notif models.Notification) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	// Publish to all active publishers sequentially. With none, the
+	// notification is simply discarded. The timeout in Publish keeps one
+	// slow publisher from blocking indefinitely.
+	for _, pub := range p.active {
+		if err := pub.Publish(notif); err != nil {
+			log.Warn().Err(err).Msgf("failed to publish %s notification", notif.Method)
+		}
+	}
+}
+
+// buildPublishers starts every enabled publisher in the config.
+func buildPublishers(st *state.State, cfg *config.Instance) []publishers.Publisher {
 	activePublishers := make([]publishers.Publisher, 0)
 
-	mqttConfigs := cfg.GetMQTTPublishers()
-	if len(mqttConfigs) > 0 {
-		for _, mqttCfg := range mqttConfigs {
-			// Skip if explicitly disabled (nil = enabled by default)
-			if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
-				continue
-			}
-
-			redactedBroker := redactBroker(mqttCfg.Broker)
-			log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", redactedBroker, mqttCfg.Topic)
-
-			publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
-			if err := publisher.Start(st.GetContext()); err != nil {
-				log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", redactedBroker)
-				continue
-			}
-
-			activePublishers = append(activePublishers, publisher)
+	for _, mqttCfg := range cfg.GetMQTTPublishers() {
+		// Skip if explicitly disabled (nil = enabled by default)
+		if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
+			continue
 		}
+
+		redactedBroker := config.RedactBroker(mqttCfg.Broker)
+		log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", redactedBroker, mqttCfg.Topic)
+
+		publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
+		if err := publisher.Start(st.GetContext()); err != nil {
+			log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", redactedBroker)
+			continue
+		}
+
+		activePublishers = append(activePublishers, publisher)
 	}
 
 	for _, pcCfg := range cfg.GetPixelCadePublishers() {
@@ -84,6 +131,19 @@ func startPublishers(
 	if len(activePublishers) > 0 {
 		log.Info().Msgf("started %d publisher(s)", len(activePublishers))
 	}
+	return activePublishers
+}
+
+// startPublishers starts all configured publishers and the fan-out that
+// feeds them. It returns the set, a cancel function for graceful shutdown
+// and a channel closed when the fan-out has stopped.
+func startPublishers(
+	st *state.State,
+	cfg *config.Instance,
+	notifChan <-chan models.Notification,
+) (*publisherSet, context.CancelFunc, <-chan struct{}) {
+	set := &publisherSet{st: st, cfg: cfg}
+	set.active = buildPublishers(st, cfg)
 
 	// CRITICAL: Always start the drain goroutine, even if there are no active publishers.
 	// The notifChan MUST be consumed or it will fill up and block the notification system.
@@ -102,39 +162,10 @@ func startPublishers(
 					log.Debug().Msg("publisher fan-out: notification channel closed")
 					return
 				}
-				// Publish to all active publishers sequentially
-				// If no publishers, notification is simply discarded
-				// Timeout in Publish() prevents blocking indefinitely
-				for _, pub := range activePublishers {
-					if err := pub.Publish(notif); err != nil {
-						log.Warn().Err(err).Msgf("failed to publish %s notification", notif.Method)
-					}
-				}
+				set.publish(notif)
 			}
 		}
 	}()
 
-	return activePublishers, cancel, done
-}
-
-func redactBroker(broker string) string {
-	if broker == "" {
-		return broker
-	}
-
-	if strings.Contains(broker, "://") {
-		parsed, err := url.Parse(broker)
-		if err == nil && parsed.Host != "" {
-			if parsed.Scheme != "" {
-				return parsed.Scheme + "://" + parsed.Host
-			}
-			return parsed.Host
-		}
-	}
-
-	if at := strings.LastIndex(broker, "@"); at >= 0 && at+1 < len(broker) {
-		return broker[at+1:]
-	}
-
-	return broker
+	return set, cancel, done
 }

@@ -174,6 +174,7 @@ func connectReaders(
 	opened manualReaders,
 ) error {
 	closeRemovedManualReaders(cfg, st, iq, opened)
+	closeDisabledDriverReaders(cfg, st, iq, opened)
 
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
@@ -321,6 +322,44 @@ func closeRemovedManualReaders(
 			Msg("closing reader removed from readers.connect")
 		st.RemoveReader(readerID)
 		delete(opened, path)
+		select {
+		case iq <- readers.Scan{Source: tokens.SourceReader, ReaderID: readerID, ReaderError: true}:
+		case <-st.GetContext().Done():
+		}
+	}
+}
+
+// closeDisabledDriverReaders closes every connected reader whose driver is
+// now turned off in readers.drivers, however it was connected, and reports it
+// on iq the way closeRemovedManualReaders does.
+func closeDisabledDriverReaders(
+	cfg *config.Instance,
+	st *state.State,
+	iq chan<- readers.Scan,
+	opened manualReaders,
+) {
+	for _, r := range st.ListReaders() {
+		if r == nil {
+			continue
+		}
+		driverID := r.Metadata().ID
+		if driverID == "" {
+			continue
+		}
+		if cfg.IsReaderEnabled(config.DriverInfo{ID: driverID}, config.ReaderEnableContextManualConnect) {
+			continue
+		}
+		readerID := r.ReaderID()
+		log.Info().
+			Str("readerID", readerID).
+			Str("driver", driverID).
+			Msg("closing reader of disabled driver")
+		st.RemoveReader(readerID)
+		for path, openedReader := range opened {
+			if openedReader == r {
+				delete(opened, path)
+			}
+		}
 		select {
 		case iq <- readers.Scan{Source: tokens.SourceReader, ReaderID: readerID, ReaderError: true}:
 		case <-st.GetContext().Done():
@@ -509,6 +548,20 @@ func readerManager(
 
 	proc := &scanPreprocessor{prevTokens: make(map[string]*tokens.Token)}
 	connectScanSeen := make(map[string]bool)
+	// Readers already connected when ignore_on_connect is turned on are past
+	// their connect scan, so their next scan is a person's and must count.
+	ignoreOnConnectEnabled := make(chan struct{}, 1)
+	svc.Config.OnChange(config.ChangeIgnoreOnConnect, func() {
+		select {
+		case ignoreOnConnectEnabled <- struct{}{}:
+		default:
+		}
+	})
+	markConnectedReadersSeen := func() {
+		for _, id := range connectedReaderIDs(svc.State) {
+			connectScanSeen[id] = true
+		}
+	}
 	pendingRemovals := make(map[holdTokenKey]tokens.Token)
 	removalHookResults := make(chan removalHookResult, 1)
 	var exitTimer clockwork.Timer
@@ -765,6 +818,9 @@ preprocessing:
 			continue preprocessing
 		case <-guardContextDone:
 			cancelGuard()
+			continue preprocessing
+		case <-ignoreOnConnectEnabled:
+			markConnectedReadersSeen()
 			continue preprocessing
 		case t := <-scanQueue:
 			// a reader has sent a token for pre-processing
@@ -1039,6 +1095,11 @@ preprocessing:
 
 			delete(pendingRemovals, newHoldTokenKey(scan))
 
+			select {
+			case <-ignoreOnConnectEnabled:
+				markConnectedReadersSeen()
+			default:
+			}
 			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
 			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" && !connectScanSeen[scan.ReaderID] {
 				connectScanSeen[scan.ReaderID] = true

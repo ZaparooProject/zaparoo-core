@@ -2108,3 +2108,56 @@ confirmed:
 		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
 	}
 }
+
+// TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders covers
+// ignore_on_connect turned on while a reader is connected: that reader is
+// past its connect scan, so its next scan is a person's and must launch.
+func TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders(t *testing.T) {
+	t.Parallel()
+
+	connected := mocks.NewMockReader()
+	connected.On("ReaderID").Return("reader-1")
+	connected.On("Connected").Return(true).Maybe()
+	connected.On("Path").Return("/dev/reader-1").Maybe()
+	connected.On("Info").Return("Reader 1").Maybe()
+	connected.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader", DefaultEnabled: true}).Maybe()
+	connected.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	connected.On("Capabilities").Return([]readers.Capability{}).Maybe()
+
+	var cfg *config.Instance
+	env := setupReaderManagerBeforeStart(t, nil, nil, func(st *state.State) {
+		st.SetReader(connected)
+	}, func(c *config.Instance) { cfg = c })
+
+	// A launch shows the manager is running, and so listening for the change.
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "before", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-1",
+		},
+	})
+	assert.Equal(t, "before", env.expectToken(t).UID)
+	env.sendScan(readers.Scan{Source: "test-reader", ReaderID: "reader-1"})
+	env.expectNoToken(t)
+
+	cfg.SetScanIgnoreOnConnect(true)
+	cfg.NotifyChanged(config.ChangeIgnoreOnConnect)
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "real-card", Text: "**launch.system:snes", ScanTime: time.Now(), ReaderID: "reader-1",
+		},
+	})
+	assert.Equal(t, "real-card", env.expectToken(t).UID)
+
+	// A reader that connects after the change still has its first scan
+	// ignored.
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "startup-card", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-2",
+		},
+	})
+	env.expectNoToken(t)
+}

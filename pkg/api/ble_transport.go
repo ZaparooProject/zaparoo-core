@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
@@ -80,6 +81,8 @@ type bleTransport struct {
 	left        map[string]map[uint16]struct{}
 	peripheral  ble.Peripheral
 	serveCancel context.CancelFunc
+	// serveDone is closed when the serve started last has returned.
+	serveDone chan struct{}
 	// unregister detaches serve from the bluetooth manager on stop.
 	unregister func()
 	// serving is the peripheral currently serving, nil between adapters.
@@ -111,6 +114,9 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 		bondKick:         make(chan struct{}, 1),
 	}
 	t.ctx, t.cancel = context.WithCancel(d.core.st.GetContext())
+	if d.core.cfg != nil {
+		d.core.cfg.OnChange(config.ChangeBLEName, t.readvertise)
+	}
 	if t.clock == nil {
 		t.clock = clockwork.NewRealClock()
 	}
@@ -170,8 +176,15 @@ func (t *bleTransport) localName() string {
 // time an adapter becomes ready; it returns at once and serves in the
 // background until the peripheral goes away or the transport stops.
 func (t *bleTransport) serve(p ble.Peripheral) {
+	t.serveOn(p, false)
+}
+
+// serveOn starts serving on p. onlyIfCurrent skips it unless p is still
+// the peripheral being served, so a re-advertise racing an adapter change
+// cannot take the new adapter's place.
+func (t *bleTransport) serveOn(p ble.Peripheral, onlyIfCurrent bool) {
 	t.mu.Lock()
-	if t.stopped {
+	if t.stopped || (onlyIfCurrent && t.peripheral != p) {
 		t.mu.Unlock()
 		return
 	}
@@ -179,7 +192,9 @@ func (t *bleTransport) serve(p ble.Peripheral) {
 		t.serveCancel()
 	}
 	ctx, cancel := context.WithCancel(t.ctx)
+	done := make(chan struct{})
 	t.serveCancel = cancel
+	t.serveDone = done
 	t.peripheral = p
 	t.serving = p
 	// Counted under the lock so stop, which sets stopped under the same
@@ -187,14 +202,39 @@ func (t *bleTransport) serve(p ble.Peripheral) {
 	t.wg.Add(1)
 	t.mu.Unlock()
 
-	// The name is read once here: renaming the device takes effect the
-	// next time advertising starts.
+	// The name is read once here: a rename takes effect when advertising
+	// starts again, which readvertise does on a settings change.
 	adv := ble.Advertisement{LocalName: t.localName(), ServiceUUIDs: []string{apigatt.ServiceUUID}}
 	t.kickBonding()
 	go func() {
 		defer t.wg.Done()
+		defer close(done)
 		t.serveWithRetries(ctx, p, adv)
 	}()
+}
+
+// readvertise starts advertising again on the current peripheral, so a new
+// device name shows in scan lists without restarting Core. Connected
+// Bluetooth clients are dropped and reconnect under the new name. The old
+// serve is waited out first: one peripheral cannot serve twice at once.
+func (t *bleTransport) readvertise() {
+	t.mu.Lock()
+	p := t.peripheral
+	cancel := t.serveCancel
+	done := t.serveDone
+	stopped := t.stopped
+	t.mu.Unlock()
+	if stopped || p == nil {
+		return
+	}
+	log.Info().Msg("bluetooth name changed, advertising again")
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	t.serveOn(p, true)
 }
 
 // serveWithRetries serves on p, starting again after a failure. Right after

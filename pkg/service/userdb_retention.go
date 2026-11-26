@@ -59,7 +59,8 @@ func runUserDBRetention(ctx context.Context, cfg *config.Instance, pl platforms.
 
 // startUserDBRetentionScheduler repeats retention every
 // userDBRetentionInterval after the boot run, each time waiting for an idle
-// window like the boot run does.
+// window like the boot run does. A change to readers.scan_history also
+// queues a run, so a shorter history is pruned without waiting a day.
 func startUserDBRetentionScheduler(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -68,8 +69,11 @@ func startUserDBRetentionScheduler(
 	idleSched *idle.Scheduler,
 	wg *sync.WaitGroup,
 ) {
-	scheduleUserDBRetention(ctx, clockwork.NewRealClock(), idleSched, wg, func(ctx context.Context) {
+	trigger := scheduleUserDBRetention(ctx, clockwork.NewRealClock(), idleSched, wg, func(ctx context.Context) {
 		runUserDBRetention(ctx, cfg, pl, db)
+	})
+	cfg.OnChange(config.ChangeScanHistory, func() {
+		trigger.fire(ctx)
 	})
 }
 
@@ -81,13 +85,14 @@ func scheduleUserDBRetention(
 	idleSched *idle.Scheduler,
 	wg *sync.WaitGroup,
 	run func(context.Context),
-) {
+) *userDBRetentionTrigger {
 	trigger := &userDBRetentionTrigger{idle: idleSched, run: run}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		repeatUserDBRetention(ctx, clock, trigger.fire)
 	}()
+	return trigger
 }
 
 type userDBRetentionTrigger struct {

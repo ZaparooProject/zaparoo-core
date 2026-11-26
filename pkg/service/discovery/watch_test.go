@@ -276,3 +276,69 @@ func TestStartAfterStopDoesNotAdvertise(t *testing.T) {
 	assert.Nil(t, h.svc.responder)
 	assert.Empty(t, h.responder.startCalls)
 }
+
+func TestReconfigureAdvertisesTheNewName(t *testing.T) {
+	t.Parallel()
+
+	h := newWatchHarness(t, []net.Interface{iface(22, "Wi-Fi")})
+	names := make(chan string, 4)
+	h.svc.newResponder = func(svc *mdns.Service, _ func(string, ...any)) responder {
+		names <- svc.Instance
+		return h.responder
+	}
+	h.svc.cfg.SetDiscoveryInstanceName("Den")
+	require.NoError(t, h.svc.Start())
+	waitFor(t, h.responder.startCalls, "the initial registration")
+	assert.Equal(t, "Den", <-names)
+
+	h.svc.cfg.SetDiscoveryInstanceName("Lounge")
+	require.NoError(t, h.svc.Reconfigure())
+
+	select {
+	case <-h.responder.stopCalls:
+	case <-time.After(waitTimeout):
+		t.Fatal("the old record was never withdrawn")
+	}
+	waitFor(t, h.responder.startCalls, "the new registration")
+	assert.Equal(t, "Lounge", <-names)
+	assert.Equal(t, "Lounge", h.svc.InstanceName())
+	h.svc.Stop()
+}
+
+func TestReconfigureTurnsAdvertisingOffAndOn(t *testing.T) {
+	t.Parallel()
+
+	h := newWatchHarness(t, []net.Interface{iface(22, "Wi-Fi")})
+	require.NoError(t, h.svc.Start())
+	waitFor(t, h.responder.startCalls, "the initial registration")
+
+	h.svc.cfg.SetDiscoveryEnabled(false)
+	require.NoError(t, h.svc.Reconfigure())
+	select {
+	case <-h.responder.stopCalls:
+	case <-time.After(waitTimeout):
+		t.Fatal("turning discovery off never withdrew the record")
+	}
+	assert.Nil(t, h.svc.responder)
+	assert.Empty(t, h.responder.startCalls)
+
+	h.svc.cfg.SetDiscoveryEnabled(true)
+	require.NoError(t, h.svc.Reconfigure())
+	waitFor(t, h.responder.startCalls, "the registration after turning discovery on")
+	h.svc.Stop()
+}
+
+func TestReconfigureOutsideStartAndStopDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	h := newWatchHarness(t, []net.Interface{iface(22, "Wi-Fi")})
+	require.NoError(t, h.svc.Reconfigure())
+	assert.Nil(t, h.svc.responder, "a host that never started Core's responder keeps its own")
+
+	require.NoError(t, h.svc.Start())
+	waitFor(t, h.responder.startCalls, "the initial registration")
+	h.svc.Stop()
+	require.NoError(t, h.svc.Reconfigure())
+	assert.Nil(t, h.svc.responder, "a stopped service stays stopped")
+	assert.Empty(t, h.responder.startCalls)
+}

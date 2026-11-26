@@ -1522,3 +1522,76 @@ func TestResolveAutoDetector_DisablingDropsDetectorState(t *testing.T) {
 	require.NotNil(t, detector)
 	assert.Empty(t, detector.suppressedPaths(), "re-enabling must not inherit stale failure state")
 }
+
+// TestConnectReaders_ClosesReadersOfDisabledDriver covers a driver turned off
+// in readers.drivers while its readers are connected: every one of them is
+// closed, however it was opened, and readers of other drivers stay.
+func TestConnectReaders_ClosesReadersOfDisabledDriver(t *testing.T) {
+	t.Parallel()
+
+	newReader := func(driver, id, path string) *mocks.MockReader {
+		r := mocks.NewMockReader()
+		r.On("Metadata").Return(readers.DriverMetadata{ID: driver, DefaultEnabled: true})
+		r.On("IDs").Return([]string{driver}).Maybe()
+		r.On("ReaderID").Return(id)
+		r.On("Connected").Return(true).Maybe()
+		r.On("Path").Return(path)
+		r.On("Info").Return(driver).Maybe()
+		r.On("Capabilities").Return([]readers.Capability{}).Maybe()
+		return r
+	}
+	detected := newReader("pn532", "pn532-detected", "/dev/ttyUSB0")
+	manual := newReader("pn532", "pn532-manual", "/dev/ttyUSB1")
+	other := newReader("ccid", "ccid-1", "usb:1")
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return([]readers.Reader{}).Maybe()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetReaderConnections([]config.ReadersConnect{{Driver: "pn532", Path: "/dev/ttyUSB1"}})
+
+	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetReader(detected)
+	st.SetReader(manual)
+	st.SetReader(other)
+	opened := manualReaders{"/dev/ttyUSB1": manual}
+	iq := make(chan readers.Scan, 10)
+
+	require.NoError(t, connectReaders(mockPlatform, cfg, st, iq, nil, opened))
+	assert.Len(t, st.ListReaders(), 3, "an enabled driver's readers stay open")
+
+	off := false
+	cfg.SetReaderDrivers(map[string]config.DriverConfig{"pn532": {Enabled: &off}})
+	require.NoError(t, connectReaders(mockPlatform, cfg, st, iq, nil, opened))
+
+	for _, id := range []string{"pn532-detected", "pn532-manual"} {
+		_, ok := st.GetReader(id)
+		assert.False(t, ok, "%s is closed once its driver is off", id)
+	}
+	detected.AssertCalled(t, "Close")
+	manual.AssertCalled(t, "Close")
+	assert.Empty(t, opened, "the manual entry is forgotten so it can be opened again")
+	_, ok := st.GetReader("ccid-1")
+	assert.True(t, ok, "another driver's reader stays open")
+	other.AssertNotCalled(t, "Close")
+
+	var reported []string
+	for len(iq) > 0 {
+		scan := <-iq
+		assert.True(t, scan.ReaderError)
+		reported = append(reported, scan.ReaderID)
+	}
+	assert.ElementsMatch(t, []string{"pn532-detected", "pn532-manual"}, reported)
+}

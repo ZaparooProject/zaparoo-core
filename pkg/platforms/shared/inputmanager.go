@@ -113,7 +113,9 @@ func (l *InputManager) InitDevices(cfg *config.Instance, gamepadEnabledByDefault
 	l.keyboardDelay = DefaultInputDelay
 
 	l.gamepadErr = nil
-	if cfg.VirtualGamepadEnabled(gamepadEnabledByDefault) {
+	gamepadEnabled := cfg.VirtualGamepadEnabled(gamepadEnabledByDefault)
+	cfg.RecordGamepadAtStart(gamepadEnabledByDefault, gamepadEnabled)
+	if gamepadEnabled {
 		gpd, err := newGpd()
 		if err != nil {
 			// The virtual gamepad is optional, and on Windows it needs a

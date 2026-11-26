@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +129,42 @@ func TestStartUserDBRetentionScheduler_StopsWithContext(t *testing.T) {
 	startUserDBRetentionScheduler(ctx, &config.Instance{}, mocks.NewMockPlatform(),
 		&database.Database{}, idle.New(), &wg)
 	wg.Wait()
+}
+
+// Lowering readers.scan_history prunes at the next idle window rather than at
+// the next daily tick.
+func TestStartUserDBRetentionScheduler_RunsOnScanHistoryChange(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	clock := clockwork.NewFakeClock()
+	idleSched := idle.NewWithClock(clock)
+	clock.Advance(userDBMaintenanceQuietWindow)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("ID").Return("test-platform").Maybe()
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockUserDB.On("PruneExpiredZapLinkHosts", zapLinkHostExpiration).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupHistory", 3).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", mock.Anything, mock.Anything).Return(int64(0), nil).Once()
+	mockUserDB.On("PruneInboxMessages", inboxMessageMaxAge, database.InboxMessageLimit).
+		Return(int64(0), nil).Once()
+
+	var wg sync.WaitGroup
+	startUserDBRetentionScheduler(ctx, cfg, pl, db, idleSched, &wg)
+	mockUserDB.AssertNotCalled(t, "CleanupHistory", mock.Anything)
+
+	cfg.SetScanHistory(3)
+	cfg.NotifyChanged(config.ChangeScanHistory)
+	idleSched.Wait()
+
+	cancel()
+	wg.Wait()
+	mockUserDB.AssertExpectations(t)
 }
 
 // One retention pass prunes ZapLink hosts, both histories and the inbox.

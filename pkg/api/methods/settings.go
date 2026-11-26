@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -61,9 +62,10 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	systemDefaults := make([]models.SystemDefault, 0, len(defaultsCfg))
 	for _, sd := range defaultsCfg {
 		systemDefaults = append(systemDefaults, models.SystemDefault{
-			System:     sd.System,
-			Launcher:   sd.Launcher,
-			BeforeExit: sd.BeforeExit,
+			System:        sd.System,
+			Launcher:      sd.Launcher,
+			BeforeExit:    sd.BeforeExit,
+			PauseOnLaunch: sd.PauseOnLaunch,
 		})
 	}
 
@@ -97,6 +99,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
 		ProfilesSwapData:          env.Config.ProfilesSwapData(),
 		MediaThumbCacheMaxMB:      env.Config.ThumbCacheMaxMB(),
+		RestartRequired:           env.Config.RestartRequired(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -118,6 +121,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		resp.OnlineBaseURL = &onlineBaseURL
 		imageDir := requestImageDir(&env)
 		resp.MediaImageDir = &imageDir
+		resp.AdminSettings = adminSettingsResponse(&env)
 	}
 
 	return resp, nil
@@ -245,6 +249,10 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.MediaImageDir != nil && !isLocalOrAdmin(&env) {
 		return nil, models.ClientErrf("the image folder can only be changed by a local or admin client")
 	}
+	adminSet := params.Set()
+	if adminSet && !isLocalOrAdmin(&env) {
+		return nil, models.ClientErrf("these settings require a local or admin client: %w", ErrForbidden)
+	}
 	if params.MediaImageDir != nil {
 		if err := validateMediaImageDir(*params.MediaImageDir, helpers.DataDir(env.Platform)); err != nil {
 			return nil, err
@@ -258,7 +266,9 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
-	releaseConfig := env.Config.AcquireUpdateLock()
+	// Released early on success, so the services a change restarts can read
+	// the config without waiting on this request.
+	releaseConfig := sync.OnceFunc(env.Config.AcquireUpdateLock())
 	defer releaseConfig()
 
 	// Pre-flight validation of inputs that depend on runtime state. Run before
@@ -290,6 +300,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	var adminPlan *adminSettingsPlan
+	if adminSet {
+		var err error
+		adminPlan, err = prepareAdminSettings(&env, &params.AdminSettingsParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save or
 	// validated against stale in-memory values.
@@ -304,6 +323,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	// Installing updates without checking for them is not a state the device
 	// can be in, so the combination is refused rather than stored and quietly
 	// ignored. A client asking for both at once is fine.
+	if err := checkSettingsHooks(&env, &params); err != nil {
+		return nil, err
+	}
+	if adminSet {
+		if err := checkAdminSettingsAgainstConfig(&env, &params.AdminSettingsParams, adminPlan); err != nil {
+			return nil, err
+		}
+	}
+
 	if params.UpdateInstall != nil && *params.UpdateInstall {
 		checking := env.Config.UpdateCheck()
 		if params.UpdateCheck != nil {
@@ -500,6 +528,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetLauncherPreference(*params.LauncherPreference)
 	}
 
+	adminChanges := &adminSettingsChanges{needs: make(map[string][]string)}
+	if adminSet {
+		log.Debug().Msg("updating admin settings")
+		var err error
+		adminChanges, err = applyAdminSettings(&env, &params.AdminSettingsParams, adminPlan)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// The image folder, cache cap and MIDI SoundFont take effect as soon as
 	// they are set, so a failed save puts them back rather than leaving the
 	// running Core on values the file does not hold.
@@ -536,7 +574,19 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LibrarySyncEnabled != nil {
 		env.State.RequestLibrarySync()
 	}
-	return NoContent{}, nil
+	if adminChanges.soundsChanged && env.Player != nil {
+		env.Player.ClearFileCache()
+	}
+	if adminChanges.launchersChanged && env.LauncherCache != nil {
+		if err := refreshLauncherDependencies(env.Platform); err != nil {
+			log.Error().Err(err).Msg("error refreshing launcher dependencies after launcher defaults change")
+		}
+		env.LauncherCache.Refresh(env.Platform, env.Config)
+	}
+	result := settingsUpdateResult(&params, env.Config.RestartRequired(), adminChanges.needs)
+	releaseConfig()
+	env.Config.NotifyChanged(adminChanges.kinds...)
+	return result, nil
 }
 
 // validateMediaImageDir refuses an image folder Core could not use: a
@@ -674,9 +724,10 @@ func buildSystemDefaults(cache *helpers.LauncherCache, in []models.SystemDefault
 			}
 		}
 		out = append(out, config.SystemsDefault{
-			System:     sd.System,
-			Launcher:   sd.Launcher,
-			BeforeExit: sd.BeforeExit,
+			System:        sd.System,
+			Launcher:      sd.Launcher,
+			BeforeExit:    sd.BeforeExit,
+			PauseOnLaunch: sd.PauseOnLaunch,
 		})
 	}
 	return out, nil
@@ -728,6 +779,10 @@ func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []
 	for i := range updated {
 		system, err := systemdefs.LookupSystem(updated[i].System)
 		if err != nil {
+			continue
+		}
+		if updated[i].PauseOnLaunch != nil {
+			carried[system.ID] = true
 			continue
 		}
 		if entry, ok := previous[system.ID]; ok {

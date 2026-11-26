@@ -198,6 +198,7 @@ const (
 	MethodSystems                     = "systems"
 	MethodLaunchers                   = "launchers"
 	MethodLaunchersRefresh            = "launchers.refresh"
+	MethodLaunchersCustom             = "launchers.custom"
 	MethodHistory                     = "tokens.history"
 	MethodMappings                    = "mappings"
 	MethodMappingsNew                 = "mappings.new"

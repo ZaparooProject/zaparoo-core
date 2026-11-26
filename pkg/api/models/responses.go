@@ -274,43 +274,48 @@ type BrowseIndexResults struct {
 }
 
 type SettingsResponse struct {
-	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
-	BackupRemoteAutoBackup    *bool              `json:"backupRemoteAutoBackup,omitempty"`
-	PlaytimeSyncEnabled       *bool              `json:"playtimeSyncEnabled,omitempty"`
-	LibrarySyncEnabled        *bool              `json:"librarySyncEnabled,omitempty"`
-	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
-	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
-	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
-	MediaImageDir             *string            `json:"mediaImageDir,omitempty"`
-	UpdateChannel             string             `json:"updateChannel"`
-	AudioMidiSoundFont        string             `json:"audioMidiSoundFont"`
-	ReadersScanMode           string             `json:"readersScanMode"`
-	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
-	ReadersConnect            []ReaderConnection `json:"readersConnect"`
-	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
-	LauncherPreference        []string           `json:"launcherPreference"`
-	AudioVolume               int                `json:"audioVolume"`
-	AudioMusicVolume          int                `json:"audioMusicVolume"`
-	MediaThumbCacheMaxMB      int                `json:"mediaThumbCacheMaxMb"`
-	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
-	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
-	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
-	RunZapScript              bool               `json:"runZapScript"`
-	DebugLogging              bool               `json:"debugLogging"`
-	AudioScanFeedback         bool               `json:"audioScanFeedback"`
-	AudioMusicAutoplay        bool               `json:"audioMusicAutoplay"`
-	AudioNormalize            bool               `json:"audioNormalize"`
-	AudioMusicPauseOnLaunch   bool               `json:"audioMusicPauseOnLaunch"`
-	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
-	ErrorReporting            bool               `json:"errorReporting"`
-	Encryption                bool               `json:"encryption"`
-	BLEEnabled                bool               `json:"bleEnabled"`
-	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
-	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
-	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
-	ProfilesSwapData          bool               `json:"profilesSwapData"`
-	UpdateCheck               bool               `json:"updateCheck"`
-	UpdateInstall             bool               `json:"updateInstall"`
+	// AdminSettings is set for a local or admin client only.
+	*AdminSettings
+	BackupRemoteEnabled     *bool              `json:"backupRemoteEnabled,omitempty"`
+	BackupRemoteAutoBackup  *bool              `json:"backupRemoteAutoBackup,omitempty"`
+	PlaytimeSyncEnabled     *bool              `json:"playtimeSyncEnabled,omitempty"`
+	LibrarySyncEnabled      *bool              `json:"librarySyncEnabled,omitempty"`
+	RemoteControlEnabled    *bool              `json:"remoteControlEnabled,omitempty"`
+	BackupRemoteSchedule    *string            `json:"backupRemoteSchedule,omitempty"`
+	OnlineBaseURL           *string            `json:"onlineBaseUrl,omitempty"`
+	MediaImageDir           *string            `json:"mediaImageDir,omitempty"`
+	UpdateChannel           string             `json:"updateChannel"`
+	AudioMidiSoundFont      string             `json:"audioMidiSoundFont"`
+	ReadersScanMode         string             `json:"readersScanMode"`
+	ReadersScanIgnoreSystem []string           `json:"readersScanIgnoreSystems"`
+	ReadersConnect          []ReaderConnection `json:"readersConnect"`
+	SystemDefaults          []SystemDefault    `json:"systemDefaults"`
+	LauncherPreference      []string           `json:"launcherPreference"`
+	// RestartRequired names the fields whose value waits for Core to
+	// restart. Empty after a restart.
+	RestartRequired           []string `json:"restartRequired"`
+	AudioVolume               int      `json:"audioVolume"`
+	AudioMusicVolume          int      `json:"audioMusicVolume"`
+	MediaThumbCacheMaxMB      int      `json:"mediaThumbCacheMaxMb"`
+	LaunchGuardTimeout        float32  `json:"launchGuardTimeout"`
+	LaunchGuardDelay          float32  `json:"launchGuardDelay"`
+	ReadersScanExitDelay      float32  `json:"readersScanExitDelay"`
+	RunZapScript              bool     `json:"runZapScript"`
+	DebugLogging              bool     `json:"debugLogging"`
+	AudioScanFeedback         bool     `json:"audioScanFeedback"`
+	AudioMusicAutoplay        bool     `json:"audioMusicAutoplay"`
+	AudioNormalize            bool     `json:"audioNormalize"`
+	AudioMusicPauseOnLaunch   bool     `json:"audioMusicPauseOnLaunch"`
+	ReadersAutoDetect         bool     `json:"readersAutoDetect"`
+	ErrorReporting            bool     `json:"errorReporting"`
+	Encryption                bool     `json:"encryption"`
+	BLEEnabled                bool     `json:"bleEnabled"`
+	LaunchGuardEnabled        bool     `json:"launchGuardEnabled"`
+	LaunchGuardRequireConfirm bool     `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  bool     `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          bool     `json:"profilesSwapData"`
+	UpdateCheck               bool     `json:"updateCheck"`
+	UpdateInstall             bool     `json:"updateInstall"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -1062,10 +1067,39 @@ type Launcher struct {
 	Groups             []string `json:"groups,omitempty"`
 	Available          bool     `json:"available"`
 	Default            bool     `json:"default,omitempty"`
+	// Custom marks a launcher defined in a custom launcher file or
+	// config.toml, rather than built into Core.
+	Custom bool `json:"custom,omitempty"`
 }
 
 type LaunchersResponse struct {
 	Launchers []Launcher `json:"launchers"`
+}
+
+// CustomLauncher is one loaded custom launcher definition as written. Source
+// is the file in the launchers folder it came from, empty for config.toml.
+type CustomLauncher struct {
+	Controls   map[string]string `json:"controls,omitempty"`
+	ID         string            `json:"id"`
+	Kind       string            `json:"kind,omitempty"`
+	Backend    string            `json:"backend,omitempty"`
+	System     string            `json:"system,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Category   string            `json:"category,omitempty"`
+	Execute    string            `json:"execute,omitempty"`
+	Lifecycle  string            `json:"lifecycle,omitempty"`
+	LoadPath   string            `json:"loadPath,omitempty"`
+	Source     string            `json:"source,omitempty"`
+	Categories []string          `json:"categories,omitempty"`
+	MediaDirs  []string          `json:"mediaDirs,omitempty"`
+	FileExts   []string          `json:"fileExts,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Schemes    []string          `json:"schemes,omitempty"`
+	Restricted bool              `json:"restricted,omitempty"`
+}
+
+type CustomLaunchersResponse struct {
+	Launchers []CustomLauncher `json:"launchers"`
 }
 
 // RemoteActivityEntry is one owner-facing row of the remote operations

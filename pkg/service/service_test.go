@@ -1568,7 +1568,8 @@ func TestStartPublishers_NoPublishers(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	set, cancel, done := startPublishers(st, cfg, notifChan)
+	publishers := set.snapshot()
 	defer func() {
 		cancel()
 		<-done
@@ -1588,7 +1589,8 @@ func TestStartPublishers_DrainsNotificationsWithoutPublishers(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	set, cancel, done := startPublishers(st, cfg, notifChan)
+	publishers := set.snapshot()
 	require.Empty(t, publishers)
 
 	select {
@@ -1724,7 +1726,8 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	set, cancel, done := startPublishers(st, cfg, notifChan)
+	publishers := set.snapshot()
 	defer func() {
 		cancel()
 		<-done
@@ -1760,7 +1763,8 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	set, cancel, done := startPublishers(st, cfg, notifChan)
+	publishers := set.snapshot()
 	defer func() {
 		cancel()
 		<-done
@@ -1799,7 +1803,8 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	set, cancel, done := startPublishers(st, cfg, notifChan)
+	publishers := set.snapshot()
 	defer func() {
 		cancel()
 		<-done
@@ -1813,9 +1818,9 @@ topic = "zaparoo/events"
 func TestRedactBroker(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "mqtt://broker.example:1883", redactBroker("mqtt://user:pass@broker.example:1883"))
-	assert.Equal(t, "broker.example:1883", redactBroker("user:pass@broker.example:1883"))
-	assert.Equal(t, "broker.example:1883", redactBroker("broker.example:1883"))
+	assert.Equal(t, "mqtt://broker.example:1883", config.RedactBroker("mqtt://user:pass@broker.example:1883"))
+	assert.Equal(t, "broker.example:1883", config.RedactBroker("user:pass@broker.example:1883"))
+	assert.Equal(t, "broker.example:1883", config.RedactBroker("broker.example:1883"))
 }
 
 func TestPruneExpiredZapLinkHosts_Success(t *testing.T) {
