@@ -38,6 +38,11 @@ var (
 	atrClassic4K = storageATR(0x00, 0x02, 0x69)
 	// atrPlaceholder is what the bR500 reports before it has identified a tag.
 	atrPlaceholder = storageATR(0x00, 0xFF, 0x94)
+	// atrFeliCa is a FeliCa card, such as an Amusement IC arcade card.
+	atrFeliCa = []byte{
+		0x3B, 0x8F, 0x80, 0x01, 0x80, 0x4F, 0x0C, 0xA0, 0x00, 0x00, 0x03, 0x06,
+		0x11, 0x00, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x42,
+	}
 	// atrDESFire is an ISO 14443-4 card: contactless, but not a storage card.
 	atrDESFire = []byte{0x3B, 0x81, 0x80, 0x01, 0x80, 0x80}
 	// atrSecurityKey is a contact-interface device, as a YubiKey reports over USB.
@@ -93,6 +98,9 @@ type simDevice struct {
 	pollErr error
 	tag     simTag
 	atr     []byte
+	// cardUID is the UID of a card placed with placeCard. Unset gives a
+	// 7-byte UID.
+	cardUID []byte
 	// transmits is every APDU the driver sent.
 	transmits [][]byte
 	profile   simProfile
@@ -197,6 +205,9 @@ func (d *simDevice) getUID() []byte {
 	}
 	if d.tag == nil {
 		// A card that is not a storage card still has a UID.
+		if d.cardUID != nil {
+			return sw(swSuccess, d.cardUID...)
+		}
 		return sw(swSuccess, 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66)
 	}
 	return sw(swSuccess, d.tag.UID()...)

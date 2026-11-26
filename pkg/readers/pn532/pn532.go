@@ -208,6 +208,7 @@ type PollingSession interface {
 	SetOnCardDetected(callback func(context.Context, *pn532.DetectedTag) error)
 	SetOnCardRemoved(callback func())
 	SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error)
+	SetOnFeliCaUnavailable(callback func(err error))
 	WriteToNextTag(
 		ctx, writeCtx context.Context,
 		timeout time.Duration,
@@ -319,6 +320,10 @@ func (s *realSession) SetOnCardRemoved(callback func()) {
 
 func (s *realSession) SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error) {
 	s.session.SetOnCardChanged(callback)
+}
+
+func (s *realSession) SetOnFeliCaUnavailable(callback func(err error)) {
+	s.session.SetOnFeliCaUnavailable(callback)
 }
 
 func (s *realSession) WriteToNextTag(
@@ -472,7 +477,11 @@ func (*Reader) IDs() []string {
 	}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	opts readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
@@ -561,6 +570,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 
 	// Create session configuration
 	sessionConfig := polling.DefaultConfig()
+	feliCa := r.cfg != nil &&
+		r.cfg.HasReaderFeature(readers.DriverIDs(r), device.Path, config.ReaderFeatureFeliCa)
+	sessionConfig.FeliCa = feliCa
 
 	// Create session with callbacks
 	r.session = r.sessionFactory(r.device, sessionConfig)
@@ -581,6 +593,15 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	r.session.SetOnCardChanged(func(ctx context.Context, detectedTag *pn532.DetectedTag) error {
 		return r.handleTagDetected(ctx, detectedTag, iq)
 	})
+
+	if feliCa {
+		readerName := r.name
+		log.Info().Str("reader", readerName).Msg("PN532 FeliCa polling enabled")
+		r.session.SetOnFeliCaUnavailable(func(err error) {
+			log.Warn().Err(err).Str("reader", readerName).
+				Msg("PN532 FeliCa polling failed repeatedly, disabled until the reader reconnects")
+		})
+	}
 
 	r.writeMutex.Lock()
 	r.closing = false

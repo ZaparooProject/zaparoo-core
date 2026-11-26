@@ -245,8 +245,8 @@ func TestReadersConnect_IsEnabled(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
 		rc       ReadersConnect
+		name     string
 		expected bool
 	}{
 		{
@@ -1059,4 +1059,152 @@ scan_mode = "hold"
 		assert.Equal(t, ScanModeHold,
 			cfg.ScanModeForReader([]string{"ccid", "acr122pcsc", "acr122_pcsc"}, "ACS ACR122 0"))
 	})
+}
+
+func TestReaderFeatures(t *testing.T) {
+	t.Parallel()
+
+	none := []string{}
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Connect: []ReadersConnect{
+					{Driver: "pn532", Path: "/dev/ttyUSB0"},
+					{Driver: "pn532", Path: "/dev/ttyUSB1", Features: &none},
+					{Driver: "pn532_uart", Path: "/dev/ttyUSB2", Features: &[]string{" FeliCa ", "bogus"}},
+					{Driver: "pn532", Path: "/dev/ttyUSB3", Features: &[]string{"felica"}},
+					{Driver: "pn532", Path: "/dev/ttyUSB3", Features: &none},
+				},
+				Drivers: map[string]DriverConfig{
+					"pn532":         {Features: &[]string{"felica", "FELICA"}},
+					"libnfcacr122":  {Features: &[]string{"felica"}},
+					"libnfc_acr122": {Features: &none},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		path      string
+		driverIDs []string
+		want      []string
+	}{
+		{
+			name:      "connect entry without features inherits the driver's",
+			driverIDs: []string{"pn532"},
+			path:      "/dev/ttyUSB0",
+			want:      []string{ReaderFeatureFeliCa},
+		},
+		{
+			name:      "empty connect list turns features off",
+			driverIDs: []string{"pn532"},
+			path:      "/dev/ttyUSB1",
+			want:      nil,
+		},
+		{
+			name:      "connect entry under an alias, unknown names dropped",
+			driverIDs: []string{"pn532", "pn532_uart"},
+			path:      "/dev/ttyUSB2",
+			want:      []string{ReaderFeatureFeliCa},
+		},
+		{
+			name:      "first matching connect entry wins",
+			driverIDs: []string{"pn532"},
+			path:      "/dev/ttyUSB3",
+			want:      []string{ReaderFeatureFeliCa},
+		},
+		{
+			name:      "reader with no connect entry uses the driver's",
+			driverIDs: []string{"pn532"},
+			path:      "/dev/ttyUSB9",
+			want:      []string{ReaderFeatureFeliCa},
+		},
+		{
+			// "libnfc_acr122" sorts before "libnfcacr122", so its empty list
+			// wins on every call.
+			name:      "conflicting driver keys resolve on the key",
+			driverIDs: []string{"libnfc_acr122"},
+			path:      "",
+			want:      nil,
+		},
+		{
+			name:      "no entry at all",
+			driverIDs: []string{"simple_serial"},
+			path:      "/dev/ttyACM0",
+			want:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, cfg.ReaderFeatures(tt.driverIDs, tt.path))
+			assert.Equal(t, len(tt.want) > 0,
+				cfg.HasReaderFeature(tt.driverIDs, tt.path, ReaderFeatureFeliCa))
+		})
+	}
+}
+
+func TestReaderFeatures_LoadAndSaveKeepEmptyList(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs("/config", BaseDefaults, memFs)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[readers.drivers.pn532]
+features = ["felica", "nonsense"]
+
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB0"
+features = []
+
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB1"
+`))
+
+	check := func() {
+		t.Helper()
+		assert.Empty(t, cfg.ReaderFeatures([]string{"pn532"}, "/dev/ttyUSB0"))
+		assert.Equal(t, []string{ReaderFeatureFeliCa}, cfg.ReaderFeatures([]string{"pn532"}, "/dev/ttyUSB1"))
+	}
+	check()
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	check()
+}
+
+func TestNormalizeReaderFeature(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, ReaderFeatureFeliCa, NormalizeReaderFeature(" FeliCa "))
+	assert.Empty(t, NormalizeReaderFeature("felicia"))
+	assert.Empty(t, NormalizeReaderFeature(""))
+}
+
+func TestReaderFeatures_EmptyDriverListSurvivesSave(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(
+		"[readers.drivers.libnfc_acr122]\nfeatures = []\n\n"+
+			"[readers.drivers.libnfcacr122]\nfeatures = [\"felica\"]\n\n"+
+			"[readers.drivers.pn532]\nauto_detect = true\n",
+	))
+	require.Empty(t, cfg.ReaderFeatures([]string{"libnfc_acr122"}, ""))
+	require.NoError(t, cfg.Save())
+
+	reloaded, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.ReaderFeatures([]string{"libnfc_acr122"}, ""))
+
+	drivers := reloaded.Readers().Drivers
+	require.NotNil(t, drivers["libnfc_acr122"].Features)
+	assert.Empty(t, *drivers["libnfc_acr122"].Features)
+	assert.Nil(t, drivers["pn532"].Features, "an unset list stays unset")
 }

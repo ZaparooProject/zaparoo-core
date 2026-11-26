@@ -67,7 +67,11 @@ func (*Reader) IDs() []string {
 	return []string{"mqtt"}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Scan, _ readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	scanQueue chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

@@ -109,7 +109,11 @@ func (r *Reader) IDs() []string {
 	return append([]string(nil), r.ids...)
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
+	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

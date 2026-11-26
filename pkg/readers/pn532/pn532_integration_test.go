@@ -166,6 +166,7 @@ type mockPollingSession struct {
 	onCardDetected              func(context.Context, *pn532.DetectedTag) error
 	onCardRemoved               func()
 	onCardChanged               func(context.Context, *pn532.DetectedTag) error
+	onFeliCaUnavailable         func(err error)
 	closeCalled                 bool
 	setCallbacksCalled          bool
 }
@@ -197,6 +198,10 @@ func (m *mockPollingSession) SetOnCardRemoved(callback func()) {
 
 func (m *mockPollingSession) SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error) {
 	m.onCardChanged = callback
+}
+
+func (m *mockPollingSession) SetOnFeliCaUnavailable(callback func(err error)) {
+	m.onFeliCaUnavailable = callback
 }
 
 func (m *mockPollingSession) WriteToNextTag(
@@ -1396,4 +1401,53 @@ func TestWriteWithContext_LogsCallbackFailureHiddenByCancellation(t *testing.T) 
 	entries := decodeLogEntries(t, buf)
 	assert.Equal(t, 1, countLogEntries(entries, "debug", "PN532 error"), "the cancellation itself")
 	assert.Equal(t, 1, countLogEntries(entries, "error", "PN532 error"), "the write failure it hid")
+}
+
+// The felica feature reaches the polling session only for the reader it is
+// enabled on, and the session's give-up callback is only set when it is on.
+func TestOpen_FeliCaFeature(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		features *[]string
+		name     string
+		want     bool
+	}{
+		{name: "not configured", features: nil, want: false},
+		{name: "enabled", features: &[]string{"felica"}, want: true},
+		{name: "empty list", features: &[]string{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			device := config.ReadersConnect{Driver: "pn532", Path: "/dev/test", Features: tt.features}
+			cfg := &config.Instance{}
+			cfg.SetReaderConnections([]config.ReadersConnect{device})
+			reader := NewReader(cfg)
+			mockSession := &mockPollingSession{}
+			var got *polling.Config
+			reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+				return &mockTransport{}, nil
+			}
+			reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+				return &mockPN532Device{}, nil
+			}
+			reader.sessionFactory = func(_ PN532Device, sessionConfig *polling.Config) PollingSession {
+				got = sessionConfig
+				return mockSession
+			}
+
+			require.NoError(t, reader.Open(device, testutils.CreateTestScanChannel(t), readers.OpenOpts{}))
+			defer func() { _ = reader.Close() }()
+
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want, got.FeliCa)
+			assert.Equal(t, tt.want, mockSession.onFeliCaUnavailable != nil)
+			if tt.want {
+				mockSession.onFeliCaUnavailable(pn532.ErrCommandNotSupported)
+			}
+		})
+	}
 }

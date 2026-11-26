@@ -782,6 +782,100 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	assert.Equal(t, "uid", readers[0].IDSource)
 }
 
+// TestHandleSettingsUpdate_ReaderConnectionFeatures tests that a reader
+// connection's features survive a settings round trip, so a client that
+// echoes the list back does not drop them, and that unknown names are
+// rejected.
+func TestHandleSettingsUpdate_ReaderConnectionFeatures(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	update := func(conns []models.ReaderConnection) error {
+		paramsJSON, marshalErr := json.Marshal(models.UpdateSettingsParams{ReadersConnect: &conns})
+		require.NoError(t, marshalErr)
+		_, updateErr := HandleSettingsUpdate(requests.RequestEnv{
+			Context:  context.Background(),
+			Platform: mockPlatform,
+			Config:   cfg,
+			State:    appState,
+			Params:   paramsJSON,
+			IsLocal:  true,
+		})
+		return updateErr
+	}
+
+	none := []string{}
+	require.NoError(t, update([]models.ReaderConnection{
+		{Driver: "pn532", Path: "/dev/ttyUSB0", Features: &[]string{" FeliCa ", "felica"}},
+		{Driver: "pn532", Path: "/dev/ttyUSB1", Features: &none},
+		{Driver: "pn532", Path: "/dev/ttyUSB2"},
+	}))
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 3)
+	require.NotNil(t, readers[0].Features)
+	assert.Equal(t, []string{config.ReaderFeatureFeliCa}, *readers[0].Features)
+	require.NotNil(t, readers[1].Features)
+	assert.Empty(t, *readers[1].Features)
+	assert.Nil(t, readers[2].Features)
+
+	result, err := HandleSettings(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.ReadersConnect, 3)
+	require.NotNil(t, resp.ReadersConnect[0].Features)
+	assert.Equal(t, []string{config.ReaderFeatureFeliCa}, *resp.ReadersConnect[0].Features)
+	require.NotNil(t, resp.ReadersConnect[1].Features)
+	assert.Empty(t, *resp.ReadersConnect[1].Features)
+	assert.Nil(t, resp.ReadersConnect[2].Features)
+
+	err = update([]models.ReaderConnection{
+		{Driver: "pn532", Path: "/dev/ttyUSB0", Features: &[]string{"felicia"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "felicia")
+	assert.Len(t, cfg.Readers().Connect, 3, "a rejected update changes nothing")
+
+	// A config.toml written for a newer Core can name features this one
+	// does not know. settings leaves them out, so echoing the list back
+	// through settings.update is accepted.
+	require.NoError(t, cfg.LoadTOML("[[readers.connect]]\ndriver = \"pn532\"\n"+
+		"path = \"/dev/ttyUSB0\"\nfeatures = [\"FeliCa\", \"future_feature\"]\n\n"+
+		"[[readers.connect]]\ndriver = \"pn532\"\npath = \"/dev/ttyUSB1\"\nfeatures = [\"future_feature\"]\n"))
+	result, err = HandleSettings(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	})
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.ReadersConnect, 2)
+	require.NotNil(t, resp.ReadersConnect[0].Features)
+	assert.Equal(t, []string{config.ReaderFeatureFeliCa}, *resp.ReadersConnect[0].Features)
+	require.NotNil(t, resp.ReadersConnect[1].Features)
+	assert.Empty(t, *resp.ReadersConnect[1].Features)
+	require.NoError(t, update(resp.ReadersConnect))
+}
+
 // TestHandleSettings_ReaderConnectionsEnabled tests that the enabled field
 // is passed through in the settings response.
 func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *testing.T) {

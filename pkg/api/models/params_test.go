@@ -33,8 +33,8 @@ func TestReaderConnection_IsEnabled(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
 		rc       ReaderConnection
+		name     string
 		expected bool
 	}{
 		{

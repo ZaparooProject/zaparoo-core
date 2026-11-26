@@ -37,6 +37,8 @@ const (
 	// standardISO14443A3 is the Part 3 "SS" byte for a Type A tag that is not
 	// an ISO 14443-4 card.
 	standardISO14443A3 = 0x03
+	// standardFeliCa is the Part 3 "SS" byte for a FeliCa card.
+	standardFeliCa = 0x11
 
 	atrStorageLen = 15
 )
@@ -73,4 +75,11 @@ func tagKind(atr []byte) nfctag.Kind {
 	default:
 		return nfctag.KindUnknown
 	}
+}
+
+// isFeliCaATR reports whether an ATR declares a FeliCa card. Its UID is the
+// card's IDm, which arcade access cards use as their identity.
+func isFeliCaATR(atr []byte) bool {
+	return isContactlessATR(atr) && len(atr) >= atrStorageLen &&
+		bytes.Equal(atr[4:12], storageCardHeader) && atr[12] == standardFeliCa
 }

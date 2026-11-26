@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/rs/zerolog/log"
 )
 
 type Readers struct {
@@ -36,14 +37,18 @@ type Readers struct {
 }
 
 type DriverConfig struct {
-	Enabled    *bool  `toml:"enabled,omitempty"`
-	AutoDetect *bool  `toml:"auto_detect,omitempty"`
-	ScanMode   string `toml:"scan_mode,omitempty"`
+	Enabled    *bool `toml:"enabled,omitempty"`
+	AutoDetect *bool `toml:"auto_detect,omitempty"`
 	// KeepReading, LaunchOrder and AudioCDLauncher apply to the optical
 	// drive reader only.
-	KeepReading     *bool  `toml:"keep_reading,omitempty"`
-	LaunchOrder     string `toml:"launch_order,omitempty"`
-	AudioCDLauncher string `toml:"audio_cd_launcher,omitempty"`
+	KeepReading *bool `toml:"keep_reading,omitempty"`
+	// Features turns on optional driver behaviour for every reader of the
+	// driver. See ReaderFeatures. A pointer, so an explicit empty list
+	// survives a save as distinct from an unset one.
+	Features        *[]string `toml:"features,omitempty"`
+	ScanMode        string    `toml:"scan_mode,omitempty"`
+	LaunchOrder     string    `toml:"launch_order,omitempty"`
+	AudioCDLauncher string    `toml:"audio_cd_launcher,omitempty"`
 }
 
 // Optical drive launch orders. They decide between a library image the disc
@@ -76,11 +81,15 @@ type ScanLaunchGuard struct {
 }
 
 type ReadersConnect struct {
-	Enabled  *bool  `toml:"enabled,omitempty"`
-	Driver   string `toml:"driver"`
-	Path     string `toml:"path,omitempty"`
-	IDSource string `toml:"id_source,omitempty"`
-	ScanMode string `toml:"scan_mode,omitempty"`
+	Enabled *bool `toml:"enabled,omitempty"`
+	// Features replaces the driver's features for this reader. It is a
+	// pointer so that an empty list, which turns them all off, is told apart
+	// from a missing one, which keeps the driver's.
+	Features *[]string `toml:"features,omitempty"`
+	Driver   string    `toml:"driver"`
+	Path     string    `toml:"path,omitempty"`
+	IDSource string    `toml:"id_source,omitempty"`
+	ScanMode string    `toml:"scan_mode,omitempty"`
 }
 
 // DriverInfo contains driver metadata needed for enabled/auto-detect checks.
@@ -105,11 +114,11 @@ const (
 
 // IsEnabled returns whether this connection is enabled.
 // nil (omitted) and true both mean enabled; only explicit false disables.
-func (r ReadersConnect) IsEnabled() bool {
+func (r ReadersConnect) IsEnabled() bool { //nolint:gocritic // hugeParam
 	return r.Enabled == nil || *r.Enabled
 }
 
-func (r ReadersConnect) ConnectionString() string {
+func (r ReadersConnect) ConnectionString() string { //nolint:gocritic // hugeParam
 	return fmt.Sprintf("%s:%s", normalizeDriverID(r.Driver), r.Path)
 }
 
@@ -281,6 +290,104 @@ func (c *Instance) GlobalScanMode() string {
 		return mode
 	}
 	return ScanModeTap
+}
+
+// ReaderFeatureFeliCa makes a PN532 reader poll for FeliCa cards as well as
+// ISO14443A ones.
+const ReaderFeatureFeliCa = "felica"
+
+// NormalizeReaderFeature returns the canonical spelling of a reader feature,
+// or "" when it is not one.
+func NormalizeReaderFeature(feature string) string {
+	switch strings.ToLower(strings.TrimSpace(feature)) {
+	case ReaderFeatureFeliCa:
+		return ReaderFeatureFeliCa
+	default:
+		return ""
+	}
+}
+
+// ReaderFeatures returns the features turned on for a connected reader,
+// canonical and without duplicates. A matching [[readers.connect]] entry that
+// sets features replaces the [readers.drivers.<id>] list, so an empty list
+// there turns every feature off for that reader. Unknown names are dropped;
+// they were warned about when the config loaded.
+//
+// driverIDs is every ID the reader answers to. Callers pass readers.DriverIDs.
+func (c *Instance) ReaderFeatures(driverIDs []string, path string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return NormalizeReaderFeatures(c.readerFeaturesLocked(driverIDs, path))
+}
+
+// HasReaderFeature reports whether a feature is turned on for a connected
+// reader.
+func (c *Instance) HasReaderFeature(driverIDs []string, path, feature string) bool {
+	return slices.Contains(c.ReaderFeatures(driverIDs, path), feature)
+}
+
+// readerFeaturesLocked resolves a reader's raw feature list in the same order
+// as scanModeForReaderLocked. Caller must hold c.mu.
+func (c *Instance) readerFeaturesLocked(driverIDs []string, path string) []string {
+	for _, conn := range c.vals.Readers.Connect {
+		if conn.Features == nil || conn.Path != path || !matchesAnyDriverID(driverIDs, conn.Driver) {
+			continue
+		}
+		return *conn.Features
+	}
+
+	for _, id := range driverIDs {
+		normalizedID := normalizeDriverID(id)
+		matched := ""
+		var features []string
+		for key, driver := range c.vals.Readers.Drivers {
+			if driver.Features == nil || normalizeDriverID(key) != normalizedID {
+				continue
+			}
+			if matched == "" || key < matched {
+				matched, features = key, *driver.Features
+			}
+		}
+		if matched != "" {
+			return features
+		}
+	}
+	return nil
+}
+
+// NormalizeReaderFeatures returns the features in raw that Core knows, in
+// canonical form and without duplicates. Unknown names are dropped.
+func NormalizeReaderFeatures(raw []string) []string {
+	var out []string
+	for _, feature := range raw {
+		if canonical := NormalizeReaderFeature(feature); canonical != "" && !slices.Contains(out, canonical) {
+			out = append(out, canonical)
+		}
+	}
+	return out
+}
+
+// warnUnknownReaderFeatures logs each feature name the config gives a reader
+// that Core does not know. They are ignored rather than failing the load.
+func warnUnknownReaderFeatures(readers *Readers) {
+	warn := func(where string, features []string) {
+		for _, feature := range features {
+			if NormalizeReaderFeature(feature) == "" {
+				log.Warn().Str("reader", where).Str("feature", feature).
+					Msg("ignoring unknown reader feature in config.toml")
+			}
+		}
+	}
+	for id, driver := range readers.Drivers {
+		if driver.Features != nil {
+			warn(id, *driver.Features)
+		}
+	}
+	for _, conn := range readers.Connect {
+		if conn.Features != nil {
+			warn(conn.Driver+":"+conn.Path, *conn.Features)
+		}
+	}
 }
 
 // HoldModeEnabledForReader reports whether a connected reader holds by default.

@@ -429,7 +429,7 @@ func withDiscLaunchers(svc *ServiceContext, schemes ...string) {
 	svc.LauncherCache = cache
 }
 
-func withDiscConfig(t *testing.T, svc *ServiceContext, driver config.DriverConfig) {
+func withDiscConfig(t *testing.T, svc *ServiceContext, driver config.DriverConfig) { //nolint:gocritic // hugeParam
 	t.Helper()
 	cfg, err := config.NewConfig(t.TempDir(), config.Values{Readers: config.Readers{
 		Drivers: map[string]config.DriverConfig{"opticaldrive": driver},

@@ -97,8 +97,9 @@ func readUID(ctx context.Context, card transmitter) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 4, 7 and 10 bytes are ISO 14443-3 UIDs; 8 bytes is a FeliCa IDm.
 	switch len(uid) {
-	case 4, 7, 10:
+	case 4, 7, 8, 10:
 		return uid, nil
 	default:
 		return nil, fmt.Errorf("%w: UID of %d bytes", errTagNotReady, len(uid))

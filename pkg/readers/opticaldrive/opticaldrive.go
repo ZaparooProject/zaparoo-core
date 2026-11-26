@@ -226,7 +226,7 @@ func effectiveDiscTokenFile(
 }
 
 func (r *FileReader) Open(
-	device config.ReadersConnect,
+	device config.ReadersConnect, //nolint:gocritic // hugeParam
 	iq chan<- readers.Scan,
 	_ readers.OpenOpts,
 ) error {
