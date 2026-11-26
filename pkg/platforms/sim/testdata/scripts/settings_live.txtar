@@ -1,0 +1,34 @@
+# Reader and hook settings changed through settings.update apply to the
+# running service without a restart.
+
+sim-start
+rom snes/Alpha.sfc nes/Beta.nes
+
+# An on_scan hook that fails blocks the token, from the next scan on.
+api settings.update {"readersScanOnScan":"**nosuchcommand"}
+stdout '"readersScanOnScan"'
+tap -uid 01 $ROMS/nes/Beta.nes
+notification run.failed source=Hook command=nosuchcommand
+! notification media.started systemId=NES
+remove
+
+api settings.update {"readersScanOnScan":""}
+tap -uid 02 $ROMS/nes/Beta.nes
+notification media.started systemId=NES
+remove
+
+# Turning on ignore_on_connect does not swallow the next scan of a reader
+# that was already connected.
+api settings.update {"readersScanIgnoreOnConnect":true}
+tap -uid 03 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES
+remove
+
+# Disabling a driver closes its connected readers at once; enabling it
+# again lets auto-detect open them.
+api settings.update {"readersDrivers":[{"id":"sim","enabled":false}]}
+notification readers.removed
+api settings
+stdout '"enabled": false'
+api settings.update {"readersDrivers":[{"id":"sim","enabled":true}]}
+notification readers.added

@@ -66,6 +66,7 @@ Core stores media paths with forward slashes on every OS. PR CI runs the full su
 - Preserve backward compatibility for JSON-RPC methods, notifications, API models, configuration files, mappings, launchers and persisted database data.
 - Add a new migration for schema changes. Applied migrations in `pkg/database/{userdb,mediadb}/migrations/` are immutable.
 - Give configuration schema changes migration and compatibility handling for existing installs.
+- Expose a new config key through `settings`/`settings.update`, or list it as file-only with a reason, in `configKeyAPI` (`pkg/api/methods/settings_coverage_test.go`). The test fails on an unclassified key.
 - Report which checks ran and which were skipped. Do not claim completion while a relevant check fails or the work is partial.
 
 ### Ask first

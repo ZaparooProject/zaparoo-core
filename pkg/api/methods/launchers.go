@@ -22,6 +22,7 @@ package methods
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -108,6 +109,14 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 	runtimeProvider, hasRuntimeProvider := env.Platform.(platforms.LauncherRuntimeProvider)
 
+	customIDs := make(map[string]struct{})
+	if env.Config != nil {
+		custom := env.Config.CustomLaunchers()
+		for i := range custom {
+			customIDs[strings.ToLower(custom[i].ID)] = struct{}{}
+		}
+	}
+
 	all := env.LauncherCache.GetAllLaunchers()
 	resp := make([]models.Launcher, 0, len(all))
 	for i := range all {
@@ -129,6 +138,9 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			Detected:           l.Detected,
 			Default:            isDefaultLauncher(env.Config, &l),
 		}
+		if _, ok := customIDs[strings.ToLower(l.ID)]; ok {
+			entry.Custom = true
+		}
 		if l.SystemID != "" {
 			if sm, mErr := assets.GetSystemMetadata(l.SystemID); mErr == nil && sm.Name != "" {
 				entry.SystemName = sm.Name
@@ -148,6 +160,40 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	})
 
 	return models.LaunchersResponse{Launchers: resp}, nil
+}
+
+// HandleLaunchersCustom lists the loaded custom launcher definitions. They
+// hold the commands Core runs, so only a local or admin client reads them,
+// and nothing here writes one.
+func HandleLaunchersCustom(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
+	if !isLocalOrAdmin(&env) {
+		return nil, models.ClientErrf("custom launchers require a local or admin client: %w", ErrForbidden)
+	}
+	defs := env.Config.CustomLaunchers()
+	out := make([]models.CustomLauncher, 0, len(defs))
+	for i := range defs {
+		d := &defs[i]
+		out = append(out, models.CustomLauncher{
+			ID:         d.ID,
+			Kind:       d.Kind,
+			Backend:    d.Backend,
+			System:     d.System,
+			Name:       d.Name,
+			Category:   d.Category,
+			Categories: slices.Clone(d.Categories),
+			Execute:    d.Execute,
+			Lifecycle:  d.Lifecycle,
+			LoadPath:   d.LoadPath,
+			MediaDirs:  slices.Clone(d.MediaDirs),
+			FileExts:   slices.Clone(d.FileExts),
+			Groups:     slices.Clone(d.Groups),
+			Schemes:    slices.Clone(d.Schemes),
+			Controls:   maps.Clone(d.Controls),
+			Restricted: d.Restricted,
+			Source:     d.Source,
+		})
+	}
+	return models.CustomLaunchersResponse{Launchers: out}, nil
 }
 
 func refreshLauncherDependencies(pl platforms.Platform) error {

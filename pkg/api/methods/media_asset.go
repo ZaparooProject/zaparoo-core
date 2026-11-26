@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 )
 
@@ -367,7 +368,11 @@ func trustedMediaAssetRoots(env *requests.RequestEnv, systemID string) ([]string
 		roots = append(roots, sourceRoots...)
 	}
 	if env.Config != nil {
-		if customRoot := env.Config.ScraperGamelistXMLCustomPath(); customRoot != "" {
+		dataDir := ""
+		if env.Platform != nil {
+			dataDir = helpers.DataDir(env.Platform)
+		}
+		if customRoot := env.Config.ScraperGamelistXMLCustomDir(dataDir); customRoot != "" {
 			roots = append(roots, customRoot)
 		}
 	}

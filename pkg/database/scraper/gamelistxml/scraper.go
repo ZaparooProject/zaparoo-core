@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/ssgenre"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -96,6 +97,8 @@ type GamelistXMLScraper struct {
 	fs    afero.Fs
 	cfg   *config.Instance
 	scope *database.ScrapeScope
+	// dataDir resolves a relative custom_path.
+	dataDir string
 	// unmapped collects the source values this run had no tag mapping for.
 	unmapped           scraper.UnmappedValues
 	externalAssetRoots []string
@@ -298,6 +301,7 @@ func NewPlatformScraper(options ...Option) platforms.Scraper {
 				fs:                 fs,
 				cfg:                cfg,
 				scope:              opts.Scope,
+				dataDir:            helpers.DataDir(pl),
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				maxGamelistBytes:   maxGamelistBytesForPlatform(pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
@@ -402,6 +406,9 @@ func resolveSystemsFromPlatform(
 	virtualSystems := virtualLauncherSystems(launchers)
 
 	customBase := cfg.ScraperGamelistXMLCustomPath()
+	if customBase != "" {
+		customBase = cfg.ScraperGamelistXMLCustomDir(helpers.DataDir(pl))
+	}
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
@@ -662,7 +669,7 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 func (g *GamelistXMLScraper) loadCustomGamelistFile(
 	ctx context.Context, system scraper.ScrapeSystem,
 ) (parsedGamelistFile, bool, *scraper.SourceError) {
-	customBase := g.cfg.ScraperGamelistXMLCustomPath()
+	customBase := g.cfg.ScraperGamelistXMLCustomDir(g.dataDir)
 	if customBase == "" {
 		return parsedGamelistFile{}, false, nil
 	}

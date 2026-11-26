@@ -112,11 +112,14 @@ type LaunchersCustom struct {
 	Execute    string            `toml:"execute,omitempty"`
 	Lifecycle  string            `toml:"lifecycle,omitempty"`
 	LoadPath   string            `toml:"load_path,omitempty"`
-	MediaDirs  []string          `toml:"media_dirs,omitempty"`
-	FileExts   []string          `toml:"file_exts,omitempty"`
-	Groups     []string          `toml:"groups,omitempty"`
-	Schemes    []string          `toml:"schemes,omitempty"`
-	Restricted bool              `toml:"restricted,omitempty"`
+	// Source is the launchers folder file the entry came from, empty for an
+	// entry in config.toml.
+	Source     string   `toml:"-"`
+	MediaDirs  []string `toml:"media_dirs,omitempty"`
+	FileExts   []string `toml:"file_exts,omitempty"`
+	Groups     []string `toml:"groups,omitempty"`
+	Schemes    []string `toml:"schemes,omitempty"`
+	Restricted bool     `toml:"restricted,omitempty"`
 }
 
 func (c *Instance) LauncherPreference() []string {
@@ -314,7 +317,9 @@ func ValidateRenderResolution(value string) (width, height int, err error) {
 	return width, height, nil
 }
 
-func validateLauncherDefaults(defaults []LaunchersDefault) error {
+// ValidateLauncherDefaults reports why SetLauncherDefaults would refuse the
+// list, if it would.
+func ValidateLauncherDefaults(defaults []LaunchersDefault) error {
 	for i := range defaults {
 		entry := &defaults[i]
 		if entry.RenderScale != nil && entry.RenderResolution != "" {
@@ -448,6 +453,9 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 			continue
 		}
 
+		for i := range newVals.Launchers.Custom {
+			newVals.Launchers.Custom[i].Source = filepath.Base(launcherPath)
+		}
 		rawLaunchers = append(rawLaunchers, newVals.Launchers.Custom...)
 		filesCount++
 	}

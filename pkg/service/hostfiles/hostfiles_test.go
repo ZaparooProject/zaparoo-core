@@ -202,3 +202,94 @@ func TestOpenImageNeedsAnImageFile(t *testing.T) {
 		require.ErrorIs(t, err, hostfiles.ErrNotFile, "path %q", rel)
 	}
 }
+
+func TestAudioBrowserListsAndResolvesSounds(t *testing.T) {
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	assets, music := filepath.Join(base, "assets"), filepath.Join(base, "music")
+	outside := filepath.Join(base, "private")
+	writeFile(t, filepath.Join(assets, "success.WAV"))
+	writeFile(t, filepath.Join(assets, "cover.png"))
+	writeFile(t, filepath.Join(music, "Chimes", "a.ogg"))
+	writeFile(t, filepath.Join(music, "b.flac"))
+	writeFile(t, filepath.Join(music, "c.mp3"))
+	writeFile(t, filepath.Join(music, "notes.txt"))
+	writeFile(t, filepath.Join(outside, "secret.wav"))
+	browser := hostfiles.NewAudioBrowser([]string{music}, assets)
+
+	roots := browser.Roots(context.Background())
+	require.Len(t, roots, 2)
+	assert.Equal(t, hostfiles.AssetsRootID, roots[0].ID, "the assets folder is listed first")
+	assert.Equal(t, assets, roots[0].Path)
+	musicRoot := rootIDFor(t, browser, music)
+
+	listing, err := browser.ListAudio(context.Background(), musicRoot, "")
+	require.NoError(t, err)
+	names := make([]string, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
+		names = append(names, entry.Name)
+	}
+	assert.Equal(t, []string{"Chimes", "b.flac", "c.mp3"}, names, "folders first, then sounds by name")
+
+	assetsListing, err := browser.ListAudio(context.Background(), hostfiles.AssetsRootID, "")
+	require.NoError(t, err)
+	require.Len(t, assetsListing.Entries, 1, "an image is not a sound")
+
+	path, err := browser.ResolveAudio(context.Background(), musicRoot, "Chimes/a.ogg")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(music, "Chimes", "a.ogg"), path)
+	path, err = browser.ResolveAudio(context.Background(), hostfiles.AssetsRootID, "success.WAV")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(assets, "success.WAV"), path)
+
+	for _, rel := range []string{"notes.txt", "Chimes"} {
+		_, err = browser.ResolveAudio(context.Background(), musicRoot, rel)
+		require.ErrorIs(t, err, hostfiles.ErrNotFile, "path %q", rel)
+	}
+	_, err = browser.ResolveAudio(context.Background(), musicRoot, "missing.wav")
+	require.ErrorIs(t, err, hostfiles.ErrNotFound)
+	for _, rel := range []string{"../private/secret.wav", "/etc/passwd", `Chimes\a.ogg`} {
+		_, err = browser.ResolveAudio(context.Background(), musicRoot, rel)
+		require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "path %q", rel)
+	}
+	_, err = browser.ResolveAudio(context.Background(), hostfiles.ImagesRootID, "x.wav")
+	require.ErrorIs(t, err, hostfiles.ErrUnknownRoot, "an audio browse has no image root")
+
+	if err = os.Symlink(filepath.Join(outside, "secret.wav"), filepath.Join(music, "leak.wav")); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	_, err = browser.ResolveAudio(context.Background(), musicRoot, "leak.wav")
+	require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "a link out of the root is refused")
+}
+
+// A link is offered only when it can be saved: resolving checks the target's
+// extension, because the stored path is the target and playback decodes by it.
+func TestAudioLinksListOnlyWhenTheyResolve(t *testing.T) {
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	music := filepath.Join(base, "music")
+	writeFile(t, filepath.Join(music, "blobs", "sound"))
+	writeFile(t, filepath.Join(music, "blobs", "chime.ogg"))
+	if err = os.Symlink(filepath.Join(music, "blobs", "sound"), filepath.Join(music, "success.wav")); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	require.NoError(t, os.Symlink(filepath.Join(music, "blobs", "chime.ogg"), filepath.Join(music, "fail.ogg")))
+	browser := hostfiles.NewAudioBrowser([]string{music}, "")
+	musicRoot := rootIDFor(t, browser, music)
+
+	listing, err := browser.ListAudio(context.Background(), musicRoot, "")
+	require.NoError(t, err)
+	names := make([]string, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
+		names = append(names, entry.Name)
+	}
+	assert.Equal(t, []string{"blobs", "fail.ogg"}, names)
+
+	_, err = browser.ResolveAudio(context.Background(), musicRoot, "success.wav")
+	require.ErrorIs(t, err, hostfiles.ErrNotFile)
+	path, err := browser.ResolveAudio(context.Background(), musicRoot, "fail.ogg")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(music, "blobs", "chime.ogg"), path)
+}

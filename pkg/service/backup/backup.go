@@ -606,7 +606,7 @@ func (m *Manager) OnlineStatus() models.OnlineStatusResponse {
 }
 
 func (m *Manager) backupDir() string {
-	if localDir := m.cfg.BackupLocalDir(); localDir != "" {
+	if localDir := m.cfg.BackupLocalDirIn(helpers.DataDir(m.pl)); localDir != "" {
 		return localDir
 	}
 	return filepath.Join(helpers.DataDir(m.pl), "backups", backupDirName)

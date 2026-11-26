@@ -526,6 +526,7 @@ func NewMethodMap() *MethodMap {
 		// launchers
 		models.MethodLaunchers:        methods.HandleLaunchers,
 		models.MethodLaunchersRefresh: methods.HandleLaunchersRefresh,
+		models.MethodLaunchersCustom:  methods.HandleLaunchersCustom,
 		// mappings
 		models.MethodMappings:       methods.HandleMappings,
 		models.MethodMappingsNew:    methods.HandleAddMapping,

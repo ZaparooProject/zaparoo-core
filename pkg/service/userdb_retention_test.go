@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,6 +120,34 @@ func TestUserDBRetentionTrigger_SkipsWhileRunning(t *testing.T) {
 	assert.Equal(t, int32(2), runs.Load(), "a run is allowed again once the last one finished")
 }
 
+// A scan_history change during a run may come after the run read the limit,
+// so one more run follows. Several changes during the run share it.
+func TestUserDBRetentionTrigger_RerunsAfterChangeDuringRun(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	idleSched := idle.NewWithClock(clock)
+	clock.Advance(userDBMaintenanceQuietWindow)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var runs atomic.Int32
+	trigger := &userDBRetentionTrigger{idle: idleSched, run: func(context.Context) {
+		if runs.Add(1) == 1 {
+			started <- struct{}{}
+			<-release
+		}
+	}}
+
+	trigger.fire(context.Background())
+	<-started
+	trigger.fireChanged(context.Background())
+	trigger.fireChanged(context.Background())
+	trigger.fire(context.Background())
+	close(release)
+	idleSched.Wait()
+	assert.Equal(t, int32(2), runs.Load(), "changes during one run share a single follow-up")
+}
+
 func TestStartUserDBRetentionScheduler_StopsWithContext(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +157,42 @@ func TestStartUserDBRetentionScheduler_StopsWithContext(t *testing.T) {
 	startUserDBRetentionScheduler(ctx, &config.Instance{}, mocks.NewMockPlatform(),
 		&database.Database{}, idle.New(), &wg)
 	wg.Wait()
+}
+
+// Lowering readers.scan_history prunes at the next idle window rather than at
+// the next daily tick.
+func TestStartUserDBRetentionScheduler_RunsOnScanHistoryChange(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	clock := clockwork.NewFakeClock()
+	idleSched := idle.NewWithClock(clock)
+	clock.Advance(userDBMaintenanceQuietWindow)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("ID").Return("test-platform").Maybe()
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockUserDB.On("PruneExpiredZapLinkHosts", zapLinkHostExpiration).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupHistory", 3).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", mock.Anything, mock.Anything).Return(int64(0), nil).Once()
+	mockUserDB.On("PruneInboxMessages", inboxMessageMaxAge, database.InboxMessageLimit).
+		Return(int64(0), nil).Once()
+
+	var wg sync.WaitGroup
+	startUserDBRetentionScheduler(ctx, cfg, pl, db, idleSched, &wg)
+	mockUserDB.AssertNotCalled(t, "CleanupHistory", mock.Anything)
+
+	cfg.SetScanHistory(3)
+	cfg.NotifyChanged(config.ChangeScanHistory)
+	idleSched.Wait()
+
+	cancel()
+	wg.Wait()
+	mockUserDB.AssertExpectations(t)
 }
 
 // One retention pass prunes ZapLink hosts, both histories and the inbox.

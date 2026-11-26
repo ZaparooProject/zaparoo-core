@@ -22,8 +22,10 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 
 	zapscript "github.com/ZaparooProject/go-zapscript"
 )
@@ -355,4 +357,29 @@ func (c *Instance) ResetOnlineConsent() {
 	c.SetBackupRemoteEnabled(false)
 	c.SetPlaytimeSync(false)
 	c.SetLibrarySync(false)
+}
+
+// RedactBroker strips credentials and paths from an MQTT broker address so
+// it can be logged or shown.
+func RedactBroker(broker string) string {
+	if broker == "" {
+		return broker
+	}
+
+	if strings.Contains(broker, "://") {
+		parsed, err := url.Parse(broker)
+		if err == nil && parsed.Host != "" {
+			if parsed.Scheme != "" {
+				return parsed.Scheme + "://" + parsed.Host
+			}
+			return parsed.Host
+		}
+	}
+
+	// Everything up to the last @ is credentials, even with no host after it.
+	if at := strings.LastIndex(broker, "@"); at >= 0 {
+		return broker[at+1:]
+	}
+
+	return broker
 }

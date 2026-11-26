@@ -206,9 +206,12 @@ type ReaderConnection struct {
 }
 
 type SystemDefault struct {
-	System     string `json:"system" validate:"required,system"`
-	Launcher   string `json:"launcher,omitempty"`
-	BeforeExit string `json:"beforeExit,omitempty"`
+	// PauseOnLaunch is left as it is when omitted, so a client that does not
+	// know the field keeps the value config.toml holds.
+	PauseOnLaunch *bool  `json:"pauseOnLaunch,omitempty"`
+	System        string `json:"system" validate:"required,system"`
+	Launcher      string `json:"launcher,omitempty"`
+	BeforeExit    string `json:"beforeExit,omitempty" validate:"omitempty,max=4096"`
 }
 
 // IsEnabled returns whether this connection is enabled.
@@ -264,6 +267,7 @@ type UpdateSettingsParams struct {
 	MediaImageDir *string `json:"mediaImageDir" validate:"omitempty,max=4096"`
 	// MediaThumbCacheMaxMB is [media] thumb_cache_max_mb; 0 restores the default.
 	MediaThumbCacheMaxMB *int `json:"mediaThumbCacheMaxMb" validate:"omitempty,gte=0,lte=1048576"`
+	AdminSettingsParams
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -611,7 +615,7 @@ type MediaImageInput struct {
 type FilesBrowseParams struct {
 	Offset  *int   `json:"offset,omitempty" validate:"omitempty,gte=0"`
 	Limit   *int   `json:"limit,omitempty" validate:"omitempty,gte=1,lte=500"`
-	Purpose string `json:"purpose" validate:"required,oneof=image"`
+	Purpose string `json:"purpose" validate:"required,oneof=image audio"`
 	Root    string `json:"root,omitempty" validate:"omitempty,max=64"`
 	Path    string `json:"path,omitempty" validate:"omitempty,max=4096"`
 }

@@ -46,7 +46,7 @@ profiles.verify.cancel
 profiles.content profiles.content.update
 kiosk kiosk.enable kiosk.disable kiosk.unlock kiosk.lock kiosk.update kiosk.allow
 decks decks.get decks.new decks.update decks.delete decks.open decks.image
-systems launchers launchers.refresh tokens.history mappings mappings.new mappings.delete
+systems launchers launchers.refresh launchers.custom tokens.history mappings mappings.new mappings.delete
 mappings.update mappings.reload readers readers.write readers.write.cancel readers.drivers readers.ports
 tokens.resolve version health
 inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings.auth.unlink
