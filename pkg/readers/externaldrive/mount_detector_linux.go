@@ -916,7 +916,7 @@ func (d *linuxMountDetectorFallback) applyMounts(entries []helpers.MountEntry, u
 		}
 
 		// Bind mounts of a subdirectory are not drives of their own
-		if e.Root != "/" {
+		if !isWholeFilesystemMount(e) {
 			continue
 		}
 

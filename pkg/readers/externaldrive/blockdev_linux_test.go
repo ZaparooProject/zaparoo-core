@@ -160,6 +160,50 @@ func TestIsBlockDevicePresent(t *testing.T) {
 	}
 }
 
+// A stat error other than "not found" says nothing about the device, so it
+// must not get a live mount forgotten and unmounted.
+func TestIsBlockDevicePresent_StatErrorIsNotMissing(t *testing.T) {
+	t.Parallel()
+	sys := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(sys, "dev"), 0o750))
+	// A file where a directory is expected makes stat fail with ENOTDIR.
+	require.NoError(t, os.WriteFile(filepath.Join(sys, "dev", "block"), nil, 0o600))
+
+	assert.True(t, isBlockDevicePresent(sys, &MountEvent{DeviceNode: "/dev/sda1", DevNum: "8:1"}))
+}
+
+func TestIsWholeFilesystemMount(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		entry    helpers.MountEntry
+		expected bool
+	}{
+		{name: "filesystem root", entry: helpers.MountEntry{Root: "/", FSType: "vfat"}, expected: true},
+		{name: "bind mount of a directory", entry: helpers.MountEntry{Root: "/saves", FSType: "exfat"}},
+		{
+			name:     "Btrfs subvolume",
+			entry:    helpers.MountEntry{Root: "/@data", FSType: "btrfs", SuperOptions: "rw,subvol=/@data"},
+			expected: true,
+		},
+		{
+			name:  "bind mount inside a Btrfs subvolume",
+			entry: helpers.MountEntry{Root: "/@data/roms", FSType: "btrfs", SuperOptions: "rw,subvol=/@data"},
+		},
+		{name: "Btrfs without subvol option", entry: helpers.MountEntry{Root: "/@data", FSType: "btrfs"}},
+		{
+			name:  "subvol option on another filesystem",
+			entry: helpers.MountEntry{Root: "/@data", FSType: "ext4", SuperOptions: "subvol=/@data"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isWholeFilesystemMount(&tt.entry))
+		})
+	}
+}
+
 func TestParentDisk(t *testing.T) {
 	t.Parallel()
 	sys := newMiSTerFakeSysfs(t)
@@ -200,14 +244,23 @@ func TestSiblingMountsFrom(t *testing.T) {
 		{Root: "/", Mountpoint: "/media/usb0", Source: "/dev/sda1", DevNum: "8:1"},
 		{Root: "/", Mountpoint: "/media/usb1", Source: "/dev/sda2", DevNum: "8:2"},
 		{Root: "/", Mountpoint: "/srv/usb", Source: "/dev/sda2", DevNum: "8:2"},
+		{
+			Root: "/@data", Mountpoint: "/media/usb2", FSType: "btrfs", Source: "/dev/sda2", DevNum: "0:50",
+			SuperOptions: "rw,subvol=/@data",
+		},
+		{
+			Root: "/@data/roms", Mountpoint: "/media/usb3", FSType: "btrfs", Source: "/dev/sda2", DevNum: "0:50",
+			SuperOptions: "rw,subvol=/@data",
+		},
 	}
 
 	// The SD card has no other partitions mounted; the USB stick and the
 	// bind mount of a subdirectory are not its siblings.
 	assert.Empty(t, siblingMountsFrom(sys, "mmcblk0", "/media/fat", entries))
 
-	// Other partitions of the stick are, but only in removable locations.
-	assert.Equal(t, []string{"/media/usb1"}, siblingMountsFrom(sys, "sda", "/media/usb0", entries))
+	// Other partitions of the stick are, but only in removable locations,
+	// and a Btrfs subvolume counts while a bind mount inside it doesn't.
+	assert.Equal(t, []string{"/media/usb1", "/media/usb2"}, siblingMountsFrom(sys, "sda", "/media/usb0", entries))
 
 	assert.Empty(t, siblingMountsFrom(sys, "", "/media/usb0", entries))
 }
@@ -292,4 +345,61 @@ func TestHandleMountEvent_KeyedByPhysicalDisk(t *testing.T) {
 	defer reader.mu.RUnlock()
 	assert.Empty(t, reader.activeTokens)
 	assert.NotContains(t, reader.deviceKeys, "AAAA-1111")
+}
+
+// Only the partition that stored a token removes it. A sibling's unmount that
+// arrives after a replacement drive has stored its own token under the same
+// disk key leaves that token alone, whether partitions are identified by UUID
+// or by device node.
+func TestHandleUnmountEvent_LateSiblingKeepsReplacementToken(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                    string
+		first, second, replaced string
+	}{
+		{name: "UUID IDs", first: "AAAA-1111", second: "BBBB-2222", replaced: "CCCC-3333"},
+		{name: "device node IDs", first: "/dev/sda1", second: "/dev/sda2", replaced: "/dev/sda1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sys := newMiSTerFakeSysfs(t)
+			part1 := t.TempDir()
+			part2 := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(part1, "zaparoo.txt"), []byte("**echo:old"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(part2, "zaparoo.txt"), []byte("**echo:old"), 0o600))
+			reader, scanChan, _ := newTestReaderWithSysfs(t, sys, nil)
+
+			first := MountEvent{DeviceID: tt.first, DeviceNode: "/dev/sda1", DevNum: "8:1", MountPath: part1}
+			second := MountEvent{DeviceID: tt.second, DeviceNode: "/dev/sda2", DevNum: "8:2", MountPath: part2}
+			reader.wg.Add(2)
+			reader.handleMountEvent(&first)
+			reader.handleMountEvent(&second)
+			require.Len(t, scanChan, 1)
+			<-scanChan
+
+			// The stick is pulled and only the first unmount is handled.
+			reader.handleUnmountEvent(tt.first)
+			require.Len(t, scanChan, 1)
+			assert.Nil(t, (<-scanChan).Token)
+
+			// A replacement stick comes up as sda and stores its token.
+			newPart := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(newPart, "zaparoo.txt"), []byte("**echo:new"), 0o600))
+			replacement := MountEvent{DeviceID: tt.replaced, DeviceNode: "/dev/sda1", DevNum: "8:1", MountPath: newPart}
+			reader.wg.Add(1)
+			reader.handleMountEvent(&replacement)
+			require.Len(t, scanChan, 1)
+			<-scanChan
+
+			// The old stick's second unmount arrives late.
+			reader.handleUnmountEvent(tt.second)
+			assert.Empty(t, scanChan, "no removal scan for the replacement's token")
+			reader.mu.RLock()
+			token := reader.activeTokens["/dev/sda"]
+			reader.mu.RUnlock()
+			require.NotNil(t, token)
+			assert.Equal(t, "**echo:new", token.Text)
+		})
+	}
 }

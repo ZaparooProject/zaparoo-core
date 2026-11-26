@@ -20,6 +20,8 @@
 package externaldrive
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -70,6 +72,13 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
+// pathMissing reports whether path is known not to exist. Other stat errors,
+// such as permission or I/O errors, leave it unknown and return false.
+func pathMissing(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 // isBlockDevicePresent reports whether the block device behind a mount still
 // exists. It returns false only on evidence the device is gone, and true when
 // nothing can be checked.
@@ -79,16 +88,16 @@ func pathExists(path string) bool {
 // one, while their names may not match any sysfs entry.
 func isBlockDevicePresent(sysRoot string, event *MountEvent) bool {
 	if devNum, ok := realDevNum(event.DevNum); ok {
-		return pathExists(filepath.Join(sysRoot, "dev", "block", devNum))
+		return !pathMissing(filepath.Join(sysRoot, "dev", "block", devNum))
 	}
 	if !strings.HasPrefix(event.DeviceNode, "/dev/") {
 		return true
 	}
 	if name, ok := kernelDevName(event.DeviceNode); ok &&
-		pathExists(filepath.Join(sysRoot, "class", "block", name)) {
+		!pathMissing(filepath.Join(sysRoot, "class", "block", name)) {
 		return true
 	}
-	return pathExists(event.DeviceNode)
+	return !pathMissing(event.DeviceNode)
 }
 
 // parentDisk returns the kernel name of the whole disk that holds the
@@ -145,7 +154,7 @@ func siblingMountsFrom(sysRoot, disk, primary string, entries []helpers.MountEnt
 	seen := map[string]bool{primary: true}
 	for i := range entries {
 		e := &entries[i]
-		if e.Root != "/" || seen[e.Mountpoint] || !isRemovableMountPath(e.Mountpoint) {
+		if !isWholeFilesystemMount(e) || seen[e.Mountpoint] || !isRemovableMountPath(e.Mountpoint) {
 			continue
 		}
 		if parentDisk(sysRoot, e.DevNum, e.Source) != disk {
@@ -155,6 +164,25 @@ func siblingMountsFrom(sysRoot, disk, primary string, entries []helpers.MountEnt
 		mounts = append(mounts, e.Mountpoint)
 	}
 	return mounts
+}
+
+// isWholeFilesystemMount reports whether a mount shows a filesystem from its
+// top rather than being a bind mount of a subdirectory. A Btrfs subvolume
+// mount's root is the subvolume path, which its subvol= option repeats; a bind
+// mount of a directory inside it has a longer root.
+func isWholeFilesystemMount(e *helpers.MountEntry) bool {
+	if e.Root == "/" {
+		return true
+	}
+	if e.FSType != "btrfs" {
+		return false
+	}
+	for opt := range strings.SplitSeq(e.SuperOptions, ",") {
+		if subvol, ok := strings.CutPrefix(opt, "subvol="); ok {
+			return subvol == e.Root
+		}
+	}
+	return false
 }
 
 // isRemovableMountPath reports whether a mount path is in a location used for

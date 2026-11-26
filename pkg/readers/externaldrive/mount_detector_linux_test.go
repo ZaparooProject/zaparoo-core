@@ -567,11 +567,13 @@ func TestFallbackApplyMounts_EmitsDeviceNumber(t *testing.T) {
 			"21 20 179:1 / /media/fat rw,noatime - exfat /dev/root rw\n" +
 			"22 21 179:1 /saves /media/fat/saves rw,noatime - exfat /dev/root rw\n" +
 			"23 20 0:22 / /tmp rw - tmpfs tmpfs rw\n" +
-			"24 20 8:1 / /media/usb\\0400 rw - vfat /dev/sda1 rw\n")
+			"24 20 8:1 / /media/usb\\0400 rw - vfat /dev/sda1 rw\n" +
+			"25 20 0:50 /@data /media/usb1 rw - btrfs /dev/sdb1 rw,subvolid=256,subvol=/@data\n" +
+			"26 20 0:51 /@data/roms /media/usb2 rw - btrfs /dev/sdc1 rw,subvolid=256,subvol=/@data\n")
 	d.applyMounts(entries, noUUID)
 
 	events := drainMountEvents(d)
-	require.Len(t, events, 2)
+	require.Len(t, events, 3)
 	byID := map[string]MountEvent{}
 	for _, ev := range events {
 		byID[ev.DeviceID] = ev
@@ -582,6 +584,8 @@ func TestFallbackApplyMounts_EmitsDeviceNumber(t *testing.T) {
 	}, byID["/dev/root"], "the subdirectory bind mount does not replace the drive's own mount")
 	assert.Equal(t, "/media/usb 0", byID["/dev/sda1"].MountPath, "escaped spaces decoded")
 	assert.Equal(t, "8:1", byID["/dev/sda1"].DevNum)
+	assert.Equal(t, "/media/usb1", byID["/dev/sdb1"].MountPath, "Btrfs subvolume mount is a drive")
+	assert.NotContains(t, byID, "/dev/sdc1", "bind mount of a directory inside a subvolume is not")
 }
 
 // A stale mount that stays in the table is reported once, not on every

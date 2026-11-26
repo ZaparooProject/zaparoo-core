@@ -450,6 +450,7 @@ func TestProcessEvents_UnmountEvent(t *testing.T) {
 	// Add a token to active tokens
 	reader.mu.Lock()
 	reader.activeTokens["test-device-456"] = nil
+	reader.deviceKeys["test-device-456"] = "test-device-456"
 	reader.mu.Unlock()
 
 	// Start event loop
@@ -775,6 +776,7 @@ func TestHandleUnmountEvent(t *testing.T) {
 	// Add a fake active token
 	reader.mu.Lock()
 	reader.activeTokens["test-device-unmount"] = nil
+	reader.deviceKeys["test-device-unmount"] = "test-device-unmount"
 	reader.mu.Unlock()
 
 	// Handle unmount
@@ -1378,7 +1380,7 @@ func TestHandleMountEvent_DuplicateTokenPrevention(t *testing.T) {
 }
 
 func TestHandleUnmountEvent_BaseDeviceMatching(t *testing.T) {
-	// Test that unmount uses base device for matching (e.g., /dev/sda for /dev/sda1)
+	// Test that unmount uses the disk key recorded at mount (e.g., /dev/sda for /dev/sda1)
 	cfg := &config.Instance{}
 	reader := NewReader(cfg)
 	scanChan := make(chan readers.Scan, 10)
@@ -1391,9 +1393,10 @@ func TestHandleUnmountEvent_BaseDeviceMatching(t *testing.T) {
 	baseDevice := "/dev/sda"
 	reader.mu.Lock()
 	reader.activeTokens[baseDevice] = nil
+	reader.deviceKeys["/dev/sda1"] = baseDevice
 	reader.mu.Unlock()
 
-	// Unmount with partition ID should still match via getBaseDevice
+	// Unmount with the partition ID finds the recorded disk key
 	reader.handleUnmountEvent("/dev/sda1")
 
 	// Should emit nil token scan

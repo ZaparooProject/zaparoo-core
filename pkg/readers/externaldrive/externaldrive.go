@@ -93,9 +93,11 @@ type Reader struct {
 	scanChan     chan<- readers.Scan
 	stopChan     chan struct{}
 	activeTokens map[string]*tokens.Token
-	// deviceKeys maps a mount's DeviceID to its activeTokens key, recorded at
-	// mount time because the key may come from sysfs, which is gone by the
-	// time a yanked device's unmount arrives.
+	// deviceKeys maps the DeviceID of the mount that stored a token to its
+	// activeTokens key. It is recorded at mount time because the key may come
+	// from sysfs, which is gone by the time a yanked device's unmount arrives.
+	// Sibling partitions get no entry, so a late sibling unmount can't remove
+	// a token a newly inserted drive stored under the same key.
 	deviceKeys map[string]string
 	// readMounts returns the current mount table, for finding sibling
 	// partitions. sysRoot is the sysfs root. Both are replaceable in tests.
@@ -510,7 +512,6 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 
 	// Store active token by physical device to prevent duplicates from sibling partitions
 	r.mu.Lock()
-	r.deviceKeys[event.DeviceID] = deviceKey
 	if _, exists := r.activeTokens[deviceKey]; exists {
 		// Already have a token for this physical device
 		r.mu.Unlock()
@@ -521,6 +522,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		return
 	}
 	r.activeTokens[deviceKey] = token
+	r.deviceKeys[event.DeviceID] = deviceKey
 	r.mu.Unlock()
 
 	// Emit scan event
@@ -541,21 +543,18 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 }
 
 func (r *Reader) handleUnmountEvent(deviceID string) {
-	// Use the key recorded at mount time, which matches how the token was
-	// stored in handleMountEvent
+	// Only the mount that stored a token removes it, using the key it
+	// recorded
 	r.mu.Lock()
-	baseDevice, known := r.deviceKeys[deviceID]
-	if !known {
-		baseDevice = getBaseDevice(deviceID)
-	}
+	baseDevice, owner := r.deviceKeys[deviceID]
 	delete(r.deviceKeys, deviceID)
 	_, exists := r.activeTokens[baseDevice]
-	if exists {
+	if owner && exists {
 		delete(r.activeTokens, baseDevice)
 	}
 	r.mu.Unlock()
 
-	if !exists {
+	if !owner || !exists {
 		return
 	}
 
