@@ -22,11 +22,11 @@ package service
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
@@ -73,7 +73,7 @@ func startUserDBRetentionScheduler(
 		runUserDBRetention(ctx, cfg, pl, db)
 	})
 	cfg.OnChange(config.ChangeScanHistory, func() {
-		trigger.fire(ctx)
+		trigger.fireChanged(ctx)
 	})
 }
 
@@ -98,20 +98,53 @@ func scheduleUserDBRetention(
 type userDBRetentionTrigger struct {
 	idle    *idle.Scheduler
 	run     func(context.Context)
-	running atomic.Bool
+	mu      syncutil.Mutex
+	queued  bool
+	working bool
+	again   bool
 }
 
 // fire queues one retention run for the next idle window, unless the
 // previous one is still waiting or working.
 func (r *userDBRetentionTrigger) fire(ctx context.Context) {
-	if !r.running.CompareAndSwap(false, true) {
+	r.queue(ctx, false)
+}
+
+// fireChanged queues a run for a changed setting. A run that is already
+// working may have read the old value, so one more run follows it; changes
+// during the same run share it. A run still waiting reads the new value.
+func (r *userDBRetentionTrigger) fireChanged(ctx context.Context) {
+	r.queue(ctx, true)
+}
+
+func (r *userDBRetentionTrigger) queue(ctx context.Context, changed bool) {
+	r.mu.Lock()
+	switch {
+	case r.queued:
+		r.mu.Unlock()
+		return
+	case r.working:
+		r.again = r.again || changed
+		r.mu.Unlock()
 		return
 	}
+	r.queued = true
+	r.mu.Unlock()
 	r.idle.Schedule(ctx, "userdb-retention",
 		userDBMaintenanceQuietWindow, userDBMaintenanceMaxWait,
-		func(ctx context.Context) {
-			defer r.running.Store(false)
-			r.run(ctx)
+		func(runCtx context.Context) {
+			r.mu.Lock()
+			r.queued, r.working = false, true
+			r.mu.Unlock()
+			r.run(runCtx)
+			r.mu.Lock()
+			r.working = false
+			again := r.again
+			r.again = false
+			r.mu.Unlock()
+			if again {
+				r.queue(ctx, false)
+			}
 		},
 	)
 }

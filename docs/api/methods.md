@@ -4257,7 +4257,7 @@ To set a sound, send `{ "mode": "default" }`, `{ "mode": "off" }`, or `{ "mode":
 | host    | string   | Read-only. Pixelcade host. |
 | port    | number   | Read-only. Pixelcade port. |
 
-To change publishers, send `publishersMqtt` or `publishersPixelcade` as a list of `{ "index": n, "enabled": ..., "filter": [...], "mode": "..." }`. Each item names an existing publisher by `index` and holds only the fields to change; `mode` applies to Pixelcade only. Publishers are added, removed and pointed at a host only in the config file.
+To change publishers, send `publishersMqtt` or `publishersPixelcade` as a list of `{ "index": n, "enabled": ..., "filter": [...], "mode": "..." }`. Each item names an existing publisher by `index`, which is required, and holds only the fields to change; `mode` applies to Pixelcade only. Publishers are added, removed and pointed at a host only in the config file.
 
 Some settings are only set in the config file, because changing them from the network would widen what Core runs, reads, writes or sends: `install_dir`, `server_url`, `[launchers] index_root` and `media_dir`, the `[scraper]` paths and hosts, `[backup] local_dir`, publisher hosts, the `allow_*` lists, the `[zapscript]` input and command blocks, the GMC proxy and custom launchers. [launchers.custom](#launcherscustom) lists custom launchers read-only.
 

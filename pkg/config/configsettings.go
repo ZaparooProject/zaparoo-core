@@ -21,7 +21,6 @@ package config
 
 import (
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
 )
@@ -157,7 +156,7 @@ func (c *Instance) SetScanHistory(days int) {
 func (c *Instance) ReaderDrivers() map[string]DriverConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return maps.Clone(c.vals.Readers.Drivers)
+	return cloneDriverConfigs(c.vals.Readers.Drivers)
 }
 
 // SetReaderDrivers replaces the [readers.drivers] tables.
@@ -168,7 +167,7 @@ func (c *Instance) SetReaderDrivers(drivers map[string]DriverConfig) {
 		c.vals.Readers.Drivers = nil
 		return
 	}
-	c.vals.Readers.Drivers = maps.Clone(drivers)
+	c.vals.Readers.Drivers = cloneDriverConfigs(drivers)
 }
 
 func (c *Instance) SetLaunchersBeforeMediaStart(script string) {
@@ -193,18 +192,19 @@ func (c *Instance) SetLaunchersBeforeExit(script string) {
 func (c *Instance) LauncherDefaults() []LaunchersDefault {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return slices.Clone(c.vals.Launchers.Default)
+	return cloneLauncherDefaults(c.vals.Launchers.Default)
 }
 
 // SetLauncherDefaults replaces the [[launchers.default]] entries, refusing
 // the list a config load would refuse.
 func (c *Instance) SetLauncherDefaults(defaults []LaunchersDefault) error {
-	if err := ValidateLauncherDefaults(defaults); err != nil {
+	owned := cloneLauncherDefaults(defaults)
+	if err := ValidateLauncherDefaults(owned); err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Launchers.Default = slices.Clone(defaults)
+	c.vals.Launchers.Default = owned
 	return nil
 }
 
@@ -213,7 +213,7 @@ func (c *Instance) SetLauncherDefaults(defaults []LaunchersDefault) error {
 func (c *Instance) SystemCategories() []SystemsCategory {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return slices.Clone(c.vals.Systems.Category)
+	return cloneSystemCategories(c.vals.Systems.Category)
 }
 
 // ValidateSystemCategories reports the first entry SetSystemCategories would
@@ -230,13 +230,14 @@ func ValidateSystemCategories(categories []SystemsCategory) error {
 // entry must be valid, and the resolver is rebuilt so the change applies
 // without a reload.
 func (c *Instance) SetSystemCategories(categories []SystemsCategory) error {
-	resolver, problems := newCategoryResolver(categories)
+	owned := cloneSystemCategories(categories)
+	resolver, problems := newCategoryResolver(owned)
 	if len(problems) > 0 {
 		return problems[0]
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Systems.Category = slices.Clone(categories)
+	c.vals.Systems.Category = owned
 	c.loaded.categoryResolver = resolver
 	return nil
 }
@@ -291,7 +292,7 @@ func (c *Instance) SetInternetCheck(enabled bool) {
 func (c *Instance) SetMQTTPublishers(pubs []MQTTPublisher) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Service.Publishers.MQTT = slices.Clone(pubs)
+	c.vals.Service.Publishers.MQTT = cloneMQTTPublishers(pubs)
 }
 
 // SetPixelCadePublishers replaces the [[service.publishers.pixelcade]]
@@ -299,5 +300,68 @@ func (c *Instance) SetMQTTPublishers(pubs []MQTTPublisher) {
 func (c *Instance) SetPixelCadePublishers(pubs []PixelCadePublisher) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Service.Publishers.PixelCade = slices.Clone(pubs)
+	c.vals.Service.Publishers.PixelCade = clonePixelCadePublishers(pubs)
+}
+
+// clonePtr returns a copy of *p in new memory, or nil.
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// The clone helpers below copy config entries together with the pointers and
+// slices inside them, so neither a caller nor the stored config can change
+// the other's values after the copy.
+
+func cloneDriverConfigs(drivers map[string]DriverConfig) map[string]DriverConfig {
+	if drivers == nil {
+		return nil
+	}
+	owned := make(map[string]DriverConfig, len(drivers))
+	for id, d := range drivers {
+		d.Enabled = clonePtr(d.Enabled)
+		d.AutoDetect = clonePtr(d.AutoDetect)
+		d.KeepReading = clonePtr(d.KeepReading)
+		owned[id] = d
+	}
+	return owned
+}
+
+func cloneLauncherDefaults(defaults []LaunchersDefault) []LaunchersDefault {
+	if defaults == nil {
+		return nil
+	}
+	owned := slices.Clone(defaults)
+	for i := range owned {
+		owned[i].RenderScale = clonePtr(owned[i].RenderScale)
+		owned[i].ScanDuplicates = clonePtr(owned[i].ScanDuplicates)
+	}
+	return owned
+}
+
+func cloneMQTTPublishers(pubs []MQTTPublisher) []MQTTPublisher {
+	if pubs == nil {
+		return nil
+	}
+	owned := slices.Clone(pubs)
+	for i := range owned {
+		owned[i].Enabled = clonePtr(owned[i].Enabled)
+		owned[i].Filter = slices.Clone(owned[i].Filter)
+	}
+	return owned
+}
+
+func clonePixelCadePublishers(pubs []PixelCadePublisher) []PixelCadePublisher {
+	if pubs == nil {
+		return nil
+	}
+	owned := slices.Clone(pubs)
+	for i := range owned {
+		owned[i].Enabled = clonePtr(owned[i].Enabled)
+		owned[i].Filter = slices.Clone(owned[i].Filter)
+	}
+	return owned
 }

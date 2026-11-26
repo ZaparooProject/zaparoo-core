@@ -262,3 +262,34 @@ func TestAudioBrowserListsAndResolvesSounds(t *testing.T) {
 	_, err = browser.ResolveAudio(context.Background(), musicRoot, "leak.wav")
 	require.ErrorIs(t, err, hostfiles.ErrInvalidPath, "a link out of the root is refused")
 }
+
+// A link is offered only when it can be saved: resolving checks the target's
+// extension, because the stored path is the target and playback decodes by it.
+func TestAudioLinksListOnlyWhenTheyResolve(t *testing.T) {
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	music := filepath.Join(base, "music")
+	writeFile(t, filepath.Join(music, "blobs", "sound"))
+	writeFile(t, filepath.Join(music, "blobs", "chime.ogg"))
+	if err = os.Symlink(filepath.Join(music, "blobs", "sound"), filepath.Join(music, "success.wav")); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	require.NoError(t, os.Symlink(filepath.Join(music, "blobs", "chime.ogg"), filepath.Join(music, "fail.ogg")))
+	browser := hostfiles.NewAudioBrowser([]string{music}, "")
+	musicRoot := rootIDFor(t, browser, music)
+
+	listing, err := browser.ListAudio(context.Background(), musicRoot, "")
+	require.NoError(t, err)
+	names := make([]string, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
+		names = append(names, entry.Name)
+	}
+	assert.Equal(t, []string{"blobs", "fail.ogg"}, names)
+
+	_, err = browser.ResolveAudio(context.Background(), musicRoot, "success.wav")
+	require.ErrorIs(t, err, hostfiles.ErrNotFile)
+	path, err := browser.ResolveAudio(context.Background(), musicRoot, "fail.ogg")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(music, "blobs", "chime.ogg"), path)
+}

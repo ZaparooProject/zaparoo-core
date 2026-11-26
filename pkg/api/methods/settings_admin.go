@@ -22,6 +22,7 @@ package methods
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path"
@@ -604,13 +605,17 @@ func requireLauncherRef(env *requests.RequestEnv, ref string) error {
 func checkPublisherUpdates(field string, updates []models.PublisherUpdate, count int, modes bool) error {
 	seen := make(map[int]bool, len(updates))
 	for _, u := range updates {
-		if u.Index >= count {
-			return models.ClientErrf("invalid params: %s: no publisher at index %d", field, u.Index)
+		if u.Index == nil {
+			return models.ClientErrf("invalid params: %s: index is required", field)
 		}
-		if seen[u.Index] {
-			return models.ClientErrf("invalid params: %s: index %d is listed twice", field, u.Index)
+		index := *u.Index
+		if index < 0 || index >= count {
+			return models.ClientErrf("invalid params: %s: no publisher at index %d", field, index)
 		}
-		seen[u.Index] = true
+		if seen[index] {
+			return models.ClientErrf("invalid params: %s: index %d is listed twice", field, index)
+		}
+		seen[index] = true
 		if u.Mode != nil && !modes {
 			return models.ClientErrf("invalid params: %s: mode is not a setting of this publisher", field)
 		}
@@ -649,8 +654,9 @@ func carryLauncherInstallSettings(existing, updated []config.LaunchersDefault) {
 	}
 }
 
-// scanDuplicatesChanged reports whether a launcher indexes differently under
-// the new list.
+// scanDuplicatesChanged reports whether an entry's scan_duplicates was set,
+// cleared or changed. Removing an explicit false can expose a group entry's
+// true, so a key going away counts as a change even when it held false.
 func scanDuplicatesChanged(existing, updated []config.LaunchersDefault) bool {
 	resolve := func(list []config.LaunchersDefault) map[string]bool {
 		out := make(map[string]bool)
@@ -661,18 +667,7 @@ func scanDuplicatesChanged(existing, updated []config.LaunchersDefault) bool {
 		}
 		return out
 	}
-	before, after := resolve(existing), resolve(updated)
-	for k, v := range after {
-		if before[k] != v {
-			return true
-		}
-	}
-	for k, v := range before {
-		if after[k] != v {
-			return true
-		}
-	}
-	return false
+	return !maps.Equal(resolve(existing), resolve(updated))
 }
 
 func clonePublisherFilter(f []string) []string {
@@ -840,10 +835,10 @@ func applyPublisherUpdates(cfg *config.Instance, p *models.AdminSettingsParams) 
 		for _, u := range *p.PublishersMQTT {
 			if u.Enabled != nil {
 				enabled := *u.Enabled
-				pubs[u.Index].Enabled = &enabled
+				pubs[*u.Index].Enabled = &enabled
 			}
 			if u.Filter != nil {
-				pubs[u.Index].Filter = clonePublisherFilter(*u.Filter)
+				pubs[*u.Index].Filter = clonePublisherFilter(*u.Filter)
 			}
 		}
 		cfg.SetMQTTPublishers(pubs)
@@ -858,13 +853,13 @@ func applyPublisherUpdates(cfg *config.Instance, p *models.AdminSettingsParams) 
 		for _, u := range *p.PublishersPixelcade {
 			if u.Enabled != nil {
 				enabled := *u.Enabled
-				pubs[u.Index].Enabled = &enabled
+				pubs[*u.Index].Enabled = &enabled
 			}
 			if u.Filter != nil {
-				pubs[u.Index].Filter = clonePublisherFilter(*u.Filter)
+				pubs[*u.Index].Filter = clonePublisherFilter(*u.Filter)
 			}
 			if u.Mode != nil {
-				pubs[u.Index].Mode = *u.Mode
+				pubs[*u.Index].Mode = *u.Mode
 			}
 		}
 		cfg.SetPixelCadePublishers(pubs)

@@ -520,14 +520,16 @@ func readEntries(top, folder *os.Root, rootReal, dir, relDir string, keep func(s
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		info, ok := entryInfo(top, folder, rootReal, filepath.Join(dir, name), dirEntry)
+		info, target, ok := entryInfo(top, folder, rootReal, filepath.Join(dir, name), dirEntry)
 		if !ok {
 			continue
 		}
 		entry := Entry{Name: name, IsDir: info.IsDir(), Modified: info.ModTime()}
 		switch {
 		case entry.IsDir:
-		case info.Mode().IsRegular() && keep(name):
+		// A link must pass by its target's name too: opening and resolving
+		// check the target, and audio is decoded by its extension.
+		case info.Mode().IsRegular() && keep(name) && keep(target):
 			entry.Size = info.Size()
 		default:
 			continue
@@ -553,21 +555,25 @@ func readEntries(top, folder *os.Root, rootReal, dir, relDir string, keep func(s
 
 // entryInfo describes one folder entry, read through the roots. A symlink is
 // described by its target, and left out when the target is outside the root.
-func entryInfo(top, folder *os.Root, rootReal, path string, dirEntry os.DirEntry) (os.FileInfo, bool) {
+// The returned path is the entry's real path: the target for a symlink.
+func entryInfo(
+	top, folder *os.Root, rootReal, path string, dirEntry os.DirEntry,
+) (info os.FileInfo, resolved string, ok bool) {
 	if dirEntry.Type()&os.ModeSymlink == 0 {
-		info, err := folder.Lstat(dirEntry.Name())
-		return info, err == nil
+		var err error
+		info, err = folder.Lstat(dirEntry.Name())
+		return info, path, err == nil
 	}
 	// An absolute link inside the root is kept, which os.Root alone refuses,
 	// so the target is resolved here and then read through the root.
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil || !within(rootReal, target) {
-		return nil, false
+		return nil, "", false
 	}
 	relTarget, err := filepath.Rel(rootReal, target)
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
-	info, err := top.Stat(relTarget)
-	return info, err == nil
+	info, err = top.Stat(relTarget)
+	return info, target, err == nil
 }

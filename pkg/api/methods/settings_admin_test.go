@@ -449,6 +449,24 @@ func TestHandleSettingsUpdate_PixelcadeModeOnlyForPixelcade(t *testing.T) {
 	assert.Contains(t, err.Error(), "mode is not a setting")
 }
 
+func TestHandleSettingsUpdate_PublisherIndexRequired(t *testing.T) {
+	t.Parallel()
+
+	for _, params := range []string{
+		`{"publishersMqtt":[{"enabled":false}]}`,
+		`{"publishersMqtt":[{"index":null,"enabled":false}]}`,
+	} {
+		cfg := newAdminTestConfig(t, &config.Values{
+			Service: config.Service{Publishers: config.Publishers{
+				MQTT: []config.MQTTPublisher{{Broker: "broker:1883", Topic: "t"}},
+			}},
+		})
+		_, err := HandleSettingsUpdate(adminSettingsEnv(t, cfg, clientLocal, params))
+		require.Error(t, err, params)
+		assert.Nil(t, cfg.GetMQTTPublishers()[0].Enabled, "%s: the first publisher is left alone", params)
+	}
+}
+
 func TestHandleSettingsUpdate_SoundFromAbsolutePath(t *testing.T) {
 	t.Parallel()
 
@@ -743,4 +761,19 @@ func TestHandleSettingsUpdate_SoundFromBrowseRoot(t *testing.T) {
 	_, err = HandleSettingsUpdate(env)
 	require.Error(t, err, "a path out of the root is refused")
 	assert.Equal(t, &want, cfg.SoundSetting(config.SoundReady))
+}
+
+func TestScanDuplicatesChangedCountsAClearedFalse(t *testing.T) {
+	t.Parallel()
+
+	group := config.LaunchersDefault{Launcher: "MisterArcade", ScanDuplicates: new(true)}
+	own := config.LaunchersDefault{Launcher: "ArcadeMRA", ScanDuplicates: new(false)}
+	assert.True(t, scanDuplicatesChanged(
+		[]config.LaunchersDefault{group, own},
+		[]config.LaunchersDefault{group, {Launcher: "ArcadeMRA"}},
+	), "dropping the launcher's false lets the group's true apply")
+	assert.False(t, scanDuplicatesChanged(
+		[]config.LaunchersDefault{group, own},
+		[]config.LaunchersDefault{{Launcher: "misterarcade", ScanDuplicates: new(true)}, own},
+	), "case-only renames change nothing")
 }

@@ -101,7 +101,10 @@ type bleTransport struct {
 	bondHolds int
 	wg        sync.WaitGroup
 	mu        syncutil.Mutex
-	stopped   bool
+	// readvertiseMu runs one readvertise at a time, so two renames cannot
+	// both wait out the same serve and then start two on one peripheral.
+	readvertiseMu syncutil.Mutex
+	stopped       bool
 }
 
 func newBLETransport(d *bleTransportDeps) *bleTransport {
@@ -218,6 +221,8 @@ func (t *bleTransport) serveOn(p ble.Peripheral, onlyIfCurrent bool) {
 // Bluetooth clients are dropped and reconnect under the new name. The old
 // serve is waited out first: one peripheral cannot serve twice at once.
 func (t *bleTransport) readvertise() {
+	t.readvertiseMu.Lock()
+	defer t.readvertiseMu.Unlock()
 	t.mu.Lock()
 	p := t.peripheral
 	cancel := t.serveCancel

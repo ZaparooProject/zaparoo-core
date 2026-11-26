@@ -21,7 +21,6 @@ package methods
 
 import (
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +37,14 @@ type settingsField string
 // adminField points a config key at the AdminSettings field only a local or
 // admin client reads and writes.
 type adminField string
+
+// readOnlyField points a config key at a settings field any client reads
+// but settings.update does not write.
+type readOnlyField string
+
+// adminReadOnlyField points a config key at an AdminSettings field only a
+// local or admin client reads, and settings.update does not write.
+type adminReadOnlyField string
 
 // otherMethod points a config key at the API method that manages it.
 type otherMethod string
@@ -124,9 +131,9 @@ var configKeyAPI = map[string]any{
 	"launchers.on_media_start":                  adminField("launchersOnMediaStart"),
 	"launchers.preference":                      settingsField("launcherPreference"),
 	"library.sync":                              settingsField("librarySyncEnabled"),
-	"mappings.entry.match_pattern":              otherMethod(models.MethodMappingsNew),
-	"mappings.entry.token_key":                  otherMethod(models.MethodMappingsNew),
-	"mappings.entry.zapscript":                  otherMethod(models.MethodMappingsNew),
+	"mappings.entry.match_pattern":              otherMethod(models.MethodMappings),
+	"mappings.entry.token_key":                  otherMethod(models.MethodMappings),
+	"mappings.entry.zapscript":                  otherMethod(models.MethodMappings),
 	"media.default_langs":                       adminField("mediaDefaultLangs"),
 	"media.default_regions":                     adminField("mediaDefaultRegions"),
 	"media.filename_tags":                       adminField("mediaFilenameTags"),
@@ -172,18 +179,18 @@ var configKeyAPI = map[string]any{
 	"service.allow_run":                    fileOnly(reasonAllowList),
 	"service.allowed_ips":                  fileOnly(reasonAllowList),
 	"service.allowed_origins":              fileOnly(reasonAllowList),
-	"service.api_listen":                   adminField("apiListen"),
-	"service.api_port":                     adminField("apiPort"),
+	"service.api_listen":                   adminReadOnlyField("apiListen"),
+	"service.api_port":                     adminReadOnlyField("apiPort"),
 	"service.ble.enabled":                  settingsField("bleEnabled"),
 	"service.ble.name":                     adminField("bleName"),
-	"service.device_id":                    adminField("deviceId"),
+	"service.device_id":                    adminReadOnlyField("deviceId"),
 	"service.discovery.enabled":            adminField("discoveryEnabled"),
 	"service.discovery.instance_name":      adminField("discoveryInstanceName"),
 	"service.encryption":                   settingsField("encryption"),
 	"service.internet_check":               adminField("internetCheck"),
 	"service.on_boot":                      adminField("serviceOnBoot"),
 	"service.on_ready":                     adminField("serviceOnReady"),
-	"service.online_base_url":              settingsField("onlineBaseUrl"),
+	"service.online_base_url":              readOnlyField("onlineBaseUrl"),
 	"service.publishers.mqtt.broker":       fileOnly(reasonHost),
 	"service.publishers.mqtt.enabled":      adminField("publishersMqtt"),
 	"service.publishers.mqtt.filter":       adminField("publishersMqtt"),
@@ -281,6 +288,7 @@ func TestEveryConfigKeyIsClassified(t *testing.T) {
 	settingsFields := jsonFieldNames(reflect.TypeFor[models.SettingsResponse]())
 	adminFields := jsonFieldNames(reflect.TypeFor[models.AdminSettings]())
 	adminParams := jsonFieldNames(reflect.TypeFor[models.AdminSettingsParams]())
+	updateParams := jsonFieldNames(reflect.TypeFor[models.UpdateSettingsParams]())
 
 	for _, key := range keys {
 		class, ok := configKeyAPI[key]
@@ -291,12 +299,16 @@ func TestEveryConfigKeyIsClassified(t *testing.T) {
 		switch v := class.(type) {
 		case settingsField:
 			assert.Containsf(t, settingsFields, string(v), "%s: settings has no field %q", key, v)
+			assert.Containsf(t, updateParams, string(v), "%s: settings.update cannot write %q", key, v)
 		case adminField:
 			assert.Containsf(t, adminFields, string(v), "%s: AdminSettings has no field %q", key, v)
-			if !slices.Contains([]string{"deviceId", "apiListen", "apiPort"}, string(v)) {
-				assert.Containsf(t, adminParams, string(v),
-					"%s: settings.update cannot write admin field %q", key, v)
-			}
+			assert.Containsf(t, adminParams, string(v), "%s: settings.update cannot write admin field %q", key, v)
+		case readOnlyField:
+			assert.Containsf(t, settingsFields, string(v), "%s: settings has no field %q", key, v)
+			assert.NotContainsf(t, updateParams, string(v), "%s: settings.update writes %q; use settingsField", key, v)
+		case adminReadOnlyField:
+			assert.Containsf(t, adminFields, string(v), "%s: AdminSettings has no field %q", key, v)
+			assert.NotContainsf(t, adminParams, string(v), "%s: settings.update writes %q; use adminField", key, v)
 		case otherMethod:
 			assert.NotEmptyf(t, string(v), "%s: no method named", key)
 		case fileOnly:

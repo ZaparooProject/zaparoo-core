@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -152,6 +153,43 @@ func connectedReaderIDs(st *state.State) []string {
 			ids = append(ids, r.ReaderID())
 		}
 	}
+	return ids
+}
+
+// readerSnapshots collects reader IDs taken on one goroutine for the reader
+// manager to apply later. Snapshots taken before the manager reads them are
+// merged, and ready signals that one is waiting.
+type readerSnapshots struct {
+	ready chan struct{}
+	ids   map[string]struct{}
+	mu    syncutil.Mutex
+}
+
+func newReaderSnapshots() *readerSnapshots {
+	return &readerSnapshots{ready: make(chan struct{}, 1), ids: make(map[string]struct{})}
+}
+
+func (s *readerSnapshots) add(ids []string) {
+	s.mu.Lock()
+	for _, id := range ids {
+		s.ids[id] = struct{}{}
+	}
+	s.mu.Unlock()
+	select {
+	case s.ready <- struct{}{}:
+	default:
+	}
+}
+
+// take returns and clears the IDs collected since the last take.
+func (s *readerSnapshots) take() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.ids))
+	for id := range s.ids {
+		ids = append(ids, id)
+	}
+	clear(s.ids)
 	return ids
 }
 
@@ -550,15 +588,15 @@ func readerManager(
 	connectScanSeen := make(map[string]bool)
 	// Readers already connected when ignore_on_connect is turned on are past
 	// their connect scan, so their next scan is a person's and must count.
-	ignoreOnConnectEnabled := make(chan struct{}, 1)
+	// They are read when the setting changes: a reader connecting before the
+	// manager gets to the change still has its connect scan ignored.
+	connectedAtEnable := newReaderSnapshots()
 	svc.Config.OnChange(config.ChangeIgnoreOnConnect, func() {
-		select {
-		case ignoreOnConnectEnabled <- struct{}{}:
-		default:
-		}
+		connectedAtEnable.add(connectedReaderIDs(svc.State))
 	})
+	ignoreOnConnectEnabled := connectedAtEnable.ready
 	markConnectedReadersSeen := func() {
-		for _, id := range connectedReaderIDs(svc.State) {
+		for _, id := range connectedAtEnable.take() {
 			connectScanSeen[id] = true
 		}
 	}

@@ -2142,6 +2142,9 @@ func TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders(t *test
 
 	cfg.SetScanIgnoreOnConnect(true)
 	cfg.NotifyChanged(config.ChangeIgnoreOnConnect)
+	// Connected after the change, so its connect scan is still ignored even
+	// if the manager handles the change only now.
+	env.st.SetReader(lateReader(t, "reader-3"))
 
 	env.sendScan(readers.Scan{
 		Source: "test-reader",
@@ -2160,4 +2163,49 @@ func TestReaderManager_IgnoreOnConnect_EnabledLaterKeepsConnectedReaders(t *test
 		},
 	})
 	env.expectNoToken(t)
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID: "late-card", Text: "**launch.system:nes", ScanTime: time.Now(), ReaderID: "reader-3",
+		},
+	})
+	env.expectNoToken(t)
+}
+
+func lateReader(t *testing.T, id string) *mocks.MockReader {
+	t.Helper()
+	reader := mocks.NewMockReader()
+	reader.On("ReaderID").Return(id)
+	reader.On("Connected").Return(true).Maybe()
+	reader.On("Path").Return("/dev/" + id).Maybe()
+	reader.On("Info").Return(id).Maybe()
+	reader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader", DefaultEnabled: true}).Maybe()
+	reader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	reader.On("Capabilities").Return([]readers.Capability{}).Maybe()
+	return reader
+}
+
+// TestReaderSnapshots_MergesUntilTaken covers ignore_on_connect changes that
+// arrive before the manager handles the first: the readers connected at each
+// change are all kept, under one signal, and a reader connecting later is in
+// none of them.
+func TestReaderSnapshots_MergesUntilTaken(t *testing.T) {
+	t.Parallel()
+
+	snapshots := newReaderSnapshots()
+	snapshots.add([]string{"reader-1"})
+	snapshots.add([]string{"reader-2", "reader-1"})
+
+	select {
+	case <-snapshots.ready:
+	default:
+		t.Fatal("no signal after a snapshot")
+	}
+	select {
+	case <-snapshots.ready:
+		t.Fatal("merged snapshots signal once")
+	default:
+	}
+	assert.ElementsMatch(t, []string{"reader-1", "reader-2"}, snapshots.take())
+	assert.Empty(t, snapshots.take(), "a take clears what it returned")
 }

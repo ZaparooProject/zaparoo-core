@@ -120,6 +120,34 @@ func TestUserDBRetentionTrigger_SkipsWhileRunning(t *testing.T) {
 	assert.Equal(t, int32(2), runs.Load(), "a run is allowed again once the last one finished")
 }
 
+// A scan_history change during a run may come after the run read the limit,
+// so one more run follows. Several changes during the run share it.
+func TestUserDBRetentionTrigger_RerunsAfterChangeDuringRun(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	idleSched := idle.NewWithClock(clock)
+	clock.Advance(userDBMaintenanceQuietWindow)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var runs atomic.Int32
+	trigger := &userDBRetentionTrigger{idle: idleSched, run: func(context.Context) {
+		if runs.Add(1) == 1 {
+			started <- struct{}{}
+			<-release
+		}
+	}}
+
+	trigger.fire(context.Background())
+	<-started
+	trigger.fireChanged(context.Background())
+	trigger.fireChanged(context.Background())
+	trigger.fire(context.Background())
+	close(release)
+	idleSched.Wait()
+	assert.Equal(t, int32(2), runs.Load(), "changes during one run share a single follow-up")
+}
+
 func TestStartUserDBRetentionScheduler_StopsWithContext(t *testing.T) {
 	t.Parallel()
 

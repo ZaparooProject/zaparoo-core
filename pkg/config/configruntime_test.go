@@ -116,7 +116,32 @@ func TestRedactBrokerDropsCredentialsAndPaths(t *testing.T) {
 		"tcp://user:secret@broker:1883/path": "tcp://broker:1883",
 		"user:secret@broker:1883":            "broker:1883",
 		"broker:1883":                        "broker:1883",
+		"user:secret@":                       "",
+		"tcp://user:secret@":                 "",
 	} {
 		assert.Equal(t, want, RedactBroker(in), in)
 	}
+}
+
+func TestSettersAndGettersDoNotShareValues(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	scale := 2
+	require.NoError(t, cfg.SetLauncherDefaults([]LaunchersDefault{{Launcher: "retroarch", RenderScale: &scale}}))
+	scale = 0
+	got := cfg.LauncherDefaults()
+	assert.Equal(t, 2, *got[0].RenderScale, "the caller's value is copied in")
+	*got[0].RenderScale = 5
+	assert.Equal(t, 2, *cfg.LauncherDefaults()[0].RenderScale, "the returned value is a copy")
+
+	enabled := true
+	cfg.SetReaderDrivers(map[string]DriverConfig{"pn532": {Enabled: &enabled}})
+	enabled = false
+	assert.True(t, *cfg.ReaderDrivers()["pn532"].Enabled)
+
+	systems := []string{"NES"}
+	require.NoError(t, cfg.SetSystemCategories([]SystemsCategory{{Name: "Mine", Systems: systems}}))
+	systems[0] = "SNES"
+	assert.Equal(t, []string{"NES"}, cfg.SystemCategories()[0].Systems)
 }

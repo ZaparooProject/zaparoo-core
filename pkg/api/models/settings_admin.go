@@ -137,13 +137,14 @@ type PixelcadePublisherSetting struct {
 	Enabled bool     `json:"enabled"`
 }
 
-// PublisherUpdate changes the publisher at Index. Mode applies to Pixelcade
-// publishers only.
+// PublisherUpdate changes the publisher at Index, which is required so a
+// missing index cannot fall back to the first publisher. Mode applies to
+// Pixelcade publishers only.
 type PublisherUpdate struct {
 	Enabled *bool     `json:"enabled,omitempty"`
 	Filter  *[]string `json:"filter,omitempty" validate:"omitempty,max=64,dive,min=1,max=128"`
 	Mode    *string   `json:"mode,omitempty" validate:"omitempty,oneof=stream write"`
-	Index   int       `json:"index" validate:"gte=0"`
+	Index   *int      `json:"index" validate:"required,gte=0"`
 }
 
 // AdminSettings are the settings only a local or admin client reads. They

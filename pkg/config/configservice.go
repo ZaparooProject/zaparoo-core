@@ -376,7 +376,8 @@ func RedactBroker(broker string) string {
 		}
 	}
 
-	if at := strings.LastIndex(broker, "@"); at >= 0 && at+1 < len(broker) {
+	// Everything up to the last @ is credentials, even with no host after it.
+	if at := strings.LastIndex(broker, "@"); at >= 0 {
 		return broker[at+1:]
 	}
 
