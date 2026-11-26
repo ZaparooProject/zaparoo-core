@@ -1076,9 +1076,9 @@ func TestReaderFeatures(t *testing.T) {
 					{Driver: "pn532", Path: "/dev/ttyUSB3", Features: &none},
 				},
 				Drivers: map[string]DriverConfig{
-					"pn532":         {Features: []string{"felica", "FELICA"}},
-					"libnfcacr122":  {Features: []string{"felica"}},
-					"libnfc_acr122": {Features: []string{}},
+					"pn532":         {Features: &[]string{"felica", "FELICA"}},
+					"libnfcacr122":  {Features: &[]string{"felica"}},
+					"libnfc_acr122": {Features: &none},
 				},
 			},
 		},
@@ -1183,4 +1183,28 @@ func TestNormalizeReaderFeature(t *testing.T) {
 	assert.Equal(t, ReaderFeatureFeliCa, NormalizeReaderFeature(" FeliCa "))
 	assert.Empty(t, NormalizeReaderFeature("felicia"))
 	assert.Empty(t, NormalizeReaderFeature(""))
+}
+
+func TestReaderFeatures_EmptyDriverListSurvivesSave(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(
+		"[readers.drivers.libnfc_acr122]\nfeatures = []\n\n"+
+			"[readers.drivers.libnfcacr122]\nfeatures = [\"felica\"]\n\n"+
+			"[readers.drivers.pn532]\nauto_detect = true\n",
+	))
+	require.Empty(t, cfg.ReaderFeatures([]string{"libnfc_acr122"}, ""))
+	require.NoError(t, cfg.Save())
+
+	reloaded, err := NewConfig(configDir, BaseDefaults)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.ReaderFeatures([]string{"libnfc_acr122"}, ""))
+
+	drivers := reloaded.Readers().Drivers
+	require.NotNil(t, drivers["libnfc_acr122"].Features)
+	assert.Empty(t, *drivers["libnfc_acr122"].Features)
+	assert.Nil(t, drivers["pn532"].Features, "an unset list stays unset")
 }

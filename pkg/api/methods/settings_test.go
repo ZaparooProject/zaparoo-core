@@ -851,6 +851,29 @@ func TestHandleSettingsUpdate_ReaderConnectionFeatures(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "felicia")
 	assert.Len(t, cfg.Readers().Connect, 3, "a rejected update changes nothing")
+
+	// A config.toml written for a newer Core can name features this one
+	// does not know. settings leaves them out, so echoing the list back
+	// through settings.update is accepted.
+	require.NoError(t, cfg.LoadTOML("[[readers.connect]]\ndriver = \"pn532\"\n"+
+		"path = \"/dev/ttyUSB0\"\nfeatures = [\"FeliCa\", \"future_feature\"]\n\n"+
+		"[[readers.connect]]\ndriver = \"pn532\"\npath = \"/dev/ttyUSB1\"\nfeatures = [\"future_feature\"]\n"))
+	result, err = HandleSettings(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	})
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.ReadersConnect, 2)
+	require.NotNil(t, resp.ReadersConnect[0].Features)
+	assert.Equal(t, []string{config.ReaderFeatureFeliCa}, *resp.ReadersConnect[0].Features)
+	require.NotNil(t, resp.ReadersConnect[1].Features)
+	assert.Empty(t, *resp.ReadersConnect[1].Features)
+	require.NoError(t, update(resp.ReadersConnect))
 }
 
 // TestHandleSettings_ReaderConnectionsEnabled tests that the enabled field

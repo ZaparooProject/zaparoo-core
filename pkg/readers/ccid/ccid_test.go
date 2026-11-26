@@ -265,6 +265,8 @@ func TestReader_FeliCaCardIsReportedByUID(t *testing.T) {
 	t.Parallel()
 	dev := newSimDevice(profileACR122U)
 	dev.placeCard(atrFeliCa, true)
+	// A FeliCa card's UID is its 8-byte IDm.
+	dev.cardUID = []byte{0x01, 0x2E, 0x4C, 0xD3, 0x8A, 0x1B, 0x66, 0x07}
 	r, iq := attach(t, dev, &testInfo)
 
 	ticks(t, r, iq, 2)
@@ -273,7 +275,7 @@ func TestReader_FeliCaCardIsReportedByUID(t *testing.T) {
 	require.Len(t, scans, 1)
 	require.NotNil(t, scans[0].Token)
 	assert.Equal(t, tokens.TypeFeliCa, scans[0].Token.Type)
-	assert.Equal(t, "04112233445566", scans[0].Token.UID)
+	assert.Equal(t, "012e4cd38a1b6607", scans[0].Token.UID)
 	assert.Empty(t, scans[0].Token.Text)
 	for _, apdu := range dev.transmits {
 		assert.Equal(t, byte(insGetData), apdu[1], "nothing but the UID is asked of a FeliCa card")

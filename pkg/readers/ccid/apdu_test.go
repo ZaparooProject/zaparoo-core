@@ -108,7 +108,7 @@ func TestReadUID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	for _, length := range []int{4, 7, 10} {
+	for _, length := range []int{4, 7, 8, 10} {
 		uid := make([]byte, length)
 		card := &scriptedCard{responses: [][]byte{sw(swSuccess, uid...)}}
 		got, err := readUID(ctx, card)
@@ -118,7 +118,7 @@ func TestReadUID(t *testing.T) {
 	}
 
 	// The bR500 answers with success and no UID before it is ready.
-	for _, length := range []int{0, 1, 5, 8, 16} {
+	for _, length := range []int{0, 1, 5, 9, 16} {
 		card := &scriptedCard{responses: [][]byte{sw(swSuccess, make([]byte, length)...)}}
 		_, err := readUID(ctx, card)
 		require.ErrorIs(t, err, errTagNotReady, "a UID of %d bytes", length)

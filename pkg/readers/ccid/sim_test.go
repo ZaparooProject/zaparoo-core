@@ -98,6 +98,9 @@ type simDevice struct {
 	pollErr error
 	tag     simTag
 	atr     []byte
+	// cardUID is the UID of a card placed with placeCard. Unset gives a
+	// 7-byte UID.
+	cardUID []byte
 	// transmits is every APDU the driver sent.
 	transmits [][]byte
 	profile   simProfile
@@ -202,6 +205,9 @@ func (d *simDevice) getUID() []byte {
 	}
 	if d.tag == nil {
 		// A card that is not a storage card still has a UID.
+		if d.cardUID != nil {
+			return sw(swSuccess, d.cardUID...)
+		}
 		return sw(swSuccess, 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66)
 	}
 	return sw(swSuccess, d.tag.UID()...)

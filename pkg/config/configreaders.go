@@ -41,13 +41,14 @@ type DriverConfig struct {
 	AutoDetect *bool `toml:"auto_detect,omitempty"`
 	// KeepReading, LaunchOrder and AudioCDLauncher apply to the optical
 	// drive reader only.
-	KeepReading     *bool  `toml:"keep_reading,omitempty"`
-	ScanMode        string `toml:"scan_mode,omitempty"`
-	LaunchOrder     string `toml:"launch_order,omitempty"`
-	AudioCDLauncher string `toml:"audio_cd_launcher,omitempty"`
+	KeepReading *bool `toml:"keep_reading,omitempty"`
 	// Features turns on optional driver behaviour for every reader of the
-	// driver. See ReaderFeatures.
-	Features []string `toml:"features,omitempty"`
+	// driver. See ReaderFeatures. A pointer, so an explicit empty list
+	// survives a save as distinct from an unset one.
+	Features        *[]string `toml:"features,omitempty"`
+	ScanMode        string    `toml:"scan_mode,omitempty"`
+	LaunchOrder     string    `toml:"launch_order,omitempty"`
+	AudioCDLauncher string    `toml:"audio_cd_launcher,omitempty"`
 }
 
 // Optical drive launch orders. They decide between a library image the disc
@@ -316,7 +317,7 @@ func NormalizeReaderFeature(feature string) string {
 func (c *Instance) ReaderFeatures(driverIDs []string, path string) []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return normalizeReaderFeatures(c.readerFeaturesLocked(driverIDs, path))
+	return NormalizeReaderFeatures(c.readerFeaturesLocked(driverIDs, path))
 }
 
 // HasReaderFeature reports whether a feature is turned on for a connected
@@ -344,7 +345,7 @@ func (c *Instance) readerFeaturesLocked(driverIDs []string, path string) []strin
 				continue
 			}
 			if matched == "" || key < matched {
-				matched, features = key, driver.Features
+				matched, features = key, *driver.Features
 			}
 		}
 		if matched != "" {
@@ -354,7 +355,9 @@ func (c *Instance) readerFeaturesLocked(driverIDs []string, path string) []strin
 	return nil
 }
 
-func normalizeReaderFeatures(raw []string) []string {
+// NormalizeReaderFeatures returns the features in raw that Core knows, in
+// canonical form and without duplicates. Unknown names are dropped.
+func NormalizeReaderFeatures(raw []string) []string {
 	var out []string
 	for _, feature := range raw {
 		if canonical := NormalizeReaderFeature(feature); canonical != "" && !slices.Contains(out, canonical) {
@@ -376,7 +379,9 @@ func warnUnknownReaderFeatures(readers *Readers) {
 		}
 	}
 	for id, driver := range readers.Drivers {
-		warn(id, driver.Features)
+		if driver.Features != nil {
+			warn(id, *driver.Features)
+		}
 	}
 	for _, conn := range readers.Connect {
 		if conn.Features != nil {
