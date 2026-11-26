@@ -85,7 +85,7 @@ func TestProbeLoadTreatsLongSilenceAsALongLoad(t *testing.T) {
 	var loaded bool
 	var err error
 	drive(t, clock, loadProbeTimeout, func() {
-		loaded, err = f.loadOverNetwork(context.Background(), testCore, testContent)
+		loaded, err = f.loadOverNetwork(context.Background(), testCore, testContent, testContent)
 	})
 	require.NoError(t, err)
 	assert.True(t, loaded)
@@ -105,7 +105,7 @@ func TestProbeLoadAcceptsDifferentlyNamedContent(t *testing.T) {
 	var loaded bool
 	var err error
 	drive(t, clock, pollInterval, func() {
-		loaded, err = f.loadOverNetwork(context.Background(), testCore, testContent)
+		loaded, err = f.loadOverNetwork(context.Background(), testCore, testContent, testContent)
 	})
 	require.NoError(t, err)
 	assert.True(t, loaded)
@@ -122,7 +122,7 @@ func TestProbeLoadStopsWhenContextEnds(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := f.loadOverNetwork(ctx, testCore, testContent)
+		_, err := f.loadOverNetwork(ctx, testCore, testContent, testContent)
 		done <- err
 	}()
 	require.NoError(t, clock.BlockUntilContext(context.Background(), 1))
@@ -143,7 +143,7 @@ func TestLaunchTransientStopFailures(t *testing.T) {
 		expectSystemctl(exec, nil, "is-active", "--quiet", transientUnit)
 		expectSystemctl(exec, boom, "stop", transientUnit)
 
-		err := f.launch(context.Background(), testArgv, testContent)
+		err := f.launch(context.Background(), testArgv, testContent, testContent)
 		require.ErrorIs(t, err, boom)
 		require.ErrorContains(t, err, "stop previous game")
 		assert.Empty(t, f.currentLaunch())
@@ -157,7 +157,7 @@ func TestLaunchTransientStopFailures(t *testing.T) {
 		expectSystemctl(exec, boom, "stop", retroArchService)
 		expectSystemctl(exec, errors.New("start failed"), "--no-block", "start", retroArchService)
 
-		err := f.launch(context.Background(), testArgv, testContent)
+		err := f.launch(context.Background(), testArgv, testContent, testContent)
 		require.ErrorIs(t, err, boom)
 		require.ErrorContains(t, err, "stop retroarch service")
 		assert.Empty(t, f.currentLaunch())

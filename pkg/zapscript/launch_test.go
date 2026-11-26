@@ -2237,6 +2237,66 @@ func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestFindFile_ResolvesAbsolute7zMemberPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := launchTestAbsPath("games")
+	archive := filepath.Join(rootDir, "snes", "Pack.7z")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(archive), 0o700))
+	require.NoError(t, afero.WriteFile(fs, archive, []byte("test"), 0o600))
+
+	member := filepath.Join(archive, "B.sfc")
+	result, err := findFile(fs, mockPlatform, cfg, nil, member)
+
+	require.NoError(t, err)
+	assert.Equal(t, member, result)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestFindFile_FolderNamedLikeArchiveIsLookedUpAsFolder(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := launchTestAbsPath("games")
+	dir := filepath.Join(rootDir, "snes", "Pack.7z")
+	game := filepath.Join(dir, "Game.sfc")
+	require.NoError(t, fs.MkdirAll(dir, 0o700))
+	require.NoError(t, afero.WriteFile(fs, game, []byte("test"), 0o600))
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	result, err := findFile(fs, mockPlatform, cfg, nil, filepath.Join(dir, "game.sfc"))
+	require.NoError(t, err)
+	assert.Equal(t, game, result, "the file's own spelling is found")
+
+	_, err = findFile(fs, mockPlatform, cfg, nil, filepath.Join(dir, "Missing.sfc"))
+	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+func TestFindFile_ParentAfterArchiveCannotLeaveRoot(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := launchTestAbsPath("games")
+	archive := filepath.Join(rootDir, "Pack.7z")
+	require.NoError(t, fs.MkdirAll(rootDir, 0o700))
+	require.NoError(t, afero.WriteFile(fs, archive, []byte("test"), 0o600))
+	outside := launchTestAbsPath("outside.sfc")
+	require.NoError(t, afero.WriteFile(fs, outside, []byte("test"), 0o600))
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	result, err := findFile(fs, mockPlatform, cfg, nil, filepath.Join("Pack.7z", "..", "..", "outside.sfc"))
+	require.ErrorIs(t, err, ErrFileNotFound)
+	assert.NotEqual(t, outside, result)
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	t.Parallel()
 

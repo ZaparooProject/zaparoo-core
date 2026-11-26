@@ -500,22 +500,27 @@ func findFile(
 	path string,
 	pathRoots ...string,
 ) (string, error) {
+	// Cleaned first, so ".." after an archive cannot carry the final path
+	// past the root check made on the archive.
 	lookupPath := normalizeVirtualLookupPath(path)
+	if lookupPath != "" {
+		lookupPath = filepath.Clean(lookupPath)
+	}
 	ps := strings.Split(lookupPath, string(filepath.Separator))
 	statPath := lookupPath
 	var virtualParts []string
 
-	// if the file is inside a zip, a disk image or a virtual list, we just check
+	// if the file is inside an archive, a disk image or a virtual list, we just check
 	// that file exists
 	// TODO: both of these things are very specific to mister, it would be good to
 	//       have a more generic way of handling this for other platforms, or
 	//       implement them from zaparoo(?)
 	for i, p := range ps {
 		ext := filepath.Ext(strings.ToLower(p))
-		if ext == ".zip" || ext == ".txt" || ext == ".vhd" {
+		if ext == ".zip" || ext == ".7z" || ext == ".txt" || ext == ".vhd" {
 			statPath = virtualStatPath(lookupPath, ps, i+1)
 			virtualParts = ps[i+1:]
-			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
+			log.Debug().Msgf("found archive/txt, setting stat path: %s", statPath)
 			break
 		}
 	}
@@ -538,12 +543,23 @@ func findFile(
 	var firstNonNotExistErr error
 	var missing []string
 	for _, candidate := range candidates {
+		virtual := len(virtualParts) > 0
 		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
+		if err == nil && virtual {
+			full := filepath.Join(append([]string{resolvedPath}, virtualParts...)...)
+			info, statErr := fs.Stat(resolvedPath)
+			if isFolder := statErr == nil && info.IsDir(); !isFolder {
+				log.Debug().Msgf("found file: %s", full)
+				return full, nil
+			}
+			// A folder named like an archive or list is a folder, and the
+			// file below it is looked up as any other file is.
+			virtual = false
+			candidate = full
+			resolvedPath, err = findPathCaseInsensitive(fs, full)
+		}
 		if err == nil {
 			log.Debug().Msgf("found file: %s", resolvedPath)
-			if len(virtualParts) > 0 {
-				return filepath.Join(append([]string{resolvedPath}, virtualParts...)...), nil
-			}
 			return resolvedPath, nil
 		}
 		if errors.Is(err, errAmbiguousPath) {
@@ -555,7 +571,7 @@ func findFile(
 			}
 			continue
 		}
-		if len(virtualParts) == 0 {
+		if !virtual {
 			// A case-corrected path is what a launcher would know it by.
 			if resolvedPath != "" {
 				candidate = resolvedPath

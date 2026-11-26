@@ -291,18 +291,19 @@ func (p *Platform) retroArchOptions() retroarch.Options {
 // adaptLauncher sends the launch to the running RetroArch rather than starting
 // a child of Core, and stops through the platform so the menu comes back. A
 // launcher given a playlist system runs that system's playlist entries with
-// the core their playlist recorded.
+// the core their playlist recorded. A file inside an archive is loaded by its
+// "archive.zip#file" path and tracked by its media path.
 func (p *Platform) adaptLauncher(
 	launcher *platforms.Launcher,
 	controls map[string]platforms.Control,
 	playlistSystem string,
 ) {
-	build := launcher.BuildLaunchCommand
+	build := p.archiveMemberCommand(launcher.BuildLaunchCommand)
 	if playlistSystem != "" {
-		build = p.playlistCommand(build, playlistSystem)
-		launcher.BuildLaunchCommand = build
+		build = p.playlistCommand(launcher.BuildLaunchCommand, playlistSystem)
 		p.playlistAvailability(launcher, playlistSystem)
 	}
+	launcher.BuildLaunchCommand = build
 	launcher.Lifecycle = platforms.LifecycleFireAndForget
 	launcher.Kill = nil
 	launcher.Controls = controls
@@ -314,7 +315,7 @@ func (p *Platform) adaptLauncher(
 		argv := append([]string{cmd.Executable}, cmd.Args...)
 		ctx, cancel := context.WithTimeout(p.context(), launchTimeout)
 		defer cancel()
-		return nil, p.frontend.launch(ctx, argv, path)
+		return nil, p.frontend.launch(ctx, argv, p.retroArchContentPath(path), path)
 	}
 	launcher.GameRunning = func(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) (bool, error) {
 		return p.frontend.gameRunning(ctx)
