@@ -137,6 +137,7 @@ type Audio struct {
 	MusicVolume   *int    `toml:"music_volume,omitempty"`
 	MusicAutoplay *bool   `toml:"music_autoplay,omitempty"`
 	MidiSoundFont *string `toml:"midi_soundfont,omitempty"`
+	Device        *string `toml:"device,omitempty"`
 	Normalize     *bool   `toml:"normalize,omitempty"`
 	ScanFeedback  bool    `toml:"scan_feedback"`
 }
@@ -755,6 +756,17 @@ func (c *Instance) SetAudioNormalize(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.Normalize = &enabled
+}
+
+// AudioDevice returns the configured playback device: "" for the system
+// default, "auto" to prefer a USB sound card, or part of a device name.
+func (c *Instance) AudioDevice() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.Device == nil {
+		return ""
+	}
+	return strings.TrimSpace(*c.vals.Audio.Device)
 }
 
 // MidiSoundFontPath returns the SoundFont MIDI files play through, or ""

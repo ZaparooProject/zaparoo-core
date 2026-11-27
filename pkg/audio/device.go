@@ -24,12 +24,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gen2brain/malgo"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // mixSource is implemented by all audio sources that contribute to the shared output device.
@@ -59,12 +62,14 @@ type mixSourceList []*mixSourceEntry
 // snapshot. The realtime callback only reads that snapshot and never takes devMu.
 type sharedDevice struct {
 	initContext  func([]malgo.Backend, malgo.ContextConfig, malgo.LogProc) (*malgo.AllocatedContext, error)
+	fs           afero.Fs
 	malgoCtx     *malgo.AllocatedContext
 	device       *malgo.Device
 	cancelFn     context.CancelFunc
 	devDone      chan struct{}
 	prevDone     <-chan struct{}
 	sourceView   atomic.Pointer[mixSourceList]
+	outputDevice atomic.Pointer[func() string]
 	sources      []*mixSourceEntry
 	mixBuf       [][2]float64
 	devMu        syncutil.Mutex
@@ -310,10 +315,15 @@ func (d *sharedDevice) open() {
 	cfg.Alsa.NoMMap = 1
 	cfg.PeriodSizeInMilliseconds = periodSizeInMilliseconds
 	cfg.Periods = periodCount
+	cfg.Playback.DeviceID = d.choosePlaybackDevice(malgoCtx)
 
-	device, err := malgo.InitDevice(malgoCtx.Context, cfg, malgo.DeviceCallbacks{
-		Data: d.onSamples,
-	})
+	callbacks := malgo.DeviceCallbacks{Data: d.onSamples}
+	device, err := malgo.InitDevice(malgoCtx.Context, cfg, callbacks)
+	if err != nil && cfg.Playback.DeviceID != nil {
+		log.Warn().Err(err).Msg("failed to open chosen audio device, using system default")
+		cfg.Playback.DeviceID = nil
+		device, err = malgo.InitDevice(malgoCtx.Context, cfg, callbacks)
+	}
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio device")
 		d.failAllSources()
@@ -339,6 +349,44 @@ func (d *sharedDevice) open() {
 	d.devMu.Unlock()
 
 	go d.manage(ctx, device, malgoCtx, done)
+}
+
+// choosePlaybackDevice resolves the output device setting against the devices
+// the context lists. It returns nil for the system default, including when the
+// setting matches nothing, so a missing speaker never silences playback.
+func (d *sharedDevice) choosePlaybackDevice(malgoCtx *malgo.AllocatedContext) unsafe.Pointer {
+	setting := d.outputDeviceSetting()
+	if setting == "" {
+		return nil
+	}
+	infos, err := malgoCtx.Devices(malgo.Playback)
+	if err != nil {
+		log.Warn().Err(err).Str("device", setting).
+			Msg("failed to list audio devices, using system default")
+		return nil
+	}
+	devices := playbackCandidates(infos)
+	var usbCards []int
+	if strings.EqualFold(setting, OutputDeviceAuto) {
+		fs := d.fs
+		if fs == nil {
+			fs = afero.NewOsFs()
+		}
+		usbCards = usbSoundCards(fs)
+	}
+	id, reason := selectPlaybackDevice(setting, devices, usbCards)
+	if id == nil && reason == "" {
+		log.Warn().Str("device", setting).Strs("available", candidateNames(devices)).
+			Msg("audio device not found, using system default")
+		return nil
+	}
+	log.Debug().Str("device", setting).Strs("available", candidateNames(devices)).
+		Msgf("audio output: %s", reason)
+	if id == nil {
+		return nil
+	}
+	// malgo takes the ID as a pointer and copies it during InitDevice.
+	return unsafe.Pointer(id) //nolint:gosec // points at a Go-owned malgo.DeviceID
 }
 
 // manage runs while the device is open. It removes sources marked drained by
