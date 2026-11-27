@@ -48,10 +48,15 @@ func cmdRemove(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 
 // editCollection adds the running media to the collection the command names,
 // or removes it. Media already in the collection, or never in it, is left as
-// it is and the command still succeeds.
+// it is and the command still succeeds. An untrusted script, such as an item
+// of somebody else's deck, is refused, so it cannot change the user's own
+// lists.
 //
 //nolint:gocritic // env is passed by pointer from the commands that hold it
 func editCollection(env *platforms.CmdEnv, add bool) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, ErrRemoteSource
+	}
 	if len(env.Cmd.Args) != 1 {
 		return platforms.CmdResult{}, ErrArgCount
 	}

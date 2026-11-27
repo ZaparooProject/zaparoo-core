@@ -239,3 +239,27 @@ func TestCmdAdd_DeckEditFailureIsReported(t *testing.T) {
 	require.ErrorIs(t, err, platforms.ErrLibraryRefused)
 	assert.Contains(t, err.Error(), "Weekend")
 }
+
+func TestCmdAdd_UntrustedScriptIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		run  func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
+		name string
+		link string
+	}{
+		{name: "add favorite", run: cmdAdd, link: "favorites://"},
+		{name: "remove favorite", run: cmdRemove, link: "favorites://"},
+		{name: "add to deck", run: cmdAdd, link: "deck://Weekend"},
+		{name: "remove from deck", run: cmdRemove, link: "deck://Weekend"},
+	} {
+		library := &fakeLibrary{}
+		env, db := editEnv(t, library, zapscript.ZapScriptCmdAdd, tc.link)
+		require.NoError(t, db.UserDB.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Weekend", Owned: true}))
+		env.Unsafe = true
+		_, err := tc.run(newPlaylistTestPlatform(), env)
+		require.ErrorIs(t, err, ErrRemoteSource, tc.name)
+		assert.True(t, IsExpectedRunError(err), tc.name)
+		assert.Empty(t, library.flags, tc.name)
+		assert.Empty(t, library.deckEdits, tc.name)
+	}
+}
