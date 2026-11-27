@@ -99,20 +99,34 @@ func FetchDeckLink(
 	return arg, nil
 }
 
+// resolveDeck finds the deck a deck:// reference names, by ID or by name.
+//
+//nolint:gocritic // env is passed by pointer from the callers that hold it
+func resolveDeck(env *platforms.CmdEnv, deckRef string) (*database.Deck, error) {
+	if env.Database == nil || env.Database.UserDB == nil {
+		return nil, fmt.Errorf("%w: %s", ErrDeckNotFound, deckRef)
+	}
+	deck, err := decks.ResolveDeckRef(env.Database.UserDB, deckRef)
+	if errors.Is(err, database.ErrDeckNotFound) {
+		return nil, fmt.Errorf("%w: %s", ErrDeckNotFound, deckRef)
+	}
+	if errors.Is(err, decks.ErrAmbiguousDeckName) {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve deck %s: %w", deckRef, err)
+	}
+	return deck, nil
+}
+
 // loadDeckItems reads a deck on this device as a collection, refreshing it
 // from its source first when that is quick.
 //
 //nolint:gocritic // env is passed by pointer from the callers that hold it
-func loadDeckItems(pl platforms.Platform, env *platforms.CmdEnv, deckID string) (*collection, error) {
-	if env.Database == nil || env.Database.UserDB == nil {
-		return nil, fmt.Errorf("%w: %s", ErrDeckNotFound, deckID)
-	}
-	deck, err := env.Database.UserDB.GetDeck(deckID)
-	if errors.Is(err, database.ErrDeckNotFound) {
-		return nil, fmt.Errorf("%w: %s", ErrDeckNotFound, deckID)
-	}
+func loadDeckItems(pl platforms.Platform, env *platforms.CmdEnv, deckRef string) (*collection, error) {
+	deck, err := resolveDeck(env, deckRef)
 	if err != nil {
-		return nil, fmt.Errorf("load deck %s: %w", deckID, err)
+		return nil, err
 	}
 	if refreshed := refreshDeck(pl, env, deck); refreshed != nil {
 		deck = refreshed

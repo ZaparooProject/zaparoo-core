@@ -1,0 +1,27 @@
+# A deck is reached by its name wherever deck:// is read: **add puts the
+# running game in it and launch.random rolls from it.
+
+sim-start
+rom snes/Alpha.sfc snes/Beta.sfc
+index SNES
+stdout '^media [1-9][0-9]*$'
+
+api decks.new {"name":"My Deck"}
+stdout '"name": "My Deck"'
+
+tap -uid 01 -for 200 $ROMS/snes/Alpha.sfc
+notification media.started systemId=SNES mediaName=Alpha
+launch-idle
+
+tap -uid 02 -for 200 **add:deck://My Deck
+notification tokens.added uid=02
+notification decks.changed
+api decks
+stdout '"itemCount": 1'
+
+api stop
+notification media.stopped systemId=SNES
+launch-idle
+
+tap -uid 03 -for 200 **launch.random:deck://my deck
+notification media.started systemId=SNES mediaName=Alpha

@@ -31,6 +31,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -300,7 +301,8 @@ func changed(before, after *models.IndexingStatusResponse) bool {
 }
 
 // MatchParams reports whether every KEY=VALUE holds in params. Dotted keys
-// reach nested fields. Values compare as their JSON text with strings
+// reach nested fields, and a number indexes an array, as in
+// playlists.0.total=2. Values compare as their JSON text with strings
 // unquoted, so active=true and name=Tetris both work.
 func MatchParams(params json.RawMessage, matches []string) bool {
 	if len(matches) == 0 {
@@ -314,13 +316,11 @@ func MatchParams(params json.RawMessage, matches []string) bool {
 		key, want, _ := strings.Cut(m, "=")
 		v := root
 		for part := range strings.SplitSeq(key, ".") {
-			obj, isObj := v.(map[string]any)
-			if !isObj {
+			next, found := matchStep(v, part)
+			if !found {
 				return false
 			}
-			if v, isObj = obj[part]; !isObj {
-				return false
-			}
+			v = next
 		}
 		got := ""
 		if s, isString := v.(string); isString {
@@ -334,4 +334,21 @@ func MatchParams(params json.RawMessage, matches []string) bool {
 		}
 	}
 	return true
+}
+
+// matchStep reads one part of a dotted MatchParams key out of v.
+func matchStep(v any, part string) (any, bool) {
+	switch node := v.(type) {
+	case map[string]any:
+		next, found := node[part]
+		return next, found
+	case []any:
+		i, err := strconv.Atoi(part)
+		if err != nil || i < 0 || i >= len(node) {
+			return nil, false
+		}
+		return node[i], true
+	default:
+		return nil, false
+	}
 }

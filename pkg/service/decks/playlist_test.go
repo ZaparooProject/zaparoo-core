@@ -39,7 +39,9 @@ func TestDeckURI(t *testing.T) {
 		"deck://0123456789ab":   "0123456789ab",
 		"DECK://0123456789AB":   "0123456789ab",
 		"deck://ZZZZZZZZ":       "zzzzzzzz",
-		"deck://0123456789aI":   "",
+		"deck://0123456789aI":   "0123456789aI",
+		"deck://  My Deck  ":    "My Deck",
+		"deck://   ":            "",
 		"deck://":               "",
 		"deckx://0123456789ab":  "",
 		"/roms/deck/playlist.m": "",
@@ -295,4 +297,34 @@ func TestPlaylistItems(t *testing.T) {
 	assert.Equal(t, "deck://0123456789ab/card0002", arg.ID)
 	require.Len(t, arg.Items, 2)
 	assert.Equal(t, "**b", arg.Items[1].ZapScript)
+}
+
+func TestResolveDeckRef(t *testing.T) {
+	t.Parallel()
+	f := newProjectFixture(t)
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Weekend Games", Owned: true}))
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ac", Name: "Twice", Owned: true}))
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ad", Name: "twice", Owned: true}))
+	// A deck named like another deck's ID loses to that ID.
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ae", Name: "0123456789ab", Owned: true}))
+
+	for ref, want := range map[string]string{
+		"0123456789ab":    "0123456789ab",
+		"0123456789AB":    "0123456789ab",
+		"weekend games":   "0123456789ab",
+		" WEEKEND GAMES ": "0123456789ab",
+	} {
+		deck, err := decks.ResolveDeckRef(f.userDB, ref)
+		require.NoError(t, err, ref)
+		assert.Equal(t, want, deck.DeckID, ref)
+	}
+
+	_, err := decks.ResolveDeckRef(f.userDB, "Twice")
+	require.ErrorIs(t, err, decks.ErrAmbiguousDeckName)
+
+	_, err = decks.ResolveDeckRef(f.userDB, "Nothing Here")
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
+
+	_, err = decks.ResolveDeckRef(nil, "Weekend Games")
+	require.ErrorIs(t, err, decks.ErrNoUserDB)
 }

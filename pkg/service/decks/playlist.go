@@ -56,17 +56,70 @@ func DeckURI(deckID string) string {
 	return URIScheme + "://" + deckID
 }
 
-// ParseDeckURI returns the deck ID a deck:// playlist argument names.
+// ErrAmbiguousDeckName reports a deck:// argument naming more than one deck.
+var ErrAmbiguousDeckName = errors.New("more than one deck has this name")
+
+// ParseDeckURI returns the deck reference a deck:// argument names: a deck ID,
+// normalized, or else the trimmed deck name. Use ResolveDeckRef to find the
+// deck it names.
 func ParseDeckURI(arg string) (string, bool) {
 	scheme, rest, found := strings.Cut(strings.TrimSpace(arg), "://")
 	if !found || !strings.EqualFold(scheme, URIScheme) {
 		return "", false
 	}
-	deckID, err := database.NormalizeDeckID(rest)
-	if err != nil {
+	if deckID, err := database.NormalizeDeckID(rest); err == nil {
+		return deckID, true
+	}
+	ref := strings.TrimSpace(rest)
+	if ref == "" {
 		return "", false
 	}
-	return deckID, true
+	return ref, true
+}
+
+// ResolveDeckRef finds the deck a deck:// reference names. A deck whose ID
+// matches wins; otherwise the reference is matched against deck names without
+// regard to case, and a name more than one deck shares is refused with
+// ErrAmbiguousDeckName. It returns database.ErrDeckNotFound when no deck
+// matches.
+func ResolveDeckRef(db database.UserDBI, ref string) (*database.Deck, error) {
+	if db == nil {
+		return nil, ErrNoUserDB
+	}
+	ref = strings.TrimSpace(ref)
+	if deckID, err := database.NormalizeDeckID(ref); err == nil {
+		deck, getErr := db.GetDeck(deckID)
+		if getErr == nil {
+			return deck, nil
+		}
+		if !errors.Is(getErr, database.ErrDeckNotFound) {
+			return nil, fmt.Errorf("load deck %s: %w", deckID, getErr)
+		}
+	}
+	all, err := db.ListDecks()
+	if err != nil {
+		return nil, fmt.Errorf("list decks: %w", err)
+	}
+	var match *database.Deck
+	for i := range all {
+		if !strings.EqualFold(strings.TrimSpace(all[i].Name), ref) {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("%w: %s", ErrAmbiguousDeckName, ref)
+		}
+		match = &all[i]
+	}
+	if match == nil {
+		return nil, database.ErrDeckNotFound
+	}
+	// The list may carry decks without their items, so read the one found
+	// whole.
+	deck, err := db.GetDeck(match.DeckID)
+	if err != nil {
+		return nil, fmt.Errorf("load deck %s: %w", match.DeckID, err)
+	}
+	return deck, nil
 }
 
 // PlaylistID returns the ID a deck opens as. A deck kept from a link opens as
