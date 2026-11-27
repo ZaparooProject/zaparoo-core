@@ -284,6 +284,20 @@ func (in *Instance) WaitReaders(ctx context.Context, names ...string) error {
 	}
 }
 
+// WaitLaunchIdle waits until no launch holds the launch lock and no playlist
+// item launch is pending. Media can start, and reach play history, before
+// the launch that started it has finished.
+func (in *Instance) WaitLaunchIdle(ctx context.Context) error {
+	for in.result.Launching() {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for launch to finish: %w", ctx.Err())
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
 // Reader returns the named sim reader device, or the first boot reader when
 // name is empty.
 func (in *Instance) Reader(name string) (*simreader.Device, error) {

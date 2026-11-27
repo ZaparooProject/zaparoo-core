@@ -168,10 +168,13 @@ func (e *Engine) settle(now time.Time) {
 
 func (e *Engine) rearm(timer clockwork.Timer, now time.Time) {
 	deadline, ok := e.nextDeadline(e.host.ActivePlaylist(), now)
-	timer.Stop()
 	if !ok {
+		timer.Stop()
 		return
 	}
+	// Reset stops and re-arms in one step. A separate Stop first would leave
+	// a moment with no timer armed, and a clock that moves past the deadline
+	// then fires nothing.
 	timer.Reset(max(deadline.Sub(now), 0))
 }
 

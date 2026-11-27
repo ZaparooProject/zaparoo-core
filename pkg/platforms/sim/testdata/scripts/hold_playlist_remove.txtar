@@ -26,12 +26,16 @@ rom snes/Alpha.sfc snes/Beta.sfc snes/Gamma.sfc
 tap -uid 04bb22 **playlist.play:$ROMS/snes
 notification tokens.added uid=04bb22
 notification media.started systemId=SNES mediaName=Alpha
-# The playlist holds its launch until the item is in play history; next from
-# the app before that is refused as busy.
+# The playlist holds its launch until the item's launch finishes, which can be
+# after the item is in play history; next from the app before that is refused
+# as busy.
 played $ROMS/snes/Alpha.sfc
+launch-idle
 
 api run {"text":"**playlist.next"}
 notification media.started systemId=SNES mediaName=Beta
+# The item's launch hands hold ownership back after media.started is sent.
+launch-idle
 mark
 
 remove
