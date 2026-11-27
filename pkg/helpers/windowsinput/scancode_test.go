@@ -41,7 +41,8 @@ func TestEveryMappedKeyHasScancode(t *testing.T) {
 			base = -base
 		}
 		_, _, ok := Scancode(base)
-		assert.True(t, ok, "key %q (keycode %d) has no windows scancode", name, base)
+		_, isVirtual := VirtualKey(base)
+		assert.True(t, ok || isVirtual, "key %q (keycode %d) has no windows scancode", name, base)
 	}
 }
 
@@ -68,6 +69,14 @@ func TestScancode(t *testing.T) {
 		{name: "delete is extended", code: 111, want: 0x53, extended: true, ok: true},
 		{name: "right ctrl is extended", code: 97, want: 0x1D, extended: true, ok: true},
 		{name: "left meta is extended", code: 125, want: 0x5B, extended: true, ok: true},
+		{name: "mute is extended", code: 113, want: 0x20, extended: true, ok: true},
+		{name: "play pause is extended", code: 164, want: 0x22, extended: true, ok: true},
+		{name: "102nd is plain", code: 86, want: 0x56, ok: true},
+		{name: "f13 is plain", code: 183, want: 0x64, ok: true},
+		{name: "f24 is plain", code: 194, want: 0x76, ok: true},
+		{name: "84 has no scancode", code: 84, ok: false},
+		{name: "85 has no scancode", code: 85, ok: false},
+		{name: "pause has no scancode", code: 119, ok: false},
 		{name: "unmapped", code: 200, ok: false},
 		{name: "zero", code: 0, ok: false},
 		{name: "negative", code: -30, ok: false},
@@ -88,12 +97,35 @@ func TestScancode(t *testing.T) {
 }
 
 // TestExtendedAndIdentityDoNotOverlap guards the assumption that the identity
-// range and the extended table describe disjoint sets of keycodes.
+// range, the extended and plain tables, and the virtual-key table describe
+// disjoint sets of keycodes.
 func TestExtendedAndIdentityDoNotOverlap(t *testing.T) {
 	t.Parallel()
 
-	for code := range extendedScancodes {
-		inIdentityRange := (code >= 1 && code <= 83) || code == 87 || code == 88
-		assert.False(t, inIdentityRange, "keycode %d is in both the identity range and the extended table", code)
+	inIdentityRange := func(code int) bool {
+		return (code >= 1 && code <= 83) || code == 87 || code == 88
 	}
+	for code := range extendedScancodes {
+		assert.False(t, inIdentityRange(code), "keycode %d is in both the identity range and the extended table", code)
+		_, plain := plainScancodes[code]
+		assert.False(t, plain, "keycode %d is in both the extended and plain tables", code)
+	}
+	for code := range plainScancodes {
+		assert.False(t, inIdentityRange(code), "keycode %d is in both the identity range and the plain table", code)
+	}
+	for code := range virtualKeys {
+		_, _, ok := Scancode(code)
+		assert.False(t, ok, "keycode %d has both a scancode and a virtual key", code)
+	}
+}
+
+func TestVirtualKey(t *testing.T) {
+	t.Parallel()
+
+	vk, ok := VirtualKey(119)
+	require.True(t, ok)
+	assert.Equal(t, uint16(0x13), vk, "KEY_PAUSE sends VK_PAUSE")
+
+	_, ok = VirtualKey(30)
+	assert.False(t, ok, "ordinary keys are sent by scancode")
 }
