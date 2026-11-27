@@ -68,6 +68,10 @@ const (
 	// understands the Stop command. Plugins that report nothing predate the
 	// handshake and are treated as unable to stop.
 	launchBoxStopProtocolVersion = 2
+
+	// launchBoxWriteTimeout bounds one write to the plugin, so a plugin that
+	// stops reading cannot hold every later command behind it.
+	launchBoxWriteTimeout = 5 * time.Second
 )
 
 // errLaunchBoxStopUnsupported reports that the connected plugin is too old to
@@ -491,6 +495,7 @@ type LaunchBoxPipeServer struct {
 	pendingStopReq    pendingStopRequest
 	pluginVersion     string
 	protocolVersion   int
+	writeTimeout      time.Duration
 	connMu            syncutil.Mutex
 	pendingGamesReqMu syncutil.Mutex
 	pendingStopReqMu  syncutil.Mutex
@@ -502,8 +507,9 @@ func NewLaunchBoxPipeServer() *LaunchBoxPipeServer {
 	// TODO: should be reusing the service context here
 	ctx, cancel := context.WithCancel(context.Background())
 	return &LaunchBoxPipeServer{
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:          ctx,
+		cancel:       cancel,
+		writeTimeout: launchBoxWriteTimeout,
 	}
 }
 
@@ -567,30 +573,9 @@ func (s *LaunchBoxPipeServer) SetPlatformsReceivedHandler(handler func(plats []l
 
 // RequestPlatforms sends a GetPlatforms command to the LaunchBox plugin
 func (s *LaunchBoxPipeServer) RequestPlatforms() error {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-
-	if s.writer == nil {
-		return errors.New("LaunchBox plugin not connected")
+	if err := s.sendCommand(pluginCommand{Command: "GetPlatforms"}); err != nil {
+		return err
 	}
-
-	cmd := pluginCommand{
-		Command: "GetPlatforms",
-	}
-
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to marshal GetPlatforms command: %w", err)
-	}
-
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		return fmt.Errorf("failed to write GetPlatforms command: %w", err)
-	}
-
-	if err := s.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush GetPlatforms command: %w", err)
-	}
-
 	log.Debug().Msg("sent GetPlatforms command to LaunchBox plugin")
 	return nil
 }
@@ -646,31 +631,9 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 
 // LaunchGame sends a launch command to the LaunchBox plugin
 func (s *LaunchBoxPipeServer) LaunchGame(gameID string) error {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-
-	if s.writer == nil {
-		return errors.New("LaunchBox plugin not connected")
+	if err := s.sendCommand(pluginCommand{Command: "Launch", ID: gameID}); err != nil {
+		return err
 	}
-
-	cmd := pluginCommand{
-		Command: "Launch",
-		ID:      gameID,
-	}
-
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to marshal launch command: %w", err)
-	}
-
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		return fmt.Errorf("failed to write launch command: %w", err)
-	}
-
-	if err := s.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush launch command: %w", err)
-	}
-
 	log.Debug().Msgf("sent launch command for game ID: %s", gameID)
 	return nil
 }
@@ -783,6 +746,11 @@ func (s *LaunchBoxPipeServer) deliverStopResult(result launchBoxStopResultEvent)
 }
 
 // sendCommand writes a command to the plugin.
+//
+// Each write has a deadline. A plugin that stops reading, such as LaunchBox
+// sitting in a modal dialog, would otherwise block the write forever while it
+// holds connMu, and every later launch, stop and connection check would queue
+// behind it.
 func (s *LaunchBoxPipeServer) sendCommand(cmd pluginCommand) error {
 	data, err := json.Marshal(cmd)
 	if err != nil {
@@ -791,14 +759,32 @@ func (s *LaunchBoxPipeServer) sendCommand(cmd pluginCommand) error {
 
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
-	if s.writer == nil {
+	if s.writer == nil || s.conn == nil {
 		return errors.New("LaunchBox plugin not connected")
 	}
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		return fmt.Errorf("failed to write %s command: %w", cmd.Command, err)
+	if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+		log.Debug().Err(err).Msg("failed to set LaunchBox pipe write deadline")
 	}
-	if err := s.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush %s command: %w", cmd.Command, err)
+	writeErr := func() error {
+		if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
+			return fmt.Errorf("failed to write %s command: %w", cmd.Command, err)
+		}
+		if err := s.writer.Flush(); err != nil {
+			return fmt.Errorf("failed to flush %s command: %w", cmd.Command, err)
+		}
+		return nil
+	}()
+	if writeErr != nil {
+		// The writer keeps its error and part of a line may have gone out, so
+		// the connection is unusable. Dropping it ends its reader, and the
+		// plugin reconnects once it is reading again.
+		log.Warn().Err(writeErr).Msg("dropping LaunchBox plugin connection after failed write")
+		if err := s.conn.Close(); err != nil {
+			log.Debug().Err(err).Msg("error closing LaunchBox pipe connection")
+		}
+		s.conn = nil
+		s.writer = nil
+		return writeErr
 	}
 	return nil
 }
@@ -812,31 +798,7 @@ func (s *LaunchBoxPipeServer) IsConnected() bool {
 
 // sendPing sends a heartbeat ping to keep the connection alive
 func (s *LaunchBoxPipeServer) sendPing() error {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-
-	if s.writer == nil {
-		return errors.New("writer not available")
-	}
-
-	cmd := pluginCommand{
-		Command: "Ping",
-	}
-
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ping command: %w", err)
-	}
-
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		return fmt.Errorf("failed to write ping command: %w", err)
-	}
-
-	if err := s.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush ping command: %w", err)
-	}
-
-	return nil
+	return s.sendCommand(pluginCommand{Command: "Ping"})
 }
 
 func (s *LaunchBoxPipeServer) acceptConnections() {

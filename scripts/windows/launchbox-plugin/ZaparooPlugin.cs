@@ -971,13 +971,6 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         try
         {
-            if (IsGameRunning())
-            {
-                Log($"Ignoring launch for {gameId}: a game is already running");
-                SendCommandError("Launch", "A game is already running");
-                return;
-            }
-
             // First try to find as a regular game
             var game = PluginHelper.DataManager.GetGameById(gameId);
             if (game != null)
@@ -1008,34 +1001,41 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         InvokeOnUiThread(() =>
         {
-            if (_isBigBoxRunning || PluginHelper.StateManager?.IsBigBox == true)
+            // Checked here rather than on the pipe thread: launches are queued
+            // on the UI thread, and one queued earlier may not have marked
+            // itself pending yet.
+            if (IsGameRunning())
+            {
+                Log($"Ignoring launch for {game.Id}: a game is already running");
+                SendCommandError("Launch", "A game is already running");
+                return;
+            }
+
+            bool bigBox = _isBigBoxRunning || PluginHelper.StateManager?.IsBigBox == true;
+            if (bigBox)
             {
                 EnsureForegroundHook();
-                BeginPendingLaunch(game, app, navigateAfterLaunch: true);
+            }
+            BeginPendingLaunch(game, app, navigateAfterLaunch: bigBox);
 
-                try
+            try
+            {
+                if (bigBox)
                 {
                     Log($"Launching BigBox game: {game.Title} ({game.Id})");
                     PluginHelper.BigBoxMainViewModel.PlayGame(game, app, null, null);
                 }
-                catch
+                else
                 {
-                    ClearPendingLaunch(game, app);
-                    throw;
+                    Log($"Launching LaunchBox game: {game.Title} ({game.Id})");
+                    PluginHelper.LaunchBoxMainViewModel.PlayGame(game, app, null, null);
                 }
-                return;
             }
-
-            BeginPendingLaunch(game, app, navigateAfterLaunch: false);
-            try
-            {
-                Log($"Launching LaunchBox game: {game.Title} ({game.Id})");
-                PluginHelper.LaunchBoxMainViewModel.PlayGame(game, app, null, null);
-            }
-            catch
+            catch (Exception ex)
             {
                 ClearPendingLaunch(game, app);
-                throw;
+                Log($"Failed to launch game {game.Id}: {ex.Message}");
+                SendCommandError("Launch", ex.Message);
             }
         }, "Launch game");
     }
@@ -1056,7 +1056,21 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             return;
         }
 
-        dispatcher.Invoke(action);
+        // Queued rather than waited on. These actions can open LaunchBox's
+        // own modal dialogs, such as a missing ROM prompt, and waiting would
+        // stall the pipe read loop until the dialog closed. Core then cannot
+        // write to the pipe, and every later command is stuck behind it.
+        dispatcher.BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                Log($"UI action failed ({description}): {ex.Message}");
+            }
+        }));
     }
 
     private static bool IsGameRunning()
