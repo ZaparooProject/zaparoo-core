@@ -62,6 +62,7 @@ type mixSourceList []*mixSourceEntry
 // snapshot. The realtime callback only reads that snapshot and never takes devMu.
 type sharedDevice struct {
 	initContext  func([]malgo.Backend, malgo.ContextConfig, malgo.LogProc) (*malgo.AllocatedContext, error)
+	startDevice  func(malgo.Context, malgo.DeviceConfig, malgo.DeviceCallbacks) (*malgo.Device, error)
 	fs           afero.Fs
 	malgoCtx     *malgo.AllocatedContext
 	device       *malgo.Device
@@ -318,23 +319,20 @@ func (d *sharedDevice) open() {
 	cfg.Playback.DeviceID = d.choosePlaybackDevice(malgoCtx)
 
 	callbacks := malgo.DeviceCallbacks{Data: d.onSamples}
-	device, err := malgo.InitDevice(malgoCtx.Context, cfg, callbacks)
+	d.devMu.Lock()
+	startDevice := d.startDevice
+	d.devMu.Unlock()
+	if startDevice == nil {
+		startDevice = startPlaybackDevice
+	}
+	device, err := startDevice(malgoCtx.Context, cfg, callbacks)
 	if err != nil && cfg.Playback.DeviceID != nil {
-		log.Warn().Err(err).Msg("failed to open chosen audio device, using system default")
+		log.Warn().Err(err).Msg("failed to start chosen audio device, using system default")
 		cfg.Playback.DeviceID = nil
-		device, err = malgo.InitDevice(malgoCtx.Context, cfg, callbacks)
+		device, err = startDevice(malgoCtx.Context, cfg, callbacks)
 	}
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to initialize audio device")
-		d.failAllSources()
-		cancelFn()
-		go d.cleanup(done, malgoCtx, nil)
-		return
-	}
-
-	if err := device.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start audio device")
-		device.Uninit()
 		d.failAllSources()
 		cancelFn()
 		go d.cleanup(done, malgoCtx, nil)
@@ -349,6 +347,24 @@ func (d *sharedDevice) open() {
 	d.devMu.Unlock()
 
 	go d.manage(ctx, device, malgoCtx, done)
+}
+
+// startPlaybackDevice initialises and starts a playback device, releasing it
+// again if it initialises but fails to start.
+func startPlaybackDevice(
+	malgoCtx malgo.Context,
+	cfg malgo.DeviceConfig, //nolint:gocritic // matches malgo.InitDevice
+	callbacks malgo.DeviceCallbacks,
+) (*malgo.Device, error) {
+	device, err := malgo.InitDevice(malgoCtx, cfg, callbacks)
+	if err != nil {
+		return nil, fmt.Errorf("init audio device: %w", err)
+	}
+	if err := device.Start(); err != nil {
+		device.Uninit()
+		return nil, fmt.Errorf("start audio device: %w", err)
+	}
+	return device, nil
 }
 
 // choosePlaybackDevice resolves the output device setting against the devices

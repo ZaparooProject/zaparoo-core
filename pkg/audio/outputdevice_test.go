@@ -20,6 +20,7 @@
 package audio
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -180,6 +181,41 @@ func TestSharedDeviceOpenOutputDeviceSetting(t *testing.T) {
 			d.closeDevice()
 		})
 	}
+}
+
+// TestSharedDeviceOpenFallsBackWhenChosenDeviceFails makes the chosen device
+// fail to start and checks the retry on the system default still plays.
+func TestSharedDeviceOpenFallsBackWhenChosenDeviceFails(t *testing.T) {
+	t.Parallel()
+
+	var attempts []bool
+	d := newSharedDevice()
+	d.initContext = nullBackendInit
+	d.setOutputDeviceSource(func() string { return "null" })
+	d.startDevice = func(
+		ctx malgo.Context,
+		cfg malgo.DeviceConfig, //nolint:gocritic // signature fixed by sharedDevice.startDevice
+		callbacks malgo.DeviceCallbacks,
+	) (*malgo.Device, error) {
+		attempts = append(attempts, cfg.Playback.DeviceID != nil)
+		if cfg.Playback.DeviceID != nil {
+			return nil, errors.New("stub: chosen device failed to start")
+		}
+		return startPlaybackDevice(ctx, cfg, callbacks)
+	}
+	src := &testMixSource{active: true, drained: true, onDrainedCh: make(chan struct{})}
+	setTestSources(d, src)
+	d.opening = true
+
+	d.open()
+
+	select {
+	case <-src.onDrainedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("default device did not open and drain the source")
+	}
+	assert.Equal(t, []bool{true, false}, attempts, "chosen device first, then the default")
+	d.closeDevice()
 }
 
 func TestSharedDeviceOutputDeviceSettingTrimsAndClears(t *testing.T) {
