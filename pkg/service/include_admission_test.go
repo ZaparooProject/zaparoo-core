@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -109,5 +110,81 @@ func TestLaunchGuard_StagesIncludedLaunch(t *testing.T) {
 	env.sendCommandScan("other", "**include:"+name)
 	env.waitForGuard(t)
 	env.expectNoLaunch(t)
+	require.Equal(t, first, env.st.ActiveMedia().Path)
+}
+
+// A profile switch that a nested include runs before the launch satisfies
+// require_for_launch, as it does when the switch is in the included file.
+func TestScanBehavior_RequireProfile_NestedIncludeSwitchThenLaunch(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	env.cfg.SetProfilesRequireForLaunch(true)
+	profile := &database.Profile{ProfileID: "profile-1", Name: "Kid A", SwitchID: "pear-lid-cloud"}
+	env.userDB.On("GetProfileBySwitchID", "pear-lid-cloud").Return(profile, nil)
+	env.userDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
+	name := includeName(t)
+	env.writeIncludeScript(t, name+"-profile", "**profile:pear-lid-cloud")
+	env.writeIncludeScript(t, name, "**include:"+name+"-profile||**launch:"+env.gamePath("game1.gba"))
+
+	require.NoError(t, waitCompletion(t, env.scanWithCompletion(t, "combo-card", "**include:"+name)))
+	env.waitForLaunch(t)
+	env.waitForActiveProfile(t, "profile-1")
+}
+
+// An on_remove hook that reaches a delay through an include runs off the
+// reader loop, so putting the card back cancels it as it does a direct delay.
+func TestScanBehavior_HoldDelayedOnRemove_IncludedDelayReinsertCancels(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	name := includeName(t)
+	env.writeIncludeScript(t, name, "**delay:10s||**input.keyboard:{escape}")
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**include:`+name+`'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.sendRemoval()
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+
+	env.expectNoLaunch(t)
+	env.expectNoStop(t)
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("unexpected delayed on_remove keyboard command: %s", key)
+	case <-time.After(noEventWait):
+	}
+}
+
+// An include with a when condition may not run, so a profile switch in its
+// file does not let a launch after it past require_for_launch.
+func TestScanBehavior_RequireProfile_ConditionalIncludeSwitchDoesNotSatisfy(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	env.cfg.SetProfilesRequireForLaunch(true)
+	name := includeName(t)
+	env.writeIncludeScript(t, name, "**profile:corn-arm-truck")
+
+	err := waitCompletion(t, env.scanWithCompletion(t, "combo-card",
+		"**include:"+name+"?when=false||**launch:"+env.gamePath("game1.gba")))
+	require.ErrorIs(t, err, state.ErrLaunchRequiresProfile)
+	env.expectNoLaunch(t)
+}
+
+// With the launch guard on, an include whose file cannot be known before the
+// run is held for confirmation, as it might launch.
+func TestLaunchGuard_StagesIncludeFromExpressionName(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	first := env.gamePath("first.rom")
+	require.NoError(t, waitCompletion(t, env.sendAPIToken(t, first)))
+	env.waitForLaunch(t)
+	env.cfg.SetLaunchGuard(true)
+
+	env.sendCommandScan("other", "**include:[[platform]]")
+	env.waitForGuard(t)
 	require.Equal(t, first, env.st.ActiveMedia().Path)
 }

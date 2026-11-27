@@ -358,3 +358,14 @@ func TestExpandIncludes_NoIncludeReturnsTheSameCommands(t *testing.T) {
 	got := ExpandIncludes(nil, cmds)
 	assert.Equal(t, cmds, got)
 }
+
+// An include with a when condition may not run, so it is kept as it is.
+func TestExpandIncludes_KeepsConditionalIncludes(t *testing.T) {
+	t.Parallel()
+	pl, scripts := includePlatform(t)
+	writeScript(t, scripts, "inner.txt", "**launch:game.rom")
+	cmds := parseCommands(t, "**include:inner?when=[[platform]]||**include:inner")
+
+	got := ExpandIncludes(pl, cmds)
+	assert.Equal(t, []string{"include:inner", "launch:game.rom"}, commandNames(got))
+}

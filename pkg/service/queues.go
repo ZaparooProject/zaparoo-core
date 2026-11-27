@@ -623,7 +623,9 @@ func admitIncludedLaunch(
 	if inHookContext || cmd.Name != gozapscript.ZapScriptCmdInclude {
 		return nil
 	}
-	included := &gozapscript.Script{Cmds: added}
+	// A nested include runs before what follows it, so a profile it
+	// switches to counts as it does in the check before the run.
+	included := &gozapscript.Script{Cmds: zapscript.ExpandIncludes(svc.Platform, added)}
 	if !scriptHasMediaLaunchingCommand(included) {
 		return nil
 	}

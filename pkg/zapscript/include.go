@@ -66,7 +66,8 @@ func cmdInclude(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 // the file it names, nested includes too, as a run would insert them. Checks
 // made before a run, such as whether it launches media, use it to see what
 // the run will do. An include that cannot be loaded is kept as it is: running
-// it fails the same way, and the run checks what it adds again.
+// it fails the same way, and the run checks what it adds again. An include
+// with a when condition is kept too, as it may not run at all.
 func ExpandIncludes(pl platforms.Platform, cmds []zapscript.Command) []zapscript.Command {
 	if !slices.ContainsFunc(cmds, isInclude) {
 		return cmds
@@ -81,7 +82,7 @@ func expandIncludesWithin(
 ) []zapscript.Command {
 	out := make([]zapscript.Command, 0, len(cmds))
 	for _, cmd := range cmds {
-		if !isInclude(cmd) {
+		if !isInclude(cmd) || hasWhen(cmd) {
 			out = append(out, cmd)
 			continue
 		}
@@ -97,6 +98,12 @@ func expandIncludesWithin(
 
 func isInclude(cmd zapscript.Command) bool {
 	return cmd.Name == zapscript.ZapScriptCmdInclude
+}
+
+//nolint:gocritic // read-only command value
+func hasWhen(cmd zapscript.Command) bool {
+	_, ok := cmd.AdvArgs.GetWhen()
+	return ok
 }
 
 // loadInclude reads and parses the script an include's args name, and

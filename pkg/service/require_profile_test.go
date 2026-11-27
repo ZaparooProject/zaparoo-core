@@ -150,3 +150,16 @@ func (env *scanBehaviorEnv) waitForNoActiveProfile(t *testing.T) {
 		}
 	}
 }
+
+// A profile switch with a when condition may not run, so it does not let a
+// launch after it past require_for_launch.
+func TestScanBehavior_RequireProfile_ConditionalSwitchDoesNotSatisfy(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	env.cfg.SetProfilesRequireForLaunch(true)
+
+	env.sendCommandScan("combo-card",
+		"**profile:corn-arm-truck?when=false||**launch:"+env.gamePath("game1.gba"))
+	env.expectNoLaunch(t)
+}
