@@ -74,6 +74,8 @@ type RunCommandOptions struct {
 	BeforeExit         func()
 	RefreshOwnedDeck   func(ctx context.Context, deckID string)
 	BackgroundMedia    func() *apimodels.ActiveMedia
+	ActiveMedia        func() *apimodels.ActiveMedia
+	Library            platforms.MediaLibrary
 	PlaylistMemory     platforms.PlaylistMemory
 	// ScanCtx ends when a newer scan supersedes the one running this
 	// command. Nil when the command did not come from a scanned token.
@@ -143,6 +145,11 @@ var expectedRunErrors = []error{
 	ErrFileNotFound,
 	ErrInvalidScript,
 	ErrInvalidArguments,
+	// Nothing running for a command about the running media, and a library
+	// edit the library refused, are the script meeting the device's state.
+	ErrNoActiveMedia,
+	platforms.ErrLibraryRefused,
+	ErrDeckNotFound,
 	// A command written with the wrong arguments is the script's mistake.
 	ErrArgCount,
 	ErrRequiredArgs,
@@ -239,6 +246,9 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdProfileClear: cmdProfileClear,
 
 			zapscript.ZapScriptCmdPlaytimeExtend: cmdPlaytimeExtend,
+
+			zapscript.ZapScriptCmdAdd:    cmdAdd,
+			zapscript.ZapScriptCmdRemove: cmdRemove,
 
 			zapscript.ZapScriptCmdWrite: cmdWrite,
 
@@ -789,6 +799,8 @@ func RunCommand(
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
 		BackgroundMedia:    opts.BackgroundMedia,
+		ActiveMedia:        opts.ActiveMedia,
+		Library:            opts.Library,
 		PlaylistMemory:     opts.PlaylistMemory,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,

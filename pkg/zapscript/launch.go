@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio/radio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -733,7 +734,12 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	}
 	if isCollection {
 		if len(tagFilters) > 0 {
-			return platforms.CmdResult{}, fmt.Errorf("%w: tags do not apply to a collection", ErrInvalidArguments)
+			if !coll.library {
+				return platforms.CmdResult{}, fmt.Errorf("%w: tags do not apply to a collection", ErrInvalidArguments)
+			}
+			if filterErr := filterCollectionByTags(env, coll, tagFilters); filterErr != nil {
+				return platforms.CmdResult{}, filterErr
+			}
 		}
 		return randomFromCollection(env, coll, launch)
 	}
@@ -1086,11 +1092,11 @@ func randomGameBySystemTier(
 func searchMediaBySystemTier(
 	ctx context.Context,
 	gamesDB database.MediaDBI,
-	filters *database.SearchFilters,
+	base *database.SearchFilters,
 	tiers [][]systemdefs.System,
 ) ([]database.SearchResultWithCursor, error) {
 	for i := range tiers {
-		tierFilters := *filters
+		tierFilters := *base
 		tierFilters.Systems = tiers[i]
 		results, err := gamesDB.SearchMediaWithFilters(ctx, &tierFilters)
 		if err != nil {
@@ -1784,6 +1790,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	query = strings.TrimSpace(query)
 
 	gamesdb := env.Database.MediaDB
+	// Hidden media stays out of a search the way it does in the app's,
+	// unless the search asks for a user tag such as user:hidden.
+	excludeHidden := !filters.IncludesHidden(tagFilters, false)
 
 	if !strings.Contains(query, "/") {
 		// search all systems
@@ -1792,10 +1801,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, openErr
 		}
 		searchFilters := database.SearchFilters{
-			Systems: allSystems,
-			Query:   query,
-			Tags:    tagFilters,
-			Limit:   1,
+			Systems:       allSystems,
+			Query:         query,
+			Tags:          tagFilters,
+			Limit:         1,
+			ExcludeHidden: excludeHidden,
 		}
 		ctx, cancel := mediaDBLookupContext(&env)
 		defer cancel()
@@ -1844,9 +1854,10 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	searchFilters := database.SearchFilters{
-		Query: searchQuery,
-		Tags:  tagFilters,
-		Limit: 1,
+		Query:         searchQuery,
+		Tags:          tagFilters,
+		Limit:         1,
+		ExcludeHidden: excludeHidden,
 	}
 	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()

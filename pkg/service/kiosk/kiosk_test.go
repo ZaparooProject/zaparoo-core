@@ -397,7 +397,7 @@ func TestCommandPolicyIsDefaultDeny(t *testing.T) {
 		gozapscript.ZapScriptCmdMisterScript, gozapscript.ZapScriptCmdMisterMGL,
 		gozapscript.ZapScriptCmdMisterWallpaper, gozapscript.ZapScriptCmdINI,
 		gozapscript.ZapScriptCmdWrite, gozapscript.ZapScriptCmdScreenshot,
-		gozapscript.ZapScriptCmdProfileClear,
+		gozapscript.ZapScriptCmdProfileClear, gozapscript.ZapScriptCmdAdd, gozapscript.ZapScriptCmdRemove,
 		"a.command.added.later",
 	} {
 		assert.False(t, policy.Allows(name), name)

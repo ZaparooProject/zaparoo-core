@@ -44,11 +44,24 @@ type collection struct {
 	// deckID is set when the collection is a deck on this device.
 	deckID string
 	items  []playlists.PlaylistItem
+	rows   []collectionRow
 	// unsafe means the items must run without the rights of the device owner.
 	unsafe bool
 	// media means every item is a plain media path that launches directly,
 	// rather than ZapScript of its own.
 	media bool
+	// library means the collection is one of the media library's own lists,
+	// with rows holding each item's indexed media.
+	library bool
+	// ephemeral means the list is computed afresh each time, so its
+	// playlist is not remembered.
+	ephemeral bool
+}
+
+// collectionRow is the indexed media behind one item of a library list.
+type collectionRow struct {
+	systemID string
+	mediaID  int64
 }
 
 // resolveCollection expands arg into its items. It reports false when arg is
@@ -60,6 +73,9 @@ func resolveCollection(
 ) (*collection, bool, error) {
 	if deckID, isDeck := decks.ParseDeckURI(arg); isDeck {
 		coll, err := loadDeckItems(pl, env, deckID)
+		return coll, true, err
+	}
+	if coll, handled, err := resolveLibraryCollection(pl, env, arg); handled {
 		return coll, true, err
 	}
 	if !strings.Contains(arg, "://") {
@@ -150,18 +166,23 @@ func randomFromCollection(
 	}
 
 	selectItem := func() (database.SearchResult, error) {
-		item, err := helpers.RandomElem(coll.items)
+		index, err := helpers.RandomInt(len(coll.items))
 		if err != nil {
 			return database.SearchResult{}, fmt.Errorf("failed to select random item: %w", err)
 		}
-		return database.SearchResult{Name: item.Name, Path: item.ZapScript}, nil
+		item := coll.items[index]
+		picked := database.SearchResult{Name: item.Name, Path: item.ZapScript}
+		if index < len(coll.rows) {
+			picked.SystemID, picked.MediaID = coll.rows[index].systemID, coll.rows[index].mediaID
+		}
+		return picked, nil
 	}
 	first, err := selectItem()
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 	picked, err := launchRandomGameWithRetry(first, selectItem, func(candidate database.SearchResult) error {
-		return launch(launchTarget{path: candidate.Path})
+		return launch(launchTarget{path: candidate.Path, systemID: candidate.SystemID, mediaID: candidate.MediaID})
 	})
 	if err != nil {
 		return platforms.CmdResult{MediaChanged: true},

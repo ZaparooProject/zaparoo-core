@@ -331,6 +331,12 @@ type CmdEnv struct {
 	// BackgroundMedia returns the media playing in the background slot, nil
 	// when there is none. Nil when no state is attached.
 	BackgroundMedia func() *models.ActiveMedia
+	// ActiveMedia returns the media playing in the primary slot, nil when
+	// there is none. Nil when no state is attached.
+	ActiveMedia func() *models.ActiveMedia
+	// Library reads and edits the lists the API serves. Nil when no API is
+	// attached.
+	Library         MediaLibrary
 	PlaybackManager audio.PlaybackManager
 	// LauncherCache resolves the launcher behind the active media. It holds
 	// launchers the platform cannot build itself, so it is the only complete

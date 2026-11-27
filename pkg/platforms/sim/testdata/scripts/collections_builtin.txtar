@@ -1,0 +1,42 @@
+# **add:favorites:// favorites the running game, a playlist of favorites://
+# plays it, and **remove:favorites:// takes it out again. Tokens run in
+# order, so a **stop after an edit marks when the edit is done. A hidden
+# favorite stays out of favorites:// and shows in hidden://.
+
+sim-start
+rom snes/Alpha.sfc snes/Beta.sfc
+index SNES
+stdout '^media [1-9][0-9]*$'
+
+tap -uid 01 -for 200 $ROMS/snes/Beta.sfc
+notification media.started systemId=SNES mediaName=Beta
+launch-idle
+
+tap -uid 02 -for 200 **add:favorites://
+notification tokens.added uid=02
+notification tokens.removed
+tap -uid 03 -for 200 **stop
+notification media.stopped systemId=SNES
+api media.search {"tags":["user:favorite"]}
+stdout -count=1 '"path":'
+stdout '"path": ".*Beta\.sfc"'
+launch-idle
+
+api media.tags.update {"system":"SNES","path":"$ROMS/snes/Alpha.sfc","add":["user:favorite","user:hidden"]}
+tap -uid 10 -for 200 **playlist.open:favorites://
+notification playlists.changed playlists.0.total=1 playlists.0.items.0.name=Beta
+tap -uid 11 -for 200 **playlist.open:hidden://
+notification playlists.changed playlists.0.total=1 playlists.0.items.0.name=Alpha
+
+tap -uid 04 -for 200 **playlist.play:favorites://
+notification media.started systemId=SNES mediaName=Beta
+launch-idle
+
+tap -uid 05 -for 200 **remove:favorites://
+notification tokens.added uid=05
+notification tokens.removed
+tap -uid 06 -for 200 **stop
+notification media.stopped systemId=SNES
+api media.search {"tags":["user:favorite"]}
+! stdout 'Beta\.sfc'
+! notification run.failed

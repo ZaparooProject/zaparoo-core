@@ -21,12 +21,14 @@ package decks_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +41,9 @@ func TestDeckURI(t *testing.T) {
 		"deck://0123456789ab":   "0123456789ab",
 		"DECK://0123456789AB":   "0123456789ab",
 		"deck://ZZZZZZZZ":       "zzzzzzzz",
-		"deck://0123456789aI":   "",
+		"deck://0123456789aI":   "0123456789aI",
+		"deck://  My Deck  ":    "My Deck",
+		"deck://   ":            "",
 		"deck://":               "",
 		"deckx://0123456789ab":  "",
 		"/roms/deck/playlist.m": "",
@@ -295,4 +299,56 @@ func TestPlaylistItems(t *testing.T) {
 	assert.Equal(t, "deck://0123456789ab/card0002", arg.ID)
 	require.Len(t, arg.Items, 2)
 	assert.Equal(t, "**b", arg.Items[1].ZapScript)
+}
+
+func TestResolveDeckRef(t *testing.T) {
+	t.Parallel()
+	f := newProjectFixture(t)
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Weekend Games", Owned: true}))
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ac", Name: "Twice", Owned: true}))
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ad", Name: "twice", Owned: true}))
+	// A deck named like another deck's ID loses to that ID.
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ae", Name: "0123456789ab", Owned: true}))
+
+	for ref, want := range map[string]string{
+		"0123456789ab":    "0123456789ab",
+		"0123456789AB":    "0123456789ab",
+		"weekend games":   "0123456789ab",
+		" WEEKEND GAMES ": "0123456789ab",
+	} {
+		deck, err := decks.ResolveDeckRef(f.userDB, ref)
+		require.NoError(t, err, ref)
+		assert.Equal(t, want, deck.DeckID, ref)
+	}
+
+	_, err := decks.ResolveDeckRef(f.userDB, "Twice")
+	require.ErrorIs(t, err, decks.ErrAmbiguousDeckName)
+
+	_, err = decks.ResolveDeckRef(f.userDB, "Nothing Here")
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
+
+	_, err = decks.ResolveDeckRef(nil, "Weekend Games")
+	require.ErrorIs(t, err, decks.ErrNoUserDB)
+}
+
+func TestResolveDeckRefReportsReadFailures(t *testing.T) {
+	t.Parallel()
+	broken := errors.New("disk unreadable")
+
+	getFails := testhelpers.NewMockUserDBI()
+	getFails.On("GetDeck", "0123456789ab").Return(nil, broken)
+	_, err := decks.ResolveDeckRef(getFails, "0123456789ab")
+	require.ErrorIs(t, err, broken)
+	require.NotErrorIs(t, err, database.ErrDeckNotFound, "a failed read is not a missing deck")
+
+	listFails := testhelpers.NewMockUserDBI()
+	listFails.On("ListDecks").Return(nil, broken)
+	_, err = decks.ResolveDeckRef(listFails, "Weekend Games")
+	require.ErrorIs(t, err, broken)
+
+	loadFails := testhelpers.NewMockUserDBI()
+	loadFails.On("ListDecks").Return([]database.Deck{{DeckID: "0123456789ab", Name: "Weekend Games"}}, nil)
+	loadFails.On("GetDeck", "0123456789ab").Return(nil, broken)
+	_, err = decks.ResolveDeckRef(loadFails, "Weekend Games")
+	require.ErrorIs(t, err, broken)
 }

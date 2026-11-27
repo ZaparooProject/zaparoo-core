@@ -1,0 +1,13 @@
+# launch.search never launches a hidden game.
+
+sim-start
+rom 'snes/Quest Hidden.sfc'
+index SNES
+stdout '^media [1-9][0-9]*$'
+
+api media.tags.update {"system":"SNES","path":"$ROMS/snes/Quest Hidden.sfc","add":["user:hidden"]}
+stdout '"tag": "hidden"'
+
+tap -uid 01 -for 200 **launch.search:SNES/*Quest*
+notification tokens.added uid=01
+! notification media.started

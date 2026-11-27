@@ -1,0 +1,22 @@
+# The computed lists read what the API shows: versions:// opens every version
+# of a game, each named by what sets it apart, and similar:// opens the games
+# media.similar finds for the one running.
+
+sim-start
+fixtures -systems snes -per-system 80 -gamelist
+rom 'snes/Quest (USA).sfc' 'snes/Quest (Japan).sfc'
+index SNES
+# similar:// ranks by scraped tags, and the scrape that follows indexing can
+# start after idle has settled, so wait for it.
+notification -timeout 60s media.scraping scraperId=gamedatabase done=true
+idle
+
+tap -uid 01 -for 200 **playlist.open:versions://SNES/Quest
+notification playlists.changed playlists.0.name=Versions playlists.0.total=2 'playlists.0.items.0.name=Quest (us, en)' 'playlists.0.items.1.name=Quest (jp, ja)'
+
+tap -uid 02 -for 200 $ROMS/snes/Final Fight 3.smc
+notification media.started systemId=SNES 'mediaName=Final Fight 3'
+launch-idle
+
+tap -uid 03 -for 200 **playlist.open:similar://
+notification playlists.changed playlists.0.name=Similar

@@ -631,10 +631,16 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 func collectionPlaylist(
 	pl platforms.Platform, env *platforms.CmdEnv, coll *collection, args *zapscript.PlaylistArgs,
 ) (*playlists.Playlist, error) {
+	// A library list is computed for this tap, so an empty one has nothing to
+	// show; a deck or launcher collection opens empty as it always has.
+	if coll.library && len(coll.items) == 0 {
+		return nil, fmt.Errorf("no items in collection: %s", coll.name)
+	}
 	pls := playlists.NewPlaylist(coll.id, coll.name, slices.Clone(coll.items))
 	shufflePlaylistIfAsked(pls, args)
 	pls.DeckID = coll.deckID
 	pls.Unsafe = coll.unsafe
+	pls.Ephemeral = coll.ephemeral
 	pls.AllowedCommands = env.AllowedCommands
 	if err := applyPlaylistArgs(pl, env, pls, args); err != nil {
 		return nil, err

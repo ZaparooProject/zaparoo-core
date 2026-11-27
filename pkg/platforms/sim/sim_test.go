@@ -328,6 +328,12 @@ func TestMatchParams(t *testing.T) {
 	assert.False(t, MatchParams(params, []string{"media.missing=x"}))
 	assert.False(t, MatchParams(params, []string{"systemId.deep=x"}))
 	assert.False(t, MatchParams(json.RawMessage("not json"), []string{"a=b"}))
+
+	list := json.RawMessage(`{"playlists":[{"name":"A","total":2},{"name":"B"}]}`)
+	assert.True(t, MatchParams(list, []string{"playlists.0.total=2", "playlists.1.name=B"}))
+	assert.False(t, MatchParams(list, []string{"playlists.2.name=B"}))
+	assert.False(t, MatchParams(list, []string{"playlists.x.name=A"}))
+	assert.False(t, MatchParams(list, []string{"playlists.-1.name=A"}))
 }
 
 const spawnHelperEnv = "ZAPAROO_SIM_SPAWN_HELPER_ROOT"
