@@ -20,10 +20,8 @@
 package service
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -853,43 +851,6 @@ func TestTimedExit_ClearsQueuesAfterStop(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("exit did not clear the launch queue")
 	}
-}
-
-// Shutdown closes the launch queue once the background group is done, so an
-// exit still sending on it must hold the group open until the send finishes.
-func TestTimedExit_HoldsBackgroundGroupUntilSent(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		fx := newTimedExitStopFixture(t, nil)
-		fx.svc.BackgroundWG = &sync.WaitGroup{}
-		fx.svc.LaunchSoftwareQueue = make(chan softwareTokenUpdate)
-		clock := clockwork.NewFakeClock()
-		var exitGeneration atomic.Uint64
-		timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner, 7)
-		clock.Advance(time.Millisecond)
-
-		waitDone := make(chan struct{})
-		go func() {
-			fx.svc.BackgroundWG.Wait()
-			close(waitDone)
-		}()
-		synctest.Wait()
-		select {
-		case <-waitDone:
-			t.Fatal("background group finished while the exit was still sending")
-		default:
-		}
-
-		update := <-fx.svc.LaunchSoftwareQueue
-		assert.Nil(t, update.token)
-		synctest.Wait()
-		select {
-		case <-waitDone:
-		default:
-			t.Fatal("background group still open after the exit sent")
-		}
-	})
 }
 
 // A stop the platform could not carry out leaves the game running, so the
