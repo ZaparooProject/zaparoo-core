@@ -226,10 +226,37 @@ func (a *API) Index(ctx context.Context, systems []string) (*models.IndexingStat
 	if err != nil {
 		return nil, err
 	}
-	if _, err := a.Call(ctx, models.MethodMediaGenerate, params); err != nil {
-		return nil, err
+	for {
+		_, err := a.Call(ctx, models.MethodMediaGenerate, params)
+		if err == nil {
+			break
+		}
+		if !briefMediaWork(err) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	return a.waitIndexed(ctx, before)
+}
+
+// briefMediaWork reports a busy refusal caused by short work Core runs on its
+// own, such as the browse index check right after startup, rather than by
+// indexing or scraping a scenario started.
+func briefMediaWork(err error) bool {
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	data, ok := rpcErr.Data.(map[string]any)
+	if !ok || data["category"] != models.ErrorCategoryBusy {
+		return false
+	}
+	return rpcErr.Message == "media database maintenance in progress" ||
+		rpcErr.Message == "database optimization in progress"
 }
 
 // WaitIdle waits until no indexing, optimization or scrape is running. An

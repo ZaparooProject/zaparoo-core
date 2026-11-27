@@ -70,6 +70,7 @@ const (
 // TestEveryConfigKeyIsClassified until it is exposed through the API or
 // given a reason to stay file-only.
 var configKeyAPI = map[string]any{
+	"audio.device":         fileOnly("output device names are host-specific and set by hand"),
 	"audio.fail_sound":     adminField("audioFailSound"),
 	"audio.limit_sound":    adminField("audioLimitSound"),
 	"audio.midi_soundfont": settingsField("audioMidiSoundFont"),

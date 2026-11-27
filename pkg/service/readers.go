@@ -490,7 +490,15 @@ func timedExit(
 	timer := exitTimer
 	generation := exitGeneration.Add(1)
 
+	// Shutdown closes the queues this sends on once the background group is
+	// done, so the send must be finished by then.
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Add(1)
+	}
 	go func() {
+		if svc.BackgroundWG != nil {
+			defer svc.BackgroundWG.Done()
+		}
 		select {
 		case <-timer.Chan():
 		case <-svc.State.GetContext().Done():

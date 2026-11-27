@@ -1916,6 +1916,19 @@ func TestAudioNormalize_SaveLoadRoundTrip(t *testing.T) {
 	assert.False(t, loaded.AudioNormalize())
 }
 
+func TestAudioDevice(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{fs: afero.NewMemMapFs()}
+	assert.Empty(t, cfg.AudioDevice(), "unset uses the system default")
+
+	require.NoError(t, cfg.LoadTOML("[audio]\ndevice = \"  USB Audio  \"\n"))
+	assert.Equal(t, "USB Audio", cfg.AudioDevice())
+
+	require.NoError(t, cfg.LoadTOML("[audio]\ndevice = \"auto\"\n"))
+	assert.Equal(t, "auto", cfg.AudioDevice())
+}
+
 func TestMidiSoundFont(t *testing.T) {
 	t.Parallel()
 

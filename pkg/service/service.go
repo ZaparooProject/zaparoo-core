@@ -507,6 +507,7 @@ func startServiceWithOptions(
 		player = audio.NewMalgoPlayer()
 	}
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
+	audio.SetOutputDeviceSource(cfg.AudioDevice)
 	platformSettings := pl.Settings()
 	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 	playbackManager.SetTrackMetaLimit(methods.MediaImageMaxBytes(pl))
