@@ -1,6 +1,6 @@
 {
   "GoVersion": "go1.27.4",
-  "GoZapScriptVersion": "v0.23.1-0.20261127054711-7c567dd8a063",
+  "GoZapScriptVersion": "v0.24.0",
   "ExprSourceSHA256": "dc6a0920f3f9bababa98fdbbf867168982c5602d917b1b8d7cc252d2f3ca2a87",
   "BuiltinNames": [
     "abs",
