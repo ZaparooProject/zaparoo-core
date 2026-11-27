@@ -1037,10 +1037,13 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 Log($"Failed to launch game {game.Id}: {ex.Message}");
                 SendCommandError("Launch", ex.Message);
             }
-        }, "Launch game");
+        }, "Launch game", ex => SendCommandError("Launch", ex.Message));
     }
 
-    private static void InvokeOnUiThread(Action action, string description)
+    // onError reports a failure of an action run for a Core command back to
+    // Core. A queued action runs after HandleCommand has returned, so its
+    // catch cannot. Internal UI actions leave it null and only log.
+    private static void InvokeOnUiThread(Action action, string description, Action<Exception>? onError = null)
     {
         CaptureApplicationContext();
         Dispatcher? dispatcher = _uiDispatcher ?? System.Windows.Application.Current?.Dispatcher;
@@ -1069,6 +1072,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             catch (Exception ex)
             {
                 Log($"UI action failed ({description}): {ex.Message}");
+                onError?.Invoke(ex);
             }
         }));
     }
@@ -1387,7 +1391,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             PluginHelper.BigBoxMainViewModel.ShowPlatforms();
-        }, "Show BigBox platforms");
+        }, "Show BigBox platforms", ex => SendCommandError("ShowPlatforms", ex.Message));
     }
 
     private void ShowAllGames()
@@ -1407,7 +1411,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             PluginHelper.BigBoxMainViewModel.ShowAllGames();
-        }, "Show BigBox all games");
+        }, "Show BigBox all games", ex => SendCommandError("ShowAllGames", ex.Message));
     }
 
     private void ShowPlatform(string platformName)
@@ -1434,7 +1438,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             PluginHelper.BigBoxMainViewModel.ShowGames(platform);
-        }, "Show BigBox platform");
+        }, "Show BigBox platform", ex => SendCommandError("ShowPlatform", ex.Message));
     }
 
     private void ShowPlaylist(string playlistName)
@@ -1462,7 +1466,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             PluginHelper.BigBoxMainViewModel.ShowGames(FilterType.PlatformOrCategoryOrPlaylist, playlist.Name);
-        }, "Show BigBox playlist");
+        }, "Show BigBox playlist", ex => SendCommandError("ShowPlaylist", ex.Message));
     }
 
     private void Search(string query)
@@ -1482,7 +1486,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             PluginHelper.BigBoxMainViewModel.Search(query);
-        }, "Search BigBox");
+        }, "Search BigBox", ex => SendCommandError("Search", ex.Message));
     }
 
     private void OpenManual(string? gameId)
@@ -1520,7 +1524,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             {
                 Log($"OpenManual result for {game.Title}: {result}");
             }
-        }, "Open manual");
+        }, "Open manual", ex => SendCommandError("OpenManual", ex.Message));
     }
 
     private static bool IsBigBox()

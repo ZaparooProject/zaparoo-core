@@ -114,6 +114,8 @@ func ScriptSetup(env *testscript.Env) error {
 //	played PATH...             wait until play history's newest entry is the
 //	                           media at the path the arguments join to; history
 //	                           is written after media.started is sent
+//	launch-idle                wait until no launch is in progress; media can
+//	                           be in play history before its launch finishes
 //	mark                       move both cursors to now
 //	fault JSON | fault clear [LAUNCHER]
 //	write-complete [-reader R] [UID]
@@ -140,6 +142,7 @@ func ScriptCommands() map[string]func(ts *testscript.TestScript, neg bool, args 
 		"notification":   cmdNotification,
 		"event":          cmdEvent,
 		"played":         cmdPlayed,
+		"launch-idle":    cmdLaunchIdle,
 		"mark":           cmdMark,
 		"fault":          cmdFault,
 		"write-complete": cmdWriteComplete,
@@ -633,6 +636,14 @@ func cmdPlayed(ts *testscript.TestScript, neg bool, args []string) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func cmdLaunchIdle(ts *testscript.TestScript, neg bool, _ []string) {
+	noNeg(ts, neg, "launch-idle")
+	st := running(ts)
+	ctx, cancel := ctxFor(ScriptWaitTimeout)
+	defer cancel()
+	ts.Check(st.in.WaitLaunchIdle(ctx))
 }
 
 func cmdMark(ts *testscript.TestScript, neg bool, _ []string) {

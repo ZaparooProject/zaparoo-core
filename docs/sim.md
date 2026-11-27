@@ -520,6 +520,7 @@ Use `harness.ScriptSetup` and `harness.ScriptCommands()` to add the commands to 
 | `notification [-timeout D] METHOD [K=V...]` | Wait for a notification after the cursor and move the cursor past it. `! notification` asserts none arrives within 750ms. |
 | `event [-peek] [-timeout D] KIND [K=V...]` | The same for journal events. `-peek` leaves the cursor in place, for events whose order is not fixed. |
 | `played PATH...` | Wait until play history's newest entry is the path the arguments join to. History is written after `media.started`, so wait with this before a check that reads last played. |
+| `launch-idle` | Wait until no launch is in progress. Media can reach play history before the launch that started it finishes, so wait with this before an API call that a launch in progress would refuse as busy. |
 | `mark` | Move both cursors to now. |
 | `fault JSON` / `fault clear [LAUNCHER]` | JSON uses the camelCase fault fields. Unknown fields are an error. |
 | `write-complete [-reader R] [UID]` | Present a tag to the pending write. |

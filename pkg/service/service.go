@@ -91,6 +91,9 @@ type StartResult struct {
 	StopContext      func(context.Context) error
 	Done             <-chan struct{}
 	RestartRequested func() bool
+	// Launching reports whether a launch holds the launch lock or a playlist
+	// item launch has not finished.
+	Launching func() bool
 	// Err reports a terminal service error after Done closes; nil while running.
 	Err func() error
 }
@@ -1423,6 +1426,7 @@ func startServiceWithOptions(
 		StopContext:      stopContext,
 		Done:             doneCh,
 		RestartRequested: st.RestartRequested,
+		Launching:        st.LauncherManager().Launching,
 		Err: func() error {
 			select {
 			case <-doneCh:

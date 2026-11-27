@@ -151,15 +151,29 @@ func TestSharedDeviceOpenIfNeededRequiresActiveSource(t *testing.T) {
 	d.devMu.Unlock()
 	assert.False(t, opening)
 
+	// open() waits on prevDone before it touches a sound card. Holding it here
+	// keeps the background open from clearing opening (failAllSources does that
+	// when no sound card is available) before the assertion reads it.
+	prevDone := make(chan struct{})
+	d.prevDone = prevDone
 	setTestSources(d, d.sources[0].source, &testMixSource{active: true})
 	d.openIfNeeded()
-	// Read under devMu: failAllSources (called when ALSA is unavailable) also
-	// holds devMu when it clears d.opening, so the lock ensures we observe the
-	// value set by openIfNeeded before the background goroutine can clear it.
 	d.devMu.Lock()
 	opening = d.opening
 	d.devMu.Unlock()
 	assert.True(t, opening)
+
+	// Remove the sources so open() returns without opening a device.
+	d.devMu.Lock()
+	d.sources = nil
+	d.publishSourcesLocked()
+	d.devMu.Unlock()
+	close(prevDone)
+	require.Eventually(t, func() bool {
+		d.devMu.Lock()
+		defer d.devMu.Unlock()
+		return !d.opening
+	}, 5*time.Second, time.Millisecond)
 }
 
 func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
