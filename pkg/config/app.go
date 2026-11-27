@@ -73,6 +73,7 @@ const (
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
+	ScriptsDir           = "scripts"
 	CacheDir             = "cache"
 	LogUploadURL         = "https://logs.zaparoo.org/"
 	// LogUploadMaxBytes is the largest request logs.zaparoo.org accepts, and

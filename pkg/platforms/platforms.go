@@ -357,7 +357,11 @@ type CmdEnv struct {
 	Cfg             *config.Instance
 	Database        *database.Database
 	ExprEnv         *zapscript.ArgExprEnv
-	Source          string
+	// SpendExpansion charges the run's shared expansion budget for a
+	// command that expands into cmds commands read from size bytes of
+	// script. It returns an error once the run would exceed the budget.
+	SpendExpansion func(cmds, size int) error
+	Source         string
 	// PathRoot is an optional per-token root for resolving relative filesystem paths.
 	PathRoot      string
 	Cmd           zapscript.Command

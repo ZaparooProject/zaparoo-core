@@ -898,6 +898,11 @@ func zaparooBackupDefinitions(configDir, dataDir string) []platforms.BackupDefin
 			RestoreRoot: config.MappingsDir,
 			Category:    CategoryZaparoo, Include: []platforms.BackupPattern{{Glob: "*.toml"}},
 		},
+		{
+			SourceRoot:  filepath.Join(dataDir, config.ScriptsDir),
+			RestoreRoot: config.ScriptsDir,
+			Category:    CategoryZaparoo, Include: []platforms.BackupPattern{{Glob: "*.txt"}},
+		},
 	}
 }
 

@@ -220,6 +220,10 @@ func executeTokenZapScript(
 		}
 	}()
 
+	// Includes and ZapLinks anywhere in this run share one budget, so a
+	// script that expands into itself stops instead of running forever.
+	expansions := &zapscript.ExpansionBudget{}
+
 	for i := 0; i < len(cmds); i++ {
 		if err := runCtx.Err(); err != nil {
 			return err
@@ -468,6 +472,7 @@ func executeTokenZapScript(
 				Library:          zapScriptLibrary(svc),
 				PlaylistMemory:   playlistMemoryFor(svc),
 				ScanCtx:          scanContextFrom(runCtx),
+				Expansions:       expansions,
 			},
 			&cmdEnv,
 		)
@@ -593,11 +598,38 @@ func executeTokenZapScript(
 		// if a command results in additional commands to run (like from a
 		// remote query) inject them to be run immediately after this command
 		if len(result.NewCommands) > 0 {
+			if admitErr := admitIncludedLaunch(svc, cmd, result.NewCommands, inHookContext); admitErr != nil {
+				return &runfailure.CommandError{Name: cmd.Name, Err: admitErr}
+			}
 			log.Info().Msgf("injecting %d new commands", len(result.NewCommands))
 			cmds = injectCommands(cmds, i, result.NewCommands)
 		}
 	}
 
+	return nil
+}
+
+// admitIncludedLaunch checks a launch an include adds against the device's
+// launch policies. The scan was checked before the run with its includes
+// expanded, but the file can change after that, or its name can come from an
+// expression, so the commands the run actually got are checked again. Hooks
+// are left alone, as their own launches are.
+func admitIncludedLaunch(
+	svc *ServiceContext,
+	cmd gozapscript.Command, //nolint:gocritic // read-only command value
+	added []gozapscript.Command,
+	inHookContext bool,
+) error {
+	if inHookContext || cmd.Name != gozapscript.ZapScriptCmdInclude {
+		return nil
+	}
+	included := &gozapscript.Script{Cmds: added}
+	if !scriptHasMediaLaunchingCommand(included) {
+		return nil
+	}
+	if _, err := launchAdmission(svc, scriptActivatesProfileBeforeLaunch(included)); err != nil {
+		return fmt.Errorf("included launch blocked: %w", err)
+	}
 	return nil
 }
 
@@ -1486,6 +1518,12 @@ func handleQueuedToken(
 		log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 		// Continue anyway - the error will be caught in runTokenZapScript
 	}
+	// The checks below decide what the run is allowed to do from what it
+	// will run, so they see an included file's commands in its place.
+	policy := script
+	if parseErr == nil {
+		policy.Cmds = zapscript.ExpandIncludes(svc.Platform, script.Cmds)
+	}
 
 	// The one place a token's traits are settled. Every token carrying script
 	// text passes through here, and everything downstream reads this set
@@ -1503,7 +1541,7 @@ func handleQueuedToken(
 	// run fails quickly. A run request has no tag to acknowledge and its
 	// caller is waiting on the result, so its success sound is held until the
 	// script has actually succeeded.
-	successSound := parseErr != nil || shouldPlayScanSuccessSound(&script)
+	successSound := parseErr != nil || shouldPlayScanSuccessSound(&policy)
 	if successSound && t.Source != tokens.SourceAPI {
 		path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
@@ -1543,7 +1581,7 @@ func handleQueuedToken(
 	}
 
 	// Check if any command in the script launches media
-	hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
+	hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&policy)
 
 	// Media launches are gated on the device's own policies. Profile switch
 	// commands still run while a profile is required — scanning a profile
@@ -1551,7 +1589,7 @@ func handleQueuedToken(
 	// profile before launching passes, because the switch activates a profile
 	// before the launch command runs, or fails and aborts the whole script.
 	if hasMediaLaunchCmd {
-		limitReason, admitErr := launchAdmission(svc, scriptActivatesProfileBeforeLaunch(&script))
+		limitReason, admitErr := launchAdmission(svc, scriptActivatesProfileBeforeLaunch(&policy))
 		if admitErr != nil {
 			if errors.Is(admitErr, state.ErrLaunchRequiresProfile) {
 				log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
@@ -1587,7 +1625,7 @@ func handleQueuedToken(
 	// launch tokens in a separate thread
 	runCtx := svc.State.GetContext()
 	var scanCtx context.Context
-	if t.Source != tokens.SourcePlaylist && parseErr == nil && scriptSupersedesEarlierScans(&script) {
+	if t.Source != tokens.SourcePlaylist && parseErr == nil && scriptSupersedesEarlierScans(&policy) {
 		scanCtx = svc.scans.supersede(runCtx)
 	} else {
 		scanCtx = svc.scans.current(runCtx)

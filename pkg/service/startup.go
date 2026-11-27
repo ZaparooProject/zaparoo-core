@@ -89,6 +89,7 @@ func setupEnvironmentFS(fs afero.Fs, pl platforms.Platform) error {
 		filepath.Join(helpers.DataDir(pl), config.AssetsDir),
 		filepath.Join(helpers.DataDir(pl), config.LaunchersDir),
 		filepath.Join(helpers.DataDir(pl), config.MediaDir),
+		filepath.Join(helpers.DataDir(pl), config.ScriptsDir),
 	}
 	for _, dir := range dirs {
 		err := fs.MkdirAll(dir, 0o750)

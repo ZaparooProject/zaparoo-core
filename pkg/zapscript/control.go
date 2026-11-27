@@ -60,8 +60,11 @@ func IsControlCommand(cmdName string) bool {
 }
 
 // isControlAllowed returns true if the command is safe to run in control context.
+// An include is refused because the commands it would add are not the ones
+// checked here before the script runs.
 func isControlAllowed(cmdName string) bool {
-	return !IsMediaLaunchingCommand(cmdName) && !IsPlaylistCommand(cmdName) && !IsControlCommand(cmdName)
+	return !IsMediaLaunchingCommand(cmdName) && !IsPlaylistCommand(cmdName) && !IsControlCommand(cmdName) &&
+		cmdName != gozapscript.ZapScriptCmdInclude
 }
 
 // RunControlScript parses and executes a zapscript string in control context.

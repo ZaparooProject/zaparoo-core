@@ -1277,7 +1277,9 @@ preprocessing:
 					cancelGuard()
 					guardGeneration++
 					scan.LaunchGuardGeneration = guardGeneration
-				} else if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
+				} else if parseErr != nil || scriptHasMediaDisruptingCommand(&gozapscript.Script{
+					Cmds: zapscript.ExpandIncludes(svc.Platform, script.Cmds),
+				}) {
 					guardGeneration++
 					log.Info().Msgf("launch guard: staging token: %v", tokenForLog(scan))
 					stageToken(scan, nil)
