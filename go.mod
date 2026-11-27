@@ -52,7 +52,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/rivo/tview v0.42.0
-	github.com/rogpeppe/go-internal v1.14.1
+	github.com/rogpeppe/go-internal v1.16.0
 	github.com/rs/zerolog v1.35.1
 	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8
 	github.com/sasha-s/go-deadlock v0.3.9
