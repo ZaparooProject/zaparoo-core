@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/zigcc/**'
+      - 'scripts/tasks/zigcc.yml'
       - '.github/workflows/zigcc-build.yml'
     branches:
       - main
@@ -87,3 +88,31 @@ jobs:
             GID=1001
           cache-from: type=gha,scope=zigcc-build
           cache-to: type=gha,mode=max,scope=zigcc-build
+
+      # The Linux C sanitizers job rebuilds libusb and libnfc with UBSan from
+      # this toolchain unless it can pull them. Publish them for this
+      # scripts/zigcc tree; the job still rebuilds when the image's label shows
+      # a different toolchain or different flags.
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
+
+      - name: Build and push sanitized native libraries
+        run: |
+          image="ghcr.io/${OWNER_LC}/zigcc:sanitized-$(git rev-parse HEAD:scripts/zigcc)"
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "$image already exists in registry"
+            exit 0
+          fi
+          docker pull "ghcr.io/${OWNER_LC}/zigcc:${VERSION}"
+          docker tag "ghcr.io/${OWNER_LC}/zigcc:${VERSION}" zaparoo/zigcc
+          task linux:sanitized-image-amd64
+          docker tag zaparoo/zigcc-sanitized "$image"
+          docker push "$image"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}

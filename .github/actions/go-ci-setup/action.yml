@@ -5,11 +5,18 @@ inputs:
   os:
     description: "Runner OS from the job matrix: ubuntu, macos or windows"
     required: true
+  build-cache:
+    description: >-
+      Restore the Go build cache: "true" or "false". Linux and Windows only;
+      a macOS cache would not fit the repository's Actions quota.
+    required: false
+    default: "false"
   save-build-cache:
     description: >-
-      Save the Windows Go build cache when the job ends. Only the test job
-      should: the cache key is per commit, so the first job to finish wins it,
-      and a lint job's cache would leave the next test run compiling cold.
+      Also save the Go build cache when the job ends, on main only. Only the
+      test job should: one entry is kept per day, so the first job to finish
+      wins it, and a lint job's cache would leave the next test run compiling
+      cold.
     required: false
     default: "false"
 
@@ -67,37 +74,62 @@ runs:
         restore-keys: |
           ${{ runner.os }}-gomod-
 
-    # Only the module cache is persisted, so every Windows run compiled the
-    # module from scratch: cgo plus a -race test binary per package, at
-    # GOMAXPROCS 2. That put the first test result seven minutes in and left
-    # the job still linking when the timeout killed it. This cache is keyed by
-    # commit and restored by prefix, so a run starts from the nearest previous
-    # build rather than from nothing.
+    # Without a build cache every run compiled the module from scratch: cgo
+    # plus a -race test binary per package. Pull requests restore the newest
+    # cache main saved; main saves one a day, since a save per commit cost
+    # Windows over six minutes and pushed out every other cache.
+    #
+    # The cache also holds test results. Go reuses one only when the files the
+    # test read have the size and modification time it recorded, so the
+    # checkout's times are replaced with times derived from each file's git
+    # hash, and a package whose inputs did not change reports (cached).
     #
     # Go's cache does not see C and C++ files that a package pulls in by
     # #include from another directory, which is how the vendored audio
     # libraries under pkg/**/third_party are built. A restored cache would
     # keep linking objects compiled from the old sources, so the key and every
     # restore key carry a hash of those sources and a change starts cold.
-    - name: Cache Go build cache (Windows)
-      if: inputs.os == 'windows' && inputs.save-build-cache == 'true'
+    - name: Compute Go build cache key
+      id: build-cache-key
+      if: inputs.build-cache == 'true' && inputs.os != 'macos'
+      shell: bash
+      env:
+        PREFIX: ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-
+      run: |
+        echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+        echo "key=$PREFIX$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        if [ "$RUNNER_OS" = Windows ]; then
+          echo "path=D:\go-cache" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Cache Go build cache
+      if: steps.build-cache-key.outputs.key && inputs.save-build-cache == 'true' && github.ref == 'refs/heads/main'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: D:\go-cache
-        key: ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        path: ${{ steps.build-cache-key.outputs.path }}
+        key: ${{ steps.build-cache-key.outputs.key }}
         restore-keys: |
-          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ steps.build-cache-key.outputs.prefix }}
           ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-
 
-    - name: Restore Go build cache (Windows)
-      if: inputs.os == 'windows' && inputs.save-build-cache != 'true'
+    - name: Restore Go build cache
+      if: steps.build-cache-key.outputs.key && (inputs.save-build-cache != 'true' || github.ref != 'refs/heads/main')
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: D:\go-cache
-        key: ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        path: ${{ steps.build-cache-key.outputs.path }}
+        key: ${{ steps.build-cache-key.outputs.key }}
         restore-keys: |
-          ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ steps.build-cache-key.outputs.prefix }}
           ${{ runner.os }}-gobuild-${{ hashFiles('pkg/**/third_party/**') }}-
+
+    - name: Set file times from git
+      if: steps.build-cache-key.outputs.key
+      shell: bash
+      run: |
+        if command -v python3 >/dev/null; then py=python3; else py=python; fi
+        "$py" -I .github/scripts/set-mtimes-from-git.py
 
     - name: Download Go modules
       shell: bash

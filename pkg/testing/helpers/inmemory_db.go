@@ -22,6 +22,8 @@ package helpers
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/dbtemplate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -63,30 +66,17 @@ func NewUserDBInDataDir(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	return db, cleanup
 }
 
+// NewInMemoryUserDB opens a migrated UserDB in a temporary file. Despite the
+// name the database is on disk, so it survives closing and reopening the
+// connection. The schema comes from a template built once per test binary.
 func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	t.Helper()
 
-	ctx := context.Background()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-
-	// Create temporary directory for test database
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "userdb_test.db")
+	dbtemplate.Seed(t, "userdb-plain", tempDir, buildPlainUserDB)
 
-	// Open SQLite database using temp file (persists across connection close/reopen)
-	sqlDB, err := sql.Open("sqlite3", dbPath)
+	db, err := openPlainUserDB(filepath.Join(tempDir, plainUserDBFile))
 	if err != nil {
-		t.Fatalf("Failed to open test database: %v", err)
-	}
-
-	// Create UserDB instance and set the sql field directly
-	db = &userdb.UserDB{}
-	err = db.SetSQLForTesting(ctx, sqlDB, mockPlatform)
-	if err != nil {
-		if closeErr := sqlDB.Close(); closeErr != nil {
-			t.Errorf("Failed to close SQL database after setup error: %v", closeErr)
-		}
 		t.Fatalf("Failed to set up UserDB for testing: %v", err)
 	}
 
@@ -99,18 +89,50 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	return db, cleanup
 }
 
+const plainUserDBFile = "userdb_test.db"
+
+func buildPlainUserDB(dir string) error {
+	db, err := openPlainUserDB(filepath.Join(dir, plainUserDBFile))
+	if err != nil {
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("closing template UserDB: %w", err)
+	}
+	return nil
+}
+
+func openPlainUserDB(dbPath string) (*userdb.UserDB, error) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening test database: %w", err)
+	}
+
+	db := &userdb.UserDB{}
+	if err := db.SetSQLForTesting(context.Background(), sqlDB, mockPlatform); err != nil {
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("allocating test database: %w", err)
+	}
+	return db, nil
+}
+
+// NewInMemoryMediaDB opens a MediaDB in a temporary data directory with the
+// production opener, so tests get the same connection hooks, WAL settings and
+// pool behavior as the service. Despite the name the database is on disk. The
+// schema comes from a template built once per test binary.
 func NewInMemoryMediaDB(tb testing.TB) (db *mediadb.MediaDB, cleanup func()) {
 	tb.Helper()
 
-	// Use the production MediaDB opener so tests get the same SQLite connection
-	// hooks, WAL settings, pool behavior, and migrations as runtime databases.
 	tempDir := tb.TempDir()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: tempDir})
+	dbtemplate.Seed(tb, "mediadb", tempDir, buildMediaDB)
 
 	var err error
-	db, err = mediadb.OpenMediaDB(context.Background(), mockPlatform)
+	db, err = openMediaDBInDataDir(tempDir)
 	if err != nil {
 		tb.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
@@ -122,6 +144,29 @@ func NewInMemoryMediaDB(tb testing.TB) (db *mediadb.MediaDB, cleanup func()) {
 	}
 
 	return db, cleanup
+}
+
+func buildMediaDB(dir string) error {
+	db, err := openMediaDBInDataDir(dir)
+	if err != nil {
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("closing template MediaDB: %w", err)
+	}
+	return nil
+}
+
+func openMediaDBInDataDir(dataDir string) (*mediadb.MediaDB, error) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir})
+
+	db, err := mediadb.OpenMediaDB(context.Background(), mockPlatform)
+	if err != nil {
+		return nil, fmt.Errorf("opening test MediaDB: %w", err)
+	}
+	return db, nil
 }
 
 // NewTestDatabase creates both MediaDB and UserDB for comprehensive testing.

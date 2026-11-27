@@ -6,6 +6,11 @@ tasks:
     cmds:
       - task: :zigcc:test-linux-amd64-sanitized
 
+  sanitized-image-amd64:
+    desc: Build the toolchain image with UBSan-instrumented libusb and libnfc (zaparoo/zigcc-sanitized)
+    cmds:
+      - task: :zigcc:sanitized-image
+
   dev:
     desc: Start air for live reload development using current architecture
     cmds:

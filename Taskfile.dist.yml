@@ -138,45 +138,95 @@ tasks:
       - '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} {{.TARGET_DIR}}'
 
   hooks:install:
-    desc: Install local pre-push validation hook
+    desc: Install the pre-push hook, which runs task validate unless HEAD already passed it
+    vars:
+      HOOKS_DIR:
+        sh: git rev-parse --git-path hooks
     cmds:
-      - mkdir -p .git/hooks
+      - mkdir -p "{{.HOOKS_DIR}}"
       - |
-        cat > .git/hooks/pre-push <<'HOOK'
+        cat > "{{.HOOKS_DIR}}/pre-push" <<'HOOK'
         #!/usr/bin/env bash
         set -euo pipefail
 
-        if [[ -n "$(git status --short)" ]]; then
-          cat >&2 <<'MSG'
-        pre-push: working tree has uncommitted changes before validation.
-        Commit or stash them, then push again.
-        MSG
-          git status --short >&2
-          exit 1
+        # task validate records the commit it passed. Git opens the connection
+        # to the remote before this hook runs, so a long validation here can
+        # outlast it; task push validates first and leaves nothing to do here.
+        stamp="$(git rev-parse --git-path zaparoo-validated)"
+        if [[ -f "$stamp" && "$(cat "$stamp")" == "$(git rev-parse HEAD)" ]]; then
+          printf 'pre-push: HEAD already passed task validate\n'
+          exit 0
         fi
 
-        printf 'pre-push: running task lint-fix\n'
-        task lint-fix
-
-        printf 'pre-push: running task test\n'
-        task test
-
-        printf 'pre-push: running task cross-lint:all\n'
-        task cross-lint:all
-
-        if [[ -n "$(git status --short)" ]]; then
-          cat >&2 <<'MSG'
-        pre-push: validation changed working tree.
-        Review changes, commit them, then push again.
-        MSG
-          git status --short >&2
-          exit 1
+        # Hooks are shared by every worktree, and a branch from before task
+        # validate existed still needs its checks run.
+        if ! task --summary validate >/dev/null 2>&1; then
+          if [[ -n "$(git status --short)" ]]; then
+            printf 'pre-push: working tree has uncommitted changes; commit them first\n' >&2
+            git status --short >&2
+            exit 1
+          fi
+          printf 'pre-push: this branch has no task validate; running the older checks\n'
+          task lint-fix
+          task test
+          task cross-lint:all
+          if [[ -n "$(git status --short)" ]]; then
+            printf 'pre-push: validation changed files; review and commit them\n' >&2
+            git status --short >&2
+            exit 1
+          fi
+          exit 0
         fi
 
-        printf 'pre-push: validation passed\n'
+        printf 'pre-push: running task validate (use task push to validate before connecting)\n'
+        exec task validate
         HOOK
-      - chmod +x .git/hooks/pre-push
-      - echo "Installed .git/hooks/pre-push"
+      - chmod +x "{{.HOOKS_DIR}}/pre-push"
+      - echo "Installed {{.HOOKS_DIR}}/pre-push"
+
+  validate:
+    desc: Run the pre-push checks (lint-fix, then tests and cross-lint at once) and record HEAD as validated
+    vars:
+      STAMP:
+        sh: git rev-parse --git-path zaparoo-validated
+    cmds:
+      - task: validate:clean-tree
+        vars:
+          WHEN: before validation
+      - task: lint-fix
+      - task: validate:clean-tree
+        vars:
+          WHEN: after lint-fix
+      - task --output=prefixed validate:checks
+      - task: validate:clean-tree
+        vars:
+          WHEN: after the checks
+      - git rev-parse HEAD > "{{.STAMP}}"
+      - 'echo "validate: $(git rev-parse --short HEAD) passed"'
+
+  validate:checks:
+    # No desc, so it stays out of task --list: run it through task validate.
+    deps:
+      - test
+      - cross-lint:check:windows
+      - cross-lint:check:mac
+
+  validate:clean-tree:
+    internal: true
+    cmds:
+      - |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "validate: the working tree has uncommitted changes {{.WHEN}}." >&2
+          echo "Review and commit them, then run it again." >&2
+          git status --short >&2
+          exit 1
+        fi
+
+  push:
+    desc: Run task validate, then git push with any arguments after --
+    cmds:
+      - task: validate
+      - git push {{.CLI_ARGS}}
 
   test:c-sanitizer-canary:
     desc: Verify the C compiler flags make undefined behavior fail the job
@@ -243,10 +293,10 @@ tasks:
     cmds:
       - task: expr:check-profile
       - task: credits:check
-      - go test -race -tags=validator_novalidatefn,expr_static_methods {{.TEST_ARGS}}
+      - go test -race -vet=off -tags=validator_novalidatefn,expr_static_methods {{.TEST_ARGS}}
       - |
         if [ '{{.TEST_ARGS}}' = './...' ]; then
-          (cd mister && go test -race ./...)
+          (cd mister && go test -race -vet=off ./...)
         fi
 
   fuzz:

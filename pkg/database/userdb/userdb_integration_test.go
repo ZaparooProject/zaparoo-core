@@ -29,25 +29,24 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/dbtemplate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupTempUserDB(t *testing.T) (db *UserDB, cleanup func()) {
-	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-userdb-*")
 	require.NoError(t, err)
-
-	// Create a mock platform that returns our temp directory for Settings().DataDir
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Settings").Return(platforms.Settings{
-		DataDir: tempDir,
+	dbtemplate.Seed(t, "userdb-internal", tempDir, func(dir string) error {
+		tplDB, openErr := openTempUserDB(dir)
+		if openErr != nil {
+			return openErr
+		}
+		return tplDB.Close()
 	})
 
-	// Use OpenUserDB with context and the mock platform
-	ctx := context.Background()
-	db, err = OpenUserDB(ctx, mockPlatform)
+	db, err = openTempUserDB(tempDir)
 	require.NoError(t, err)
 
 	cleanup = func() {
@@ -58,6 +57,14 @@ func setupTempUserDB(t *testing.T) (db *UserDB, cleanup func()) {
 	}
 
 	return db, cleanup
+}
+
+func openTempUserDB(dataDir string) (*UserDB, error) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: dataDir,
+	})
+	return OpenUserDB(context.Background(), mockPlatform)
 }
 
 func TestUserDB_OpenClose_Integration(t *testing.T) {

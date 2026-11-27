@@ -250,9 +250,12 @@ func startLogUpload(inFlight *atomic.Bool, item menuEntry, run func()) bool {
 	}
 	item.Disable()
 	go func() {
+		// Clear the flag before enabling the entry: the tray cannot deliver a
+		// click to a disabled entry, so no click lands while the flag is still
+		// set and gets dropped.
 		defer func() {
-			item.Enable()
 			inFlight.Store(false)
+			item.Enable()
 		}()
 		run()
 	}()

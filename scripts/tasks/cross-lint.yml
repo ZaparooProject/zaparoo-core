@@ -3,47 +3,79 @@ version: "3"
 vars:
   # Pinned so CI, cross-lint and the pre-push hook all agree on one version.
   GOLANGCI_LINT_VERSION: v2.14.0
+  # The pinned golangci-lint binary and a lint cache per target live here on
+  # the host, so a run downloads the linter only once per version and
+  # re-analyses only the packages that changed.
+  LINT_HOME:
+    sh: echo "$(dirname "$(go env GOCACHE)")/zaparoo-cross-lint"
+  IMG_LINT_HOME: /home/build/.cache/zaparoo-cross-lint
 
 tasks:
   setup:
     internal: true
+    run: once
     cmds:
       - task: :docker:build-image
         vars:
           IMAGE_NAME: zaparoo/zigcc
           DOCKERFILE: "./scripts/zigcc"
 
-  windows:
-    desc: Run golangci-lint targeting Windows via zigcc
+  run:
+    internal: true
+    requires:
+      vars: [TARGET, GOOS]
     cmds:
       - task: setup
+      - mkdir -p "{{.LINT_HOME}}"
       - task: :docker:run
         vars:
+          LABEL: cross-lint:{{.TARGET}}
           IMAGE_NAME: zaparoo/zigcc
-          PLATFORM: windows
-          BUILD_OS: windows
+          PLATFORM: "{{.TARGET}}"
+          BUILD_OS: "{{.GOOS}}"
           BUILD_ARCH: amd64
-          CC: "zig cc -w --target=x86_64-windows-gnu"
-          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+          CC: "{{.CC}}"
+          CXX: "{{.CXX}}"
+          # Two targets can run at once, so the download goes to a private
+          # directory and is renamed into place.
           EXEC: >-
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin {{.GOLANGCI_LINT_VERSION}} 2>&1 | tail -1
-            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
+            bash -c 'set -eu;
+            bin={{.IMG_LINT_HOME}}/bin/golangci-lint-{{.GOLANGCI_LINT_VERSION}};
+            if [ ! -x "$bin" ]; then
+            mkdir -p {{.IMG_LINT_HOME}}/bin;
+            tmp=$(mktemp -d {{.IMG_LINT_HOME}}/bin/download.XXXXXX);
+            curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$tmp" {{.GOLANGCI_LINT_VERSION}} 2>&1 | tail -1;
+            mv "$tmp/golangci-lint" "$bin";
+            rm -rf "$tmp";
+            fi;
+            GOLANGCI_LINT_CACHE={{.IMG_LINT_HOME}}/cache-{{.TARGET}} "$bin" run {{.LINT_ARGS}} --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
-            -e GOOS=windows
+            -v "{{.LINT_HOME}}:{{.IMG_LINT_HOME}}"
+            -e GOOS={{.GOOS}}
             -e GOARCH=amd64
             -e CGO_ENABLED=1
-            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
+            {{.EXTRA_ENV}}
 
-  mac:
-    desc: Run golangci-lint targeting macOS via zigcc
+  check:windows:
+    desc: Run golangci-lint targeting Windows via zigcc, without changing files
     cmds:
-      - task: setup
-      - task: :docker:run
+      - task: run
         vars:
-          IMAGE_NAME: zaparoo/zigcc
-          PLATFORM: mac
-          BUILD_OS: darwin
-          BUILD_ARCH: amd64
+          TARGET: windows
+          GOOS: windows
+          LINT_ARGS: "{{.LINT_ARGS}}"
+          CC: "zig cc -w --target=x86_64-windows-gnu"
+          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+          EXTRA_ENV: -e CGO_LDFLAGS="-Wl,--subsystem,windows"
+
+  check:mac:
+    desc: Run golangci-lint targeting macOS via zigcc, without changing files
+    cmds:
+      - task: run
+        vars:
+          TARGET: mac
+          GOOS: darwin
+          LINT_ARGS: "{{.LINT_ARGS}}"
           CC: >-
             zig cc -w --target=x86_64-macos
             -I/opt/macosx-sdk/usr/include
@@ -54,16 +86,27 @@ tasks:
             -idirafter /opt/macosx-sdk/usr/include
             -L/opt/macosx-sdk/usr/lib
             -F/opt/macosx-sdk/System/Library/Frameworks
-          EXEC: >-
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin {{.GOLANGCI_LINT_VERSION}} 2>&1 | tail -1
-            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
-          EXTRA_DOCKER_ARGS: >-
-            -e GOOS=darwin
-            -e GOARCH=amd64
-            -e CGO_ENABLED=1
+
+  check:all:
+    desc: Run golangci-lint for Windows and macOS via zigcc at the same time, without changing files
+    deps: [check:windows, check:mac]
+
+  windows:
+    desc: Run golangci-lint targeting Windows via zigcc and apply its fixes
+    cmds:
+      - task: check:windows
+        vars:
+          LINT_ARGS: --fix
+
+  mac:
+    desc: Run golangci-lint targeting macOS via zigcc and apply its fixes
+    cmds:
+      - task: check:mac
+        vars:
+          LINT_ARGS: --fix
 
   all:
-    desc: Run golangci-lint for Windows and macOS via zigcc
+    desc: Run golangci-lint for Windows and macOS via zigcc and apply their fixes
     cmds:
       - task: windows
       - task: mac
