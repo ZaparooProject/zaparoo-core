@@ -208,3 +208,34 @@ func TestCmdPlaylistLoad_DeckIDBeatsName(t *testing.T) {
 	pls := <-queue
 	assert.Equal(t, "By ID", pls.Name)
 }
+
+func TestCmdAdd_NeedsOneCollection(t *testing.T) {
+	t.Parallel()
+	library := &fakeLibrary{}
+	env, _ := editEnv(t, library, zapscript.ZapScriptCmdAdd, "")
+	_, err := cmdAdd(newPlaylistTestPlatform(), env)
+	require.ErrorIs(t, err, ErrRequiredArgs)
+
+	env.Cmd.Args = []string{"favorites://", "liked://"}
+	_, err = cmdAdd(newPlaylistTestPlatform(), env)
+	require.ErrorIs(t, err, ErrArgCount)
+	assert.Empty(t, library.flags)
+}
+
+func TestCmdAdd_NeedsTheLibrary(t *testing.T) {
+	t.Parallel()
+	env, _ := editEnv(t, nil, zapscript.ZapScriptCmdAdd, "favorites://")
+	env.Library = nil
+	_, err := cmdAdd(newPlaylistTestPlatform(), env)
+	require.ErrorIs(t, err, ErrNoMediaLibrary)
+}
+
+func TestCmdAdd_DeckEditFailureIsReported(t *testing.T) {
+	t.Parallel()
+	library := &fakeLibrary{err: platforms.ErrLibraryRefused}
+	env, db := editEnv(t, library, zapscript.ZapScriptCmdAdd, "deck://Weekend")
+	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Weekend", Owned: true}))
+	_, err := cmdAdd(newPlaylistTestPlatform(), env)
+	require.ErrorIs(t, err, platforms.ErrLibraryRefused)
+	assert.Contains(t, err.Error(), "Weekend")
+}

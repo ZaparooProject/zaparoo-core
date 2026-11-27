@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -364,4 +365,73 @@ func TestCmdPlaylistLoad_EmptyLibraryListFails(t *testing.T) {
 		assert.Contains(t, err.Error(), "no items in collection", link)
 		assert.Empty(t, queue, "%s queues no playlist", link)
 	}
+}
+
+func TestResolveCollection_LastPlayedWithNoHistory(t *testing.T) {
+	t.Parallel()
+	env := libraryEnv(&fakeLibrary{}, nil)
+	env.Database.UserDB = nil
+	_, _, err := resolveCollection(newPlaylistTestPlatform(), env, "similar://last")
+	require.ErrorIs(t, err, ErrNoHistory)
+
+	failing := testhelpers.NewMockUserDBI()
+	failing.On("GetMediaHistory", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.MediaHistoryEntry(nil), errors.New("history unreadable"))
+	env.Database.UserDB = failing
+	_, _, err = resolveCollection(newPlaylistTestPlatform(), env, "similar://last")
+	require.ErrorContains(t, err, "history unreadable")
+}
+
+func TestResolveCollection_VersionsOfTitle(t *testing.T) {
+	t.Parallel()
+	library := &fakeLibrary{lists: libraryTestItems}
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	scantest.IndexMediaPaths(t, db.MediaDB, "NES", "roms/NES/Metroid.nes", "roms/NES/Contra.nes")
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	env := &platforms.CmdEnv{ServiceCtx: t.Context(), Cfg: cfg, Database: db, Library: library}
+
+	coll, _, err := resolveCollection(newPlaylistTestPlatform(), env, "versions://NES/Metroid")
+	require.NoError(t, err)
+	require.Len(t, library.refs, 1)
+	assert.Equal(t, "NES", library.refs[0].SystemID)
+	assert.Equal(t, "roms/NES/Metroid.nes", library.refs[0].Path, "the title resolves the way launch.title does")
+	assert.NotZero(t, library.refs[0].MediaID)
+	assert.Equal(t, "versions://NES/roms/NES/Metroid.nes", coll.id)
+}
+
+func TestResolveCollection_VersionsOfTitleInUnknownSystem(t *testing.T) {
+	t.Parallel()
+	library := &fakeLibrary{lists: libraryTestItems}
+	env := libraryEnv(library, nil)
+	env.Database.MediaDB = nil
+	_, _, err := resolveCollection(newPlaylistTestPlatform(), env, "versions://NotASystem/Metroid")
+	require.ErrorContains(t, err, "NotASystem")
+	assert.Empty(t, library.refs)
+}
+
+func TestFilterCollectionByTags_NoMediaDBLeavesTheList(t *testing.T) {
+	t.Parallel()
+	env := libraryEnv(nil, nil)
+	env.Database.MediaDB = nil
+	coll := &collection{items: []playlists.PlaylistItem{{ZapScript: "a"}}, rows: []collectionRow{{mediaID: 11}}}
+	require.NoError(t, filterCollectionByTags(env, coll, []zapscript.TagFilter{{Type: "region", Value: "us"}}))
+	assert.Equal(t, []string{"a"}, collectionPaths(coll))
+}
+
+func TestFilterCollectionByTags_ReportsMatchFailure(t *testing.T) {
+	t.Parallel()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("MatchMediaTagFilters", mock.Anything, []int64{11}, mock.Anything).
+		Return(map[int64]struct{}(nil), errors.New("tags unreadable"))
+	env := libraryEnv(nil, mediaDB)
+	coll := &collection{
+		name:  "favorites",
+		items: []playlists.PlaylistItem{{ZapScript: "a"}},
+		rows:  []collectionRow{{mediaID: 11}},
+	}
+	err := filterCollectionByTags(env, coll, []zapscript.TagFilter{{Type: "region", Value: "us"}})
+	require.ErrorContains(t, err, "tags unreadable")
+	assert.Equal(t, []string{"a"}, collectionPaths(coll), "a failed filter leaves the list as it was")
 }

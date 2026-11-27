@@ -23,13 +23,17 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/recommend"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -167,4 +171,255 @@ func TestZapScriptLibrary_EditDeckLeavesAMissingDeckRefused(t *testing.T) {
 		platforms.MediaRef{SystemID: "SNES", Path: "roms/snes/Quest.sfc"}, true)
 	require.ErrorIs(t, err, platforms.ErrLibraryRefused)
 	assert.False(t, changed)
+}
+
+// Most played reads media.history.top for the system asked for and leaves out
+// hidden media, as every other list does.
+func TestZapScriptLibrary_MostPlayedLeavesOutHiddenMedia(t *testing.T) {
+	t.Parallel()
+	userDB := helpers.NewMockUserDBI()
+	mediaDB := helpers.NewMockMediaDBI()
+	shown, hidden := "/roms/SNES/Shown.sfc", "/roms/SNES/Hidden.sfc"
+	userDB.On("GetMediaHistoryTop", []string{"SNES"}, (*time.Time)(nil), 25).Return([]database.MediaHistoryTopEntry{
+		{SystemID: "SNES", MediaName: "Shown", MediaPath: shown, SessionCount: 4, LastPlayedAt: time.Now()},
+		{SystemID: "SNES", MediaName: "Hidden", MediaPath: hidden, SessionCount: 2, LastPlayedAt: time.Now()},
+	}, nil)
+	mediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).Return([]database.MediaPathID{
+		{SystemID: "SNES", Path: shown, DBID: 1, MediaTitleDBID: 10},
+		{SystemID: "SNES", Path: hidden, DBID: 2, MediaTitleDBID: 20},
+	}, nil)
+	mediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).Return(map[int64][]database.TagInfo{
+		1: {{Type: "user", Tag: "favorite"}},
+		2: {{Type: "region", Tag: "hidden"}, {Type: "user", Tag: "hidden"}},
+	}, nil)
+	library := &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context:  ctx,
+			Database: &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			Config:   &config.Instance{},
+		}
+	}}
+
+	items, err := library.MostPlayed(context.Background(), "SNES")
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.LibraryItem{{SystemID: "SNES", Name: "Shown", Path: shown, MediaID: 1}}, items)
+	userDB.AssertExpectations(t)
+}
+
+func TestHasUserTag(t *testing.T) {
+	t.Parallel()
+	list := []database.TagInfo{{Type: "region", Tag: "hidden"}, {Type: "user", Tag: "liked"}}
+	assert.False(t, hasUserTag(list, tags.TagUserHidden), "only a user tag counts")
+	assert.True(t, hasUserTag(list, tags.TagUserLiked))
+	assert.False(t, hasUserTag(nil, tags.TagUserHidden))
+}
+
+// Recommended reads the same plan the app shows: every section, one section
+// by kind, or the queue layout.
+//
+//nolint:paralleltest // swaps the package's recommendation clock and plan cache
+func TestZapScriptLibrary_Recommended(t *testing.T) {
+	fixture := newRecommendedFixture(t)
+	fixture.mediaDB.On("MediaPreferencesRevision", mock.Anything).Return("1", nil)
+	library := &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context:  ctx,
+			Database: &database.Database{MediaDB: fixture.mediaDB, UserDB: fixture.userDB},
+			Config:   &config.Instance{},
+			State:    fixture.state,
+		}
+	}}
+	ctx := context.Background()
+	want := fixture.call(t, nil).Sections[0].Items
+	wantIDs := make([]int64, 0, len(want))
+	for i := range want {
+		wantIDs = append(wantIDs, want[i].MediaID)
+	}
+	ids := func(items []platforms.LibraryItem) []int64 {
+		out := make([]int64, 0, len(items))
+		for i := range items {
+			out = append(out, items[i].MediaID)
+		}
+		return out
+	}
+
+	all, err := library.Recommended(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, wantIDs, ids(all))
+
+	seed, err := library.Recommended(ctx, recommend.SectionSeed)
+	require.NoError(t, err)
+	assert.Equal(t, wantIDs, ids(seed))
+
+	series, err := library.Recommended(ctx, "series")
+	require.NoError(t, err)
+	assert.Empty(t, series, "a section the plan does not hold lists nothing")
+
+	queue, err := library.Recommended(ctx, platforms.RecommendedQueue)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, wantIDs, ids(queue))
+}
+
+// A request the API refuses reaches ZapScript as a refused library call.
+func TestZapScriptLibrary_ClientErrorIsRefused(t *testing.T) {
+	t.Parallel()
+	library := newSearchLibrary(t, helpers.NewMockMediaDBI())
+	_, err := library.Similar(context.Background(), platforms.MediaRef{})
+	require.ErrorIs(t, err, platforms.ErrLibraryRefused)
+	_, err = library.Versions(context.Background(), platforms.MediaRef{})
+	require.ErrorIs(t, err, platforms.ErrLibraryRefused)
+}
+
+func decksLibrary(e *decksTestEnv) *ZapScriptLibrary {
+	return &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		env := e.env
+		env.Context = ctx
+		return env
+	}}
+}
+
+// SetUserFlag writes the flag through media.tags.update, by media ID or by
+// system and path.
+func TestZapScriptLibrary_SetUserFlag(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	library := decksLibrary(e)
+	ctx := context.Background()
+	metroid := pathutil.CanonicalMediaPath(e.paths[0])
+	contra := pathutil.CanonicalMediaPath(e.paths[1])
+
+	favorite := func(path string) bool {
+		t.Helper()
+		data, found, err := e.env.Database.UserDB.GetMediaUserData("NES", path)
+		require.NoError(t, err)
+		return found && data.IsFavorite
+	}
+
+	require.NoError(t, library.SetUserFlag(ctx,
+		platforms.MediaRef{SystemID: "NES", Path: metroid, MediaID: e.ids[0]}, "favorite", true))
+	assert.True(t, favorite(metroid))
+	require.NoError(t, library.SetUserFlag(ctx,
+		platforms.MediaRef{SystemID: "NES", Path: metroid, MediaID: e.ids[0]}, "favorite", false))
+	assert.False(t, favorite(metroid))
+
+	require.NoError(t, library.SetUserFlag(ctx, platforms.MediaRef{SystemID: "NES", Path: contra}, "favorite", true))
+	assert.True(t, favorite(contra), "a ref with no media ID is found by system and path")
+
+	err := library.SetUserFlag(ctx, platforms.MediaRef{SystemID: "NES", Path: "roms/NES/None.nes"}, "favorite", true)
+	require.ErrorIs(t, err, platforms.ErrLibraryRefused, "media the index does not hold is refused")
+}
+
+// EditDeck adds the game once and removes every item linked to it, leaving a
+// deck that already holds it, or never did, as it is.
+func TestZapScriptLibrary_EditDeck(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	library := decksLibrary(e)
+	ctx := context.Background()
+	created, ok := e.call(t, HandleDecksNew, `{"name": "Weekend"}`).(models.DeckResponse)
+	require.True(t, ok)
+	metroid := platforms.MediaRef{SystemID: "NES", Path: pathutil.CanonicalMediaPath(e.paths[0]), MediaID: e.ids[0]}
+	contra := platforms.MediaRef{SystemID: "NES", Path: pathutil.CanonicalMediaPath(e.paths[1])}
+	itemCount := func() int {
+		t.Helper()
+		deck, err := e.env.Database.UserDB.GetDeck(created.DeckID)
+		require.NoError(t, err)
+		return len(deck.Items)
+	}
+
+	changed, err := library.EditDeck(ctx, created.DeckID, metroid, true)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = library.EditDeck(ctx, created.DeckID, metroid, true)
+	require.NoError(t, err)
+	assert.False(t, changed, "a deck already holding the game is left as it is")
+	assert.Equal(t, 1, itemCount())
+
+	changed, err = library.EditDeck(ctx, created.DeckID, contra, true)
+	require.NoError(t, err)
+	assert.True(t, changed, "a ref with no media ID is added by system and path")
+	assert.Equal(t, 2, itemCount())
+
+	changed, err = library.EditDeck(ctx, created.DeckID, metroid, false)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = library.EditDeck(ctx, created.DeckID, metroid, false)
+	require.NoError(t, err)
+	assert.False(t, changed, "removing a game the deck does not hold changes nothing")
+	assert.Equal(t, 1, itemCount())
+}
+
+func manyVersionRows(n int) []database.SearchResultWithCursor {
+	rows := make([]database.SearchResultWithCursor, 0, n)
+	for i := range n {
+		id := int64(1000 + i)
+		rows = append(rows, versionRow(id, contraTitle, "Contra", fmt.Sprintf("/roms/NES/Contra %04d.nes", id)))
+	}
+	return rows
+}
+
+// Versions reads every page of media.versions, so a game with more versions
+// than one page lists them all.
+func TestZapScriptLibrary_VersionsReadsEveryPage(t *testing.T) {
+	t.Parallel()
+	mediaDB := helpers.NewMockMediaDBI()
+	rows := manyVersionRows(zapScriptVersionsPage + 20)
+	expectVersionsRead(mediaDB, 1000, contraTitle, nil, rows)
+	library := &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context: ctx, Database: &database.Database{MediaDB: mediaDB}, Config: &config.Instance{},
+		}
+	}}
+
+	items, err := library.Versions(context.Background(), platforms.MediaRef{SystemID: "NES", MediaID: 1000})
+	require.NoError(t, err)
+	require.Len(t, items, len(rows))
+	seen := make(map[int64]bool, len(items))
+	for i := range items {
+		seen[items[i].MediaID] = true
+	}
+	assert.Len(t, seen, len(rows), "no version is listed twice across pages")
+}
+
+// Versions and Similar find a ref with no media ID by its system and path.
+func TestZapScriptLibrary_ListsBySystemAndPath(t *testing.T) {
+	t.Parallel()
+	mediaDB := helpers.NewMockMediaDBI()
+	path := "/roms/NES/Contra (USA).nes"
+	mediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES"}, nil)
+	mediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(1), []string{path}).
+		Return(map[string]database.Media{path: {DBID: 101, MediaTitleDBID: contraTitle, Path: path}}, nil)
+	expectVersionsRead(mediaDB, 101, contraTitle, nil, contraRows()[:2])
+	library := &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context: ctx, Database: &database.Database{MediaDB: mediaDB}, Config: &config.Instance{},
+		}
+	}}
+
+	items, err := library.Versions(context.Background(), platforms.MediaRef{SystemID: "NES", Path: path})
+	require.NoError(t, err)
+	assert.Equal(t, []int64{101, 102}, []int64{items[0].MediaID, items[1].MediaID})
+}
+
+// Similar lists what media.similar finds for the game.
+func TestZapScriptLibrary_Similar(t *testing.T) {
+	t.Parallel()
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{11}).
+		Return(map[int64]database.MediaFullRow{11: mediaFullRow(11, 1, "")}, nil)
+	expectSimilarReads(mediaDB, 2, 3, 4)
+	mediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).Return([]database.SearchResultWithCursor{
+		suggestionRow(4, "Salamander"), suggestionRow(2, "Gradius II"),
+	}, nil)
+	library := &ZapScriptLibrary{Env: func(ctx context.Context) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context: ctx, Database: &database.Database{MediaDB: mediaDB}, Config: &config.Instance{},
+		}
+	}}
+
+	items, err := library.Similar(context.Background(), platforms.MediaRef{SystemID: "NES", MediaID: 11})
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "Gradius II", items[0].Name)
+	assert.Equal(t, int64(21), items[0].MediaID)
 }

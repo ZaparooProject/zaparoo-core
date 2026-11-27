@@ -21,12 +21,14 @@ package decks_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,4 +329,26 @@ func TestResolveDeckRef(t *testing.T) {
 
 	_, err = decks.ResolveDeckRef(nil, "Weekend Games")
 	require.ErrorIs(t, err, decks.ErrNoUserDB)
+}
+
+func TestResolveDeckRefReportsReadFailures(t *testing.T) {
+	t.Parallel()
+	broken := errors.New("disk unreadable")
+
+	getFails := testhelpers.NewMockUserDBI()
+	getFails.On("GetDeck", "0123456789ab").Return(nil, broken)
+	_, err := decks.ResolveDeckRef(getFails, "0123456789ab")
+	require.ErrorIs(t, err, broken)
+	require.NotErrorIs(t, err, database.ErrDeckNotFound, "a failed read is not a missing deck")
+
+	listFails := testhelpers.NewMockUserDBI()
+	listFails.On("ListDecks").Return(nil, broken)
+	_, err = decks.ResolveDeckRef(listFails, "Weekend Games")
+	require.ErrorIs(t, err, broken)
+
+	loadFails := testhelpers.NewMockUserDBI()
+	loadFails.On("ListDecks").Return([]database.Deck{{DeckID: "0123456789ab", Name: "Weekend Games"}}, nil)
+	loadFails.On("GetDeck", "0123456789ab").Return(nil, broken)
+	_, err = decks.ResolveDeckRef(loadFails, "Weekend Games")
+	require.ErrorIs(t, err, broken)
 }
