@@ -38,6 +38,37 @@ func TestParseKeyCombo(t *testing.T) {
 	}{
 		// Single key tests
 		{
+			name:      "mute",
+			input:     "{mute}",
+			wantCodes: []int{113}, // KEY_MUTE
+		},
+		{
+			name:      "win and print screen combo",
+			input:     "{win+prtsc}",
+			wantCodes: []int{125, 99}, // KEY_LEFTMETA, KEY_SYSRQ
+			wantCombo: true,
+		},
+		{
+			name:      "keypad enter",
+			input:     "{kpenter}",
+			wantCodes: []int{96}, // KEY_KPENTER
+		},
+		{
+			name:      "f20",
+			input:     "{f20}",
+			wantCodes: []int{190}, // KEY_F20
+		},
+		{
+			name:      "iso 102nd key",
+			input:     "{102nd}",
+			wantCodes: []int{86}, // KEY_102ND
+		},
+		{
+			name:      "pause",
+			input:     "{pause}",
+			wantCodes: []int{119}, // KEY_PAUSE
+		},
+		{
 			name:      "single lowercase letter",
 			input:     "a",
 			wantCodes: []int{30}, // KEY_A

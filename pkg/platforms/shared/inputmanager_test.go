@@ -563,6 +563,39 @@ func TestKeyboardPressSequence_BracedSpecial(t *testing.T) {
 	assert.Contains(t, rec.events, keyEvent{"up", 28})
 }
 
+// TestKeyboardPressSequence_MediaAndModifierKeys verifies that keys added
+// for MiSTer hotkeys reach the device with their evdev codes: {mute} toggles
+// MiSTer's volume mute, and {win+prtsc} is its screenshot hotkey.
+func TestKeyboardPressSequence_MediaAndModifierKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		arg   string
+		codes []int
+	}{
+		{arg: "{mute}", codes: []int{113}},
+		{arg: "{win+prtsc}", codes: []int{125, 99}},
+		{arg: "{kpenter}", codes: []int{96}},
+		{arg: "{f20}", codes: []int{190}},
+		{arg: "{pause}", codes: []int{119}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.arg, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &recordingKeyboard{}
+			input := newRecordingInputManager(rec)
+
+			require.NoError(t, input.KeyboardPressSequence([]string{tt.arg}, 0))
+			for _, code := range tt.codes {
+				assert.Contains(t, rec.events, keyEvent{"down", code})
+				assert.Contains(t, rec.events, keyEvent{"up", code})
+			}
+		})
+	}
+}
+
 // TestKeyboardPressSequence_EmptyArgs returns nil without emitting anything.
 func TestKeyboardPressSequence_EmptyArgs(t *testing.T) {
 	t.Parallel()

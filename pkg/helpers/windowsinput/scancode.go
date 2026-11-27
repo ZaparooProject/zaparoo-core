@@ -43,11 +43,52 @@ var extendedScancodes = map[int]uint16{
 	109: 0x51, // KEY_PAGEDOWN
 	110: 0x52, // KEY_INSERT
 	111: 0x53, // KEY_DELETE
+	113: 0x20, // KEY_MUTE
 	114: 0x2E, // KEY_VOLUMEDOWN
 	115: 0x30, // KEY_VOLUMEUP
 	125: 0x5B, // KEY_LEFTMETA
 	126: 0x5C, // KEY_RIGHTMETA
 	127: 0x5D, // KEY_COMPOSE
+	163: 0x19, // KEY_NEXTSONG
+	164: 0x22, // KEY_PLAYPAUSE
+	165: 0x10, // KEY_PREVIOUSSONG
+	166: 0x24, // KEY_STOPCD
+}
+
+// plainScancodes holds the evdev keycodes outside the identity range whose
+// scancodes have no extended prefix.
+//
+//nolint:gochecknoglobals // immutable translation table
+var plainScancodes = map[int]uint16{
+	86:  0x56, // KEY_102ND
+	183: 0x64, // KEY_F13
+	184: 0x65, // KEY_F14
+	185: 0x66, // KEY_F15
+	186: 0x67, // KEY_F16
+	187: 0x68, // KEY_F17
+	188: 0x69, // KEY_F18
+	189: 0x6A, // KEY_F19
+	190: 0x6B, // KEY_F20
+	191: 0x6C, // KEY_F21
+	192: 0x6D, // KEY_F22
+	193: 0x6E, // KEY_F23
+	194: 0x76, // KEY_F24
+}
+
+// virtualKeys holds the evdev keycodes that have no single scancode
+// SendInput can send, so they are sent by virtual-key code instead. Pause
+// sends the three-byte sequence E1 1D 45, which no scancode flag can express.
+//
+//nolint:gochecknoglobals // immutable translation table
+var virtualKeys = map[int]uint16{
+	119: 0x13, // KEY_PAUSE -> VK_PAUSE
+}
+
+// VirtualKey returns the Windows virtual-key code for an evdev keycode that
+// must be sent by virtual key rather than by scancode.
+func VirtualKey(code int) (vk uint16, ok bool) {
+	vk, ok = virtualKeys[code]
+	return vk, ok
 }
 
 // Scancode returns the AT set 1 scancode for an evdev keycode, whether it needs
@@ -60,12 +101,15 @@ func Scancode(code int) (scancode uint16, extended, ok bool) {
 	if sc, isExtended := extendedScancodes[code]; isExtended {
 		return sc, true, true
 	}
+	if sc, isPlain := plainScancodes[code]; isPlain {
+		return sc, false, true
+	}
 	if code < 1 || code > 88 {
 		return 0, false, false
 	}
-	// 84 to 86 are the keys Linux added in the gap before F11, and they have
-	// no unprefixed AT scancode.
-	if code >= 84 && code <= 86 {
+	// 84 and 85 are keys Linux added in the gap before F11 with no AT
+	// scancode. 86, the ISO 102nd key, is in plainScancodes.
+	if code == 84 || code == 85 {
 		return 0, false, false
 	}
 	return uint16(code), false, true

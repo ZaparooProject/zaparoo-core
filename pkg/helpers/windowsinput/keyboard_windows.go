@@ -99,6 +99,14 @@ func (*Keyboard) Close() error {
 }
 
 func sendKey(code int, up bool) error {
+	if vk, ok := VirtualKey(code); ok {
+		flags := uint32(0)
+		if up {
+			flags |= keyEventKeyUp
+		}
+		return sendInput(code, keybdInput{wVk: vk, dwFlags: flags})
+	}
+
 	scancode, extended, ok := Scancode(code)
 	if !ok {
 		return fmt.Errorf("%w: keycode %d", ErrUnknownKey, code)
@@ -115,12 +123,13 @@ func sendKey(code int, up bool) error {
 		flags |= keyEventKeyUp
 	}
 
+	return sendInput(code, keybdInput{wScan: scancode, dwFlags: flags})
+}
+
+func sendInput(code int, ki keybdInput) error {
 	in := input{
 		typ: inputKeyboard,
-		ki: keybdInput{
-			wScan:   scancode,
-			dwFlags: flags,
-		},
+		ki:  ki,
 	}
 
 	markKeyboardInjection()
