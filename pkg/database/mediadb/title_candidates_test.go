@@ -795,6 +795,10 @@ func FuzzTitleCandidateSimilarityBound(f *testing.F) {
 	f.Add("libraryadventuer001234", "libraryadventure001234", float32(0.98))
 	f.Add("abcdefghi", "badcfehgi", float32(0.85))
 	f.Add("crystalspacequest", "questspacecrystal", float32(1))
+	f.Add("parish", "liar", float32(0.6))
+	f.Add("abcb", "ceabcf", float32(0.6))
+	f.Add("less", "lede", float32(0.6))
+	f.Add("cavy", "camb", float32(0.6))
 	f.Add(strings.Repeat("a", 256), strings.Repeat("a", 256), float32(1))
 	f.Add("\u65e5\u672c\u8a9e", "\u65e5\u672c", float32(0.85))
 	f.Fuzz(func(t *testing.T, a, b string, cutoff float32) {
