@@ -57,13 +57,14 @@ const (
 	reasonGroovy    = "the GMC proxy listens unauthenticated on every interface and turns packets into tokens"
 	reasonInput     = "input mode and command blocks bound what a token may type or run; " +
 		"opening them remotely is close to running code"
-	reasonExecDir        = "Core runs programs found in this folder"
-	reasonDriverFeatures = "a driver-wide default; clients set features per reader through readersConnect"
-	reasonLogins         = "saved logins are sent to this server"
-	reasonRoots          = "widens what media.asset, browse and launch accept"
-	reasonWrites         = "Core writes files into this folder"
-	reasonHost           = "scans would be sent to a host the caller picks; shown, never written"
-	reasonCustom         = "custom launcher commands run on the host; launchers.custom shows them read-only"
+	reasonExecDir         = "Core runs programs found in this folder"
+	reasonDriverFeatures  = "a driver-wide default; clients set features per reader through readersConnect"
+	reasonDisplayRotation = "display accessories only; set in the config file until a client offers it"
+	reasonLogins          = "saved logins are sent to this server"
+	reasonRoots           = "widens what media.asset, browse and launch accept"
+	reasonWrites          = "Core writes files into this folder"
+	reasonHost            = "scans would be sent to a host the caller picks; shown, never written"
+	reasonCustom          = "custom launcher commands run on the host; launchers.custom shows them read-only"
 )
 
 // configKeyAPI classifies every config.toml key. A new key fails
@@ -163,6 +164,7 @@ var configKeyAPI = map[string]any{
 	"readers.drivers.features":                  fileOnly(reasonDriverFeatures),
 	"readers.drivers.keep_reading":              adminField("readersDrivers"),
 	"readers.drivers.launch_order":              adminField("readersDrivers"),
+	"readers.drivers.rotation":                  fileOnly(reasonDisplayRotation),
 	"readers.drivers.scan_mode":                 adminField("readersDrivers"),
 	"readers.scan.allow_relaunch":               adminField("readersScanAllowRelaunch"),
 	"readers.scan.exit_delay":                   settingsField("readersScanExitDelay"),
