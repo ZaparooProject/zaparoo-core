@@ -89,6 +89,8 @@ func (m *mockMQTTClient) AddRoute(_ string, callback mqtt.MessageHandler) {
 	m.messageHandler = callback
 }
 
+func (*mockMQTTClient) DeleteRoute(_ string) {}
+
 func (*mockMQTTClient) OptionsReader() mqtt.ClientOptionsReader {
 	return mqtt.ClientOptionsReader{}
 }

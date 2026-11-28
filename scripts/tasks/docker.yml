@@ -57,6 +57,8 @@ tasks:
 
   run:
     internal: true
+    # Names the output when two runs share a terminal, as in task validate.
+    prefix: '{{default "docker:run" .LABEL}}'
     vars:
       BUILDCACHE:
         sh: go env GOCACHE

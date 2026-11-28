@@ -293,7 +293,7 @@ func writeTemp(t testing.TB, name string, data []byte) string {
 
 func readFrames(t testing.TB, d *Decoder, frames int) [][2]float64 {
 	t.Helper()
-	out := make([][2]float64, 0, min(frames, maxTestFrames))
+	out := make([][2]float64, 0, min(frames, 10*rate))
 	buf := make([][2]float64, 1024)
 	for len(out) < frames {
 		want := min(len(buf), frames-len(out))

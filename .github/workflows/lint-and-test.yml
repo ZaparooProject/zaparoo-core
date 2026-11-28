@@ -59,11 +59,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # No Go cache: the tests compile inside the container with sanitizer
+      # flags, so nothing a cache here could hold would be reused, and a cache
+      # per pull request crowded the useful ones out of the quota.
       - name: Set up Go
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Set up Task
         run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
       - name: Log in to GitHub Container Registry
@@ -85,6 +88,19 @@ jobs:
           else
             echo "Could not pull $image, building it locally..."
             docker build --build-arg UID=1001 --build-arg GID=1001 -t zaparoo/zigcc scripts/zigcc
+          fi
+      # The Build zigcc Docker image workflow publishes the sanitized native
+      # archives for each scripts/zigcc tree. The task checks the image's
+      # label and rebuilds them when the toolchain, sources or flags differ.
+      - name: Pull sanitized native libraries
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          image="ghcr.io/${OWNER,,}/zigcc:sanitized-$(git rev-parse HEAD:scripts/zigcc)"
+          if docker pull "$image"; then
+            docker tag "$image" zaparoo/zigcc-sanitized
+          else
+            echo "Could not pull $image, the next step builds it"
           fi
       - name: Build sanitized native libraries and run release tests
         run: task linux:test-sanitized-amd64
@@ -167,7 +183,7 @@ jobs:
         # asked this run for. github.event_name cannot express this — inside a
         # reusable workflow it still reads as the caller's event.
         if: matrix.os == 'ubuntu' && !cancelled() && !inputs.release_gate && hashFiles('govulncheck.sarif') != ''
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
@@ -214,6 +230,7 @@ jobs:
         uses: ./.github/actions/go-ci-setup
         with:
           os: ${{ matrix.os }}
+          build-cache: "true"
           save-build-cache: "true"
 
       # Without -v, go test prints only the output of failing tests. With it,
@@ -226,13 +243,13 @@ jobs:
           GOMAXPROCS: 2
         run: |
           set -o pipefail
-          go test -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
+          go test -race -vet=off -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
 
       - name: Run full tests (Unix)
         if: matrix.os != 'windows'
         run: |
           set -o pipefail
-          go test -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
+          go test -race -vet=off -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./... 2>&1 | tee go-test-output.txt
 
       - name: Summarize test failures
         if: failure()
@@ -295,11 +312,12 @@ jobs:
         uses: ./.github/actions/go-ci-setup
         with:
           os: ubuntu
+          build-cache: "true"
 
       - name: Run deadlock detection tests
         run: |
           set -o pipefail
-          go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./... 2>&1 | tee go-test-output.txt
+          go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -vet=off -count=1 ./... 2>&1 | tee go-test-output.txt
 
       - name: Summarize test failures
         if: failure()
@@ -423,12 +441,28 @@ jobs:
           docker rm -f go-fetch >/dev/null 2>&1 || true
           exit 1
 
+      # golangci-lint keeps its results per package, so a run re-analyses
+      # only the packages that changed since the cache was saved. It is about
+      # 45 MB per target.
+      - name: Cache golangci-lint results
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lint-cache
+          key: cross-lint-${{ matrix.target }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            cross-lint-${{ matrix.target }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('go.sum') }}-
+            cross-lint-${{ matrix.target }}-${{ env.GOLANGCI_LINT_VERSION }}-
+
       - name: Cross-platform lint (${{ matrix.target }})
         run: |
+          mkdir -p "${RUNNER_TEMP}/lint-cache"
+          chmod 777 "${RUNNER_TEMP}/lint-cache"
           docker run --rm \
             -v "${PWD}:/build" \
             -v "$(go env GOROOT):/usr/local/go:ro" \
             -v "${RUNNER_TEMP}/gomod:/home/build/go" \
+            -v "${RUNNER_TEMP}/lint-cache:/home/build/lint-cache" \
+            -e GOLANGCI_LINT_CACHE=/home/build/lint-cache \
             -e GOTOOLCHAIN=local \
             -e GOOS=${{ matrix.target }} \
             -e GOARCH=amd64 \

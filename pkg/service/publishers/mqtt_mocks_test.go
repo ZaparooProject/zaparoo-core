@@ -114,6 +114,8 @@ func (*mockMQTTClient) Unsubscribe(_ ...string) mqtt.Token {
 
 func (*mockMQTTClient) AddRoute(_ string, _ mqtt.MessageHandler) {}
 
+func (*mockMQTTClient) DeleteRoute(_ string) {}
+
 func (*mockMQTTClient) OptionsReader() mqtt.ClientOptionsReader {
 	return mqtt.ClientOptionsReader{}
 }

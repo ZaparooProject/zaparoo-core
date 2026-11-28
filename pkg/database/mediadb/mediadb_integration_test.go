@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/dbtemplate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
@@ -266,19 +267,17 @@ func TestMigrations_BrowseSortCollationBumpsVersionWithoutTableWork(t *testing.T
 }
 
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
-	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")
 	require.NoError(t, err)
-
-	// Create a mock platform that returns our temp directory for Settings().DataDir
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Settings").Return(platforms.Settings{
-		DataDir: tempDir,
+	dbtemplate.Seed(t, "mediadb-internal", tempDir, func(dir string) error {
+		tplDB, openErr := openTempMediaDB(dir)
+		if openErr != nil {
+			return openErr
+		}
+		return tplDB.Close()
 	})
 
-	// Use OpenMediaDB with context and the mock platform
-	ctx := context.Background()
-	db, err = OpenMediaDB(ctx, mockPlatform)
+	db, err = openTempMediaDB(tempDir)
 	require.NoError(t, err)
 
 	cleanup = func() {
@@ -289,6 +288,14 @@ func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	}
 
 	return db, cleanup
+}
+
+func openTempMediaDB(dataDir string) (*MediaDB, error) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: dataDir,
+	})
+	return OpenMediaDB(context.Background(), mockPlatform)
 }
 
 func TestMediaDB_ForegroundSlugSearchIgnoresUncommittedIndexTransaction(t *testing.T) {

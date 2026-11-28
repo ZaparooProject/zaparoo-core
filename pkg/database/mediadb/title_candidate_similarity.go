@@ -88,7 +88,7 @@ func candidateSimilarity(a, b string) float32 {
 	if matched == 0 {
 		return 0
 	}
-	outOfOrder, next := float32(0), 0
+	outOfOrder, next := 0, 0
 	for i := range len(a) {
 		if left&(uint32(1)<<i) == 0 {
 			continue
@@ -103,8 +103,8 @@ func candidateSimilarity(a, b string) float32 {
 	}
 	transpositions := outOfOrder / 2
 	count := float32(matched)
-	score := (count/float32(len(a)) + count/float32(len(b)) + (count-transpositions)/count) / 3
-	if score == 1 {
+	score := (count/float32(len(a)) + count/float32(len(b)) + float32(matched-transpositions)/count) / 3
+	if score <= 0.7 || score == 1 {
 		return score
 	}
 	prefix := 0
