@@ -308,7 +308,11 @@ func (r *Reader) dial(path string) (*session, error) {
 }
 
 // Open claims a display and starts the render worker.
-func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, opts readers.OpenOpts) error {
+func (r *Reader) Open(
+	device config.ReadersConnect, //nolint:gocritic // hugeParam: fixed by the Reader interface
+	_ chan<- readers.Scan,
+	opts readers.OpenOpts,
+) error {
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return fmt.Errorf("wrong driver for zapdisplay reader: %s", device.Driver)
 	}
