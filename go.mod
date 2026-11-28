@@ -43,7 +43,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/jonboulle/clockwork v0.5.0
-	github.com/klauspost/compress v1.20.4
+	github.com/klauspost/compress v1.20.5
 	github.com/mackerelio/go-osstat v0.2.8
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/miekg/dns v1.1.73
