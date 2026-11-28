@@ -146,7 +146,9 @@ func healTimestampsIfClockReliableWithDeps(
 		Dur("uptime", systemUptime).
 		Msg("calculated true boot time")
 
-	// Heal all timestamps for this boot session
+	// Heal all timestamps for this boot session. A successful zero-row heal is
+	// complete too; otherwise reliable clocks with nothing to fix would retry and
+	// log every minute forever.
 	rowsHealed, healErr := db.UserDB.HealTimestamps(bootUUID, trueBootTime)
 	if healErr != nil {
 		log.Error().Err(healErr).Msg("failed to heal timestamps")
