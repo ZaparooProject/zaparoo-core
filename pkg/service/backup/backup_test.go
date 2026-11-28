@@ -692,6 +692,7 @@ func TestManagerCanonicalLocalBackupRoundTrip(t *testing.T) {
 		filepath.Join(env.DataDir, config.AssetsDir, "custom.wav"):                    "custom-audio\n",
 		filepath.Join(env.DataDir, config.LaunchersDir, "custom.toml"):                "[[launchers]]\n",
 		filepath.Join(env.DataDir, config.MappingsDir, "tokens.toml"):                 "[[mappings]]\n",
+		filepath.Join(env.DataDir, config.ScriptsDir, "sub", "night.txt"):             "**echo:hi\n",
 		filepath.Join(env.RootDir, "MiSTer.ini"):                                      "video_mode=0\n",
 		filepath.Join(env.RootDir, "nfc.csv"):                                         "match_uid,text\n",
 		filepath.Join(env.RootDir, "names.txt"):                                       "NES=My Nintendo\n",
@@ -712,6 +713,7 @@ func TestManagerCanonicalLocalBackupRoundTrip(t *testing.T) {
 		filepath.Join(env.DataDir, "profiles", profileID, "retroachievements.cfg"): "password=secret\n",
 		filepath.Join(env.RootDir, "config", "core_recent.cfg"):                    "recent=1\n",
 		filepath.Join(env.RootDir, "games", "game.rom"):                            "rom\n",
+		filepath.Join(env.DataDir, config.ScriptsDir, "notes.md"):                  "notes\n",
 	}
 	for filePath, contents := range excluded {
 		writeTestFile(t, filePath, contents)
@@ -892,11 +894,14 @@ func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	assert.True(t, allowed("mappings/group/CARDS.TOML"))
 	assert.True(t, allowed("launchers/Custom.toml"))
 	assert.True(t, allowed("mappings/deep/nested/dirs/file.toml"))
+	assert.True(t, allowed("scripts/arcade-night.txt"))
+	assert.True(t, allowed("scripts/sub/Party.TXT"))
 	// user.db is constructed with a fixed name, never collected by glob;
 	// validateManifestPolicy allows it by exact name only.
 	assert.False(t, allowed("USER.DB"))
 	assert.False(t, allowed("user.db"))
 	assert.False(t, allowed("mappings/notes.txt"))
+	assert.False(t, allowed("scripts/notes.toml"))
 	assert.False(t, allowed("assets/ArcadeDatabase.csv"))
 	assert.False(t, allowed("assets/tty2oled_pics/NES.png"))
 	assert.False(t, allowed("other/file.toml"))

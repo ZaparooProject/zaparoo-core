@@ -49,6 +49,8 @@ github.com/ZaparooProject/go-slugs v0.1.0 h1:/Fy+ZRVD5bqL/0qvmCdNscQJhWaaQPqCkIo
 github.com/ZaparooProject/go-slugs v0.1.0/go.mod h1:4dFEMjN39QX3d4ZUcHQ3tQwA+NOzXipOljafrkeGR+U=
 github.com/ZaparooProject/go-zapscript v0.24.0 h1:tCnmjyHyeiGXQ8bwBxsWpnnLnV9aHi5m4tXKaVQUyps=
 github.com/ZaparooProject/go-zapscript v0.24.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
+github.com/ZaparooProject/go-zapscript v0.25.0 h1:EymTJ8H2Z9Hnr+NvrWP+ctFtgjG8qwLGQJf279GBRY0=
+github.com/ZaparooProject/go-zapscript v0.25.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andybalholm/brotli v1.3.0 h1:IdkhjSe/+34U+fP7FSR2Q6Poj1hnHUa2GoWmzXJd6qY=

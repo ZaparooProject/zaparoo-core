@@ -97,6 +97,9 @@ func recordPendingHoldRemoval(pending map[holdTokenKey]tokens.Token, token *toke
 	pending[newHoldTokenKey(token)] = *token
 }
 
+// hookHasDelayCommand reports whether a hook script can wait. An include can
+// hold a delay, and reading its file here would put disk reads on the reader
+// loop, so any include counts.
 func hookHasDelayCommand(scriptText string) bool {
 	parser := gozapscript.NewParser(scriptText)
 	script, err := parser.ParseScript()
@@ -104,7 +107,7 @@ func hookHasDelayCommand(scriptText string) bool {
 		return false
 	}
 	for _, cmd := range script.Cmds {
-		if cmd.Name == gozapscript.ZapScriptCmdDelay {
+		if cmd.Name == gozapscript.ZapScriptCmdDelay || cmd.Name == gozapscript.ZapScriptCmdInclude {
 			return true
 		}
 	}
@@ -1273,11 +1276,16 @@ preprocessing:
 					policyToken.Traits = tokens.ResolveTraits(script.Traits)
 					deferGuard = suppressTapRelaunch(svc, &policyToken, false)
 				}
+				var expanded *gozapscript.Script
+				if parseErr == nil && !deferGuard {
+					expanded = &gozapscript.Script{Cmds: zapscript.ExpandIncludes(svc.Platform, script.Cmds)}
+				}
 				if deferGuard {
 					cancelGuard()
 					guardGeneration++
 					scan.LaunchGuardGeneration = guardGeneration
-				} else if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
+				} else if parseErr != nil || scriptHasMediaDisruptingCommand(expanded) ||
+					scriptHasUnreadInclude(expanded) {
 					guardGeneration++
 					log.Info().Msgf("launch guard: staging token: %v", tokenForLog(scan))
 					stageToken(scan, nil)

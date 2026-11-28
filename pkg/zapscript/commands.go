@@ -83,6 +83,9 @@ type RunCommandOptions struct {
 	PlaybackManager audio.PlaybackManager
 	UI              *uievents.Service
 	LauncherManager *state.LauncherManager
+	// Expansions is the budget the whole run shares for includes and
+	// ZapLinks. Nil gives this one command a budget of its own.
+	Expansions *ExpansionBudget
 }
 
 var (
@@ -143,8 +146,10 @@ func IsExpectedRunError(err error) bool {
 
 var expectedRunErrors = []error{
 	ErrFileNotFound,
+	ErrScriptUnreadable,
 	ErrInvalidScript,
 	ErrInvalidArguments,
+	ErrExpansionLimit,
 	// Nothing running for a command about the running media, and a library
 	// edit the library refused, are the script meeting the device's state.
 	ErrNoActiveMedia,
@@ -238,6 +243,7 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdDelay:   cmdDelay,
 			zapscript.ZapScriptCmdStop:    cmdStop,
 			zapscript.ZapScriptCmdEcho:    cmdEcho,
+			zapscript.ZapScriptCmdInclude: cmdInclude,
 
 			zapscript.ZapScriptCmdControl:    cmdControl,
 			zapscript.ZapScriptCmdScreenshot: cmdScreenshot,
@@ -709,6 +715,10 @@ func RunCommand(
 	}
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
+	expansions := opts.Expansions
+	if expansions == nil {
+		expansions = &ExpansionBudget{}
+	}
 	cmd = foldURLQuery(cmd)
 
 	linkValue, linkOwned, linkErr := checkZapLink(cfg, pl, db, cmd)
@@ -735,9 +745,14 @@ func RunCommand(
 			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", parseErr)
 		case len(script.Cmds) == 0:
 			return platforms.CmdResult{}, errors.New("zap link is empty")
-		case len(script.Cmds) > 1:
+		}
+		// A link body can hold further links, including back to itself, so
+		// every one charges the budget the run shares with includes.
+		if spendErr := expansions.Spend(len(script.Cmds), len(linkValue)); spendErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", spendErr)
+		}
+		if len(script.Cmds) > 1 {
 			log.Warn().Msgf("zap link has multiple commands, queueing rest")
-			// TODO: this could result in a recursive scan
 			newCmds = append(newCmds, script.Cmds[1:]...)
 		}
 
@@ -818,6 +833,7 @@ func RunCommand(
 		AllowedCommands: token.AllowedCommands,
 		Database:        db,
 		ExprEnv:         exprEnv,
+		SpendExpansion:  expansions.Spend,
 	}
 
 	if opts.LauncherManager != nil {
@@ -941,6 +957,8 @@ func RunCommand(
 	}
 
 	res.Unsafe = unsafe
-	res.NewCommands = newCmds
+	// What the command expanded into runs first, then the rest of the link
+	// body the command came from.
+	res.NewCommands = append(res.NewCommands, newCmds...)
 	return res, nil
 }

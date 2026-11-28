@@ -46,3 +46,46 @@ func ValidateScriptLength(text string) error {
 	}
 	return nil
 }
+
+// Limits on how far one run may grow by expanding commands into scripts, as
+// include and ZapLinks do. Either can name a script that names itself, so
+// without a bound a single scan could hold the token worker forever.
+const (
+	// MaxScriptExpansions is how many includes and ZapLinks one run may
+	// expand in total. It also bounds how deeply they can nest.
+	MaxScriptExpansions = 16
+	// MaxExpandedCommands is how many commands expansions may add to a run.
+	MaxExpandedCommands = 256
+	// MaxExpandedBytes is how much script text expansions may read in a run.
+	MaxExpandedBytes = 64 << 10
+)
+
+// ErrExpansionLimit is returned when expanding a script would take a run past
+// one of the expansion limits.
+var ErrExpansionLimit = errors.New("script expansion limit reached")
+
+// ExpansionBudget tracks what one run has spent on expansions. A run's
+// commands execute one at a time, so it is not safe for concurrent use and
+// does not need to be.
+type ExpansionBudget struct {
+	expansions int
+	commands   int
+	bytes      int
+}
+
+// Spend charges one expansion that adds cmds commands from size bytes of
+// script text. Nothing is charged when it would exceed a limit.
+func (b *ExpansionBudget) Spend(cmds, size int) error {
+	switch {
+	case b.expansions >= MaxScriptExpansions:
+		return fmt.Errorf("%w: more than %d includes or links", ErrExpansionLimit, MaxScriptExpansions)
+	case b.commands+cmds > MaxExpandedCommands:
+		return fmt.Errorf("%w: more than %d expanded commands", ErrExpansionLimit, MaxExpandedCommands)
+	case b.bytes+size > MaxExpandedBytes:
+		return fmt.Errorf("%w: more than %d bytes of expanded script", ErrExpansionLimit, MaxExpandedBytes)
+	}
+	b.expansions++
+	b.commands += cmds
+	b.bytes += size
+	return nil
+}

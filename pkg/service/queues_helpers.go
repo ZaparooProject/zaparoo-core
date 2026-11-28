@@ -133,13 +133,18 @@ func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 // combo card (profile switch + favorite game in one scan) satisfies the
 // require-profile launch gate: by the time the launch command runs, the
 // switch will have activated a profile, or failed and aborted the script.
+// A profile command with a when condition does not count, as the condition
+// may be false when it runs.
 func scriptActivatesProfileBeforeLaunch(script *zapscript.Script) bool {
 	if script == nil {
 		return false
 	}
 	for _, cmd := range script.Cmds {
 		if cmd.Name == zapscript.ZapScriptCmdProfile {
-			return true
+			if _, conditional := cmd.AdvArgs.GetWhen(); !conditional {
+				return true
+			}
+			continue
 		}
 		if zscript.IsMediaLaunchingCommand(cmd.Name) {
 			return false
@@ -162,6 +167,22 @@ func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+// scriptHasUnreadInclude reports whether an include is left in a script after
+// its includes were expanded: its name comes from an expression, it has a
+// when condition, or its file could not be read. What it runs is not known
+// until the run, so the launch guard treats it as one that might launch.
+func scriptHasUnreadInclude(script *zapscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if cmd.Name == zapscript.ZapScriptCmdInclude {
+			return true
+		}
 	}
 	return false
 }
