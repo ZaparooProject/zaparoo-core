@@ -1662,3 +1662,19 @@ func TestConnectReaders_ClosesReadersOfDisabledDriver(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"pn532-detected", "pn532-manual"}, reported)
 }
+
+func TestCountScanCapableReadersIgnoresDisplays(t *testing.T) {
+	t.Parallel()
+
+	scanner := mocks.NewMockReader()
+	scanner.On("Capabilities").Return([]readers.Capability{readers.CapabilityWrite})
+
+	display := mocks.NewMockReader()
+	display.On("Capabilities").Return([]readers.Capability{readers.CapabilityDisplay})
+
+	// A display accessory is connected hardware but cannot scan a token, so it
+	// must not silence the "nothing to scan with" diagnostic.
+	assert.Equal(t, 0, countScanCapableReaders([]readers.Reader{display}))
+	assert.Equal(t, 0, countScanCapableReaders([]readers.Reader{nil}))
+	assert.Equal(t, 1, countScanCapableReaders([]readers.Reader{display, scanner}))
+}

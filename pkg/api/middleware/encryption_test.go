@@ -221,7 +221,9 @@ func TestEstablishSession_FailedDecryptIncrementsLimiter(t *testing.T) {
 	db.On("GetClientByToken", c.AuthToken).Return(c, nil)
 	mgr := middleware.NewEncryptionGateway(db,
 		middleware.WithFailedFrameThreshold(3),
-		middleware.WithFailedFrameBlockDuration(50*time.Millisecond),
+		// Long enough that a loaded runner cannot see the block lapse before
+		// the attempt that must hit it.
+		middleware.WithFailedFrameBlockDuration(time.Hour),
 	)
 
 	// Build frames with the right salt format but garbage ciphertext.

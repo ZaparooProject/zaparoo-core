@@ -144,6 +144,16 @@ func TestFindMediaBySystemAndPaths_MoreThanSQLiteVariableLimit(t *testing.T) {
 	assert.Equal(t, int64(1), results[marioPath].DBID)
 }
 
+func TestFindMediaBySystemAndPathChunk_RefusesOversizedChunk(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	paths := make([]string, sqliteMaxParams)
+	err := mediaDB.findMediaBySystemAndPathChunk(context.Background(), 1, paths, map[string]database.Media{})
+	require.Error(t, err, "a chunk with no room for the system placeholder must be refused")
+}
+
 func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

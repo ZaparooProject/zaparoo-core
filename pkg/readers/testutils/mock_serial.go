@@ -32,11 +32,14 @@ type MockSerialPort struct {
 	ReadError  error
 	CloseError error
 	TimeoutErr error
+	WriteError error
 	ReadFunc   func(p []byte) (n int, err error)
+	WriteFunc  func(p []byte) (n int, err error)
 	ReadData   []byte
+	writes     [][]byte
 	ReadIndex  int
 	Closed     bool
-	mu         syncutil.RWMutex // protects Closed, CloseError
+	mu         syncutil.RWMutex // protects Closed, CloseError, writes
 }
 
 // NewMockSerialPort creates a new mock serial port for testing.
@@ -76,6 +79,41 @@ func (m *MockSerialPort) Read(p []byte) (n int, err error) {
 	n = copy(p, m.ReadData[m.ReadIndex:])
 	m.ReadIndex += n
 	return n, nil
+}
+
+// Write implements the Write method for serial ports. Written buffers are
+// recorded so tests can assert on the exact bytes a reader sent.
+func (m *MockSerialPort) Write(p []byte) (n int, err error) {
+	m.mu.RLock()
+	closed := m.Closed
+	m.mu.RUnlock()
+
+	if closed {
+		return 0, errors.New("port closed")
+	}
+
+	if m.WriteFunc != nil {
+		return m.WriteFunc(p)
+	}
+	if m.WriteError != nil {
+		return 0, m.WriteError
+	}
+
+	recorded := make([]byte, len(p))
+	copy(recorded, p)
+	m.mu.Lock()
+	m.writes = append(m.writes, recorded)
+	m.mu.Unlock()
+	return len(p), nil
+}
+
+// Writes returns a copy of every buffer passed to Write (thread-safe).
+func (m *MockSerialPort) Writes() [][]byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([][]byte, len(m.writes))
+	copy(out, m.writes)
+	return out
 }
 
 // Close implements the Close method for serial ports.

@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
@@ -46,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/zapdisplay"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/jonboulle/clockwork"
@@ -141,6 +143,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
+		// The display is a first-party accessory only on Batocera.
+		zapdisplay.NewReaderWithDefaults(cfg, p.ID() == ids.Batocera),
 	}
 
 	var enabled []readers.Reader

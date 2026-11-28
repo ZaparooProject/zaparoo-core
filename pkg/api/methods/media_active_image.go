@@ -89,7 +89,7 @@ func HandleMediaActiveImage(env requests.RequestEnv) (any, error) {
 	if deliveryErr := validateMediaImageDelivery(params.Delivery, deliveryRef); deliveryErr != nil {
 		return nil, deliveryErr
 	}
-	localPath := params.Delivery == mediaImageDeliveryPath
+	localPath := params.Delivery == MediaImageDeliveryLocalPath
 
 	maxSize := 0
 	var cache *mediaThumbCache
