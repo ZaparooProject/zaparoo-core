@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	mqttreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,6 +39,7 @@ const publisherRetryInterval = 30 * time.Second
 // MQTTPublisher publishes system notifications to an MQTT broker.
 type MQTTPublisher struct {
 	client mqtt.Client
+	clock  clockwork.Clock
 	ctx    context.Context
 	cancel context.CancelFunc
 	broker string
@@ -54,6 +56,7 @@ func NewMQTTPublisher(broker, topic string, filter []string) *MQTTPublisher {
 		broker: broker,
 		topic:  topic,
 		filter: filter,
+		clock:  clockwork.NewRealClock(),
 	}
 }
 
@@ -113,7 +116,7 @@ func (p *MQTTPublisher) connect() error {
 
 // retryConnect periodically attempts to connect until success or context cancellation.
 func (p *MQTTPublisher) retryConnect() {
-	ticker := time.NewTicker(publisherRetryInterval)
+	ticker := p.clock.NewTicker(publisherRetryInterval)
 	defer ticker.Stop()
 
 	for {
@@ -121,7 +124,7 @@ func (p *MQTTPublisher) retryConnect() {
 		case <-p.ctx.Done():
 			log.Debug().Msgf("mqtt publisher: retry cancelled for %s", p.broker)
 			return
-		case <-ticker.C:
+		case <-ticker.Chan():
 			if p.IsConnected() {
 				return
 			}

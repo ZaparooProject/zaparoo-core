@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -363,14 +364,12 @@ func TestRetryConnect_AlreadyConnected(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	clock := clockwork.NewFakeClock()
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
 	publisher.client = mockClient
+	publisher.clock = clock
 	publisher.ctx = ctx
 	publisher.cancel = cancel
-
-	// Override retry interval to be very short for testing
-	origInterval := publisherRetryInterval
-	_ = origInterval // can't override const, but retryConnect will check IsConnected on first tick
 
 	done := make(chan struct{})
 	go func() {
@@ -378,15 +377,12 @@ func TestRetryConnect_AlreadyConnected(t *testing.T) {
 		close(done)
 	}()
 
-	// retryConnect should see client is already connected and return on first tick
-	// With 30s default interval this would be slow, so we cancel after a short time
-	// to verify the test doesn't hang. The real verification is that retryConnect
-	// checks IsConnected() and returns early.
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	clock.Advance(publisherRetryInterval)
+
 	select {
 	case <-done:
-		// Exited because already connected
-	case <-time.After(35 * time.Second):
-		cancel()
+	case <-time.After(5 * time.Second):
 		t.Fatal("retryConnect did not exit for already-connected client")
 	}
 }

@@ -9,7 +9,9 @@ Zaparoo Core is a Go daemon that turns token scans into game and media launches 
 - Run one test: `go test -race -tags=validator_novalidatefn,expr_static_methods ./pkg/path/ -run TestName`
 - Full tests with race detection: `task test`
 - Lint without changing files: `task lint`
-- Lint for every supported OS: `task cross-lint:all`. It runs `golangci-lint --fix`, so review `git diff` afterwards.
+- Lint for every supported OS: `task cross-lint:check:all` checks Windows and macOS at once without changing files. `task cross-lint:all` runs `golangci-lint --fix` instead, so review `git diff` afterwards.
+- Everything the pre-push hook checks: `task validate`. It runs `task lint-fix`, then `task test` and both cross-lint checks at once, fails if any of them changed the tree, and records the commit it passed.
+- Push: `task push -- <git push arguments>`. It runs `task validate` before git connects to the remote, and the pre-push hook then skips the commit `task validate` already passed. Install the hook with `task hooks:install`.
 - Apply lint and formatting fixes: `task lint-fix`. It can rewrite unrelated files; never use it as a check.
 - Vulnerabilities: `task vulncheck`
 - Nil analysis: `task nilcheck`
@@ -20,7 +22,7 @@ Zaparoo Core is a Go daemon that turns token scans into game and media launches 
 
 Run targeted tests while iterating, then `task test` and `task lint` before finishing a Go change.
 
-Do not run ad hoc `GOOS=...` builds, tests or lints. Core has CGO and platform-native dependencies; `task cross-lint:all` covers the other platforms, and CI runs them natively.
+Do not run ad hoc `GOOS=...` builds, tests or lints. Core has CGO and platform-native dependencies; `task cross-lint:check:all` covers the other platforms, and CI runs them natively.
 
 ## Running Core
 
@@ -97,7 +99,7 @@ For updater, signing, promotion, rollout, withdrawal or key changes, read `docs/
 - Dependencies or security-sensitive code: `task vulncheck`.
 - Performance: read `docs/optimization-targets.md`, benchmark with `b.Loop()` and allocation reporting, and include `task bench-compare` output.
 - GitHub workflows: `actionlint`.
-- Cross-platform code: `task cross-lint:all` before pushing.
+- Cross-platform code: `task cross-lint:check:all`, which `task validate` and `task push` already run.
 
 ## Pull requests
 

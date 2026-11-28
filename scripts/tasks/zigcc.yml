@@ -35,20 +35,57 @@ tasks:
             -e CGO_CFLAGS="{{.LINUX_CFLAGS}} -I/opt/libnfc/x86_64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
 
+  # The sanitized archives depend on the toolchain image, the sources under
+  # scripts/zigcc and the native flags. The image carries all three in a
+  # label, so an image pulled from the registry or left from an earlier run is
+  # reused only when it was built from exactly these inputs.
+  sanitized-image:
+    internal: true
+    vars:
+      SANITIZED_ID:
+        sh: >-
+          printf '%s %s %s'
+          "$(docker image inspect --format '{{"{{"}}.Id{{"}}"}}' {{default "zaparoo/zigcc" .ZIGCC_IMAGE}})"
+          "$(if git diff --quiet HEAD -- scripts/zigcc
+          && [ -z "$(git ls-files --others --exclude-standard -- scripts/zigcc)" ];
+          then git rev-parse HEAD:scripts/zigcc;
+          else echo "uncommitted-$(date +%s%N)"; fi)"
+          "{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}}"
+    status:
+      - >-
+        test "$(docker image inspect
+        --format '{{"{{"}}index .Config.Labels "zaparoo.sanitized-id"{{"}}"}}'
+        zaparoo/zigcc-sanitized 2>/dev/null)" = "{{.SANITIZED_ID}}"
+    cmds:
+      - >-
+        docker build --target native-test -t zaparoo/zigcc-sanitized
+        --label "zaparoo.sanitized-id={{.SANITIZED_ID}}"
+        --build-arg TOOLCHAIN_IMAGE={{default "zaparoo/zigcc" .ZIGCC_IMAGE}}
+        --build-arg TARGETS=x86_64-linux-gnu --build-arg HOSTS=x86_64-linux
+        --build-arg NATIVE_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}}"
+        ./scripts/zigcc
+
   test-linux-amd64-sanitized:
     internal: true
     preconditions:
       - sh: test '{{ARCH}}' = amd64
         msg: Sanitized Linux tests require an amd64 Docker host.
     cmds:
-      # Always evaluate the Docker build cache so source/flag changes cannot
-      # silently reuse an older, unsanitized set of native archives.
-      - >-
-        docker build --target native-test -t zaparoo/zigcc-sanitized
-        --build-arg TOOLCHAIN_IMAGE={{default "zaparoo/zigcc" .ZIGCC_IMAGE}}
-        --build-arg TARGETS=x86_64-linux-gnu --build-arg HOSTS=x86_64-linux
-        --build-arg NATIVE_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}}"
-        ./scripts/zigcc
+      - task: sanitized-image
+        vars:
+          ZIGCC_IMAGE: "{{.ZIGCC_IMAGE}}"
+      - task: run-linux-amd64-sanitized
+
+  # Go's build cache keys cgo packages on CGO_CFLAGS but not on the headers
+  # and archives under /opt, so the image ID goes into the flags as a define:
+  # new native archives compile every cgo package again, and nothing else
+  # does.
+  run-linux-amd64-sanitized:
+    internal: true
+    vars:
+      SANITIZED_IMAGE_ID:
+        sh: docker image inspect --format '{{"{{"}}.Id{{"}}"}}' zaparoo/zigcc-sanitized
+    cmds:
       - task: :docker:run
         vars:
           IMAGE_NAME: zaparoo/zigcc-sanitized
@@ -57,8 +94,8 @@ tasks:
           EXEC: sh -c 'task test:c-sanitizer-canary && task test:native-sanitized && task test:linux-release'
           EXTRA_DOCKER_ARGS: >-
             -e CGO_ENABLED=1
-            -e GOFLAGS="-a -buildvcs=false"
-            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}} -I/opt/libnfc/x86_64-linux-gnu/include"
+            -e GOFLAGS="-buildvcs=false"
+            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}} -DZAPAROO_NATIVE_IMAGE={{.SANITIZED_IMAGE_ID}} -I/opt/libnfc/x86_64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
             -e UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 

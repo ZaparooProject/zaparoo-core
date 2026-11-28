@@ -50,13 +50,15 @@ func readAll(t *testing.T, d *Decoder) [][2]float64 {
 	t.Helper()
 	var out [][2]float64
 	chunk := make([][2]float64, 4410)
-	for {
+	for len(out) <= maxTestFrames {
 		n, ok := d.Stream(chunk)
 		out = append(out, chunk[:n]...)
 		if !ok {
 			return out
 		}
 	}
+	t.Fatalf("decoder produced more than %d frames", maxTestFrames)
+	return nil
 }
 
 // rms is the root mean square of the left channel.

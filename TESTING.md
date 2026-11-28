@@ -38,6 +38,7 @@ Tests need the build tags `validator_novalidatefn,expr_static_methods`. `task te
 | Benchmarks | `task bench`, `task bench-db`; `task bench-baseline`, then `task bench-compare` |
 | Lock-order checks (go-deadlock) | `task deadlock` |
 | Build and serve the sim | `task sim:build` (writes `_build/sim/zaparoo-sim`); `task sim:run` (foreground, root `_build/sim/root` unless `ROOT=...`) |
+| Everything the pre-push hook runs | `task validate` (lint-fix, then tests and both cross-lints at once) |
 
 Use `-v`: without it a passing run, and a `-run` name that matches nothing, both print only `ok`. Output is noisy, so send it to a file and grep for `--- PASS`, `--- FAIL` and `>`.
 
@@ -88,12 +89,25 @@ userDB := helpers.NewMockUserDBI()
 userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 db := &database.Database{UserDB: userDB, MediaDB: helpers.NewMockMediaDBI()}
 
-// Real, in memory
+// Real SQLite, in the test's temp directory
 db, cleanup := helpers.NewTestDatabase(t) // or NewInMemoryUserDB(t), NewInMemoryMediaDB(t)
 defer cleanup()
 ```
 
+These databases start fully migrated without running the migrations: `pkg/testing/dbtemplate` migrates one database per test binary and copies its files into each test's directory. A helper that builds a database in its own way passes its own key to `dbtemplate.Seed`. Tests of the migrations themselves open a fresh database instead.
+
 `HistoryEntryMatcher` needs a non-zero `Time` and a `TokenID`; `fixtures.NewHistoryEntry` builds one. To fill a MediaDB through the production scan pipeline, use `scantest.IndexMediaPaths(t, db, systemID, paths...)`. For raw SQL, `testsqlmock.NewSQLMock()` (package `pkg/testing/sqlmock`) returns a `*sql.DB` and a regex-matching `sqlmock.Sqlmock`.
+
+### Native code and memory
+
+A package whose tests drive C or C++ code, such as the audio decoders, starts `pkg/testing/memguard` from its `TestMain`. On Linux it stops the test binary with a goroutine dump once its resident memory passes 2 GB, so a decoder that never ends fails its package instead of filling the machine's memory. Read helpers in those packages also cap the frames they collect.
+
+```go
+func TestMain(m *testing.M) {
+	memguard.Start(memguard.DefaultLimit)
+	m.Run()
+}
+```
 
 ### Filesystem (afero)
 
