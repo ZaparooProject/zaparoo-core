@@ -435,18 +435,19 @@ func TestToRelativePath_RebuildDropsCachedFolders(t *testing.T) {
 
 	cache := &LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
-		{ID: "snes", SystemID: "snes", Folders: []string{"SNES"}},
+		{ID: "snes", SystemID: "snes", Folders: []string{"SFC"}},
 	})
 	roots := []string{"/roms"}
-	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"))
-	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"),
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SFC/game.sfc"))
+	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SFC/game.sfc"),
 		"the second lookup reads the cached folders")
 
 	// A rebuild with a different folder must not answer from the old list.
+	// The folders avoid the system ID, which always matches on its own.
 	cache.InitializeFromSlice([]platforms.Launcher{
 		{ID: "snes", SystemID: "snes", Folders: []string{"SuperNintendo"}},
 	})
-	assert.Equal(t, "/roms/SNES/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SNES/game.sfc"))
+	assert.Equal(t, "/roms/SFC/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SFC/game.sfc"))
 	assert.Equal(t, "snes/game.sfc", cache.ToRelativePath(roots, "snes", "/roms/SuperNintendo/game.sfc"))
 
 	// Other root directories are their own list.
