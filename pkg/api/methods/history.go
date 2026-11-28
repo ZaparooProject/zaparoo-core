@@ -21,9 +21,13 @@ package methods
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
@@ -32,18 +36,37 @@ func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // s
 	log.Debug().Msg("received tokens request")
 
 	resp := models.TokensResponse{
-		Active: make([]models.TokenResponse, 0),
+		Active:    make([]models.TokenResponse, 0),
+		Modifiers: make([]models.LaunchModifierResponse, 0),
 	}
 
+	modifiers := env.State.LaunchModifiers()
+	for i := range modifiers {
+		resp.Modifiers = append(resp.Modifiers, state.LaunchModifierResponse(&modifiers[i]))
+	}
+
+	// Every card resting on a reader is active, oldest scan first. The last
+	// token scanned is listed too when it is not one of them, such as a run
+	// from the API or a scan from a reader that cannot report removal.
+	listed := env.State.ReaderTokens()
 	active := env.State.GetActiveCard()
-	if !active.ScanTime.IsZero() {
-		text, data := zapscript.RedactToken(active.Text, active.Data)
+	if !active.ScanTime.IsZero() && !slices.ContainsFunc(listed, func(t tokens.Token) bool {
+		return t.ReaderID == active.ReaderID && helpers.TokensEqual(&t, &active)
+	}) {
+		listed = append(listed, active)
+		slices.SortStableFunc(listed, func(a, b tokens.Token) int {
+			return a.ScanTime.Compare(b.ScanTime)
+		})
+	}
+	for i := range listed {
+		text, data := zapscript.RedactToken(listed[i].Text, listed[i].Data)
 		resp.Active = append(resp.Active, models.TokenResponse{
-			Type:     active.Type,
-			UID:      active.UID,
+			Type:     listed[i].Type,
+			UID:      listed[i].UID,
 			Text:     text,
 			Data:     data,
-			ScanTime: active.ScanTime,
+			ScanTime: listed[i].ScanTime,
+			ReaderID: listed[i].ReaderID,
 		})
 	}
 
@@ -56,6 +79,7 @@ func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // s
 			Text:     text,
 			Data:     data,
 			ScanTime: last.ScanTime,
+			ReaderID: last.ReaderID,
 		}
 	}
 

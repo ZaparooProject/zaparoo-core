@@ -30,6 +30,7 @@ const (
 	NotificationRunning              = "running"
 	NotificationTokensAdded          = "tokens.added"
 	NotificationTokensRemoved        = "tokens.removed"
+	NotificationTokensModifiers      = "tokens.modifiers" //nolint:gosec // not a credential
 	NotificationStopped              = "media.stopped"
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating

@@ -23,8 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScanPreprocessor_Process(t *testing.T) {
@@ -179,4 +183,42 @@ func TestScanPreprocessor_NormalRemovalSequence(t *testing.T) {
 	// 3. Same card again — should be new token (not duplicate)
 	action = proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action)
+}
+
+func readerTokenUIDs(st *state.State) []string {
+	listed := st.ReaderTokens()
+	uids := make([]string, 0, len(listed))
+	for i := range listed {
+		uids = append(uids, listed[i].UID)
+	}
+	return uids
+}
+
+// A reader error ends state's record of the card but not the preprocessor's,
+// so the same card read again is a duplicate that state must still list.
+func TestProcessScan_CardReadAgainAfterReaderErrorIsListed(t *testing.T) {
+	t.Parallel()
+	st, _ := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	r := mocks.NewMockReader()
+	r.On("ReaderID").Return("r1").Maybe()
+	r.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	r.On("Metadata").Return(readers.DriverMetadata{ID: "mock"}).Maybe()
+	r.On("Path").Return("/dev/r1").Maybe()
+	st.SetReader(r)
+
+	proc := &scanPreprocessor{}
+	card := &tokens.Token{UID: "card", ReaderID: "r1", ScanTime: time.Now()}
+	require.Equal(t, scanNewToken, processScan(st, proc, "r1", card, false))
+	require.Equal(t, scanReaderErrorRemoval, processScan(st, proc, "r1", nil, true))
+	assert.Empty(t, readerTokenUIDs(st))
+
+	again := &tokens.Token{UID: "card", ReaderID: "r1", ScanTime: time.Now().Add(time.Second)}
+	require.Equal(t, scanSkipDuplicate, processScan(st, proc, "r1", again, false))
+	listed := st.ReaderTokens()
+	require.Len(t, listed, 1)
+	assert.Equal(t, card.ScanTime, listed[0].ScanTime, "the card was not read as new")
+
+	require.Equal(t, scanSkipDuplicate, processScan(st, proc, "r1", again, false))
+	assert.Equal(t, []string{"card"}, readerTokenUIDs(st))
 }

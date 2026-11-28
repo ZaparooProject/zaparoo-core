@@ -40,3 +40,15 @@ func IsTruthy(s string) bool {
 func IsFalsey(s string) bool {
 	return strings.EqualFold(s, "false") || strings.EqualFold(s, "no")
 }
+
+// Parse reads a yes/no option value. ok is false for anything else.
+func Parse(s string) (value, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true, true
+	case "0", "f", "false", "n", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}

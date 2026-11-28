@@ -15,6 +15,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
@@ -453,14 +454,11 @@ func validSetName(name string) bool {
 }
 
 func parseSetNameSameDir(value string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "t", "true", "y", "yes", "on":
-		return true, nil
-	case "0", "f", "false", "n", "no", "off":
-		return false, nil
-	default:
+	sameDir, ok := boolutil.Parse(value)
+	if !ok {
 		return false, fmt.Errorf("invalid set_name_same_dir value %q", value)
 	}
+	return sameDir, nil
 }
 
 func applySetNameOptions(core *cores.Core, opts *platforms.LaunchOptions) error {

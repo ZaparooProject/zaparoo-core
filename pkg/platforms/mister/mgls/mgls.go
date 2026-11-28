@@ -32,6 +32,7 @@ import (
 	s "strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -84,6 +85,26 @@ func LoadsSent() uint64 {
 	return loadsSent.Load()
 }
 
+// lastLoadAt is when a load_core command was last written to Main's command
+// interface, in Unix nanoseconds.
+var lastLoadAt atomic.Int64
+
+// NoteLoadSent records that a load_core command has just been written to
+// Main's command interface.
+func NoteLoadSent() {
+	lastLoadAt.Store(time.Now().UnixNano())
+}
+
+// LastLoadSent returns when a load_core command was last written to Main's
+// command interface, or the zero time if none has been.
+func LastLoadSent() time.Time {
+	at := lastLoadAt.Load()
+	if at == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, at)
+}
+
 // MRA represents the structure of a MiSTer Arcade ROM file.
 type MRA struct {
 	XMLName xml.Name `xml:"misterromdescription"`
@@ -126,6 +147,7 @@ func (w commandInterfaceWriter) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, fmt.Errorf("write command interface: %w", err)
 	}
+	NoteLoadSent()
 	if w.sent != nil {
 		w.sent.Add(1)
 	}
@@ -432,6 +454,7 @@ func loadCoreAtPath(path string) error {
 	if _, err := fmt.Fprintf(cmd, "load_core %s\n", path); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
+	NoteLoadSent()
 
 	return nil
 }

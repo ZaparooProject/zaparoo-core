@@ -22,12 +22,14 @@
 package mister
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCoreLoadStops(t *testing.T) {
@@ -193,4 +195,190 @@ func TestCoreLoadStopsLoading(t *testing.T) {
 	assert.False(t, c.loading(now.Add(coreLoadWindow)), "the window closed")
 	c.coreChanged("NES", now.Add(2*time.Second))
 	assert.False(t, c.loading(now.Add(3*time.Second)), "the core came up")
+}
+
+// fakeCoreName stands in for CORENAME: it reports the old core until it has
+// been read upTo times, then the menu written at that moment.
+type fakeCoreName struct {
+	written time.Time
+	core    string
+	reads   int
+	upTo    int
+	mu      syncutil.Mutex
+}
+
+func (f *fakeCoreName) state() (string, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.upTo > 0 && f.reads >= f.upTo && f.core != misterconfig.MenuCore {
+		f.core = misterconfig.MenuCore
+		f.written = time.Now()
+	}
+	return f.core, f.written, nil
+}
+
+func (f *fakeCoreName) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
+// withFakeCoreName swaps in f for CORENAME and loadAt for the last load
+// Core sent. Tests using it must not run in parallel.
+func withFakeCoreName(t *testing.T, f *fakeCoreName, timeout time.Duration, loadAt ...time.Time) {
+	t.Helper()
+	state, show, settle, poll, loads := mainCoreState, mainUpTimeout, mainSettle, mainPollInterval, lastLoadSent
+	mainCoreState = f.state
+	mainUpTimeout, mainSettle, mainPollInterval = timeout, 20*time.Millisecond, time.Millisecond
+	var load time.Time
+	if len(loadAt) > 0 {
+		load = loadAt[0]
+	}
+	lastLoadSent = func() time.Time { return load }
+	t.Cleanup(func() {
+		mainCoreState, mainUpTimeout, mainSettle, mainPollInterval, lastLoadSent = state, show, settle, poll, loads
+	})
+}
+
+// Hardware, 2026-11-28 11:44: a card lifted and put straight back sent its
+// game while Main was bringing up the menu the lift asked for. Main dropped
+// it and stayed on the menu.
+func TestWaitForMainHoldsALaunchUntilTheMenuIsUp(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 5}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 5, "launched before the menu was up")
+	f.mu.Lock()
+	shown := f.written
+	f.mu.Unlock()
+	assert.GreaterOrEqual(t, time.Since(shown), mainSettle, "launched the instant the menu came up")
+
+	reads := f.readCount()
+	c.waitForMain()
+	assert.Equal(t, reads, f.readCount(), "a later launch waited again for the same request")
+}
+
+// Main rewrites CORENAME when it reloads the menu over itself, so a menu that
+// was already showing before the request does not count.
+func TestWaitForMainIgnoresAMenuShownBeforeTheRequest(t *testing.T) {
+	f := &fakeCoreName{core: misterconfig.MenuCore, written: time.Now().Add(-time.Minute)}
+	withFakeCoreName(t, f, 30*time.Millisecond)
+
+	var c coreLoadStops
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	start := time.Now()
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, time.Since(start), 25*time.Millisecond, "a stale menu was taken as the new one")
+}
+
+func TestWaitForMainWithoutARequestDoesNotWait(t *testing.T) {
+	f := &fakeCoreName{core: "SNES"}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	c.waitForMain()
+
+	assert.Zero(t, f.readCount())
+}
+
+func TestWaitForMainAfterAFailedRequestDoesNotWait(t *testing.T) {
+	f := &fakeCoreName{core: "SNES"}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	require.Error(t, c.requestMenu(func() error { return errors.New("no command interface") }))
+	c.waitForMain()
+
+	assert.Zero(t, f.readCount())
+}
+
+// Hardware, 2026-11-28 16:20: a second card tapped 3s after the first sent
+// its game while Main was still loading the first one's core. Main dropped
+// it and ran the first game while Core reported the second.
+func TestWaitForMainHoldsALaunchUntilTheLastLoadIsUp(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 5}
+	withFakeCoreName(t, f, 5*time.Second, time.Now())
+
+	var c coreLoadStops
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 5, "launched before the last load was up")
+	f.mu.Lock()
+	shown := f.written
+	f.mu.Unlock()
+	assert.GreaterOrEqual(t, time.Since(shown), mainSettle, "launched the instant the core came up")
+}
+
+func TestWaitForMainDoesNotWaitForALoadAlreadyUp(t *testing.T) {
+	loaded := time.Now().Add(-time.Second)
+	f := &fakeCoreName{core: "SNES", written: loaded.Add(500 * time.Millisecond)}
+	withFakeCoreName(t, f, 5*time.Second, loaded)
+
+	var c coreLoadStops
+	start := time.Now()
+	c.waitForMain()
+
+	assert.Equal(t, 1, f.readCount())
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+// A load that never brought a core up, such as one Main dropped, holds later
+// launches only until its load window closes.
+func TestWaitForMainGivesUpOnALoadThatNeverCameUp(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute)}
+	withFakeCoreName(t, f, 30*time.Millisecond, time.Now().Add(-time.Second))
+
+	var c coreLoadStops
+	start := time.Now()
+	c.waitForMain()
+
+	assert.Less(t, time.Since(start), time.Second)
+	assert.Equal(t, 1, f.readCount())
+}
+
+func TestWaitForMainKeepsAnEarlierRequestWhenALaterSendFails(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 3}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	require.Error(t, c.requestMenu(func() error { return errors.New("no command interface") }))
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 3, "launched while the earlier menu request was loading")
+}
+
+// A stop retried while a launch waits sends a newer menu request, and the
+// launch's load would be dropped while Main brings that menu up.
+func TestWaitForMainWaitsForARequestSentDuringTheWait(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 3}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	retried := false
+	mainCoreState = func() (string, time.Time, error) {
+		core, written, err := f.state()
+		if !retried && core == misterconfig.MenuCore {
+			retried = true
+			time.Sleep(time.Millisecond)
+			require.NoError(t, c.requestMenu(func() error { return nil }))
+			f.mu.Lock()
+			f.core, f.upTo = "SNES", f.reads+5
+			f.mu.Unlock()
+		}
+		return core, written, err
+	}
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 8, "launched while the retried menu request was loading")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.True(t, c.menuAt.IsZero(), "the covered request is still recorded")
 }

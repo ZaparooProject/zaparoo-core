@@ -610,6 +610,36 @@ func TestReaderManager_WrittenTagRemovalAfterWriteClearsCompletedToken(t *testin
 	assert.Equal(t, "just-written", tok.UID)
 }
 
+// A card scanned before a write and then lifted is reported only as a
+// written tag removal, which must end it like any other lift.
+func TestReaderManager_WrittenTagRemovalEndsTheLiftedCard(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	r := mocks.NewMockReader()
+	r.On("ReaderID").Return("reader-1").Maybe()
+	r.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	r.On("Metadata").Return(readers.DriverMetadata{ID: "mock"}).Maybe()
+	r.On("Path").Return("/dev/reader-1").Maybe()
+	r.On("Connected").Return(true).Maybe()
+	r.On("Close").Return(nil).Maybe()
+	env.st.SetReader(r)
+	tag := &tokens.Token{UID: "tag", Text: "**echo:before", ScanTime: time.Now(), ReaderID: "reader-1"}
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: tag})
+	assert.Equal(t, "tag", env.expectToken(t).UID)
+	require.Len(t, env.st.ReaderTokens(), 1)
+
+	env.st.SetReaderWriteActive(true, "reader-1")
+	env.st.SetWroteToken(&tokens.Token{UID: "tag", Text: "**echo:after", ReaderID: "reader-1"})
+	env.st.SetReaderWriteActive(false, "reader-1")
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+
+	assert.Eventually(t, func() bool {
+		return env.st.GetActiveCard().ScanTime.IsZero() && len(env.st.ReaderTokens()) == 0
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestReaderManager_WrittenTagRemovalIsReaderScoped(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t)
@@ -692,6 +722,35 @@ func TestReaderManager_WriteCallbacksDoNotChangeAnotherReadersHoldState(t *testi
 	assert.Equal(t, active.UID, env.st.GetActiveCard().UID)
 	assert.Equal(t, active, env.st.GetSoftwareToken())
 	env.st.SetReaderWriteActive(false, "reader-b")
+}
+
+// Hardware, 2026-11-28: lifting a modifier card off one reader cleared the
+// active card resting on the other, so clients were told it was gone.
+func TestReaderManager_LiftFromOneReaderKeepsAnotherReadersCard(t *testing.T) {
+	t.Parallel()
+	for _, readerError := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readerError=%v", readerError), func(t *testing.T) {
+			t.Parallel()
+			env := setupReaderManager(t)
+			onA := &tokens.Token{
+				UID: "card-a", Text: "**launch?action=details", ScanTime: time.Now(), ReaderID: "reader-a",
+			}
+			onB := &tokens.Token{UID: "card-b", Text: "game-b", ScanTime: time.Now(), ReaderID: "reader-b"}
+			env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", Token: onA})
+			env.expectToken(t)
+			env.sendScan(readers.Scan{ReaderID: "reader-b", Source: "test-reader", Token: onB})
+			env.expectToken(t)
+
+			env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", ReaderError: readerError})
+			env.expectNoToken(t)
+			assert.Equal(t, onB.UID, env.st.GetActiveCard().UID)
+
+			env.sendScan(readers.Scan{ReaderID: "reader-b", Source: "test-reader", ReaderError: readerError})
+			assert.Eventually(t, func() bool {
+				return env.st.GetActiveCard().ScanTime.IsZero()
+			}, time.Second, 5*time.Millisecond)
+		})
+	}
 }
 
 func TestReaderManager_IgnoreOnConnect_SuppressesFirstScan(t *testing.T) {

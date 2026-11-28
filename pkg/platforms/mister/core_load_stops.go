@@ -22,10 +22,14 @@
 package mister
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
 )
@@ -40,6 +44,7 @@ const coreLoadWindow = 60 * time.Second
 // request never takes effect, and the core comes up running a game Core has
 // already reported as stopped.
 type coreLoadStops struct {
+	menuAt        time.Time // a menu request a launch must wait out
 	launchedAt    time.Time
 	coreChangedAt time.Time
 	stopUntil     time.Time
@@ -104,6 +109,119 @@ func (c *coreLoadStops) coreChanged(core string, now time.Time) bool {
 	return now.Before(until)
 }
 
+// requestMenu sends a menu request and records it, so the next launch waits
+// for the menu to come up before sending its own load.
+// A failed send leaves an earlier request that may still be loading recorded.
+func (c *coreLoadStops) requestMenu(send func() error) error {
+	at := time.Now()
+	c.mu.Lock()
+	previous := c.menuAt
+	c.menuAt = at
+	c.mu.Unlock()
+	if err := send(); err != nil {
+		c.mu.Lock()
+		if c.menuAt.Equal(at) {
+			c.menuAt = previous
+		}
+		c.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// Main starts a new process for every core it loads, the menu included, and
+// only reads its command interface again once that process is up. A load
+// sent before then is dropped: a card put straight back after a lift loses
+// its game, and a second card tapped while the first one's core loads never
+// launches. Main writes CORENAME once the new core is up, even when reloading
+// the menu over itself, and a load sent the instant it does is still dropped:
+// hardware, 2026-11-28, lost 6 of 6, while 0.1s to 1.2s later all landed.
+// The menu is up in about 2.5s on an idle card, but SD load stretches that:
+// 12s while a backup ran, over 40s under heavy reads. Any load sent before
+// then is lost, so the wait is as long as a core load is allowed to take.
+var (
+	mainUpTimeout    = coreLoadWindow
+	mainSettle       = 300 * time.Millisecond
+	mainPollInterval = 50 * time.Millisecond
+	mainCoreState    = coreNameWritten
+	lastLoadSent     = mgls.LastLoadSent
+)
+
+// waitForMain holds a launch until Main has come up after the last menu
+// request or core load Core sent it, then settled. It gives up
+// mainUpTimeout after that request. A request sent while it waits, such as
+// a retried stop, is waited for too, until mainUpTimeout after the first.
+func (c *coreLoadStops) waitForMain() {
+	var covered, coveredMenu, bound time.Time
+	for {
+		c.mu.Lock()
+		menu := c.menuAt
+		c.mu.Unlock()
+		requested := menu
+		if load := lastLoadSent(); load.After(requested) {
+			requested = load
+		}
+		if requested.IsZero() || !requested.After(covered) {
+			break
+		}
+		if bound.IsZero() {
+			bound = requested.Add(mainUpTimeout)
+		} else if !time.Now().Before(bound) {
+			break
+		}
+		c.waitForMainSince(requested)
+		covered, coveredMenu = requested, menu
+	}
+	c.mu.Lock()
+	if !coveredMenu.IsZero() && c.menuAt.Equal(coveredMenu) {
+		c.menuAt = time.Time{}
+	}
+	c.mu.Unlock()
+}
+
+func (*coreLoadStops) waitForMainSince(requested time.Time) {
+	deadline := requested.Add(mainUpTimeout)
+	waited := false
+	for {
+		core, written, err := mainCoreState()
+		// Any core written since the request means a Main is reading
+		// commands again, usually the core asked for but possibly one Main
+		// was already loading when it dropped the request.
+		if err == nil && core != "" && !written.Before(requested) {
+			if wait := time.Until(written.Add(mainSettle)); wait > 0 {
+				time.Sleep(wait)
+				waited = true
+			}
+			if waited {
+				log.Debug().Str("core", core).Dur("since_request", time.Since(requested)).
+					Msg("Main is up after the last request, launching")
+			}
+			return
+		}
+		if !time.Now().Before(deadline) {
+			if waited {
+				log.Warn().Msg("Main did not come up after the last request, launching anyway")
+			}
+			return
+		}
+		time.Sleep(mainPollInterval)
+		waited = true
+	}
+}
+
+// coreNameWritten reads the core Main reports and when it last wrote it.
+func coreNameWritten() (string, time.Time, error) {
+	data, err := os.ReadFile(misterconfig.CoreNameFile)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("read core name: %w", err)
+	}
+	info, err := os.Stat(misterconfig.CoreNameFile)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("stat core name: %w", err)
+	}
+	return strings.TrimSpace(string(data)), info.ModTime(), nil
+}
+
 // Main ignores commands until it has finished loading a core, and it reports
 // the new core name before then, so the menu is asked for until Main shows it.
 var (
@@ -139,7 +257,7 @@ func (c *coreLoadStops) menuUntilShown(core string, launches uint64) {
 		if current == misterconfig.MenuCore || (current != "" && current != core) {
 			return
 		}
-		if err := coreLoadSendMenu(); err != nil {
+		if err := c.requestMenu(coreLoadSendMenu); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after a stop")
 		}
 	}

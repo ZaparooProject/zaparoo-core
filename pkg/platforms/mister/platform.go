@@ -951,7 +951,7 @@ func (p *Platform) loadMenu(stopLoadingCore bool) error {
 		}
 	}
 
-	err := mistermain.LaunchMenu()
+	err := p.coreLoads.requestMenu(mistermain.LaunchMenu)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
@@ -984,7 +984,7 @@ func (*Platform) isFPGAActive() bool {
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	// Handle menu specially - launch menu core directly
 	if strings.EqualFold(id, platforms.SystemMenu) {
-		if err := mistermain.LaunchMenu(); err != nil {
+		if err := p.coreLoads.requestMenu(mistermain.LaunchMenu); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
 		p.clearTrackedActiveGame()
@@ -995,6 +995,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
+	p.coreLoads.waitForMain()
 	// A stop sent while this core loads must still reach it.
 	p.coreLoads.launched(time.Now())
 
@@ -1065,6 +1066,7 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	if launch == nil {
 		launch = mgls.LaunchCoreAtRBF
 	}
+	p.coreLoads.waitForMain()
 	p.coreLoads.launched(time.Now())
 	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
@@ -1082,6 +1084,8 @@ func (p *Platform) LaunchMedia(
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
+	// Main drops a load sent while it brings up a menu just asked for.
+	p.coreLoads.waitForMain()
 	p.coreLoads.launched(time.Now())
 	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)

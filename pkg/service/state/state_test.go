@@ -131,6 +131,54 @@ func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
 	}
 }
 
+func TestClearActiveCardFrom_KeepsACardOnAnotherReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, notifications := NewState(mockPlatform, "test-boot-uuid")
+
+	onB := tokens.Token{
+		UID: "card-b", Text: "game", ReaderID: "reader-b",
+		ScanTime: time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
+	}
+	state.SetActiveCard(onB)
+	<-notifications
+
+	state.ClearActiveCardFrom("reader-a")
+	assert.Equal(t, onB, state.GetActiveCard(), "a lift from reader-a cleared reader-b's card")
+	select {
+	case notification := <-notifications:
+		require.Failf(t, "unexpected notification", "method: %s", notification.Method)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	state.ClearActiveCardFrom("reader-b")
+	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensRemoved, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens removed notification")
+	}
+
+	state.ClearActiveCardFrom("reader-b")
+	select {
+	case notification := <-notifications:
+		require.Failf(t, "unexpected notification", "method: %s", notification.Method)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestClearActiveCardFrom_ClearsACardWithNoReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, notifications := NewState(mockPlatform, "test-boot-uuid")
+
+	state.SetActiveCard(tokens.Token{UID: "api", Text: "run", ScanTime: time.Now()})
+	<-notifications
+	state.ClearActiveCardFrom("reader-a")
+	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
+}
+
 func TestReaderWriteActiveTracksOverlappingWrites(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()

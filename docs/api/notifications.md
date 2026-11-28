@@ -75,11 +75,21 @@ A staged token's delay period has expired and is now ready for confirmation. Sen
 
 ### tokens.removed
 
-A token was removed from a connected reader.
+The active token, the last one scanned, was removed from its reader, or that reader failed. Lifting a card off a different reader does not send it: the active token is still resting on its own reader. Use the `tokens` method for every card on a reader.
 
 #### Response
 
 Returns `null`.
+
+### tokens.modifiers
+
+The set of active launch modifiers changed: one was armed, applied, expired or lifted, or its reader disconnected. Carries the full current list, so clients can replace their copy.
+
+#### Response
+
+| Key       | Type   | Required | Description |
+| :-------- | :----- | :------- | :---------- |
+| modifiers | object[] | Yes    | Every active modifier, empty when none remain. Each entry is a [launch modifier object](./methods.md#launch-modifier-object). |
 
 ## UI
 
@@ -536,7 +546,7 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 A ZapScript run ended in failure. It is sent once for every run, whatever started it:
 a reader scan, the `run` method, a playlist item, a hook, a launcher control, or a
 remote operation. That includes a run refused before it started, such as one over the
-length limit, one blocked by a profile or playtime limit, or an invalid next action.
+length limit, one blocked by a profile or playtime limit, or an invalid launch modifier or next-card write.
 A `run` call that fails gets the same category and message in its error response too.
 A run refused because ZapScript execution is disabled is not a failure and sends
 nothing, and neither does a run cut short by the service shutting down.

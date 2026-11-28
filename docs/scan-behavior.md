@@ -240,6 +240,57 @@ token rather than a step in running it:
 
 ---
 
+## Launch modifier cards
+
+A `**launch` card with no path and only modifier arguments changes how other
+cards launch instead of launching anything itself. The modifier arguments are
+`launcher`, `set_name`, `set_name_same_dir` and `action` (`run` or `details`),
+and one card can carry several, separated by `&`:
+
+```text
+**launch?launcher=RetroArch
+**launch?action=details
+**launch?set_name=GBC&set_name_same_dir=yes
+```
+
+A `**launch` card that has a path keeps its arguments to its own game and never
+sets a modifier. A no-path card carrying any other argument is an ordinary launch
+and fails for the missing path.
+
+- [ ] A modifier with an unknown launcher, an action other than `run` or
+      `details`, or an empty value is refused when its card is scanned, with the
+      fail sound.
+- [ ] A modifier only applies to launches from reader scans (`**launch`,
+      `**launch.random`, `**launch.search`, `**launch.title`, `**launch.last`
+      and plain paths), never to API, hook or playlist launches. Its values
+      replace the launching card's own values for the same arguments.
+
+How long a modifier lasts follows the card's scan mode, settled the same way as
+any other token's (trait, then reader, then `readers.scan.mode`):
+
+- [ ] In tap mode, or on a reader that cannot detect removal, the modifier
+      applies to the next launch only, and expires unused after 5 minutes.
+- [ ] In hold mode on a reader that detects removal, the modifier applies to
+      every launch while its card stays on the reader. With two readers, leave
+      the modifier card on one and scan games on the other.
+- [ ] Lifting a hold-mode modifier card that has applied at least once ends it.
+      Lifting it before any launch turns it into a one-shot modifier for the next
+      launch, so a single reader still works: place the modifier, lift it, place
+      the game.
+- [ ] A read error or disconnect on the modifier card's reader ends its held
+      modifier. A one-shot modifier waiting for its launch is kept.
+- [ ] Modifier cards on several readers stack. For each of `launcher`, `action`
+      and the `set_name` pair, the newest card that sets it wins. `set_name` and
+      `set_name_same_dir` always come together from one card; a card setting
+      only one of them leaves the other unset.
+- [ ] A pending one-shot modifier wins over held ones for the launch that uses
+      it, and a new one-shot replaces an older unused one.
+- [ ] The [`tokens`](./api/methods.md#tokens) method lists active modifiers, and
+      the [`tokens.modifiers`](./api/notifications.md#tokensmodifiers)
+      notification is sent whenever the list changes.
+
+---
+
 ## Optical drives: discs as tokens
 
 Inserting a disc is a scan, and ejecting it is a removal, so a disc follows the

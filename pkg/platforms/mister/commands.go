@@ -160,13 +160,17 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 	}
 }
 
-func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
+func CmdMisterMgl(pl platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, errors.New("no mgl specified")
 	}
 
 	if env.Cmd.Args[0] == "" {
 		return platforms.CmdResult{}, errors.New("no mgl specified")
+	}
+
+	if mp, ok := pl.(*Platform); ok {
+		mp.coreLoads.waitForMain()
 	}
 
 	tmpFile, err := os.CreateTemp("", "*.mgl")
@@ -199,6 +203,7 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to write command: %w", err)
 	}
+	mgls.NoteLoadSent()
 
 	go func() {
 		time.Sleep(5 * time.Second)

@@ -137,7 +137,7 @@ func TestSetWallpaper_InvalidExtension(t *testing.T) {
 	t.Parallel()
 	paths := testPaths(t)
 
-	_, err := setWallpaper(paths, "wallpaper.bmp")
+	err := setWallpaper(paths, "wallpaper.bmp")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported wallpaper format")
 }
@@ -146,7 +146,7 @@ func TestSetWallpaper_MissingFile(t *testing.T) {
 	t.Parallel()
 	paths := testPaths(t)
 
-	_, err := setWallpaper(paths, "nonexistent.png")
+	err := setWallpaper(paths, "nonexistent.png")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "wallpaper file not found")
 }
@@ -155,7 +155,7 @@ func TestSetWallpaper_PathTraversal(t *testing.T) {
 	t.Parallel()
 	paths := testPaths(t)
 
-	_, err := setWallpaper(paths, "../../etc/passwd.png")
+	err := setWallpaper(paths, "../../etc/passwd.png")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid wallpaper filename")
 }
@@ -171,7 +171,7 @@ func TestSetWallpaper_Success(t *testing.T) {
 		[]byte("png data"), 0o644,
 	))
 
-	_, err := setWallpaper(paths, "cool.png")
+	err := setWallpaper(paths, "cool.png")
 	require.NoError(t, err)
 
 	// Verify symlink was created
@@ -202,7 +202,7 @@ func TestSetWallpaper_JPG(t *testing.T) {
 		[]byte("jpg data"), 0o644,
 	))
 
-	_, err := setWallpaper(paths, "cool.jpg")
+	err := setWallpaper(paths, "cool.jpg")
 	require.NoError(t, err)
 
 	link := filepath.Join(paths.sdRoot, "menu.jpg")
@@ -228,7 +228,7 @@ func TestSetWallpaper_CleansUpExisting(t *testing.T) {
 	//nolint:gosec // G306: test file in t.TempDir()
 	require.NoError(t, os.WriteFile(newTarget, []byte("new"), 0o644))
 
-	_, err := setWallpaper(paths, "new.png")
+	err := setWallpaper(paths, "new.png")
 	require.NoError(t, err)
 
 	// New symlink should point to new file
@@ -249,7 +249,7 @@ func TestUnsetWallpaper_RemovesSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("img"), 0o644))
 	require.NoError(t, os.Symlink(target, filepath.Join(paths.sdRoot, "menu.png")))
 
-	_, err := unsetWallpaper(paths)
+	err := unsetWallpaper(paths)
 	require.NoError(t, err)
 
 	_, statErr := os.Lstat(filepath.Join(paths.sdRoot, "menu.png"))
@@ -264,7 +264,7 @@ func TestUnsetWallpaper_SkipsRegularFile(t *testing.T) {
 	//nolint:gosec // G306: test file in t.TempDir()
 	require.NoError(t, os.WriteFile(menuFile, []byte("user file"), 0o644))
 
-	_, err := unsetWallpaper(paths)
+	err := unsetWallpaper(paths)
 	require.NoError(t, err)
 
 	// Regular file should NOT be removed
@@ -276,6 +276,6 @@ func TestUnsetWallpaper_NoFiles(t *testing.T) {
 	t.Parallel()
 	paths := testPaths(t)
 
-	_, err := unsetWallpaper(paths)
+	err := unsetWallpaper(paths)
 	assert.NoError(t, err)
 }
