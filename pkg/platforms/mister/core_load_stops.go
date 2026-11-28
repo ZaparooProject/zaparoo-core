@@ -111,13 +111,18 @@ func (c *coreLoadStops) coreChanged(core string, now time.Time) bool {
 
 // requestMenu sends a menu request and records it, so the next launch waits
 // for the menu to come up before sending its own load.
+// A failed send leaves an earlier request that may still be loading recorded.
 func (c *coreLoadStops) requestMenu(send func() error) error {
+	at := time.Now()
 	c.mu.Lock()
-	c.menuAt = time.Now()
+	previous := c.menuAt
+	c.menuAt = at
 	c.mu.Unlock()
 	if err := send(); err != nil {
 		c.mu.Lock()
-		c.menuAt = time.Time{}
+		if c.menuAt.Equal(at) {
+			c.menuAt = previous
+		}
 		c.mu.Unlock()
 		return err
 	}
@@ -144,20 +149,31 @@ var (
 
 // waitForMain holds a launch until Main has come up after the last menu
 // request or core load Core sent it, then settled. It gives up
-// mainUpTimeout after that request.
+// mainUpTimeout after that request. A request sent while it waits, such as
+// a retried stop, is waited for too, until mainUpTimeout after the first.
 func (c *coreLoadStops) waitForMain() {
-	c.mu.Lock()
-	menu := c.menuAt
-	c.mu.Unlock()
-	requested := menu
-	if load := lastLoadSent(); load.After(requested) {
-		requested = load
-	}
-	if !requested.IsZero() {
+	var covered, coveredMenu, bound time.Time
+	for {
+		c.mu.Lock()
+		menu := c.menuAt
+		c.mu.Unlock()
+		requested := menu
+		if load := lastLoadSent(); load.After(requested) {
+			requested = load
+		}
+		if requested.IsZero() || !requested.After(covered) {
+			break
+		}
+		if bound.IsZero() {
+			bound = requested.Add(mainUpTimeout)
+		} else if !time.Now().Before(bound) {
+			break
+		}
 		c.waitForMainSince(requested)
+		covered, coveredMenu = requested, menu
 	}
 	c.mu.Lock()
-	if !menu.IsZero() && c.menuAt.Equal(menu) {
+	if !coveredMenu.IsZero() && c.menuAt.Equal(coveredMenu) {
 		c.menuAt = time.Time{}
 	}
 	c.mu.Unlock()

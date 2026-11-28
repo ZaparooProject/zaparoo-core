@@ -108,6 +108,13 @@ func TestHandleTokens_ListsEveryCardOnAReader(t *testing.T) {
 	st.SetActiveCard(modifier)
 
 	assert.Equal(t, []string{"game", "modifier"}, activeUIDs(t, st))
+	resp, err := HandleTokens(requests.RequestEnv{State: st})
+	require.NoError(t, err)
+	tokensResp, ok := resp.(models.TokensResponse)
+	require.True(t, ok)
+	require.Len(t, tokensResp.Active, 2)
+	assert.Equal(t, "r2", tokensResp.Active[0].ReaderID)
+	assert.Equal(t, "r1", tokensResp.Active[1].ReaderID)
 
 	// Lifting the newer card clears the active card, but the older card is
 	// still on its reader.

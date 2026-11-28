@@ -187,6 +187,24 @@ func (s *State) SetReaderToken(readerID string, token *tokens.Token, now time.Ti
 	}
 }
 
+// KeepReaderToken records token as resting on readerID when nothing is
+// recorded there, such as a card read again after a reader error ended its
+// record. A recorded token is left alone, so repeated reads change nothing.
+func (s *State) KeepReaderToken(readerID string, token *tokens.Token) {
+	if readerID == "" || token == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.readerTokens[readerID]; ok {
+		return
+	}
+	if s.readerTokens == nil {
+		s.readerTokens = make(map[string]tokens.Token)
+	}
+	s.readerTokens[readerID] = *token
+}
+
 // ReleaseReaderToken records that the card on readerID left it. When the
 // removal was a normal one, a sticky modifier from that card that never
 // changed a launch becomes a one-shot; otherwise it ends. A reader error says

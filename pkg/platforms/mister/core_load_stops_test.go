@@ -341,3 +341,44 @@ func TestWaitForMainGivesUpOnALoadThatNeverCameUp(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second)
 	assert.Equal(t, 1, f.readCount())
 }
+
+func TestWaitForMainKeepsAnEarlierRequestWhenALaterSendFails(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 3}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	require.Error(t, c.requestMenu(func() error { return errors.New("no command interface") }))
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 3, "launched while the earlier menu request was loading")
+}
+
+// A stop retried while a launch waits sends a newer menu request, and the
+// launch's load would be dropped while Main brings that menu up.
+func TestWaitForMainWaitsForARequestSentDuringTheWait(t *testing.T) {
+	f := &fakeCoreName{core: "SNES", written: time.Now().Add(-time.Minute), upTo: 3}
+	withFakeCoreName(t, f, 5*time.Second)
+
+	var c coreLoadStops
+	retried := false
+	mainCoreState = func() (string, time.Time, error) {
+		core, written, err := f.state()
+		if !retried && core == misterconfig.MenuCore {
+			retried = true
+			time.Sleep(time.Millisecond)
+			require.NoError(t, c.requestMenu(func() error { return nil }))
+			f.mu.Lock()
+			f.core, f.upTo = "SNES", f.reads+5
+			f.mu.Unlock()
+		}
+		return core, written, err
+	}
+	require.NoError(t, c.requestMenu(func() error { return nil }))
+	c.waitForMain()
+
+	assert.GreaterOrEqual(t, f.readCount(), 8, "launched while the retried menu request was loading")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.True(t, c.menuAt.IsZero(), "the covered request is still recorded")
+}

@@ -1031,6 +1031,8 @@ preprocessing:
 		if writtenTagRemoved {
 			log.Info().Str("readerID", scanReaderID).Msg("written tag removed, allowing next scan to launch")
 			svc.State.MarkWrittenTagRemoved(scanReaderID)
+			svc.State.ClearActiveCardFrom(scanReaderID)
+			svc.State.ReleaseReaderToken(scanReaderID, time.Now(), false)
 			proc.Forget(scanReaderID)
 			continue preprocessing
 		}

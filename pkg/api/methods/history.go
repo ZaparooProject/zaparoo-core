@@ -66,6 +66,7 @@ func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // s
 			Text:     text,
 			Data:     data,
 			ScanTime: listed[i].ScanTime,
+			ReaderID: listed[i].ReaderID,
 		})
 	}
 
@@ -78,6 +79,7 @@ func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // s
 			Text:     text,
 			Data:     data,
 			ScanTime: last.ScanTime,
+			ReaderID: last.ReaderID,
 		}
 	}
 

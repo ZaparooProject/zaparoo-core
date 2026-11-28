@@ -27,6 +27,7 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -182,6 +183,12 @@ func resolveLaunchModifierArgs(svc *ServiceContext, raw gozapscript.AdvArgs) (ma
 		case gozapscript.KeyAction:
 			if !gozapscript.IsActionRun(resolved) && !gozapscript.IsActionDetails(resolved) {
 				log.Warn().Str("action", resolved).Msg("launch modifier action not supported")
+				valid = false
+				return false
+			}
+		case gozapscript.KeySetNameSameDir:
+			if _, ok := boolutil.Parse(resolved); !ok {
+				log.Warn().Str("set_name_same_dir", resolved).Msg("launch modifier set_name_same_dir is not yes or no")
 				valid = false
 				return false
 			}

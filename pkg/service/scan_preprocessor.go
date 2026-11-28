@@ -164,6 +164,11 @@ func processScan(
 	case scanReaderErrorRemoval:
 		st.ReleaseReaderToken(readerID, time.Now(), true)
 	case scanSkipDuplicate:
+		// A reader error ends state's record but not the preprocessor's, so
+		// the same card read again is a duplicate that must still be listed.
+		if scan != nil {
+			st.KeepReaderToken(readerID, proc.PrevToken(readerID))
+		}
 	}
 	return action
 }

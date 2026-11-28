@@ -205,3 +205,22 @@ func TestIsFalsey(t *testing.T) {
 		})
 	}
 }
+
+func TestParse(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{"1", "t", "TRUE", "y", "Yes", " on "} {
+		value, ok := boolutil.Parse(input)
+		assert.True(t, ok, input)
+		assert.True(t, value, input)
+	}
+	for _, input := range []string{"0", "F", "false", "n", "NO", "off"} {
+		value, ok := boolutil.Parse(input)
+		assert.True(t, ok, input)
+		assert.False(t, value, input)
+	}
+	for _, input := range []string{"", "maybe", "2", "enabled"} {
+		_, ok := boolutil.Parse(input)
+		assert.False(t, ok, input)
+	}
+}

@@ -610,6 +610,36 @@ func TestReaderManager_WrittenTagRemovalAfterWriteClearsCompletedToken(t *testin
 	assert.Equal(t, "just-written", tok.UID)
 }
 
+// A card scanned before a write and then lifted is reported only as a
+// written tag removal, which must end it like any other lift.
+func TestReaderManager_WrittenTagRemovalEndsTheLiftedCard(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	r := mocks.NewMockReader()
+	r.On("ReaderID").Return("reader-1").Maybe()
+	r.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	r.On("Metadata").Return(readers.DriverMetadata{ID: "mock"}).Maybe()
+	r.On("Path").Return("/dev/reader-1").Maybe()
+	r.On("Connected").Return(true).Maybe()
+	r.On("Close").Return(nil).Maybe()
+	env.st.SetReader(r)
+	tag := &tokens.Token{UID: "tag", Text: "**echo:before", ScanTime: time.Now(), ReaderID: "reader-1"}
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: tag})
+	assert.Equal(t, "tag", env.expectToken(t).UID)
+	require.Len(t, env.st.ReaderTokens(), 1)
+
+	env.st.SetReaderWriteActive(true, "reader-1")
+	env.st.SetWroteToken(&tokens.Token{UID: "tag", Text: "**echo:after", ReaderID: "reader-1"})
+	env.st.SetReaderWriteActive(false, "reader-1")
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+
+	assert.Eventually(t, func() bool {
+		return env.st.GetActiveCard().ScanTime.IsZero() && len(env.st.ReaderTokens()) == 0
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestReaderManager_WrittenTagRemovalIsReaderScoped(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t)

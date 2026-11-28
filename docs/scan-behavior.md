@@ -277,7 +277,8 @@ any other token's (trait, then reader, then `readers.scan.mode`):
       Lifting it before any launch turns it into a one-shot modifier for the next
       launch, so a single reader still works: place the modifier, lift it, place
       the game.
-- [ ] A read error or disconnect on the modifier card's reader ends its modifier.
+- [ ] A read error or disconnect on the modifier card's reader ends its held
+      modifier. A one-shot modifier waiting for its launch is kept.
 - [ ] Modifier cards on several readers stack. For each of `launcher`, `action`
       and the `set_name` pair, the newest card that sets it wins. `set_name` and
       `set_name_same_dir` always come together from one card; a card setting

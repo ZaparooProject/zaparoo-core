@@ -249,6 +249,7 @@ func TestHandleNextActionPreflight_ModifierRejectsBadValues(t *testing.T) {
 	for _, text := range []string{
 		"**launch?action=delete",
 		"**launch?set_name=",
+		"**launch?set_name=GBC&set_name_same_dir=maybe",
 	} {
 		svc, _, _ := setupNextActionTestEnv(t)
 		script := parseOne(t, text)
