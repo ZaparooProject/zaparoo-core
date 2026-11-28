@@ -694,6 +694,35 @@ func TestReaderManager_WriteCallbacksDoNotChangeAnotherReadersHoldState(t *testi
 	env.st.SetReaderWriteActive(false, "reader-b")
 }
 
+// Hardware, 2026-11-28: lifting a modifier card off one reader cleared the
+// active card resting on the other, so clients were told it was gone.
+func TestReaderManager_LiftFromOneReaderKeepsAnotherReadersCard(t *testing.T) {
+	t.Parallel()
+	for _, readerError := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readerError=%v", readerError), func(t *testing.T) {
+			t.Parallel()
+			env := setupReaderManager(t)
+			onA := &tokens.Token{
+				UID: "card-a", Text: "**launch?action=details", ScanTime: time.Now(), ReaderID: "reader-a",
+			}
+			onB := &tokens.Token{UID: "card-b", Text: "game-b", ScanTime: time.Now(), ReaderID: "reader-b"}
+			env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", Token: onA})
+			env.expectToken(t)
+			env.sendScan(readers.Scan{ReaderID: "reader-b", Source: "test-reader", Token: onB})
+			env.expectToken(t)
+
+			env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", ReaderError: readerError})
+			env.expectNoToken(t)
+			assert.Equal(t, onB.UID, env.st.GetActiveCard().UID)
+
+			env.sendScan(readers.Scan{ReaderID: "reader-b", Source: "test-reader", ReaderError: readerError})
+			assert.Eventually(t, func() bool {
+				return env.st.GetActiveCard().ScanTime.IsZero()
+			}, time.Second, 5*time.Millisecond)
+		})
+	}
+}
+
 func TestReaderManager_IgnoreOnConnect_SuppressesFirstScan(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t, withIgnoreOnConnect)

@@ -130,24 +130,65 @@ block_commands = ["write"]
 	assert.Nil(t, svc.State.GetPendingWrite())
 }
 
+const modifierReaderID = "mock-reader-0123456789abcdef"
+
+func newModifierReader(removable bool) *mocks.MockReader {
+	reader := mocks.NewMockReader()
+	caps := []readers.Capability{readers.CapabilityWrite}
+	if removable {
+		caps = append(caps, readers.CapabilityRemovable)
+	}
+	reader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	reader.On("IDs").Return([]string{"mock:"}).Maybe()
+	reader.On("Connected").Return(true).Maybe()
+	reader.On("Path").Return("/dev/mock-device").Maybe()
+	reader.On("Info").Return("Mock Reader").Maybe()
+	reader.On("Capabilities").Return(caps).Maybe()
+	reader.On("ReaderID").Return(modifierReaderID).Maybe()
+	return reader
+}
+
+func parseOne(t *testing.T, text string) gozapscript.Script {
+	t.Helper()
+	script, err := gozapscript.NewParser(text).ParseScript()
+	require.NoError(t, err)
+	return script
+}
+
+// placeModifier puts a modifier card on the mock reader the way the reader
+// loop does, then runs the preflight on it.
+func placeModifier(t *testing.T, svc *ServiceContext, text string) nextActionResult {
+	t.Helper()
+	token := tokens.Token{
+		UID:      "modifier",
+		Text:     text,
+		ScanTime: time.Now(),
+		Source:   tokens.SourceReader,
+		ReaderID: modifierReaderID,
+	}
+	svc.State.SetReaderToken(modifierReaderID, &token, time.Now())
+	token.Traits = tokens.ResolveTraits(parseOne(t, text).Traits)
+	script := parseOne(t, text)
+	return handleNextActionPreflight(svc, &token, &script)
+}
+
 func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	t.Parallel()
 
 	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
 	mockPlatform.On("Launchers", cfg).
 		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
-	parser := gozapscript.NewParser("**launch?launcher=3do-dualram")
-	script, err := parser.ParseScript()
-	require.NoError(t, err)
+	script := parseOne(t, "**launch?launcher=3do-dualram")
 	token := tokens.Token{UID: "source", Text: "**launch?launcher=3do-dualram", ScanTime: time.Now()}
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
 	require.Equal(t, nextActionArmed, result)
-	pending := svc.State.GetPendingLaunchOverride()
-	require.NotNil(t, pending)
-	assert.Equal(t, "3do-dualram", pending.LauncherID)
-	assert.Equal(t, "source", pending.Source.UID)
+	mods := svc.State.LaunchModifiers()
+	require.Len(t, mods, 1)
+	assert.Equal(t, map[string]string{"launcher": "3do-dualram"}, mods[0].Args)
+	assert.Equal(t, "source", mods[0].Source.UID)
+	assert.False(t, mods[0].Sticky)
 }
 
 func TestHandleNextActionPreflight_ArmsLaunchOverrideCaseInsensitively(t *testing.T) {
@@ -156,17 +197,15 @@ func TestHandleNextActionPreflight_ArmsLaunchOverrideCaseInsensitively(t *testin
 	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
 	mockPlatform.On("Launchers", cfg).
 		Return([]platforms.Launcher{{ID: "Winamp_Main", SystemID: ""}})
-	parser := gozapscript.NewParser("**launch?launcher=winamp_main")
-	script, err := parser.ParseScript()
-	require.NoError(t, err)
+	script := parseOne(t, "**launch?launcher=winamp_main")
 	token := tokens.Token{UID: "source", Text: "**launch?launcher=winamp_main", ScanTime: time.Now()}
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
 	require.Equal(t, nextActionArmed, result)
-	pending := svc.State.GetPendingLaunchOverride()
-	require.NotNil(t, pending)
-	assert.Equal(t, "winamp_main", pending.LauncherID)
+	mods := svc.State.LaunchModifiers()
+	require.Len(t, mods, 1)
+	assert.Equal(t, "winamp_main", mods[0].Args["launcher"])
 }
 
 func TestHandleNextActionPreflight_RejectsUnknownLaunchOverride(t *testing.T) {
@@ -175,15 +214,180 @@ func TestHandleNextActionPreflight_RejectsUnknownLaunchOverride(t *testing.T) {
 	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
 	mockPlatform.On("Launchers", cfg).
 		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
-	parser := gozapscript.NewParser("**launch?launcher=Winamp_Main")
-	script, err := parser.ParseScript()
-	require.NoError(t, err)
+	script := parseOne(t, "**launch?launcher=Winamp_Main")
 	token := tokens.Token{UID: "source", Text: "**launch?launcher=Winamp_Main", ScanTime: time.Now()}
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
 	require.Equal(t, nextActionInvalid, result)
-	assert.Nil(t, svc.State.GetPendingLaunchOverride())
+	assert.Empty(t, svc.State.LaunchModifiers())
+}
+
+func TestHandleNextActionPreflight_ArmsEveryModifierKey(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := setupNextActionTestEnv(t)
+	text := "**launch?set_name=GBC&set_name_same_dir=yes&action=DETAILS"
+	script := parseOne(t, text)
+	token := tokens.Token{UID: "source", Text: text, ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionArmed, result)
+	mods := svc.State.LaunchModifiers()
+	require.Len(t, mods, 1)
+	assert.Equal(t, map[string]string{
+		"set_name":          "GBC",
+		"set_name_same_dir": "yes",
+		"action":            "DETAILS",
+	}, mods[0].Args)
+}
+
+func TestHandleNextActionPreflight_ModifierRejectsBadValues(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"**launch?action=delete",
+		"**launch?set_name=",
+	} {
+		svc, _, _ := setupNextActionTestEnv(t)
+		script := parseOne(t, text)
+		token := tokens.Token{UID: "source", Text: text, ScanTime: time.Now()}
+
+		assert.Equal(t, nextActionInvalid, handleNextActionPreflight(svc, &token, &script), text)
+		assert.Empty(t, svc.State.LaunchModifiers(), text)
+	}
+}
+
+func TestHandleNextActionPreflight_ModifierIgnoresOtherKeys(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"**launch?system=SNES",
+		"**launch?set_name=GBC&slot=background",
+		"**launch:game.sfc?set_name=GBC",
+	} {
+		svc, _, _ := setupNextActionTestEnv(t)
+		script := parseOne(t, text)
+		token := tokens.Token{UID: "source", Text: text, ScanTime: time.Now()}
+
+		assert.Equal(t, nextActionNone, handleNextActionPreflight(svc, &token, &script), text)
+		assert.Empty(t, svc.State.LaunchModifiers(), text)
+	}
+}
+
+func TestHandleNextActionPreflight_ModifierStickiness(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		config    string
+		text      string
+		removable bool
+		sticky    bool
+	}{
+		{
+			name: "global hold on removable reader", config: holdModeTOML, text: "**launch?set_name=GBC",
+			removable: true, sticky: true,
+		},
+		{name: "tap mode stays one-shot", text: "**launch?set_name=GBC", removable: true},
+		{name: "hold trait on the card", text: "#hold||**launch?set_name=GBC", removable: true, sticky: true},
+		{
+			name: "tap trait overrides hold mode", config: holdModeTOML, text: "#tap||**launch?set_name=GBC",
+			removable: true,
+		},
+		{name: "reader without removal", config: holdModeTOML, text: "**launch?set_name=GBC"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc, _, cfg := setupNextActionTestEnv(t)
+			if tt.config != "" {
+				require.NoError(t, cfg.LoadTOML(tt.config))
+			}
+			svc.State.SetReader(newModifierReader(tt.removable))
+
+			require.Equal(t, nextActionArmed, placeModifier(t, svc, tt.text))
+			mods := svc.State.LaunchModifiers()
+			require.Len(t, mods, 1)
+			assert.Equal(t, tt.sticky, mods[0].Sticky)
+		})
+	}
+}
+
+func TestHandleNextActionPreflight_ModifierLiftedBeforeArmIsOneShot(t *testing.T) {
+	t.Parallel()
+
+	svc, _, cfg := setupNextActionTestEnv(t)
+	require.NoError(t, cfg.LoadTOML(holdModeTOML))
+	svc.State.SetReader(newModifierReader(true))
+	text := "**launch?set_name=GBC"
+	token := tokens.Token{
+		UID: "modifier", Text: text, ScanTime: time.Now(),
+		Source: tokens.SourceReader, ReaderID: modifierReaderID,
+	}
+	svc.State.SetReaderToken(modifierReaderID, &token, time.Now())
+	svc.State.ReleaseReaderToken(modifierReaderID, time.Now(), false)
+	script := parseOne(t, text)
+
+	require.Equal(t, nextActionArmed, handleNextActionPreflight(svc, &token, &script))
+	mods := svc.State.LaunchModifiers()
+	require.Len(t, mods, 1)
+	assert.False(t, mods[0].Sticky)
+}
+
+const holdModeTOML = `
+[readers.scan]
+mode = "hold"
+`
+
+func expectModifiedLaunch(
+	t *testing.T,
+	mockPlatform *mocks.MockPlatform,
+	cfg *config.Instance,
+	svc *ServiceContext,
+	path, setName string,
+	times int,
+) {
+	t.Helper()
+	mockPlatform.On("LaunchMedia", cfg, path,
+		(*platforms.Launcher)(nil),
+		svc.DB,
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil && opts.SetName == setName
+		})).Return(nil).Times(times)
+}
+
+func runReaderLaunch(t *testing.T, svc *ServiceContext, path string) {
+	t.Helper()
+	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
+	token := tokens.Token{Text: "**launch:" + path, ScanTime: time.Now(), Source: tokens.SourceReader}
+	require.NoError(t, runTokenZapScript(svc, token, plsc, nil, false))
+}
+
+func TestRunTokenZapScript_StickyModifierAppliesUntilLifted(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	require.NoError(t, cfg.LoadTOML(holdModeTOML))
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	svc.State.SetReader(newModifierReader(true))
+	path := filepath.Join(t.TempDir(), "game.gb")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
+
+	require.Equal(t, nextActionArmed, placeModifier(t, svc, "**launch?set_name=GBC"))
+
+	expectModifiedLaunch(t, mockPlatform, cfg, svc, path, "GBC", 2)
+	runReaderLaunch(t, svc, path)
+	runReaderLaunch(t, svc, path)
+	require.Len(t, svc.State.LaunchModifiers(), 1)
+
+	svc.State.ReleaseReaderToken(modifierReaderID, time.Now(), false)
+	assert.Empty(t, svc.State.LaunchModifiers())
+
+	expectModifiedLaunch(t, mockPlatform, cfg, svc, path, "", 1)
+	runReaderLaunch(t, svc, path)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
@@ -204,18 +408,15 @@ func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
 			return opts != nil && opts.ActiveMediaPublisher != nil
 		})).Return(nil).Once()
 
-	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-		LauncherID: "3do-dualram",
-		Source:     tokens.Token{UID: "source"},
-		CreatedAt:  time.Now(),
+	svc.State.ArmLaunchModifier(&state.LaunchModifier{
+		Args:      map[string]string{"launcher": "3do-dualram"},
+		Source:    tokens.Token{UID: "source"},
+		CreatedAt: time.Now(),
 	})
 
-	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
-	token := tokens.Token{Text: "**launch:" + path, ScanTime: time.Now(), Source: tokens.SourceReader}
-	err := runTokenZapScript(svc, token, plsc, nil, false)
+	runReaderLaunch(t, svc, path)
 
-	require.NoError(t, err)
-	assert.Nil(t, svc.State.GetPendingLaunchOverride())
+	assert.Empty(t, svc.State.LaunchModifiers())
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -234,18 +435,15 @@ func TestRunTokenZapScript_DiscardsExpiredPendingLaunchOverride(t *testing.T) {
 			return opts != nil && opts.ActiveMediaPublisher != nil
 		})).Return(nil).Once()
 
-	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-		LauncherID: "3do-dualram",
-		Source:     tokens.Token{UID: "source"},
-		CreatedAt:  time.Now().Add(-launchOverrideTTL - time.Minute),
+	svc.State.ArmLaunchModifier(&state.LaunchModifier{
+		Args:      map[string]string{"launcher": "3do-dualram"},
+		Source:    tokens.Token{UID: "source"},
+		CreatedAt: time.Now().Add(-state.LaunchModifierTTL - time.Minute),
 	})
 
-	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
-	token := tokens.Token{Text: "**launch:" + path, ScanTime: time.Now(), Source: tokens.SourceReader}
-	err := runTokenZapScript(svc, token, plsc, nil, false)
+	runReaderLaunch(t, svc, path)
 
-	require.NoError(t, err)
-	assert.Nil(t, svc.State.GetPendingLaunchOverride())
+	assert.Empty(t, svc.State.LaunchModifiers())
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -262,10 +460,10 @@ func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
 			return opts != nil && opts.ActiveMediaPublisher != nil
 		})).Return(nil).Once()
-	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-		LauncherID: "3do-dualram",
-		Source:     tokens.Token{UID: "source"},
-		CreatedAt:  time.Now(),
+	svc.State.ArmLaunchModifier(&state.LaunchModifier{
+		Args:      map[string]string{"launcher": "3do-dualram"},
+		Source:    tokens.Token{UID: "source"},
+		CreatedAt: time.Now(),
 	})
 
 	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
@@ -273,7 +471,7 @@ func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 	err := runTokenZapScript(svc, token, plsc, nil, false)
 
 	require.NoError(t, err)
-	assert.NotNil(t, svc.State.GetPendingLaunchOverride())
+	assert.Len(t, svc.State.LaunchModifiers(), 1)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -283,17 +481,41 @@ func TestRunTokenZapScript_LaunchSystemDoesNotConsumePendingOverride(t *testing.
 	svc, mockPlatform, _ := setupNextActionTestEnv(t)
 	mockPlatform.On("LaunchSystem", mock.AnythingOfType("*config.Instance"), "menu").Return(nil).Maybe()
 	mockPlatform.On("ReturnToMenu").Return(nil).Once()
-	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-		LauncherID: "3do-dualram",
-		Source:     tokens.Token{UID: "source"},
-		CreatedAt:  time.Now(),
+	svc.State.ArmLaunchModifier(&state.LaunchModifier{
+		Args:      map[string]string{"launcher": "3do-dualram"},
+		Source:    tokens.Token{UID: "source"},
+		CreatedAt: time.Now(),
 	})
 
 	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
 	err := runTokenZapScript(svc, tokens.Token{Text: "**launch.system:menu", ScanTime: time.Now()}, plsc, nil, false)
 
 	require.NoError(t, err)
-	assert.NotNil(t, svc.State.GetPendingLaunchOverride())
+	assert.Len(t, svc.State.LaunchModifiers(), 1)
+}
+
+func TestApplyLaunchModifiers_GroupsNewestWins(t *testing.T) {
+	t.Parallel()
+
+	base := gozapscript.NewAdvArgs(map[string]string{
+		"launcher":          "card-launcher",
+		"set_name_same_dir": "yes",
+		"system":            "GB",
+	})
+	modifiers := []state.LaunchModifier{
+		{Args: map[string]string{"launcher": "old", "set_name": "SGB", "set_name_same_dir": "no"}},
+		{Args: map[string]string{"set_name": "GBC"}},
+		{Args: map[string]string{"launcher": "new"}},
+	}
+
+	got := applyLaunchModifiers(base, modifiers).Raw()
+
+	assert.Equal(t, map[string]string{
+		"launcher": "new",
+		"set_name": "GBC",
+		"system":   "GB",
+	}, got)
+	assert.Equal(t, "card-launcher", base.Get(gozapscript.KeyLauncher), "base args must not be mutated")
 }
 
 func TestHandlePendingWrite_WritesTargetAndConsumesScan(t *testing.T) {

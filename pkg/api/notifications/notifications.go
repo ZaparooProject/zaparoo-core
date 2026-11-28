@@ -31,6 +31,7 @@ import (
 var criticalNotifications = map[string]bool{
 	models.NotificationTokensAdded:         true,
 	models.NotificationTokensRemoved:       true,
+	models.NotificationTokensModifiers:     true,
 	models.NotificationTokensStaged:        true,
 	models.NotificationTokensStagedReady:   true,
 	models.NotificationReadersConnected:    true,
@@ -121,6 +122,11 @@ func TokensStagedReady(ns chan<- models.Notification, payload models.TokenRespon
 
 func TokensRemoved(ns chan<- models.Notification) {
 	sendNotification(ns, models.NotificationTokensRemoved, nil)
+}
+
+// TokensModifiers reports the full set of armed launch modifiers.
+func TokensModifiers(ns chan<- models.Notification, payload models.LaunchModifiersParams) {
+	sendNotification(ns, models.NotificationTokensModifiers, payload)
 }
 
 func ReadersAdded(ns chan<- models.Notification, payload models.ReaderResponse) {

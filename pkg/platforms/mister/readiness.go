@@ -159,17 +159,7 @@ func newCoreReadiness() *coreReadiness {
 		stat:      os.Stat,
 		readMGL:   mgls.ReadMgl,
 		loadsSent: mgls.LoadsSent,
-		coreName: func() (string, time.Time, error) {
-			data, err := os.ReadFile(misterconfig.CoreNameFile)
-			if err != nil {
-				return "", time.Time{}, fmt.Errorf("read core name: %w", err)
-			}
-			info, err := os.Stat(misterconfig.CoreNameFile)
-			if err != nil {
-				return "", time.Time{}, fmt.Errorf("stat core name: %w", err)
-			}
-			return strings.TrimSpace(string(data)), info.ModTime(), nil
-		},
+		coreName:  coreNameWritten,
 	}
 }
 

@@ -1004,6 +1004,27 @@ type MediaResponse struct {
 type TokensResponse struct {
 	Last   *TokenResponse  `json:"last,omitempty"`
 	Active []TokenResponse `json:"active"`
+	// Modifiers are the launch modifiers that will change the next launch
+	// from a reader, oldest first. Empty when none are armed.
+	Modifiers []LaunchModifierResponse `json:"modifiers"`
+}
+
+// LaunchModifierResponse is one armed launch modifier: a launch card with no
+// path whose advanced arguments are applied to launches from readers. A
+// sticky modifier stays in effect while its card rests on its reader; any
+// other modifier applies to the next launch only.
+type LaunchModifierResponse struct {
+	CreatedAt time.Time         `json:"createdAt"`
+	Args      map[string]string `json:"args"`
+	ReaderID  string            `json:"readerId,omitempty"`
+	UID       string            `json:"uid,omitempty"`
+	Sticky    bool              `json:"sticky"`
+}
+
+// LaunchModifiersParams is the payload of the tokens.modifiers notification:
+// every armed launch modifier, oldest first, empty when none are armed.
+type LaunchModifiersParams struct {
+	Modifiers []LaunchModifierResponse `json:"modifiers"`
 }
 
 type ClientResponse struct {

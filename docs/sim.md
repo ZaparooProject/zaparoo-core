@@ -530,7 +530,7 @@ Use `harness.ScriptSetup` and `harness.ScriptCommands()` to add the commands to 
 
 Only `api`, `api-wait`, `notification` and `event` accept `!`. `notification` and `event` time out after 15s unless `-timeout` is given.
 
-Existing scenarios: `faults`, `hold_api_launch_remove`, `hold_playlist_remove`, `launch_guard`, `launch_random_hold`, `library`, `lifecycles`, `preemption`, `scrape`, `tap_launch_remove`, `write_card`.
+Existing scenarios: `faults`, `hold_api_launch_remove`, `hold_playlist_remove`, `launch_guard`, `launch_modifier_hold`, `launch_random_hold`, `library`, `lifecycles`, `preemption`, `scrape`, `tap_launch_remove`, `write_card`.
 
 ```
 sim-start -scan-mode hold

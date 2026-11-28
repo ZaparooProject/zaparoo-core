@@ -458,8 +458,9 @@ None.
 
 | Key    | Type                            | Required | Description                                                    |
 | :----- | :------------------------------ | :------- | :------------------------------------------------------------- |
-| active | [TokenResponse](#token-object)[] | Yes      | A list of currently active tokens.                             |
+| active | [TokenResponse](#token-object)[] | Yes      | Every card resting on a reader that reports removal, oldest scan first. The last token scanned is also included, in scan order, when it is not one of those cards, such as a token run through the API or scanned by a reader that cannot report removal. |
 | last   | [TokenResponse](#token-object)   | No       | The last scanned token. Null if no token has been scanned yet. |
+| modifiers | [LaunchModifier](#launch-modifier-object)[] | Yes | Launch modifiers waiting to apply to the next launch or applying while their card stays on its reader. Empty when there are none. |
 
 ##### Token object
 
@@ -471,6 +472,18 @@ None.
 | data     | string  | Yes      | Raw data of the token as hexadecimal string.     |
 | scanTime | string  | Yes      | Timestamp of when the token was scanned in RFC3339 format. |
 | readerId | string  | No       | ID of the reader that scanned the token.         |
+
+##### Launch modifier object
+
+A launch modifier is a `**launch` card with no path, such as `**launch?action=details`. Its arguments apply to launches from other cards. See [scan behavior](../scan-behavior.md#launch-modifier-cards).
+
+| Key       | Type    | Required | Description |
+| :-------- | :------ | :------- | :---------- |
+| args      | object  | Yes      | The arguments applied, keyed by name: any of `launcher`, `set_name`, `set_name_same_dir` and `action`. Values are already evaluated. |
+| sticky    | boolean | Yes      | `true` while the modifier applies to every launch until its card is lifted. `false` when it applies to the next launch only. |
+| createdAt | string  | Yes      | When the modifier was armed, in RFC3339 format. A one-shot modifier expires 5 minutes after this. |
+| readerId  | string  | No       | ID of the reader the modifier card was read on. |
+| uid       | string  | No       | UID of the modifier card. |
 
 #### Example
 
@@ -498,7 +511,8 @@ None.
       "text": "**launch.system:snes",
       "data": "",
       "scanTime": "2024-09-24T17:49:42.938167429+08:00"
-    }
+    },
+    "modifiers": []
   }
 }
 ```

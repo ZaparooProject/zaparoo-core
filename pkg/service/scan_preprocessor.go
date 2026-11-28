@@ -20,7 +20,10 @@
 package service
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
 
@@ -140,4 +143,27 @@ func (p *scanPreprocessor) Retain(readerIDs []string) {
 			delete(p.prevTokens, id)
 		}
 	}
+}
+
+// processScan runs the preprocessor and keeps state's record of which token
+// rests on each reader in step with it, which launch modifiers use to tell
+// when their card is lifted.
+func processScan(
+	st *state.State,
+	proc *scanPreprocessor,
+	readerID string,
+	scan *tokens.Token,
+	readerError bool,
+) scanAction {
+	action := proc.Process(readerID, scan, readerError)
+	switch action {
+	case scanNewToken:
+		st.SetReaderToken(readerID, scan, time.Now())
+	case scanNormalRemoval:
+		st.ReleaseReaderToken(readerID, time.Now(), false)
+	case scanReaderErrorRemoval:
+		st.ReleaseReaderToken(readerID, time.Now(), true)
+	case scanSkipDuplicate:
+	}
+	return action
 }

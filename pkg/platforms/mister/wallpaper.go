@@ -63,42 +63,54 @@ func defaultWallpaperPaths() wallpaperPaths {
 // to the target file in /media/fat/wallpapers/, then setting the background
 // mode byte in MENU.CFG to wallpaper mode. If the user is on the main menu,
 // the menu core is relaunched to display the change immediately.
-func CmdWallpaper(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
+func CmdWallpaper(pl platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	paths := defaultWallpaperPaths()
 
+	var err error
 	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "" {
-		return unsetWallpaper(paths)
+		err = unsetWallpaper(paths)
+	} else {
+		err = setWallpaper(paths, env.Cmd.Args[0])
+	}
+	if err != nil {
+		return platforms.CmdResult{}, err
 	}
 
-	return setWallpaper(paths, env.Cmd.Args[0])
+	sendMenu := mistermain.LaunchMenu
+	if mp, ok := pl.(*Platform); ok {
+		// A launch right after this must wait for the reloaded menu.
+		sendMenu = func() error { return mp.coreLoads.requestMenu(mistermain.LaunchMenu) }
+	}
+	relaunchMenuIfActive(sendMenu)
+	return platforms.CmdResult{}, nil
 }
 
-func setWallpaper(paths wallpaperPaths, filename string) (platforms.CmdResult, error) {
+func setWallpaper(paths wallpaperPaths, filename string) error {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if ext != ".png" && ext != ".jpg" {
-		return platforms.CmdResult{}, fmt.Errorf("unsupported wallpaper format %q, must be .png or .jpg", ext)
+		return fmt.Errorf("unsupported wallpaper format %q, must be .png or .jpg", ext)
 	}
 
 	wallpaperPath := filepath.Join(paths.wallpapersDir, filename)
 	cleanWallpapers := filepath.Clean(paths.wallpapersDir) + string(filepath.Separator)
 	if !strings.HasPrefix(filepath.Clean(wallpaperPath)+string(filepath.Separator), cleanWallpapers) {
-		return platforms.CmdResult{}, fmt.Errorf("invalid wallpaper filename: %s", filename)
+		return fmt.Errorf("invalid wallpaper filename: %s", filename)
 	}
 
 	if _, err := os.Stat(wallpaperPath); err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("wallpaper file not found: %s", filename)
+		return fmt.Errorf("wallpaper file not found: %s", filename)
 	}
 
 	if err := cleanupMenuFile(filepath.Join(paths.sdRoot, "menu.png"), paths.wallpapersDir); err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("cleanup menu.png: %w", err)
+		return fmt.Errorf("cleanup menu.png: %w", err)
 	}
 	if err := cleanupMenuFile(filepath.Join(paths.sdRoot, "menu.jpg"), paths.wallpapersDir); err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("cleanup menu.jpg: %w", err)
+		return fmt.Errorf("cleanup menu.jpg: %w", err)
 	}
 
 	symlinkPath := filepath.Join(paths.sdRoot, "menu"+ext)
 	if err := os.Symlink(wallpaperPath, symlinkPath); err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("create wallpaper symlink: %w", err)
+		return fmt.Errorf("create wallpaper symlink: %w", err)
 	}
 
 	log.Info().
@@ -110,12 +122,10 @@ func setWallpaper(paths wallpaperPaths, filename string) (platforms.CmdResult, e
 		log.Warn().Err(err).Msg("failed to set background mode in MENU.CFG")
 	}
 
-	relaunchMenuIfActive()
-
-	return platforms.CmdResult{}, nil
+	return nil
 }
 
-func unsetWallpaper(paths wallpaperPaths) (platforms.CmdResult, error) {
+func unsetWallpaper(paths wallpaperPaths) error {
 	removed := false
 
 	for _, name := range []string{"menu.png", "menu.jpg"} {
@@ -126,7 +136,7 @@ func unsetWallpaper(paths wallpaperPaths) (platforms.CmdResult, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return platforms.CmdResult{}, fmt.Errorf("stat %s: %w", name, err)
+			return fmt.Errorf("stat %s: %w", name, err)
 		}
 
 		if fi.Mode()&os.ModeSymlink == 0 {
@@ -135,7 +145,7 @@ func unsetWallpaper(paths wallpaperPaths) (platforms.CmdResult, error) {
 		}
 
 		if err := os.Remove(path); err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("remove wallpaper symlink %s: %w", name, err)
+			return fmt.Errorf("remove wallpaper symlink %s: %w", name, err)
 		}
 
 		log.Info().Str("path", path).Msg("wallpaper symlink removed")
@@ -146,9 +156,7 @@ func unsetWallpaper(paths wallpaperPaths) (platforms.CmdResult, error) {
 		log.Debug().Msg("no wallpaper symlink to remove")
 	}
 
-	relaunchMenuIfActive()
-
-	return platforms.CmdResult{}, nil
+	return nil
 }
 
 // cleanupMenuFile handles an existing menu.png or menu.jpg file.
@@ -222,7 +230,7 @@ func setBackgroundMode(menuCfgFile string, mode byte) error {
 
 // relaunchMenuIfActive relaunches the menu core if the user is currently
 // on the main menu, so the wallpaper change is visible immediately.
-func relaunchMenuIfActive() {
+func relaunchMenuIfActive(sendMenu func() error) {
 	coreName, err := mistermain.ReadCoreName()
 	if err != nil {
 		log.Debug().Err(err).Msg("could not read core name, skipping menu relaunch")
@@ -233,7 +241,7 @@ func relaunchMenuIfActive() {
 		return
 	}
 
-	if err := mistermain.LaunchMenu(); err != nil {
+	if err := sendMenu(); err != nil {
 		log.Warn().Err(err).Msg("failed to relaunch menu after wallpaper change")
 	}
 }

@@ -52,12 +52,6 @@ import (
 //   - Pattern: lock → modify state → copy needed data → unlock → send notifications
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
-type PendingLaunchOverride struct {
-	Source     tokens.Token
-	CreatedAt  time.Time
-	LauncherID string
-}
-
 type PendingWrite struct {
 	Source    tokens.Token
 	CreatedAt time.Time
@@ -95,7 +89,8 @@ type State struct {
 	playlistObserver       func(slot string, pls *playlists.Playlist)
 	playlistRequester      func(ctx context.Context, pls *playlists.Playlist) error
 	beforeExitHook         func()
-	pendingLaunchOverride  *PendingLaunchOverride
+	launchModifiers        []LaunchModifier
+	readerTokens           map[string]tokens.Token
 	pendingWrite           *PendingWrite
 	backupCoordinator      *backupcoordinator.Coordinator
 	launcherManager        *LauncherManager
@@ -242,6 +237,28 @@ func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-u
 	} else {
 		notifications.TokensRemoved(s.Notifications)
 	}
+}
+
+// ClearActiveCardFrom clears the active card when a token leaves readerID. A
+// card resting on another reader stays active: lifting one card off a reader
+// is not the removal of a card scanned on a different one. A card with no
+// reader, or a removal from an unknown reader, clears it as before.
+func (s *State) ClearActiveCardFrom(readerID string) {
+	s.mu.Lock()
+	active := s.activeToken
+	if readerID != "" && active.ReaderID != "" && active.ReaderID != readerID {
+		s.mu.Unlock()
+		return
+	}
+	if active.ScanTime.IsZero() && helpers.TokensEqual(&active, &tokens.Token{}) {
+		// ignore duplicate removals
+		s.mu.Unlock()
+		return
+	}
+	s.activeToken = tokens.Token{}
+	s.mu.Unlock()
+
+	notifications.TokensRemoved(s.Notifications)
 }
 
 func (s *State) GetActiveCard() tokens.Token {
@@ -489,6 +506,16 @@ func (s *State) RemoveReader(readerID string) {
 	}
 	delete(s.readers, readerID)
 
+	// A card cannot rest on a reader that is gone, and nothing will report
+	// its removal now, so its sticky modifier ends with the reader.
+	delete(s.readerTokens, readerID)
+	now := time.Now()
+	modifiersChanged := s.releaseReaderModifiersLocked(readerID, now, false)
+	var modifiersPayload models.LaunchModifiersParams
+	if modifiersChanged {
+		modifiersPayload = s.launchModifiersPayloadLocked(now)
+	}
+
 	// Prepare payload inside lock
 	payload := models.ReaderResponse{
 		Connected: false,
@@ -500,6 +527,9 @@ func (s *State) RemoveReader(readerID string) {
 
 	// Send notification outside lock to prevent deadlock
 	notifications.ReadersRemoved(s.Notifications, payload)
+	if modifiersChanged {
+		notifications.TokensModifiers(s.Notifications, modifiersPayload)
+	}
 }
 
 // ListReaders returns all registered Reader instances.
@@ -652,26 +682,6 @@ func (s *State) GetWroteToken(readerIDs ...string) *tokens.Token {
 		return nil
 	}
 	return writeState.wroteToken
-}
-
-func (s *State) SetPendingLaunchOverride(pending *PendingLaunchOverride) {
-	s.mu.Lock()
-	s.pendingLaunchOverride = pending
-	s.mu.Unlock()
-}
-
-func (s *State) GetPendingLaunchOverride() *PendingLaunchOverride {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.pendingLaunchOverride
-}
-
-func (s *State) ConsumePendingLaunchOverride() *PendingLaunchOverride {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pending := s.pendingLaunchOverride
-	s.pendingLaunchOverride = nil
-	return pending
 }
 
 func (s *State) SetPendingWrite(pending *PendingWrite) {

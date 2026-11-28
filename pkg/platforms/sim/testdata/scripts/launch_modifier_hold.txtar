@@ -1,0 +1,63 @@
+# A launch card with no path is a launch modifier. In hold mode, while its
+# card rests on one reader, every game scanned on another reader is launched
+# with its arguments. Lifting the card ends it.
+
+sim-start -readers r1,r2 -scan-mode hold
+rom simdetails/Game.sim
+
+tap -reader r1 -uid 04aa01 **launch?action=details
+notification tokens.modifiers
+api tokens
+stdout '"sticky": true'
+stdout '"action": "details"'
+
+tap -reader r2 -uid 04bb01 -for 100 $ROMS/simdetails/Game.sim
+event launch launcher=SimDetails intent=details
+tap -reader r2 -uid 04bb02 -for 100 $ROMS/simdetails/Game.sim
+event launch launcher=SimDetails intent=details
+
+remove -reader r1
+notification tokens.modifiers
+api tokens
+stdout '"modifiers": \[\]'
+
+mark
+tap -reader r2 -uid 04bb03 $ROMS/simdetails/Game.sim
+notification media.started
+! event launch intent=details
+event launch launcher=SimDetails
+
+# A card scanned on one reader must not hide the game card still on the other.
+tap -reader r1 -uid 04aa02 **launch?action=details
+notification tokens.modifiers
+api tokens
+stdout '"uid": "04bb03"'
+remove -reader r1
+notification tokens.modifiers
+api tokens
+stdout '"uid": "04bb03"'
+
+remove -reader r2
+notification media.stopped
+sim-stop
+
+# In tap mode the modifier applies to the next launch only.
+
+sim-start -readers r1,r2
+rom simdetails/Game.sim
+
+tap -reader r1 -uid 04aa01 -for 100 **launch?action=details
+notification tokens.modifiers
+api tokens
+stdout '"sticky": false'
+
+tap -reader r2 -uid 04bb01 -for 100 $ROMS/simdetails/Game.sim
+event launch launcher=SimDetails intent=details
+api tokens
+stdout '"modifiers": \[\]'
+
+mark
+tap -reader r2 -uid 04bb02 -for 100 $ROMS/simdetails/Game.sim
+notification media.started
+! event launch intent=details
+event launch launcher=SimDetails

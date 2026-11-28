@@ -1097,7 +1097,7 @@ preprocessing:
 					if delay > 0 {
 						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
 					}
-					proc.Process(scanReaderID, scan, readerError)
+					processScan(svc.State, proc, scanReaderID, scan, readerError)
 					continue preprocessing
 				}
 				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
@@ -1105,11 +1105,11 @@ preprocessing:
 				resuming := stagedLaunch != nil
 				if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
 					log.Info().Err(err).Msg("launch guard: re-tap lost resolution race")
-					proc.Process(scanReaderID, scan, readerError)
+					processScan(svc.State, proc, scanReaderID, scan, readerError)
 					continue preprocessing
 				}
 				// Let the preprocessor know what's on the reader now.
-				proc.Process(scanReaderID, scan, readerError)
+				processScan(svc.State, proc, scanReaderID, scan, readerError)
 				svc.State.SetActiveCard(confirmed)
 				if resuming {
 					continue preprocessing
@@ -1140,7 +1140,7 @@ preprocessing:
 			proc.Retain(append(connectedReaderIDs(svc.State), scanReaderID))
 		}
 
-		switch proc.Process(scanReaderID, scan, readerError) {
+		switch processScan(svc.State, proc, scanReaderID, scan, readerError) {
 		case scanSkipDuplicate:
 			log.Debug().
 				Str("source", scanSource).
@@ -1319,13 +1319,13 @@ preprocessing:
 			if cancelTimedExit(exitTimer, &exitGeneration) {
 				log.Debug().Msg("cancelled exit timer due to reader error")
 			}
-			svc.State.SetActiveCard(tokens.Token{})
+			svc.State.ClearActiveCardFrom(scanReaderID)
 
 		case scanNormalRemoval:
 			log.Info().Msg("token was removed")
 
 			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans.
-			svc.State.SetActiveCard(tokens.Token{})
+			svc.State.ClearActiveCardFrom(scanReaderID)
 
 			// Run on_remove hook for every normal removal. Delayed hooks run outside
 			// the reader loop so reinserting the removed token can cancel them.

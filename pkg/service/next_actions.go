@@ -21,10 +21,13 @@ package service
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -42,11 +45,6 @@ const (
 	nextActionBlocked
 )
 
-// launchOverrideTTL bounds how long an armed one-shot launcher override waits
-// for its next card. Without it, an override armed and then forgotten silently
-// rewrites a launch hours later.
-const launchOverrideTTL = 5 * time.Minute
-
 func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script *gozapscript.Script) nextActionResult {
 	if !svc.State.RunZapScriptEnabled() {
 		return nextActionNone
@@ -61,29 +59,25 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 	}
 	switch cmd.Name {
 	case gozapscript.ZapScriptCmdLaunch:
-		launcherID := strings.TrimSpace(cmd.AdvArgs.Get(gozapscript.KeyLauncher))
-		if launcherID == "" || len(cmd.Args) != 0 || hasNonLauncherAdvArg(cmd.AdvArgs) {
+		if len(cmd.Args) != 0 || cmd.AdvArgs.IsEmpty() || !onlyLaunchModifierArgs(cmd.AdvArgs) {
 			return nextActionNone
 		}
-		resolvedLauncherID, err := evalNextActionArg(svc, launcherID)
-		if err != nil || strings.TrimSpace(resolvedLauncherID) == "" {
-			log.Warn().Err(err).Msg("failed to evaluate launch override")
+		args, ok := resolveLaunchModifierArgs(svc, cmd.AdvArgs)
+		if !ok {
 			return nextActionInvalid
 		}
-		resolvedLauncherID = strings.TrimSpace(resolvedLauncherID)
-		// Reject unknown IDs here rather than arming. Otherwise the error only
-		// surfaces on the next card scanned, blamed on that card instead of
-		// this one.
-		if !launcherIDExists(svc, resolvedLauncherID) {
-			log.Warn().Str("launcher", resolvedLauncherID).Msg("launch override launcher not found")
-			return nextActionInvalid
-		}
-		svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-			LauncherID: resolvedLauncherID,
-			Source:     *token,
-			CreatedAt:  time.Now(),
+		sticky := svc.State.ArmLaunchModifier(&state.LaunchModifier{
+			Source:    *token,
+			Args:      args,
+			Sticky:    launchModifierCanStick(svc, token),
+			CreatedAt: time.Now(),
 		})
-		log.Info().Str("launcher", resolvedLauncherID).Msg("armed one-shot launch override")
+		if sticky {
+			log.Info().Interface("args", args).Str("readerID", token.ReaderID).
+				Msg("armed launch modifier while its card stays on the reader")
+		} else {
+			log.Info().Interface("args", args).Msg("armed one-shot launch modifier")
+		}
 		return nextActionArmed
 	case gozapscript.ZapScriptCmdWrite:
 		if len(cmd.Args) != 1 || strings.TrimSpace(cmd.Args[0]) == "" || !cmd.AdvArgs.IsEmpty() {
@@ -128,20 +122,125 @@ func evalNextActionArg(svc *ServiceContext, value string) (string, error) {
 	return output, nil
 }
 
-func hasNonLauncherAdvArg(args gozapscript.AdvArgs) bool {
-	hasNonLauncher := false
+// launchModifierKeys are the advanced arguments a launch card with no path
+// can carry as a modifier. The others describe one particular piece of media,
+// so they make no sense applied to whatever is scanned next.
+var launchModifierKeys = []gozapscript.Key{
+	gozapscript.KeyLauncher,
+	gozapscript.KeySetName,
+	gozapscript.KeySetNameSameDir,
+	gozapscript.KeyAction,
+}
+
+// launchModifierGroups are the keys a modifier sets together. The set_name
+// pair describes one launch setup, so a launch never takes one half from one
+// modifier card and the other half from another.
+var launchModifierGroups = [][]gozapscript.Key{
+	{gozapscript.KeyLauncher},
+	{gozapscript.KeySetName, gozapscript.KeySetNameSameDir},
+	{gozapscript.KeyAction},
+}
+
+func isLaunchModifierKey(key gozapscript.Key) bool {
+	return slices.Contains(launchModifierKeys, key)
+}
+
+func onlyLaunchModifierArgs(args gozapscript.AdvArgs) bool {
+	only := true
 	args.Range(func(key gozapscript.Key, _ string) bool {
-		if key != gozapscript.KeyLauncher {
-			hasNonLauncher = true
+		if !isLaunchModifierKey(key) {
+			only = false
 			return false
 		}
 		return true
 	})
-	return hasNonLauncher
+	return only
 }
 
-func launchOverrideExpired(createdAt time.Time) bool {
-	return !createdAt.IsZero() && time.Since(createdAt) > launchOverrideTTL
+// resolveLaunchModifierArgs evaluates and validates a modifier's arguments.
+// Bad values are rejected here rather than when they are applied, otherwise
+// the error only surfaces on the next card scanned, blamed on that card
+// instead of this one.
+func resolveLaunchModifierArgs(svc *ServiceContext, raw gozapscript.AdvArgs) (map[string]string, bool) {
+	args := make(map[string]string)
+	valid := true
+	raw.Range(func(key gozapscript.Key, value string) bool {
+		resolved, err := evalNextActionArg(svc, value)
+		resolved = strings.TrimSpace(resolved)
+		if err != nil || resolved == "" {
+			log.Warn().Err(err).Str("key", string(key)).Msg("failed to evaluate launch modifier")
+			valid = false
+			return false
+		}
+		switch key {
+		case gozapscript.KeyLauncher:
+			if !launcherIDExists(svc, resolved) {
+				log.Warn().Str("launcher", resolved).Msg("launch modifier launcher not found")
+				valid = false
+				return false
+			}
+		case gozapscript.KeyAction:
+			if !gozapscript.IsActionRun(resolved) && !gozapscript.IsActionDetails(resolved) {
+				log.Warn().Str("action", resolved).Msg("launch modifier action not supported")
+				valid = false
+				return false
+			}
+		default:
+		}
+		args[string(key)] = resolved
+		return true
+	})
+	return args, valid
+}
+
+// launchModifierCanStick reports whether a modifier card can stay in effect
+// while it rests on its reader: the token resolves to hold mode and its
+// reader reports removal, so lifting the card is seen.
+func launchModifierCanStick(svc *ServiceContext, token *tokens.Token) bool {
+	if token.Source != tokens.SourceReader || token.ReaderID == "" {
+		return false
+	}
+	if !holdModeForToken(svc, token) {
+		return false
+	}
+	r, ok := svc.State.GetReader(token.ReaderID)
+	return ok && readers.HasCapability(r, readers.CapabilityRemovable)
+}
+
+// applyLaunchModifiers returns args with the modifiers applied in order, so a
+// later modifier wins. Each key group is taken whole from the last modifier
+// that sets any key in it, and a modifier's group replaces the launch's own
+// values for that group.
+func applyLaunchModifiers(args gozapscript.AdvArgs, modifiers []state.LaunchModifier) gozapscript.AdvArgs {
+	if len(modifiers) == 0 {
+		return args
+	}
+	merged := maps.Clone(args.Raw())
+	if merged == nil {
+		merged = make(map[string]string)
+	}
+	for _, group := range launchModifierGroups {
+		var winner map[string]string
+		for i := range modifiers {
+			for _, key := range group {
+				if _, ok := modifiers[i].Args[string(key)]; ok {
+					winner = modifiers[i].Args
+					break
+				}
+			}
+		}
+		if winner == nil {
+			continue
+		}
+		for _, key := range group {
+			if value, ok := winner[string(key)]; ok {
+				merged[string(key)] = value
+			} else {
+				delete(merged, string(key))
+			}
+		}
+	}
+	return gozapscript.NewAdvArgs(merged)
 }
 
 func shouldApplyLaunchOverride(token *tokens.Token, inHookContext bool, cmdName string) bool {
