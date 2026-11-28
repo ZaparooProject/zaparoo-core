@@ -8,6 +8,7 @@ tap -uid 04aa11 $ROMS/snes/Alpha.sfc
 notification tokens.added uid=04aa11
 notification media.started systemId=SNES mediaName=Alpha
 event ready
+launch-idle
 
 api run {"text":"$ROMS/snes/Beta.sfc"}
 notification media.started systemId=SNES mediaName=Beta
@@ -20,6 +21,7 @@ api media.active
 stdout '"mediaName": "Beta"'
 
 # A card launch still owns its media: taking it off stops it.
+launch-idle
 tap -uid 04aa22 $ROMS/snes/Alpha.sfc
 notification tokens.added uid=04aa22
 notification media.started systemId=SNES mediaName=Alpha
