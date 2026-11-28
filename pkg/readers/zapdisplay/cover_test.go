@@ -188,3 +188,63 @@ func TestCoverAssetIDIsDeviceLegalAndStable(t *testing.T) {
 func colorRed() color.Color {
 	return color.RGBA{R: 255, A: 255}
 }
+
+// redWebP is a 4x2 solid #ff0000 lossless WebP, encoded with
+// cwebp -lossless -exact. Go has no WebP encoder to build one at test time.
+var redWebP = []byte{
+	0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+	0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x03, 0x40, 0x00,
+	0x00, 0x07, 0x10, 0xfd, 0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+}
+
+func TestEncodeCoverDecodesWebP(t *testing.T) {
+	t.Parallel()
+
+	// Scrapers store WebP box art, sometimes under a generic content type, so
+	// both the declared type and the RIFF magic have to reach the decoder.
+	for _, contentType := range []string{"image/webp", "application/octet-stream", ""} {
+		t.Run("type="+contentType, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := encodeCover(redWebP, contentType)
+			require.NoError(t, err)
+			// 2:1 is too wide to fill the 288-pixel height, so it fills the
+			// 512-pixel width instead.
+			assert.Equal(t, 512, out.width)
+			assert.Equal(t, 256, out.height)
+			require.Len(t, out.pixels, out.width*out.height*2)
+			for i := 0; i < len(out.pixels); i += 2 {
+				require.Equalf(t, byte(0x00), out.pixels[i], "low byte at %d", i)
+				require.Equalf(t, byte(0xF8), out.pixels[i+1], "high byte at %d", i)
+			}
+		})
+	}
+}
+
+func TestEncodeCoverRejectsCorruptImagesOfEveryFormat(t *testing.T) {
+	t.Parallel()
+
+	truncatedWebP := redWebP[:len(redWebP)-8]
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		want        string
+		data        []byte
+	}{
+		{name: "webp by type", contentType: "image/webp", data: truncatedWebP, want: "WebP"},
+		{name: "webp by magic", contentType: "", data: truncatedWebP, want: "WebP"},
+		{name: "jpeg by type", contentType: "image/jpeg", data: []byte("not a jpeg"), want: "JPEG"},
+		{name: "jpg by type", contentType: "image/jpg", data: []byte("not a jpeg"), want: "JPEG"},
+		{name: "jpeg by magic", contentType: "", data: []byte{0xff, 0xd8, 0x00, 0x01}, want: "JPEG"},
+		{name: "png by magic", contentType: "", data: []byte("\x89PNG\r\n\x1a\nbroken"), want: "PNG"},
+		{name: "unknown", contentType: "image/gif", data: []byte("GIF89a"), want: "unsupported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := encodeCover(tc.data, tc.contentType)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}

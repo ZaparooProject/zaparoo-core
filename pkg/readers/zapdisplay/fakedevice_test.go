@@ -60,12 +60,20 @@ type fakeDevice struct {
 	committedID      string
 	failNextAssetUse string
 	// rotation is the device-owned setting, which the firmware keeps in NVS.
-	rotation    string
-	stagingID   string
-	stagingMime string
-	chunkBuf    []byte
-	stagingData []byte
-	partial     []byte
+	rotation string
+	// features overrides the capability list INFO advertises, so a test can
+	// stand in for firmware with or without an optional feature.
+	features string
+	// rejectPrefix makes the device answer ERR rejected to any command that
+	// starts with it, standing in for a firmware that refuses one step.
+	rejectPrefix string
+	stagingID    string
+	stagingMime  string
+	chunkBuf     []byte
+	stagingData  []byte
+	// committedData is the payload of the cover the device is holding.
+	committedData []byte
+	partial       []byte
 	// commands records every complete command line received, in order.
 	commands []string
 	scenes   []fakeScene
@@ -94,6 +102,12 @@ type fakeDevice struct {
 
 func newFakeDevice() *fakeDevice {
 	return &fakeDevice{}
+}
+
+// newFakeDeviceWithFeatures builds a device that advertises features in INFO
+// in place of the default capability list.
+func newFakeDeviceWithFeatures(features string) *fakeDevice {
+	return &fakeDevice{features: features}
 }
 
 func (f *fakeDevice) Read(p []byte) (int, error) {
@@ -198,12 +212,21 @@ func (f *fakeDevice) handleLineLocked(line string) {
 	}
 	f.commands = append(f.commands, line)
 
+	if f.rejectPrefix != "" && strings.HasPrefix(line, f.rejectPrefix) {
+		f.replyLocked("ERR rejected")
+		return
+	}
+
 	switch {
 	case line == "HELLO "+protocolVersion:
 		f.replyLocked("OK " + protocolVersion)
 	case line == "INFO":
+		features := f.features
+		if features == "" {
+			features = "scenes,assets-b64,quiet,settings"
+		}
 		f.replyLocked("INFO %s fw=0.1.0 display=hd458002c40 visible=320x960 transport=cdc "+
-			"features=scenes,assets-b64,quiet,settings", protocolVersion)
+			"features=%s", protocolVersion, features)
 	case line == "PING":
 		f.replyLocked("PONG")
 	case line == "QUIET", line == "VERBOSE":
@@ -428,6 +451,7 @@ func (f *fakeDevice) handleAssetUseLocked(args string) {
 	}
 	f.committedID = id
 	f.committedBytes = len(f.stagingData)
+	f.committedData = append([]byte(nil), f.stagingData...)
 	f.stagingDone = false
 	f.pending.coverID = id
 	f.replyLocked("OK")
@@ -526,4 +550,25 @@ func (f *fakeDevice) settingRotation() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.rotation
+}
+
+// committedPayload returns a copy of the cover bytes the device is holding.
+func (f *fakeDevice) committedPayload() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.committedData...)
+}
+
+// rejectCommand makes the device answer ERR rejected to commands with prefix.
+func (f *fakeDevice) rejectCommand(prefix string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rejectPrefix = prefix
+}
+
+// isClosed reports whether the driver has released the port.
+func (f *fakeDevice) isClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
 }
