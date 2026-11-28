@@ -187,6 +187,11 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 func (db *MediaDB) findMediaBySystemAndPathChunk(
 	ctx context.Context, systemDBID int64, paths []string, results map[string]database.Media,
 ) error {
+	// The caller chunks to this bound; checking it here keeps the allocation
+	// and the placeholder count visibly within SQLite's limit.
+	if len(paths) >= sqliteMaxParams {
+		return fmt.Errorf("path chunk of %d exceeds %d parameters", len(paths), sqliteMaxParams-1)
+	}
 	args := make([]any, 0, len(paths)+1)
 	args = append(args, systemDBID)
 	for _, path := range paths {
