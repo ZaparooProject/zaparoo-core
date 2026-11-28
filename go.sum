@@ -47,8 +47,6 @@ github.com/ZaparooProject/go-pn532 v0.28.0 h1:BHI8RKNGvUyLCmWQZssGxqmRaG0ayU5Kq9
 github.com/ZaparooProject/go-pn532 v0.28.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
 github.com/ZaparooProject/go-slugs v0.1.0 h1:/Fy+ZRVD5bqL/0qvmCdNscQJhWaaQPqCkIoUV/GUAjE=
 github.com/ZaparooProject/go-slugs v0.1.0/go.mod h1:4dFEMjN39QX3d4ZUcHQ3tQwA+NOzXipOljafrkeGR+U=
-github.com/ZaparooProject/go-zapscript v0.24.0 h1:tCnmjyHyeiGXQ8bwBxsWpnnLnV9aHi5m4tXKaVQUyps=
-github.com/ZaparooProject/go-zapscript v0.24.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/ZaparooProject/go-zapscript v0.25.0 h1:EymTJ8H2Z9Hnr+NvrWP+ctFtgjG8qwLGQJf279GBRY0=
 github.com/ZaparooProject/go-zapscript v0.25.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
@@ -210,8 +208,8 @@ github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ
 github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
-github.com/hbollon/go-edlib v1.7.0 h1:Jt3AtZ+AdgtJhzkrCFvkbdbNL3KCqZlGioLnUfwsxeU=
-github.com/hbollon/go-edlib v1.7.0/go.mod h1:wnt6o6EIVEzUfgbUZY7BerzQ2uvzp354qmS2xaLkrhM=
+github.com/hbollon/go-edlib v1.8.0 h1:NjW2LFVzkv/4S3lYbX/7P/3LMPMiFtrBuiZ72wiAwl8=
+github.com/hbollon/go-edlib v1.8.0/go.mod h1:c0zNjj4DFQ8Iq0V8obe2iYlCZ55zJ2YUUW1zOMKBDmI=
 github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/icza/bitio v1.1.0 h1:ysX4vtldjdi3Ygai5m1cWy4oLkhWTAi+SyO6HC8L9T0=
 github.com/icza/bitio v1.1.0/go.mod h1:0jGnlLAx8MKMr9VGnn/4YrvZiprkvBelsVIbA9Jjr9A=
