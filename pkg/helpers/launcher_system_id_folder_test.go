@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -126,14 +127,16 @@ func TestSystemIDFolderSkippedForLaunchersWithoutRelativeFolders(t *testing.T) {
 	// A launcher with no root-relative folder matches by other means, such as
 	// a Test function or an absolute path. Handing it a folder would widen
 	// what it claims rather than just renaming where it looks.
+	// Absolute on the host OS: "/opt/roms" is relative on Windows.
+	absFolder := filepath.Join(t.TempDir(), "ps3")
 	cache := &LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
 		{ID: "byTest", SystemID: "PS2"},
-		{ID: "absOnly", SystemID: "PS3", Folders: []string{"/opt/roms/ps3"}},
+		{ID: "absOnly", SystemID: "PS3", Folders: []string{absFolder}},
 	})
 
 	assert.Empty(t, foldersFor(t, cache, "PS2"))
-	assert.Equal(t, []string{"/opt/roms/ps3"}, foldersFor(t, cache, "PS3"))
+	assert.Equal(t, []string{absFolder}, foldersFor(t, cache, "PS3"))
 }
 
 func TestSystemIDFolderDoesNotMutateCallerSlice(t *testing.T) {
@@ -157,7 +160,7 @@ func TestSystemIDFolderIgnoresAbsoluteAndEmptyFolders(t *testing.T) {
 
 	cache := &LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
-		{ID: "abs", SystemID: "Other", Folders: []string{"/opt/roms/Genesis", ""}},
+		{ID: "abs", SystemID: "Other", Folders: []string{filepath.Join(t.TempDir(), "Genesis"), ""}},
 		{ID: "gen", SystemID: "Genesis", Folders: []string{"megadrive"}},
 	})
 
