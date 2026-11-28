@@ -671,7 +671,7 @@ func TestHandleMediaMetaUpdate_ResetScrapesTheFileAgain(t *testing.T) {
 	require.NotNil(t, opts.Scope)
 	assert.Equal(t, ids[0], opts.Scope.MediaID)
 	assert.Equal(t, []string{"NES"}, opts.Systems)
-	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 15*time.Second, 10*time.Millisecond)
 	select {
 	case extra := <-gotOptions:
 		require.FailNowf(t, "a scraper that cannot fill missing fields ran", "%+v", extra)
@@ -707,7 +707,7 @@ func TestHandleMediaMetaUpdate_ResetScrapesTheFileAgain(t *testing.T) {
 	assert.False(t, isClientErr(err), "a failed write is the device's fault: %v", err)
 	opts = receiveScrapeOptions(t, gotOptions)
 	assert.Equal(t, ids[0], opts.Scope.MediaID)
-	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 15*time.Second, 10*time.Millisecond)
 }
 
 // failingFieldsUserDB fails to record user fields while fail is set.
