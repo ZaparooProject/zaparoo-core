@@ -48,6 +48,8 @@ tasks:
             mv "$tmp/golangci-lint" "$bin";
             rm -rf "$tmp";
             fi;
+            GOLANGCI_LINT_CACHE={{.IMG_LINT_HOME}}/cache-{{.TARGET}} "$bin" run {{.LINT_ARGS}} --timeout=5m;
+            cd scripts/windows/hyperhq-plugin;
             GOLANGCI_LINT_CACHE={{.IMG_LINT_HOME}}/cache-{{.TARGET}} "$bin" run {{.LINT_ARGS}} --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
             -v "{{.LINT_HOME}}:{{.IMG_LINT_HOME}}"

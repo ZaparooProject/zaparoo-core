@@ -88,9 +88,12 @@ type Platform struct {
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
 	systemToCustomPlatforms map[string][]string
+	hqSystemKeyToSystem     map[string]string
+	systemToHqSystems       map[string][]hqSystemQueryTarget
 	trackedProcess          *os.Process
 	completedTrackedProcess *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
+	hyperHqPipe             *HyperHqPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
 	popper                  *pinup.Integration
 	playnite                *playnite.Integration
@@ -106,7 +109,9 @@ type Platform struct {
 	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
 	platformMappingsMu      syncutil.RWMutex
+	hqMappingsMu            syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
+	hyperHqPipeLock         syncutil.Mutex
 	launchBoxActiveMu       syncutil.Mutex
 	popperMu                syncutil.Mutex
 	playniteMu              syncutil.Mutex
@@ -196,6 +201,9 @@ func (p *Platform) StartPost(
 	// Serve the pipe the Playnite extension connects to
 	p.initPlaynitePipe(cfg)
 
+	// Initialize HyperHQ pipe server if HyperHQ is installed
+	p.initHyperHqPipe(cfg)
+
 	// Start Steam tracker for external Steam game detection. The tracker needs
 	// the same Steam root the scanner resolves from the registry, otherwise it
 	// cannot read app manifests to name games or locate their processes. It is
@@ -262,6 +270,14 @@ func (p *Platform) Stop() error {
 		p.launchBoxPipe = nil
 	}
 	p.launchBoxPipeLock.Unlock()
+
+	// Stop HyperHQ named pipe server
+	p.hyperHqPipeLock.Lock()
+	if p.hyperHqPipe != nil {
+		p.hyperHqPipe.Stop()
+		p.hyperHqPipe = nil
+	}
+	p.hyperHqPipeLock.Unlock()
 
 	return nil
 }
@@ -802,7 +818,7 @@ func (p *Platform) launchBoxLauncher() platforms.Launcher {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 28
+	const staticLauncherCount = 29
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -913,6 +929,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.launchBoxLauncher(),
+		p.NewHyperHqLauncher(),
 		pinup.NewLauncher(p.popperIntegration()),
 		playnite.NewLauncher(p.playniteIntegration()),
 	)
