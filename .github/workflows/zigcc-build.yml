@@ -105,13 +105,22 @@ jobs:
       - name: Build and push sanitized native libraries
         run: |
           image="ghcr.io/${OWNER_LC}/zigcc:sanitized-$(git rev-parse HEAD:scripts/zigcc)"
-          if docker manifest inspect "$image" > /dev/null 2>&1; then
-            echo "$image already exists in registry"
-            exit 0
-          fi
           docker pull "ghcr.io/${OWNER_LC}/zigcc:${VERSION}"
           docker tag "ghcr.io/${OWNER_LC}/zigcc:${VERSION}" zaparoo/zigcc
+          # The tag covers only scripts/zigcc. The task rebuilds when the
+          # published image's label shows other flags or another toolchain, and
+          # the new image replaces it.
+          before=""
+          if docker pull "$image"; then
+            docker tag "$image" zaparoo/zigcc-sanitized
+            before="$(docker image inspect --format '{{.Id}}' zaparoo/zigcc-sanitized)"
+          fi
           task linux:sanitized-image-amd64
+          after="$(docker image inspect --format '{{.Id}}' zaparoo/zigcc-sanitized)"
+          if [ "$before" = "$after" ]; then
+            echo "$image is up to date"
+            exit 0
+          fi
           docker tag zaparoo/zigcc-sanitized "$image"
           docker push "$image"
         env:

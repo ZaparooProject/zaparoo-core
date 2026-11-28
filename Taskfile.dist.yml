@@ -189,6 +189,10 @@ tasks:
     vars:
       STAMP:
         sh: git rev-parse --git-path zaparoo-validated
+      # Read once when the task starts, so a commit that appears while the
+      # checks run is never recorded as validated.
+      START_HEAD:
+        sh: git rev-parse HEAD
     cmds:
       - task: validate:clean-tree
         vars:
@@ -201,8 +205,13 @@ tasks:
       - task: validate:clean-tree
         vars:
           WHEN: after the checks
-      - git rev-parse HEAD > "{{.STAMP}}"
-      - 'echo "validate: $(git rev-parse --short HEAD) passed"'
+      - |
+        if [ "$(git rev-parse HEAD)" != "{{.START_HEAD}}" ]; then
+          echo "validate: HEAD moved from {{.START_HEAD}} while the checks ran; run task validate again" >&2
+          exit 1
+        fi
+        echo "{{.START_HEAD}}" > "{{.STAMP}}"
+        echo "validate: {{.START_HEAD}} passed"
 
   validate:checks:
     # No desc, so it stays out of task --list: run it through task validate.

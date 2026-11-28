@@ -25,6 +25,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestRunawayIsStopped(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr, "the child must be stopped, got output: %s", stderr.String())
 	require.NoError(t, ctx.Err(), "the child ran until the timeout instead of being stopped")
-	assert.Contains(t, stderr.String(), "memguard: memguard.test resident memory reached")
+	assert.Contains(t, stderr.String(), "memguard: "+filepath.Base(os.Args[0])+" resident memory reached")
 	assert.Contains(t, stderr.String(), "over the 256 MiB limit")
 }
 

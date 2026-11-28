@@ -46,10 +46,12 @@ tasks:
         sh: >-
           printf '%s %s %s'
           "$(docker image inspect --format '{{"{{"}}.Id{{"}}"}}' {{default "zaparoo/zigcc" .ZIGCC_IMAGE}})"
-          "$(git rev-parse HEAD:scripts/zigcc)"
+          "$(if git diff --quiet HEAD -- scripts/zigcc
+          && [ -z "$(git ls-files --others --exclude-standard -- scripts/zigcc)" ];
+          then git rev-parse HEAD:scripts/zigcc;
+          else echo "uncommitted-$(date +%s%N)"; fi)"
           "{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}}"
     status:
-      - git diff --quiet HEAD -- scripts/zigcc
       - >-
         test "$(docker image inspect
         --format '{{"{{"}}index .Config.Labels "zaparoo.sanitized-id"{{"}}"}}'

@@ -45,9 +45,11 @@ func TestSeedBuildsOnceAndCopiesFilesWithTheirTimes(t *testing.T) {
 		return nil
 	}
 
+	// A key per invocation, so go test -count=N builds a fresh template.
+	key := t.TempDir()
 	for range 3 {
 		dir := t.TempDir()
-		Seed(t, t.Name(), dir, build)
+		Seed(t, key, dir, build)
 
 		data, err := os.ReadFile(filepath.Join(dir, "test.db")) //nolint:gosec // the test's own temp dir
 		require.NoError(t, err)
